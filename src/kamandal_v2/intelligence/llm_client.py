@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -64,6 +65,7 @@ class CodexCliJsonClient:
             text=True,
             check=False,
             timeout=self.timeout_seconds,
+            env=_subprocess_env(),
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
@@ -97,6 +99,22 @@ def _discover_codex(configured: str | None) -> str:
         if candidate and Path(candidate).exists():
             return candidate
     raise RuntimeError("Codex CLI binary not found. Set llm.codex_binary in config/control.yaml.")
+
+
+def _subprocess_env() -> dict[str, str]:
+    env = dict(os.environ)
+    extra_path = env.get("KAMANDAL_EXTRA_PATH") or ":".join(
+        [
+            "/usr/local/bin",
+            "/usr/local/opt/node@22/bin",
+            "/usr/local/Cellar/node@22/22.22.0_1/bin",
+            "/opt/homebrew/bin",
+            str(Path.home() / ".nvm/versions/node/v22.22.0/bin"),
+            str(Path.home() / ".nvm/versions/node/v20.20.0/bin"),
+        ]
+    )
+    env["PATH"] = f"{extra_path}:{env.get('PATH', '')}"
+    return env
 
 
 def _extract_codex_message(stdout: str) -> str:
