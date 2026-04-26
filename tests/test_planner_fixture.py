@@ -6,10 +6,13 @@ from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
 
 
+SAMPLE_IDEAS = "tests/fixtures/sample_ideas.yaml"
+
+
 def _run(tmp_path):
     return run_plan(
         load_control(),
-        idea_paths=["data/ideas/sample.yaml"],
+        idea_paths=[SAMPLE_IDEAS],
         config_source="seed",
         provider="fixture",
         store=LocalStore(tmp_path / "kamandal.db"),
@@ -36,7 +39,7 @@ def test_mixed_fixture_produces_ranked_plan_bundles_with_guardrails(tmp_path) ->
     control = load_control()
     result = run_plan(
         control,
-        idea_paths=["data/ideas/sample.yaml"],
+        idea_paths=[SAMPLE_IDEAS],
         config_source="seed",
         provider="fixture",
         store=LocalStore(tmp_path / "kamandal.db"),
@@ -59,7 +62,7 @@ def test_mixed_fixture_produces_ranked_plan_bundles_with_guardrails(tmp_path) ->
 def test_shadow_cycle_creates_auto_approval_audit(tmp_path) -> None:
     result = run_shadow_cycle(
         load_control(),
-        idea_paths=["data/ideas/sample.yaml"],
+        idea_paths=[SAMPLE_IDEAS],
         config_source="seed",
         provider="fixture",
         write_sheet=False,

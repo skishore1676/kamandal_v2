@@ -1,0 +1,51 @@
+ideas:
+  - idea_id: sample_tsla_call_calendar
+    source: manual_fixture
+    underlying: TSLA
+    direction: neutral
+    strategy_hint: call_calendar
+    thesis_tags: [volatility, calendar]
+    horizon_days: 45
+    confidence: fixture
+    operator_status: approved
+    notes: "Fixture idea: TSLA call calendar for planner smoke."
+  - idea_id: sample_nvda_strangle_rejected
+    source: manual_fixture
+    underlying: NVDA
+    direction: neutral
+    strategy_hint: strangle
+    thesis_tags: [high_iv, undefined_risk]
+    horizon_days: 45
+    confidence: fixture
+    operator_status: approved
+    notes: "Fixture idea: should stay rejected until short_strangle is enabled as a supported structure."
+  - idea_id: sample_spy_put_spread
+    source: manual_fixture
+    underlying: SPY
+    direction: bullish
+    strategy_hint: put_spread
+    thesis_tags: [index, defined_risk]
+    horizon_days: 45
+    confidence: fixture
+    operator_status: approved
+    notes: "Fixture idea: SPY put spread."
+  - idea_id: sample_qqq_call_spread
+    source: manual_fixture
+    underlying: QQQ
+    direction: bearish
+    strategy_hint: call_spread
+    thesis_tags: [index, defined_risk]
+    horizon_days: 45
+    confidence: fixture
+    operator_status: approved
+    notes: "Fixture idea: QQQ call spread."
+  - idea_id: sample_iwm_iron_condor
+    source: manual_fixture
+    underlying: IWM
+    direction: neutral
+    strategy_hint: iron_condor
+    thesis_tags: [index, neutral, defined_risk]
+    horizon_days: 45
+    confidence: fixture
+    operator_status: approved
+    notes: "Fixture idea: IWM iron condor."
