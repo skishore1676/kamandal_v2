@@ -73,6 +73,77 @@ DEFAULT_IV_RANGES = {
     "long_put": (0, 60),
 }
 
+FALLBACK_TEMPLATES = [
+    {
+        "id": "short_put_conservative",
+        "name": "Short put",
+        "structure": "short_put",
+        "filters": {"dte_range": [30, 60], "delta_range": [0.15, 0.30]},
+        "management": {"profit_target_pct": 50},
+    },
+    {
+        "id": "put_spread_standard",
+        "name": "Put spread",
+        "structure": "put_spread",
+        "filters": {"dte_range": [14, 60], "delta_range": [0.20, 0.35], "spread_width": 5},
+        "management": {"profit_target_pct": 50},
+    },
+    {
+        "id": "call_spread_standard",
+        "name": "Call spread",
+        "structure": "call_spread",
+        "filters": {"dte_range": [14, 60], "delta_range": [0.20, 0.35], "spread_width": 5},
+        "management": {"profit_target_pct": 50},
+    },
+    {
+        "id": "iron_condor_standard",
+        "name": "Iron condor",
+        "structure": "iron_condor",
+        "filters": {"dte_range": [30, 60], "delta_range": [0.10, 0.25], "spread_width": 5},
+        "management": {"profit_target_pct": 50},
+    },
+    {
+        "id": "calendar_spread_standard",
+        "name": "Call calendar",
+        "structure": "call_calendar",
+        "filters": {"dte_range": [20, 60], "delta_range": [0.40, 0.60]},
+        "management": {"profit_target_pct": 25},
+    },
+    {
+        "id": "short_strangle",
+        "name": "Short strangle",
+        "structure": "short_strangle",
+        "filters": {"dte_range": [30, 60], "delta_range": [0.10, 0.20]},
+        "management": {"profit_target_pct": 50},
+    },
+    {
+        "id": "jade_lizard_standard",
+        "name": "Jade lizard",
+        "structure": "jade_lizard",
+        "filters": {"dte_range": [30, 60], "delta_range": [0.15, 0.30], "spread_width": 5},
+        "management": {"profit_target_pct": 50},
+    },
+]
+
+FALLBACK_PROFILES = [
+    {
+        "profile_id": "index_etf",
+        "symbols": ["SPY", "QQQ", "IWM"],
+        "allowed_structures": ["short_put", "put_spread", "call_spread", "iron_condor", "calendar_spread"],
+        "earnings_sensitive": False,
+        "max_positions": 1,
+        "notes": "Built-in fallback profile used when old Kamandal seed files are unavailable.",
+    },
+    {
+        "profile_id": "large_stocks",
+        "symbols": ["TSLA", "NVDA"],
+        "allowed_structures": ["short_put", "put_spread", "call_spread", "iron_condor", "calendar_spread"],
+        "earnings_sensitive": True,
+        "max_positions": 1,
+        "notes": "Built-in fallback profile used when old Kamandal seed files are unavailable.",
+    },
+]
+
 
 def build_seed_tables(control: dict[str, Any]) -> dict[str, list[list[Any]]]:
     playbooks = _playbook_rows()
@@ -106,6 +177,16 @@ def _old_cache_rows(name: str) -> list[dict[str, Any]]:
     return list(payload.get("rows") or [])
 
 
+def _template_rows() -> list[dict[str, Any]]:
+    templates = _old_yaml("strategy_templates.yaml").get("templates") or []
+    return list(templates) if templates else list(FALLBACK_TEMPLATES)
+
+
+def _profile_rows() -> list[dict[str, Any]]:
+    profiles = _old_yaml("underlying_profiles.yaml").get("profiles") or []
+    return list(profiles) if profiles else list(FALLBACK_PROFILES)
+
+
 def _bool_cell(value: Any) -> str:
     return "TRUE" if bool(value) else "FALSE"
 
@@ -131,7 +212,7 @@ def _range_max(value: Any) -> Any:
 def _playbook_rows() -> list[list[Any]]:
     yaml_templates = {
         str(item.get("id") or ""): item
-        for item in (_old_yaml("strategy_templates.yaml").get("templates") or [])
+        for item in _template_rows()
         if item
     }
     cache_templates = {
@@ -222,10 +303,9 @@ def _playbook_rows() -> list[list[Any]]:
 
 
 def _profiles_for_structure(structure: str) -> list[str]:
-    profiles = _old_yaml("underlying_profiles.yaml").get("profiles") or []
     matched: list[str] = []
     old_structure = "calendar_spread" if structure == "call_calendar" else structure
-    for profile in profiles:
+    for profile in _profile_rows():
         if old_structure in (profile.get("allowed_structures") or []):
             matched.append(str(profile.get("profile_id") or ""))
     if structure == "call_calendar":
@@ -238,7 +318,7 @@ def _profiles_for_structure(structure: str) -> list[str]:
 def _universe_rows(control: dict[str, Any], playbooks: list[list[Any]]) -> list[list[Any]]:
     profile_by_id = {
         str(profile.get("profile_id") or ""): profile
-        for profile in (_old_yaml("underlying_profiles.yaml").get("profiles") or [])
+        for profile in _profile_rows()
         if profile
     }
     cached_universe = _old_cache_rows("universe.json")
