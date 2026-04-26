@@ -9,6 +9,7 @@ run_youtube_extraction() {
   require_trading_day
 
   local today transcript_dir digest_dir ideas_dir queue_file channel_file languages raw_ids ids
+  local provider sleep_requests sleep_subtitles cookies_from_browser archive_file
   today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
   transcript_dir="${KAMANDAL_YOUTUBE_TRANSCRIPT_DIR:-data/transcripts/youtube/$today}"
   digest_dir="${KAMANDAL_YOUTUBE_DIGEST_DIR:-data/digest/youtube/$today}"
@@ -16,6 +17,11 @@ run_youtube_extraction() {
   queue_file="${KAMANDAL_YOUTUBE_QUEUE_FILE:-data/youtube_queue.txt}"
   channel_file="${KAMANDAL_YOUTUBE_CHANNEL_FILE:-config/youtube_channels.txt}"
   languages="${KAMANDAL_YOUTUBE_LANGUAGES:-en}"
+  provider="${KAMANDAL_YOUTUBE_TRANSCRIPT_PROVIDER:-yt_dlp}"
+  sleep_requests="${KAMANDAL_YTDLP_SLEEP_REQUESTS:-3}"
+  sleep_subtitles="${KAMANDAL_YTDLP_SLEEP_SUBTITLES:-5}"
+  cookies_from_browser="${KAMANDAL_YTDLP_COOKIES_FROM_BROWSER:-}"
+  archive_file="${KAMANDAL_YTDLP_ARCHIVE_FILE:-data/youtube_archive.txt}"
 
   mkdir -p "$transcript_dir" "$digest_dir" "$ideas_dir"
 
@@ -64,10 +70,20 @@ run_youtube_extraction() {
       continue
     fi
     log "Fetching YouTube transcript: $video_id"
-    "$KAMANDAL_BIN" fetch-youtube-transcript \
+    fetch_args=(
+      fetch-youtube-transcript
       --video-id "$video_id" \
       --transcript-dir "$transcript_dir" \
-      --languages "$languages"
+      --languages "$languages" \
+      --provider "$provider" \
+      --sleep-requests "$sleep_requests" \
+      --sleep-subtitles "$sleep_subtitles" \
+      --archive-file "$archive_file"
+    )
+    if [[ -n "$cookies_from_browser" ]]; then
+      fetch_args+=(--cookies-from-browser "$cookies_from_browser")
+    fi
+    "$KAMANDAL_BIN" "${fetch_args[@]}"
   done
 
   find "$ideas_dir" -maxdepth 1 -type f -name 'llm_imported_*.yaml' ! -name "llm_imported_$today.yaml" -delete

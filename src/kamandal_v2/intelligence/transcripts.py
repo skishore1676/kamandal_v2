@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date
@@ -10,8 +13,8 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, urlparse
 
-import yaml
 import requests
+import yaml
 
 from kamandal_v2.paths import resolve_path
 
@@ -75,6 +78,8 @@ CONTROLLED_THESIS_TAGS = {
     "earnings",
     "resistance_rejection",
 }
+
+YOUTUBE_TRANSCRIPT_PROVIDERS = {"api", "yt_dlp"}
 
 
 @dataclass(slots=True)
@@ -288,7 +293,7 @@ def _title_passes_filter(
     return True
 
 
-def scrape_youtube_smoke(
+def fetch_youtube_transcript_api(
     video_id: str,
     *,
     transcript_dir: str | Path = "data/transcripts",
@@ -311,6 +316,120 @@ def scrape_youtube_smoke(
     target = target_dir / f"youtube_{video_id}.txt"
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return target
+
+
+def fetch_youtube_transcript_ytdlp(
+    video_id: str,
+    *,
+    transcript_dir: str | Path = "data/transcripts",
+    languages: Iterable[str] = ("en",),
+    sleep_requests: float = 3.0,
+    sleep_subtitles: float = 5.0,
+    cookies_from_browser: str = "",
+    archive_file: str | Path = "data/youtube_archive.txt",
+) -> Path:
+    video_id = _youtube_video_id(video_id)
+    target_dir = resolve_path(transcript_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = resolve_path(archive_file)
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    output_template = str(target_dir / f"youtube_{video_id}.%(ext)s")
+    executable = shutil.which("yt-dlp")
+    args = [
+        executable or sys.executable,
+    ]
+    if executable is None:
+        args.extend(["-m", "yt_dlp"])
+    args.extend([
+        "--skip-download",
+        "--write-subs",
+        "--write-auto-subs",
+        "--sub-langs",
+        ",".join(languages) or "en",
+        "--sub-format",
+        "vtt/srv3/ttml/best",
+        "--sleep-requests",
+        str(sleep_requests),
+        "--sleep-subtitles",
+        str(sleep_subtitles),
+        "--download-archive",
+        str(archive_path),
+        "--no-progress",
+        "--output",
+        output_template,
+        f"https://www.youtube.com/watch?v={video_id}",
+    ])
+    if cookies_from_browser:
+        args.extend(["--cookies-from-browser", cookies_from_browser])
+    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=240)
+    if result.returncode != 0:
+        detail = "\n".join(part for part in (result.stderr.strip(), result.stdout.strip()) if part)
+        raise RuntimeError(f"yt-dlp transcript fetch failed for {video_id}: {detail}")
+    subtitle_files = sorted(target_dir.glob(f"youtube_{video_id}.*"))
+    subtitle_files = [path for path in subtitle_files if path.suffix.lower() in {".vtt", ".srv3", ".ttml", ".srt"}]
+    if not subtitle_files:
+        raise RuntimeError(f"yt-dlp did not create a subtitle file for {video_id}")
+    target = target_dir / f"youtube_{video_id}.txt"
+    target.write_text(_subtitle_to_text(subtitle_files[0].read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
+    return target
+
+
+def fetch_youtube_transcript(
+    video_id: str,
+    *,
+    transcript_dir: str | Path = "data/transcripts",
+    languages: Iterable[str] = ("en",),
+    provider: str = "yt_dlp",
+    sleep_requests: float = 3.0,
+    sleep_subtitles: float = 5.0,
+    cookies_from_browser: str = "",
+    archive_file: str | Path = "data/youtube_archive.txt",
+) -> Path:
+    provider = provider.strip().lower()
+    if provider not in YOUTUBE_TRANSCRIPT_PROVIDERS:
+        raise ValueError(f"unsupported YouTube transcript provider: {provider}")
+    if provider == "api":
+        return fetch_youtube_transcript_api(video_id, transcript_dir=transcript_dir, languages=languages)
+    return fetch_youtube_transcript_ytdlp(
+        video_id,
+        transcript_dir=transcript_dir,
+        languages=languages,
+        sleep_requests=sleep_requests,
+        sleep_subtitles=sleep_subtitles,
+        cookies_from_browser=cookies_from_browser,
+        archive_file=archive_file,
+    )
+
+
+def scrape_youtube_smoke(
+    video_id: str,
+    *,
+    transcript_dir: str | Path = "data/transcripts",
+    languages: Iterable[str] = ("en",),
+) -> Path:
+    return fetch_youtube_transcript_api(video_id, transcript_dir=transcript_dir, languages=languages)
+
+
+def _subtitle_to_text(raw: str) -> str:
+    lines: list[str] = []
+    prior = ""
+    for line in raw.splitlines():
+        cleaned = line.strip()
+        if (
+            not cleaned
+            or cleaned == "WEBVTT"
+            or cleaned.isdigit()
+            or "-->" in cleaned
+            or cleaned.startswith(("Kind:", "Language:", "NOTE", "<?xml", "<tt ", "</tt"))
+        ):
+            continue
+        cleaned = re.sub(r"<[^>]+>", "", cleaned)
+        cleaned = cleaned.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned and cleaned != prior:
+            lines.append(cleaned)
+            prior = cleaned
+    return "\n".join(lines).strip() + "\n"
 
 
 def _youtube_video_id(raw: str) -> str:

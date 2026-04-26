@@ -10,7 +10,7 @@ from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
-from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, import_transcripts, scrape_youtube_smoke
+from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, fetch_youtube_transcript, import_transcripts, scrape_youtube_smoke
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.planner.config_loader import load_planner_config
@@ -97,6 +97,11 @@ def main() -> None:
     fetch_youtube_parser.add_argument("--video-id", required=True)
     fetch_youtube_parser.add_argument("--transcript-dir", default="data/transcripts")
     fetch_youtube_parser.add_argument("--languages", default="en", help="Comma-separated language preference list")
+    fetch_youtube_parser.add_argument("--provider", choices=["yt_dlp", "api"], default="yt_dlp")
+    fetch_youtube_parser.add_argument("--sleep-requests", type=float, default=3.0)
+    fetch_youtube_parser.add_argument("--sleep-subtitles", type=float, default=5.0)
+    fetch_youtube_parser.add_argument("--cookies-from-browser", default="")
+    fetch_youtube_parser.add_argument("--archive-file", default="data/youtube_archive.txt")
     list_youtube_parser = subparsers.add_parser("list-youtube-channel-videos", help="List recent video IDs from configured YouTube channel RSS feeds")
     list_youtube_parser.add_argument("--channel-id", action="append", default=[], help="YouTube channel ID; repeat for multiple channels")
     list_youtube_parser.add_argument("--limit", type=int, default=1, help="Recent videos per channel")
@@ -264,10 +269,15 @@ def main() -> None:
         print(json.dumps({"transcript_path": str(transcript), "import": result.to_dict()}, indent=2))
         return
     if args.command == "fetch-youtube-transcript":
-        transcript = scrape_youtube_smoke(
+        transcript = fetch_youtube_transcript(
             args.video_id,
             transcript_dir=args.transcript_dir,
             languages=[item.strip() for item in args.languages.split(",") if item.strip()],
+            provider=args.provider,
+            sleep_requests=args.sleep_requests,
+            sleep_subtitles=args.sleep_subtitles,
+            cookies_from_browser=args.cookies_from_browser,
+            archive_file=args.archive_file,
         )
         print(json.dumps({"transcript_path": str(transcript)}, indent=2))
         return

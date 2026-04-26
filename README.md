@@ -124,3 +124,5 @@ The oldmac launchd setup uses three scripts:
 Approval behavior is controlled by `execution.approval_mode` in `config/control.yaml`, or by the env override `KAMANDAL_APPROVAL_MODE`. Current shadow automation uses `shadow_auto_top_plan`; live trading still requires `KAMANDAL_MODE=live`, `KAMANDAL_TRADING_ENABLED=true`, no halt, and valid Public preflight.
 
 YouTube can be configured either with explicit video IDs (`KAMANDAL_YOUTUBE_VIDEO_IDS` or `data/youtube_queue.txt`) or with channel IDs (`KAMANDAL_YOUTUBE_CHANNEL_IDS` or `config/youtube_channels.txt`). The v1-style default is one recent video per channel via `KAMANDAL_YOUTUBE_CHANNEL_LIMIT=1`.
+
+Transcript fetching defaults to `yt-dlp` in subtitle-only mode: no audio/video download and no `ffmpeg` required. The old `youtube-transcript-api` path remains available with `--provider api`. Slow-fetch controls live in env as `KAMANDAL_YTDLP_SLEEP_REQUESTS`, `KAMANDAL_YTDLP_SLEEP_SUBTITLES`, and `KAMANDAL_YTDLP_ARCHIVE_FILE`. If needed, oldmac can use browser cookies with `KAMANDAL_YTDLP_COOKIES_FROM_BROWSER=safari` or another supported browser.

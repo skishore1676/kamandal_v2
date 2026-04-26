@@ -1,4 +1,4 @@
-from kamandal_v2.intelligence.transcripts import _youtube_feed_videos_from_xml
+from kamandal_v2.intelligence.transcripts import _subtitle_to_text, _youtube_feed_videos_from_xml
 
 
 def test_youtube_feed_parser_respects_limit_and_filters() -> None:
@@ -30,3 +30,19 @@ def test_youtube_feed_parser_respects_limit_and_filters() -> None:
     assert len(videos) == 1
     assert videos[0].video_id == "AAA111"
     assert videos[0].author == "tastylive"
+
+
+def test_subtitle_to_text_strips_vtt_markup_and_deduplicates() -> None:
+    raw = """WEBVTT
+
+00:00:01.000 --> 00:00:03.000
+<c>TSLA is overextended &amp; could mean revert.</c>
+
+00:00:03.000 --> 00:00:05.000
+<c>TSLA is overextended &amp; could mean revert.</c>
+
+00:00:05.000 --> 00:00:07.000
+Consider a defined risk spread.
+"""
+
+    assert _subtitle_to_text(raw) == "TSLA is overextended & could mean revert.\nConsider a defined risk spread.\n"
