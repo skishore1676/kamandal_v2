@@ -6,6 +6,7 @@ cd "$REPO_ROOT"
 
 export PYTHONUNBUFFERED=1
 export KAMANDAL_MARKET_TZ="${KAMANDAL_MARKET_TZ:-America/Chicago}"
+export PATH="${KAMANDAL_EXTRA_PATH:-/usr/local/bin:/usr/local/opt/node@22/bin:/usr/local/Cellar/node@22/22.22.0_1/bin:/opt/homebrew/bin:$HOME/.nvm/versions/node/v22.22.0/bin:$HOME/.nvm/versions/node/v20.20.0/bin}:$PATH"
 
 if [[ -f "$REPO_ROOT/.env" ]]; then
   set -a
