@@ -93,6 +93,10 @@ def main() -> None:
     youtube_parser.add_argument("--video-id", required=True)
     youtube_parser.add_argument("--transcript-dir", default="data/transcripts")
     youtube_parser.add_argument("--languages", default="en", help="Comma-separated language preference list")
+    fetch_youtube_parser = subparsers.add_parser("fetch-youtube-transcript", help="Fetch captions for one YouTube video without extracting ideas")
+    fetch_youtube_parser.add_argument("--video-id", required=True)
+    fetch_youtube_parser.add_argument("--transcript-dir", default="data/transcripts")
+    fetch_youtube_parser.add_argument("--languages", default="en", help="Comma-separated language preference list")
 
     args = parser.parse_args()
 
@@ -252,6 +256,15 @@ def main() -> None:
         )
         result = import_transcripts(args.transcript_dir)
         print(json.dumps({"transcript_path": str(transcript), "import": result.to_dict()}, indent=2))
+        return
+    if args.command == "fetch-youtube-transcript":
+        transcript = scrape_youtube_smoke(
+            args.video_id,
+            transcript_dir=args.transcript_dir,
+            languages=[item.strip() for item in args.languages.split(",") if item.strip()],
+        )
+        print(json.dumps({"transcript_path": str(transcript)}, indent=2))
+        return
 
 
 def _add_planner_args(parser: argparse.ArgumentParser) -> None:

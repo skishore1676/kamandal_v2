@@ -78,6 +78,7 @@ Current defaults:
 - `kamandal iv-status --symbols TSLA NVDA`
 - `kamandal import-transcripts`
 - `kamandal scrape-youtube-smoke --video-id VIDEO_ID`
+- `kamandal fetch-youtube-transcript --video-id VIDEO_ID`
 
 Public integration is intentionally conservative at this stage: the fixture adapter is the deterministic test path, and live order submission remains gated off.
 
@@ -110,3 +111,13 @@ The command imports transcripts as thesis objects, filters extracted symbols to 
 Transcript extraction emits semantic idea fields such as `direction`, controlled `thesis_tags`, `horizon_days`, `mentioned_strategy`, `extraction_confidence`, and `quote_evidence`. It does not choose executable legs; playbook matching remains deterministic.
 
 The LLM loop keeps the same boundary: Codex CLI extracts thesis objects, optional IV capture updates local volatility history, the deterministic planner builds candidates/plans, and `review-rejections` writes local suggestions only. It never mutates playbooks or submits orders.
+
+## Scheduled Shadow Cadence
+
+The oldmac launchd setup uses three scripts:
+
+- `scripts/run_youtube_extraction.sh`: trading days at 9:15, 11:45, and 14:30 Central. Fetches configured YouTube captions and runs Codex LLM extraction into `data/ideas/active`.
+- `scripts/run_market_shadow.sh`: every 15 minutes, guarded to trading days and market hours. It validates and reloads `universe`/`playbooks` from Google Sheets on every run, then writes plan rows to `daily_plan`.
+- `scripts/run_weekly_reviewer.sh`: Fridays at 10:00 Central, reviewing the latest local plan audit only.
+
+Approval behavior is controlled by `execution.approval_mode` in `config/control.yaml`, or by the env override `KAMANDAL_APPROVAL_MODE`. Current shadow automation uses `shadow_auto_top_plan`; live trading still requires `KAMANDAL_MODE=live`, `KAMANDAL_TRADING_ENABLED=true`, no halt, and valid Public preflight.
