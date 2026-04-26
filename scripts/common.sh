@@ -77,6 +77,6 @@ with_lock() {
     log "Lock exists for $name; exiting."
     exit 0
   fi
-  trap 'rmdir "$lockdir"' EXIT
+  trap "rmdir '$lockdir'" EXIT
   "$@"
 }
