@@ -10,7 +10,7 @@ from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
-from kamandal_v2.intelligence.transcripts import import_transcripts, scrape_youtube_smoke
+from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, import_transcripts, scrape_youtube_smoke
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.planner.config_loader import load_planner_config
@@ -97,6 +97,12 @@ def main() -> None:
     fetch_youtube_parser.add_argument("--video-id", required=True)
     fetch_youtube_parser.add_argument("--transcript-dir", default="data/transcripts")
     fetch_youtube_parser.add_argument("--languages", default="en", help="Comma-separated language preference list")
+    list_youtube_parser = subparsers.add_parser("list-youtube-channel-videos", help="List recent video IDs from configured YouTube channel RSS feeds")
+    list_youtube_parser.add_argument("--channel-id", action="append", default=[], help="YouTube channel ID; repeat for multiple channels")
+    list_youtube_parser.add_argument("--limit", type=int, default=1, help="Recent videos per channel")
+    list_youtube_parser.add_argument("--include-keywords", default="", help="Comma-separated title include regex/substring filters")
+    list_youtube_parser.add_argument("--exclude-keywords", default="", help="Comma-separated title exclude regex/substring filters")
+    list_youtube_parser.add_argument("--output", default="", help="Optional file to write one video ID per line")
 
     args = parser.parse_args()
 
@@ -265,6 +271,19 @@ def main() -> None:
         )
         print(json.dumps({"transcript_path": str(transcript)}, indent=2))
         return
+    if args.command == "list-youtube-channel-videos":
+        videos = fetch_youtube_channel_videos(
+            args.channel_id,
+            limit=args.limit,
+            include_keywords=_csv(args.include_keywords),
+            exclude_keywords=_csv(args.exclude_keywords),
+        )
+        if args.output:
+            output_path = resolve_path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text("\n".join(video.video_id for video in videos) + ("\n" if videos else ""), encoding="utf-8")
+        print(json.dumps({"videos": [video.to_dict() for video in videos], "output": args.output or None}, indent=2))
+        return
 
 
 def _add_planner_args(parser: argparse.ArgumentParser) -> None:
@@ -283,6 +302,10 @@ def _expand_paths(values: list[str]) -> list[Path]:
         else:
             paths.append(resolve_path(value))
     return paths
+
+
+def _csv(value: str) -> list[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _plan_result_json(result: object) -> str:

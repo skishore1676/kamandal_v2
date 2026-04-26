@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Iterable
 from urllib.parse import parse_qs, urlparse
 
 import yaml
+import requests
 
 from kamandal_v2.paths import resolve_path
 
@@ -90,6 +92,24 @@ class TranscriptImportResult:
             "skipped_symbol_count": self.skipped_symbol_count,
             "digest_path": str(self.digest_path),
             "ideas_path": str(self.ideas_path) if self.ideas_path else None,
+        }
+
+
+@dataclass(slots=True)
+class YouTubeVideoRef:
+    video_id: str
+    title: str
+    channel_id: str
+    author: str
+    published_at: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "video_id": self.video_id,
+            "title": self.title,
+            "channel_id": self.channel_id,
+            "author": self.author,
+            "published_at": self.published_at,
         }
 
 
@@ -179,6 +199,93 @@ def import_transcripts(
         digest_path=digest_file,
         ideas_path=output_ideas_file,
     )
+
+
+def fetch_youtube_channel_videos(
+    channel_ids: Iterable[str],
+    *,
+    limit: int = 1,
+    include_keywords: Iterable[str] = (),
+    exclude_keywords: Iterable[str] = (),
+) -> list[YouTubeVideoRef]:
+    videos: list[YouTubeVideoRef] = []
+    seen: set[str] = set()
+    for channel_id in channel_ids:
+        channel_id = channel_id.strip()
+        if not channel_id:
+            continue
+        response = requests.get(
+            f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}",
+            timeout=20,
+        )
+        response.raise_for_status()
+        for video in _youtube_feed_videos_from_xml(
+            response.text,
+            channel_id=channel_id,
+            limit=limit,
+            include_keywords=include_keywords,
+            exclude_keywords=exclude_keywords,
+        ):
+            if video.video_id in seen:
+                continue
+            seen.add(video.video_id)
+            videos.append(video)
+    return videos
+
+
+def _youtube_feed_videos_from_xml(
+    xml_text: str,
+    *,
+    channel_id: str,
+    limit: int,
+    include_keywords: Iterable[str] = (),
+    exclude_keywords: Iterable[str] = (),
+) -> list[YouTubeVideoRef]:
+    root = ET.fromstring(xml_text)
+    ns = {
+        "atom": "http://www.w3.org/2005/Atom",
+        "yt": "http://www.youtube.com/xml/schemas/2015",
+    }
+    videos: list[YouTubeVideoRef] = []
+    for entry in root.findall("atom:entry", ns):
+        if len(videos) >= limit:
+            break
+        video_id = _xml_text(entry, "videoId")
+        title = _xml_text(entry, "title")
+        if not video_id or not _title_passes_filter(title, include_keywords, exclude_keywords):
+            continue
+        videos.append(
+            YouTubeVideoRef(
+                video_id=video_id,
+                title=title,
+                channel_id=channel_id,
+                author=_xml_text(entry, "name"),
+                published_at=_xml_text(entry, "published"),
+            )
+        )
+    return videos
+
+
+def _xml_text(item: ET.Element, local_name: str) -> str:
+    for child in item.iter():
+        if child.tag.split("}")[-1] == local_name:
+            return (child.text or child.get("href") or "").strip()
+    return ""
+
+
+def _title_passes_filter(
+    title: str,
+    include_keywords: Iterable[str],
+    exclude_keywords: Iterable[str],
+) -> bool:
+    lowered = title.lower()
+    includes = [keyword.lower().strip() for keyword in include_keywords if keyword.strip()]
+    excludes = [keyword.lower().strip() for keyword in exclude_keywords if keyword.strip()]
+    if includes and not any(re.search(pattern, lowered) for pattern in includes):
+        return False
+    if excludes and any(re.search(pattern, lowered) for pattern in excludes):
+        return False
+    return True
 
 
 def scrape_youtube_smoke(

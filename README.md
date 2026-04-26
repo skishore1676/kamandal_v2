@@ -79,6 +79,7 @@ Current defaults:
 - `kamandal import-transcripts`
 - `kamandal scrape-youtube-smoke --video-id VIDEO_ID`
 - `kamandal fetch-youtube-transcript --video-id VIDEO_ID`
+- `kamandal list-youtube-channel-videos --channel-id CHANNEL_ID --limit 1`
 
 Public integration is intentionally conservative at this stage: the fixture adapter is the deterministic test path, and live order submission remains gated off.
 
@@ -121,3 +122,5 @@ The oldmac launchd setup uses three scripts:
 - `scripts/run_weekly_reviewer.sh`: Fridays at 10:00 Central, reviewing the latest local plan audit only.
 
 Approval behavior is controlled by `execution.approval_mode` in `config/control.yaml`, or by the env override `KAMANDAL_APPROVAL_MODE`. Current shadow automation uses `shadow_auto_top_plan`; live trading still requires `KAMANDAL_MODE=live`, `KAMANDAL_TRADING_ENABLED=true`, no halt, and valid Public preflight.
+
+YouTube can be configured either with explicit video IDs (`KAMANDAL_YOUTUBE_VIDEO_IDS` or `data/youtube_queue.txt`) or with channel IDs (`KAMANDAL_YOUTUBE_CHANNEL_IDS` or `config/youtube_channels.txt`). The v1-style default is one recent video per channel via `KAMANDAL_YOUTUBE_CHANNEL_LIMIT=1`.
