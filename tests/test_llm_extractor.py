@@ -94,7 +94,39 @@ def test_llm_extractor_writes_thesis_ideas_and_filters_universe(tmp_path) -> Non
     assert idea["strategy_hint"] == ""
     assert idea["mentioned_strategy"] == "put_diagonal"
     assert idea["extraction_confidence"] == "high"
+    assert idea["idea_id"].endswith("_01")
     assert "&id" not in result.ideas_path.read_text(encoding="utf-8")
+
+
+def test_llm_extractor_keeps_same_ticker_ideas_unique(tmp_path) -> None:
+    class SameTickerClient:
+        def chat_json(self, system_prompt: str, user_prompt: str):
+            return {
+                "digest": {"headline": "AAPL examples", "summary": "Two ideas.", "actionable_ideas_present": True},
+                "ideas": [
+                    {"underlying": "AAPL", "direction": "vol_up", "thesis_tags": ["vol_expansion"], "horizon_days": 30},
+                    {"underlying": "AAPL", "direction": "vol_down", "thesis_tags": ["vol_contraction"], "horizon_days": 45},
+                ],
+            }
+
+    transcripts = tmp_path / "transcripts"
+    transcripts.mkdir()
+    (transcripts / "sample.txt").write_text("AAPL examples.", encoding="utf-8")
+
+    result = extract_ideas_llm(
+        {},
+        transcripts,
+        digest_dir=tmp_path / "digest",
+        ideas_dir=tmp_path / "ideas",
+        allowed_symbols={"AAPL"},
+        client=SameTickerClient(),
+    )
+
+    payload = yaml.safe_load(result.ideas_path.read_text(encoding="utf-8"))
+    idea_ids = [idea["idea_id"] for idea in payload["ideas"]]
+    assert len(idea_ids) == len(set(idea_ids))
+    assert idea_ids[0].endswith("_01")
+    assert idea_ids[1].endswith("_02")
 
 
 def test_reviewer_writes_local_json_and_markdown(tmp_path) -> None:

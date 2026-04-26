@@ -74,8 +74,8 @@ def extract_ideas_llm(
         if not isinstance(source_ideas, list):
             source_ideas = []
         normalized = []
-        for raw_idea in source_ideas:
-            idea = _normalize_idea(raw_idea, transcript_file=transcript_file, today=today)
+        for idea_index, raw_idea in enumerate(source_ideas, start=1):
+            idea = _normalize_idea(raw_idea, transcript_file=transcript_file, today=today, idea_index=idea_index)
             if idea is None:
                 continue
             if allowed_symbols is not None and idea["underlying"] not in allowed_symbols:
@@ -164,7 +164,7 @@ Source: {source_name}
 """
 
 
-def _normalize_idea(raw: Any, *, transcript_file: Path, today: date) -> dict[str, Any] | None:
+def _normalize_idea(raw: Any, *, transcript_file: Path, today: date, idea_index: int = 1) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     underlying = str(raw.get("underlying") or raw.get("ticker") or "").upper().strip()
@@ -188,7 +188,7 @@ def _normalize_idea(raw: Any, *, transcript_file: Path, today: date) -> dict[str
     if confidence not in {"low", "medium", "high"}:
         confidence = "low"
     horizon_days = _coerce_horizon(raw.get("horizon_days"))
-    idea_id = f"{today.isoformat()}_{transcript_file.stem}_{underlying}"
+    idea_id = f"{today.isoformat()}_{transcript_file.stem}_{underlying}_{idea_index:02d}"
     return {
         "idea_id": idea_id,
         "source": f"llm_transcript:{transcript_file.name}",
