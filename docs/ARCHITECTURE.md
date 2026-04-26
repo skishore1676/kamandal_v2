@@ -9,7 +9,7 @@ This document reconciles:
 
 - Suman's operating model
 - lessons from `bhiksha`, `mala_v2`, and old `kamandal`
-- the external Claude PRD in `/Users/suman/Downloads/kamandal_prd.md`
+- the external Claude PRD supplied during planning
 
 The goal is to preserve the good ideas without importing complexity that does
 not match the current vision.

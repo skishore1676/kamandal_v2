@@ -242,7 +242,7 @@ LLM Intelligence Layer
   -> proposed rule changes for human approval
 ```
 
-See [ARCHITECTURE.md](/Users/suman/code/kamandal_v2/docs/ARCHITECTURE.md) for
+See [ARCHITECTURE.md](ARCHITECTURE.md) for
 the current engine design, including what we accepted and rejected from the
 external PRD review.
 
