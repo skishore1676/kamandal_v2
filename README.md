@@ -2,12 +2,19 @@
 
 Local-first multileg options portfolio planning and management cockpit.
 
-The current scaffold implements the Phase 0 surface:
+The current scaffold implements the first execution-grade planning loop:
 
 - env/local runtime control
-- Google Sheet configuration cockpit
+- Google Sheet configuration cockpit for `universe`, `playbooks`, and `daily_plan`
 - seed generation from old `kamandal`
-- sheet bootstrap for `universe`, `playbooks`, and `daily_plan`
+- local idea ingestion from YAML/JSON
+- deterministic fixture market data and preflight
+- multileg candidate builders and shape validators
+- beam-search portfolio plan generation
+- local SQLite/audit artifacts
+- shadow auto-approval of the top eligible plan
+- local transcript import into digest and rough idea YAML
+- local IV snapshot history and IV percentile overlay for Public planning
 
 ## Sheet
 
@@ -32,6 +39,9 @@ python3 -m venv .venv
 
 .venv/bin/kamandal seed-preview
 .venv/bin/kamandal bootstrap-sheet
+.venv/bin/kamandal plan --ideas data/ideas/sample.yaml --config-source seed --provider fixture
+.venv/bin/kamandal run-shadow-cycle --ideas data/ideas/sample.yaml --config-source seed --provider fixture
+.venv/bin/kamandal import-transcripts --source-dir data/transcripts
 .venv/bin/python -m pytest tests -q
 ```
 
@@ -44,8 +54,59 @@ Current defaults:
 - `mode: shadow`
 - `trading_enabled: false`
 - `halt: false`
-- account size: `$5,000`
+- Public runs use broker-reported account size and buying power
 - portfolio BPR cap: `90%`
 - per-underlying BPR cap: `25%`
 - max positions: `5`
-- approval mode: `shadow_preflight_after_approval`
+- approval mode: `shadow_auto_top_plan`
+- missing IV policy: neutral provisional `50` for bootstrap/shadow testing
+- playbooks can optionally gate on `iv_percentile`, `iv_rank`, and absolute `iv_abs`
+
+## CLI Surface
+
+- `kamandal pull-sheet`
+- `kamandal validate-config`
+- `kamandal plan --ideas data/ideas/*.yaml`
+- `kamandal write-daily-plan`
+- `kamandal run-shadow-cycle`
+- `kamandal run-intelligence-cycle`
+- `kamandal extract-ideas-llm`
+- `kamandal run-llm-cycle`
+- `kamandal review-rejections`
+- `kamandal public-smoke --symbol TSLA`
+- `kamandal capture-iv --config-source sheet --provider public`
+- `kamandal iv-status --symbols TSLA NVDA`
+- `kamandal import-transcripts`
+- `kamandal scrape-youtube-smoke --video-id VIDEO_ID`
+
+Public integration is intentionally conservative at this stage: the fixture adapter is the deterministic test path, and live order submission remains gated off.
+
+## Monday Shadow Runbook
+
+Dry smoke, no sheet write:
+
+```bash
+.venv/bin/kamandal public-smoke --symbol TSLA
+.venv/bin/kamandal capture-iv --config-source sheet --provider public
+.venv/bin/kamandal iv-status --symbols TSLA NVDA SPY
+.venv/bin/kamandal run-intelligence-cycle \
+  --source-dir data/transcripts/archive/youtube/2026-04-25 \
+  --config-source sheet \
+  --provider public \
+  --no-write-sheet
+```
+
+Operator shadow cycle, writes `daily_plan` and local shadow artifacts only:
+
+```bash
+.venv/bin/kamandal run-intelligence-cycle \
+  --source-dir data/transcripts/archive/youtube/2026-04-25 \
+  --config-source sheet \
+  --provider public
+```
+
+The command imports transcripts as thesis objects, filters extracted symbols to the configured universe, builds Public-preflighted candidates, ranks plan-level bundles, writes `daily_plan`, and records the auto-approved top shadow plan locally. It does not submit live orders.
+
+Transcript extraction emits semantic idea fields such as `direction`, controlled `thesis_tags`, `horizon_days`, `mentioned_strategy`, `extraction_confidence`, and `quote_evidence`. It does not choose executable legs; playbook matching remains deterministic.
+
+The LLM loop keeps the same boundary: Codex CLI extracts thesis objects, optional IV capture updates local volatility history, the deterministic planner builds candidates/plans, and `review-rejections` writes local suggestions only. It never mutates playbooks or submits orders.

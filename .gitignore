@@ -7,9 +7,12 @@ __pycache__/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/
 data/audit/*.json
+data/audit/*.jsonl
 data/sheet_cache/*.json
 data/digest/*.md
+data/ideas/imported_*.yaml
+data/transcripts/
 config/public_session.json
 config/public_account.json
-

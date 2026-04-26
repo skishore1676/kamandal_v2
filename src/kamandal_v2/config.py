@@ -75,7 +75,6 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "runtime.mode": os.environ.get("KAMANDAL_MODE"),
         "runtime.trading_enabled": _env_bool("KAMANDAL_TRADING_ENABLED"),
         "runtime.halt": _env_bool("KAMANDAL_HALT"),
-        "portfolio.account_size_usd": _env_float("KAMANDAL_ACCOUNT_SIZE_USD"),
         "portfolio.target_max_bpr_utilization_pct": _env_float("KAMANDAL_TARGET_MAX_BPR_UTILIZATION_PCT"),
         "portfolio.hard_max_bpr_utilization_pct": _env_float("KAMANDAL_HARD_MAX_BPR_UTILIZATION_PCT"),
         "portfolio.max_bpr_per_underlying_pct": _env_float("KAMANDAL_MAX_BPR_PER_UNDERLYING_PCT"),
@@ -125,4 +124,3 @@ def extract_spreadsheet_id(raw: str) -> str:
     if marker not in raw:
         return raw.strip()
     return raw.split(marker, 1)[1].split("/", 1)[0].strip()
-

@@ -69,6 +69,10 @@ leg_count
 profiles
 iv_percentile_min
 iv_percentile_max
+iv_rank_min
+iv_rank_max
+iv_abs_min
+iv_abs_max
 dte_min
 dte_max
 short_delta_min
@@ -100,6 +104,10 @@ Notes:
   `call_calendar`.
 - `variant`: context-specific flavor, such as `standard`, `high_iv`, or
   `earnings`.
+- `iv_percentile_min/max`: optional distribution percentile gate.
+- `iv_rank_min/max`: optional min/max-rank gate against the local lookback.
+- `iv_abs_min/max`: optional absolute ATM IV gate, useful for avoiding
+  low-volatility false positives.
 - `half_time_exit`: true/false. If true, the engine can recommend exit around
   half the original DTE.
 
@@ -123,6 +131,10 @@ per-trade Greeks, exact order payloads, and preflight responses belong in local
 SQLite/audit files. The sheet should answer, "Which portfolio plan should I
 choose?", not force the operator to reconstruct a plan from many trade rows.
 
+JSON in a cell is allowed where it improves visibility without exploding the
+sheet into many tabs or many repeated rows. The human-readable columns should be
+good enough for quick selection; JSON columns provide drilldown.
+
 Suggested columns:
 
 ```text
@@ -134,6 +146,7 @@ plan_trade_count
 plan_score
 plan_summary
 trade_bundle
+trade_bundle_json
 plan_total_bpr
 plan_bpr_utilization_pct
 buying_power_after
@@ -152,6 +165,8 @@ portfolio_vega_change
 mode
 plan_reasons
 blocked_by
+plan_metrics_json
+plan_detail_json
 operator_action
 operator_notes
 ```
@@ -162,8 +177,15 @@ Notes:
 - `plan_rank` ranks the bundle.
 - `trade_bundle` is a compact human-readable summary, such as
   `SPY put_spread; TLT short_put; QQQ call_spread`.
+- `trade_bundle_json` contains the structured list of trades in the plan:
+  candidate id, idea id, underlying, playbook, structure, expirations, strikes,
+  credit/debit, BPR, and compact reasons.
 - `plan_reasons` explains the portfolio-level decision: BPR fit, delta/gamma
   shape, theta improvement, concentration, event risk, and IV fit.
+- `plan_metrics_json` contains the structured before/after/change metrics used
+  by the scorer.
+- `plan_detail_json` contains the full plan object suitable for local replay or
+  debugging. It should mirror a local SQLite/audit record id when available.
 - `operator_action` applies to the whole plan; later values can be `approve`,
   `reject`, or `hold`.
 - Exact order payloads, preflight responses, fills, and grouped positions stay

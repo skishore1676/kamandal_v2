@@ -16,9 +16,12 @@ def test_daily_plan_header_represents_plan_bundles() -> None:
     assert "plan_id" in header
     assert "plan_trade_count" in header
     assert "trade_bundle" in header
+    assert "trade_bundle_json" in header
     assert "portfolio_delta_change" in header
     assert "portfolio_theta_change" in header
     assert "plan_reasons" in header
+    assert "plan_metrics_json" in header
+    assert "plan_detail_json" in header
     assert "candidate_rank" not in header
     assert "underlying" not in header
     assert "delta_impact" not in header

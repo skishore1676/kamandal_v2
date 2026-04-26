@@ -61,6 +61,20 @@ class GoogleSheetClient:
         worksheet.freeze(rows=1)
         return len(rows)
 
+    def read_tab(self, title: str) -> list[dict[str, str]]:
+        worksheet = self._worksheet(title, rows=100, cols=26)
+        values = worksheet.get_all_values() or []
+        if not values:
+            return []
+        header = [str(cell).strip() for cell in values[0]]
+        rows: list[dict[str, str]] = []
+        for raw in values[1:]:
+            if not any(str(cell).strip() for cell in raw):
+                continue
+            padded = list(raw) + [""] * (len(header) - len(raw))
+            rows.append({header[index]: str(padded[index]).strip() for index in range(len(header)) if header[index]})
+        return rows
+
     def _worksheet(self, title: str, *, rows: int, cols: int) -> Any:
         try:
             return self._spreadsheet.worksheet(title)
@@ -87,6 +101,25 @@ def bootstrap_sheet(
     return BootstrapResult(spreadsheet_id=client.spreadsheet_id, tabs=written)
 
 
+def pull_sheet_tables(config: dict[str, Any]) -> dict[str, list[dict[str, str]]]:
+    client = GoogleSheetClient.from_config(config)
+    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    return {
+        logical_name: client.read_tab(str(tab_names.get(logical_name) or logical_name))
+        for logical_name in ("universe", "playbooks", "daily_plan")
+    }
+
+
+def write_daily_plan(config: dict[str, Any], rows: list[list[Any]], header: list[str]) -> int:
+    client = GoogleSheetClient.from_config(config)
+    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    return client.replace_tab(
+        str(tab_names.get("daily_plan") or "daily_plan"),
+        header=header,
+        rows=rows,
+    )
+
+
 def _cell(value: Any) -> Any:
     if value is None:
         return ""
@@ -101,4 +134,3 @@ def _col_letter(index: int) -> str:
         index, remainder = divmod(index - 1, 26)
         letters = chr(65 + remainder) + letters
     return letters
-

@@ -4,7 +4,6 @@ runtime:
   halt: false
 
 portfolio:
-  account_size_usd: 5000
   target_max_bpr_utilization_pct: 90
   hard_max_bpr_utilization_pct: 90
   max_bpr_per_underlying_pct: 25
@@ -14,8 +13,18 @@ portfolio:
   theta_policy: positive_theta_preferred
   vega_policy: record_only
 
+volatility:
+  metric: atm_30_45_mean_iv
+  lookback_days: 252
+  min_observations_for_percentile: 1
+  missing_iv_policy: neutral   # strict | neutral
+  provisional_percentile: 50
+  dte_min: 30
+  dte_max: 45
+  sample_size: 12
+
 execution:
-  approval_mode: shadow_preflight_after_approval
+  approval_mode: shadow_auto_top_plan
   order_type: limit
   time_in_force: DAY
   max_contracts_per_order: 1
@@ -48,4 +57,3 @@ llm:
   codex_binary: ""
   codex_workdir: ""
   codex_timeout_seconds: 300
-

@@ -242,6 +242,10 @@ LLM Intelligence Layer
   -> proposed rule changes for human approval
 ```
 
+See [ARCHITECTURE.md](/Users/suman/code/kamandal_v2/docs/ARCHITECTURE.md) for
+the current engine design, including what we accepted and rejected from the
+external PRD review.
+
 Loaded configuration is defined by:
 
 - environment/local config for runtime control and secrets
@@ -326,6 +330,8 @@ Builds candidates and ranked portfolio plans:
 - `daily_plan` should stay plan-level: individual candidate/leg impacts are
   useful for audit, but the operator decision is based on plan-level BPR,
   portfolio Greeks, concentration, event risk, and reasons
+- JSON cells in `daily_plan` are acceptable for drilldown, as long as the sheet
+  remains one row per plan
 
 Output: `daily_plan` rows and candidate records.
 
