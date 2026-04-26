@@ -14,16 +14,26 @@ run_market_shadow() {
   provider="${KAMANDAL_MARKET_PROVIDER:-public}"
 
   mkdir -p "$ideas_dir" data/logs
+  if ! find "$ideas_dir" -maxdepth 1 \( -name '*.yaml' -o -name '*.yml' -o -name '*.json' \) | grep -q .; then
+    log "No active idea files in $ideas_dir; exiting without sheet/Public work."
+    exit 0
+  fi
 
   log "Validating sheet config."
   "$KAMANDAL_BIN" validate-config --config-source sheet
 
-  log "Running shadow cycle provider=$provider approval_mode=${KAMANDAL_APPROVAL_MODE:-config/control.yaml} ideas=$ideas_dir write_sheet=true."
+  local write_args
+  write_args=()
+  if [[ "${KAMANDAL_MARKET_WRITE_SHEET:-true}" == "true" ]]; then
+    write_args+=(--write-sheet)
+  fi
+
+  log "Running shadow cycle provider=$provider approval_mode=${KAMANDAL_APPROVAL_MODE:-config/control.yaml} ideas=$ideas_dir write_sheet=${KAMANDAL_MARKET_WRITE_SHEET:-true}."
   "$KAMANDAL_BIN" run-shadow-cycle \
     --ideas "$ideas_dir" \
     --config-source sheet \
     --provider "$provider" \
-    --write-sheet
+    "${write_args[@]}"
 }
 
 with_lock market_shadow run_market_shadow
