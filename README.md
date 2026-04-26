@@ -115,11 +115,22 @@ The LLM loop keeps the same boundary: Codex CLI extracts thesis objects, optiona
 
 ## Scheduled Shadow Cadence
 
-The oldmac launchd setup uses three scripts:
+The oldmac server uses cron, matching Bhiksha's scheduling style while keeping
+Kamandal V2 as short scheduled jobs rather than a long-running daemon:
 
 - `scripts/run_youtube_extraction.sh`: trading days at 9:15, 11:45, and 14:30 Central. Fetches configured YouTube captions and runs Codex LLM extraction into `data/ideas/active`.
 - `scripts/run_market_shadow.sh`: every 15 minutes, guarded to trading days and market hours. It validates and reloads `universe`/`playbooks` from Google Sheets on every run, then writes plan rows to `daily_plan`.
 - `scripts/run_weekly_reviewer.sh`: Fridays at 10:00 Central, reviewing the latest local plan audit only.
+
+Install or refresh the cron schedule on oldmac:
+
+```bash
+scripts/cron_install_oldmac.sh
+```
+
+The installer writes a marked `KAMANDAL_V2` block in the user's crontab and
+removes the older Kamandal V2 LaunchAgents so macOS does not show them as Login
+Items. Existing non-Kamandal cron entries are preserved.
 
 Approval behavior is controlled by `execution.approval_mode` in `config/control.yaml`, or by the env override `KAMANDAL_APPROVAL_MODE`. Current shadow automation uses `shadow_auto_top_plan`; live trading still requires `KAMANDAL_MODE=live`, `KAMANDAL_TRADING_ENABLED=true`, no halt, and valid Public preflight.
 
