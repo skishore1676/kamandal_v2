@@ -1,7 +1,8 @@
 # Build Inputs Needed
 
 Date: 2026-04-25
-Status: Initial inputs received; Phase 0 scaffold started
+Status: Historical input snapshot; scaffold, sheet load, shadow loop, and
+oldmac scheduling are now implemented. See `README.md` for the current runbook.
 
 I do not have more conceptual blockers. The initial concrete inputs from Suman
 have been captured below.
@@ -95,9 +96,11 @@ Choose the first operating behavior:
 - `daily_plan_only`: write ranked plans, no preflight
 - `shadow_preflight_after_approval`: preflight rows only when
   `operator_action=approve`
-- `shadow_auto_preflight`: preflight top-ranked candidates that pass all gates
+- `shadow_auto_top_plan`: auto-select the top eligible shadow plan for loop
+  testing, without live order submission
 
-First mode: `shadow_preflight_after_approval`.
+Current mode: `shadow_auto_top_plan`, controlled by
+`execution.approval_mode` or `KAMANDAL_APPROVAL_MODE`.
 
 ## 7. Build Permission
 
