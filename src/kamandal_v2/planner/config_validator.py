@@ -33,12 +33,27 @@ def validate_config(universe: list[UniverseEntry], playbooks: list[Playbook]) ->
     warnings: list[str] = []
     enabled_playbooks = [playbook for playbook in playbooks if playbook.enabled]
 
+    _validate_required_tables(universe, playbooks, enabled_playbooks, errors)
     _validate_support(enabled_playbooks, errors)
     _validate_thesis_tags(enabled_playbooks, errors)
     _validate_universe_allowlists(universe, playbooks, warnings)
     _validate_variant_overlap(enabled_playbooks, warnings)
 
     return ConfigValidationResult(errors=errors, warnings=warnings)
+
+
+def _validate_required_tables(
+    universe: list[UniverseEntry],
+    playbooks: list[Playbook],
+    enabled_playbooks: list[Playbook],
+    errors: list[str],
+) -> None:
+    if not universe:
+        errors.append("config_missing_universe_rows")
+    if not playbooks:
+        errors.append("config_missing_playbook_rows")
+    if playbooks and not enabled_playbooks:
+        errors.append("config_missing_enabled_playbooks")
 
 
 def _validate_support(playbooks: list[Playbook], errors: list[str]) -> None:

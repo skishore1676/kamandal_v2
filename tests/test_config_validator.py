@@ -31,6 +31,24 @@ def test_validate_config_errors_for_enabled_unsupported_structure() -> None:
     assert "enabled_playbook_missing_validator:unsupported:not_real" in result.errors
 
 
+def test_validate_config_errors_for_missing_tables() -> None:
+    result = validate_config([], [])
+
+    assert not result.ok
+    assert "config_missing_universe_rows" in result.errors
+    assert "config_missing_playbook_rows" in result.errors
+
+
+def test_validate_config_errors_when_no_playbooks_enabled() -> None:
+    result = validate_config(
+        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [_playbook("disabled", enabled=False)],
+    )
+
+    assert not result.ok
+    assert "config_missing_enabled_playbooks" in result.errors
+
+
 def test_validate_config_errors_for_enabled_unknown_thesis_tag() -> None:
     result = validate_config(
         [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
@@ -44,7 +62,10 @@ def test_validate_config_errors_for_enabled_unknown_thesis_tag() -> None:
 def test_validate_config_allows_disabled_unknown_thesis_tag() -> None:
     result = validate_config(
         [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
-        [_playbook("experimental", enabled=False, applicable_thesis_tags=["needs_confirmation"])],
+        [
+            _playbook("put_spread_default"),
+            _playbook("experimental", enabled=False, applicable_thesis_tags=["needs_confirmation"]),
+        ],
     )
 
     assert result.ok
