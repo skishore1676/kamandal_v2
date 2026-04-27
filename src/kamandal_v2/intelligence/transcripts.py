@@ -83,6 +83,10 @@ CONTROLLED_THESIS_TAGS = {
 YOUTUBE_TRANSCRIPT_PROVIDERS = {"api", "yt_dlp"}
 
 YOUTUBE_IDEA_TITLE_WEIGHTS = {
+    "put on this trade": 12,
+    "just put on this trade": 12,
+    "waiting for it to fail": 10,
+    "first call": 6,
     "trade": 6,
     "trades": 6,
     "trading": 4,
@@ -93,6 +97,9 @@ YOUTUBE_IDEA_TITLE_WEIGHTS = {
     "watchlist": 5,
     "setup": 4,
     "setups": 4,
+    "broke out": 4,
+    "breakout": 4,
+    "lifetime high": 3,
     "volatility": 3,
     "portfolio": 3,
     "stocks": 2,
@@ -116,6 +123,7 @@ YOUTUBE_EDUCATION_TITLE_WEIGHTS = {
     "position sizing": -5,
     "leverage explained": -7,
     "blow up": -6,
+    "0dte": -5,
 }
 
 

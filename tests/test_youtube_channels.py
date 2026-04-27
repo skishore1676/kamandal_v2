@@ -73,10 +73,22 @@ def test_youtube_title_score_penalizes_educational_titles() -> None:
     idea_score = _youtube_title_score("LIVE Stocks, Options & Futures Trading with Pros")
     education_score = _youtube_title_score("Options Pricing Concepts I Wish I Knew as a Beginner")
     trader_education_score = _youtube_title_score("Most Traders Blow Up Their Accounts By Doing This One Thing")
+    zero_dte_score = _youtube_title_score("This 0DTE Trade Makes More in 4 Days Than a 30-Day Spread Makes All Month")
 
     assert idea_score > 0
     assert education_score < 0
     assert trader_education_score < 1
+    assert zero_dte_score < idea_score
+
+
+def test_youtube_title_score_boosts_tastylive_trade_clues() -> None:
+    trade_score = _youtube_title_score("Tesla Is Down While the Market Hits All-Time Highs. Tony Battista Just Put On This Trade.")
+    fail_score = _youtube_title_score("Nvidia Just Hit a Lifetime High, Broke Out of a 10-Month Base. Tim Knight Is Waiting for It to Fail.")
+    first_call_score = _youtube_title_score("April 27th, 2026 | tastylive's First Call")
+
+    assert trade_score >= 12
+    assert fail_score >= 10
+    assert first_call_score >= 6
 
 
 def test_subtitle_to_text_strips_vtt_markup_and_deduplicates() -> None:
