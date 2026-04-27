@@ -72,9 +72,11 @@ def test_youtube_feed_parser_scores_same_day_idea_videos() -> None:
 def test_youtube_title_score_penalizes_educational_titles() -> None:
     idea_score = _youtube_title_score("LIVE Stocks, Options & Futures Trading with Pros")
     education_score = _youtube_title_score("Options Pricing Concepts I Wish I Knew as a Beginner")
+    trader_education_score = _youtube_title_score("Most Traders Blow Up Their Accounts By Doing This One Thing")
 
     assert idea_score > 0
     assert education_score < 0
+    assert trader_education_score < 1
 
 
 def test_subtitle_to_text_strips_vtt_markup_and_deduplicates() -> None:

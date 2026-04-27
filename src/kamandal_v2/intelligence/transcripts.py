@@ -115,6 +115,7 @@ YOUTUBE_EDUCATION_TITLE_WEIGHTS = {
     "cheap options": -5,
     "position sizing": -5,
     "leverage explained": -7,
+    "blow up": -6,
 }
 
 
@@ -344,12 +345,19 @@ def _youtube_title_score(title: str) -> int:
     lowered = title.lower()
     score = 0
     for phrase, weight in YOUTUBE_IDEA_TITLE_WEIGHTS.items():
-        if phrase in lowered:
+        if _title_phrase_matches(lowered, phrase):
             score += weight
     for phrase, weight in YOUTUBE_EDUCATION_TITLE_WEIGHTS.items():
-        if phrase in lowered:
+        if _title_phrase_matches(lowered, phrase):
             score += weight
     return score
+
+
+def _title_phrase_matches(lowered_title: str, phrase: str) -> bool:
+    phrase = phrase.lower().strip()
+    if " " in phrase:
+        return phrase in lowered_title
+    return re.search(rf"\b{re.escape(phrase)}\b", lowered_title) is not None
 
 
 def _published_local_date(published_at: str, timezone: str) -> str:
