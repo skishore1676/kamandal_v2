@@ -8,10 +8,11 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 import requests
 import yaml
@@ -81,6 +82,41 @@ CONTROLLED_THESIS_TAGS = {
 
 YOUTUBE_TRANSCRIPT_PROVIDERS = {"api", "yt_dlp"}
 
+YOUTUBE_IDEA_TITLE_WEIGHTS = {
+    "trade": 6,
+    "trades": 6,
+    "trading": 4,
+    "market open": 5,
+    "last call": 4,
+    "options": 4,
+    "earnings": 4,
+    "watchlist": 5,
+    "setup": 4,
+    "setups": 4,
+    "volatility": 3,
+    "portfolio": 3,
+    "stocks": 2,
+    "fed": 1,
+    "macro": 1,
+}
+
+YOUTUBE_EDUCATION_TITLE_WEIGHTS = {
+    "beginner": -8,
+    "explained": -7,
+    "why most traders": -8,
+    "rules": -5,
+    "concepts": -7,
+    "pricing": -7,
+    "tutorial": -8,
+    "course": -8,
+    "learn": -6,
+    "education": -6,
+    "wish i knew": -8,
+    "cheap options": -5,
+    "position sizing": -5,
+    "leverage explained": -7,
+}
+
 
 @dataclass(slots=True)
 class TranscriptImportResult:
@@ -107,14 +143,16 @@ class YouTubeVideoRef:
     channel_id: str
     author: str
     published_at: str
+    score: int = 0
 
-    def to_dict(self) -> dict[str, str]:
+    def to_dict(self) -> dict[str, str | int]:
         return {
             "video_id": self.video_id,
             "title": self.title,
             "channel_id": self.channel_id,
             "author": self.author,
             "published_at": self.published_at,
+            "score": self.score,
         }
 
 
@@ -210,6 +248,11 @@ def fetch_youtube_channel_videos(
     channel_ids: Iterable[str],
     *,
     limit: int = 1,
+    scan_limit: int = 20,
+    published_date: str = "",
+    timezone: str = "America/Chicago",
+    score_titles: bool = True,
+    min_score: int | None = None,
     include_keywords: Iterable[str] = (),
     exclude_keywords: Iterable[str] = (),
 ) -> list[YouTubeVideoRef]:
@@ -228,6 +271,11 @@ def fetch_youtube_channel_videos(
             response.text,
             channel_id=channel_id,
             limit=limit,
+            scan_limit=scan_limit,
+            published_date=published_date,
+            timezone=timezone,
+            score_titles=score_titles,
+            min_score=min_score,
             include_keywords=include_keywords,
             exclude_keywords=exclude_keywords,
         ):
@@ -243,6 +291,11 @@ def _youtube_feed_videos_from_xml(
     *,
     channel_id: str,
     limit: int,
+    scan_limit: int | None = None,
+    published_date: str = "",
+    timezone: str = "America/Chicago",
+    score_titles: bool = True,
+    min_score: int | None = None,
     include_keywords: Iterable[str] = (),
     exclude_keywords: Iterable[str] = (),
 ) -> list[YouTubeVideoRef]:
@@ -252,23 +305,63 @@ def _youtube_feed_videos_from_xml(
         "yt": "http://www.youtube.com/xml/schemas/2015",
     }
     videos: list[YouTubeVideoRef] = []
+    candidates: list[YouTubeVideoRef] = []
+    scanned = 0
+    scan_cap = scan_limit if scan_limit is not None else limit
     for entry in root.findall("atom:entry", ns):
-        if len(videos) >= limit:
+        if scanned >= scan_cap:
             break
+        scanned += 1
         video_id = _xml_text(entry, "videoId")
         title = _xml_text(entry, "title")
-        if not video_id or not _title_passes_filter(title, include_keywords, exclude_keywords):
+        published_at = _xml_text(entry, "published")
+        score = _youtube_title_score(title) if score_titles else 0
+        if not video_id:
             continue
-        videos.append(
+        if not _title_passes_filter(title, include_keywords, exclude_keywords):
+            continue
+        if published_date and _published_local_date(published_at, timezone) != published_date:
+            continue
+        if min_score is not None and score < min_score:
+            continue
+        candidates.append(
             YouTubeVideoRef(
                 video_id=video_id,
                 title=title,
                 channel_id=channel_id,
                 author=_xml_text(entry, "name"),
-                published_at=_xml_text(entry, "published"),
+                published_at=published_at,
+                score=score,
             )
         )
+    if score_titles:
+        candidates.sort(key=lambda item: (item.score, item.published_at), reverse=True)
+    videos.extend(candidates[:limit])
     return videos
+
+
+def _youtube_title_score(title: str) -> int:
+    lowered = title.lower()
+    score = 0
+    for phrase, weight in YOUTUBE_IDEA_TITLE_WEIGHTS.items():
+        if phrase in lowered:
+            score += weight
+    for phrase, weight in YOUTUBE_EDUCATION_TITLE_WEIGHTS.items():
+        if phrase in lowered:
+            score += weight
+    return score
+
+
+def _published_local_date(published_at: str, timezone: str) -> str:
+    if not published_at:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.date().isoformat()
+        return parsed.astimezone(ZoneInfo(timezone)).date().isoformat()
+    except Exception:
+        return published_at[:10]
 
 
 def _xml_text(item: ET.Element, local_name: str) -> str:

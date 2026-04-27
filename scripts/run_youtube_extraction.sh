@@ -10,6 +10,7 @@ run_youtube_extraction() {
 
   local today transcript_dir digest_dir ideas_dir queue_file channel_file languages raw_ids ids
   local provider sleep_requests sleep_subtitles cookies_from_browser archive_file
+  local channel_limit channel_scan_limit published_date min_title_score score_args
   today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
   transcript_dir="${KAMANDAL_YOUTUBE_TRANSCRIPT_DIR:-data/transcripts/youtube/$today}"
   digest_dir="${KAMANDAL_YOUTUBE_DIGEST_DIR:-data/digest/youtube/$today}"
@@ -22,6 +23,10 @@ run_youtube_extraction() {
   sleep_subtitles="${KAMANDAL_YTDLP_SLEEP_SUBTITLES:-5}"
   cookies_from_browser="${KAMANDAL_YTDLP_COOKIES_FROM_BROWSER:-}"
   archive_file="${KAMANDAL_YTDLP_ARCHIVE_FILE:-data/youtube_archive.txt}"
+  channel_limit="${KAMANDAL_YOUTUBE_CHANNEL_LIMIT:-3}"
+  channel_scan_limit="${KAMANDAL_YOUTUBE_CHANNEL_SCAN_LIMIT:-20}"
+  published_date="${KAMANDAL_YOUTUBE_PUBLISHED_DATE:-$today}"
+  min_title_score="${KAMANDAL_YOUTUBE_MIN_TITLE_SCORE:-1}"
 
   mkdir -p "$transcript_dir" "$digest_dir" "$ideas_dir"
 
@@ -46,10 +51,18 @@ run_youtube_extraction() {
       fi
     done
     discovered_file="data/youtube_discovered_$today.txt"
-    log "Discovering YouTube channel videos: $channel_ids limit=${KAMANDAL_YOUTUBE_CHANNEL_LIMIT:-1}"
+    log "Discovering YouTube channel videos: $channel_ids limit=$channel_limit scan_limit=$channel_scan_limit published_date=$published_date min_score=$min_title_score"
+    score_args=()
+    if [[ -n "$min_title_score" ]]; then
+      score_args+=(--min-score "$min_title_score")
+    fi
     "$KAMANDAL_BIN" list-youtube-channel-videos \
       "${channel_args[@]}" \
-      --limit "${KAMANDAL_YOUTUBE_CHANNEL_LIMIT:-1}" \
+      --limit "$channel_limit" \
+      --scan-limit "$channel_scan_limit" \
+      --published-date "$published_date" \
+      --timezone "$KAMANDAL_MARKET_TZ" \
+      "${score_args[@]}" \
       --include-keywords "${KAMANDAL_YOUTUBE_INCLUDE_KEYWORDS:-}" \
       --exclude-keywords "${KAMANDAL_YOUTUBE_EXCLUDE_KEYWORDS:-}" \
       --output "$discovered_file"
@@ -63,6 +76,9 @@ run_youtube_extraction() {
   fi
 
   IFS=',' read -r -a ids <<< "$raw_ids"
+  local fetched_count failed_count
+  fetched_count=0
+  failed_count=0
   for raw_id in "${ids[@]}"; do
     local video_id
     video_id="$(printf '%s' "$raw_id" | xargs)"
@@ -83,8 +99,20 @@ run_youtube_extraction() {
     if [[ -n "$cookies_from_browser" ]]; then
       fetch_args+=(--cookies-from-browser "$cookies_from_browser")
     fi
-    "$KAMANDAL_BIN" "${fetch_args[@]}"
+    if "$KAMANDAL_BIN" "${fetch_args[@]}"; then
+      fetched_count=$((fetched_count + 1))
+    else
+      failed_count=$((failed_count + 1))
+      log "Transcript fetch failed for $video_id; continuing with remaining videos."
+    fi
   done
+  if (( fetched_count == 0 )); then
+    log "No transcripts fetched successfully; failed_count=$failed_count."
+    exit 1
+  fi
+  if (( failed_count > 0 )); then
+    log "Transcript fetch completed with partial failures: fetched_count=$fetched_count failed_count=$failed_count."
+  fi
 
   find "$ideas_dir" -maxdepth 1 -type f -name 'llm_imported_*.yaml' ! -name "llm_imported_$today.yaml" -delete
 

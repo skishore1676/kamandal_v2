@@ -104,7 +104,12 @@ def main() -> None:
     fetch_youtube_parser.add_argument("--archive-file", default="data/youtube_archive.txt")
     list_youtube_parser = subparsers.add_parser("list-youtube-channel-videos", help="List recent video IDs from configured YouTube channel RSS feeds")
     list_youtube_parser.add_argument("--channel-id", action="append", default=[], help="YouTube channel ID; repeat for multiple channels")
-    list_youtube_parser.add_argument("--limit", type=int, default=1, help="Recent videos per channel")
+    list_youtube_parser.add_argument("--limit", type=int, default=1, help="Selected videos per channel")
+    list_youtube_parser.add_argument("--scan-limit", type=int, default=20, help="Recent feed entries to evaluate per channel before selecting")
+    list_youtube_parser.add_argument("--published-date", default="", help="Only select videos published on this local YYYY-MM-DD date")
+    list_youtube_parser.add_argument("--timezone", default="America/Chicago", help="Timezone for --published-date")
+    list_youtube_parser.add_argument("--min-score", type=int, default=None, help="Minimum title idea score when scoring is enabled")
+    list_youtube_parser.add_argument("--no-score-titles", action="store_true", help="Keep feed order instead of ranking by title idea score")
     list_youtube_parser.add_argument("--include-keywords", default="", help="Comma-separated title include regex/substring filters")
     list_youtube_parser.add_argument("--exclude-keywords", default="", help="Comma-separated title exclude regex/substring filters")
     list_youtube_parser.add_argument("--output", default="", help="Optional file to write one video ID per line")
@@ -285,6 +290,11 @@ def main() -> None:
         videos = fetch_youtube_channel_videos(
             args.channel_id,
             limit=args.limit,
+            scan_limit=args.scan_limit,
+            published_date=args.published_date,
+            timezone=args.timezone,
+            score_titles=not args.no_score_titles,
+            min_score=args.min_score,
             include_keywords=_csv(args.include_keywords),
             exclude_keywords=_csv(args.exclude_keywords),
         )
