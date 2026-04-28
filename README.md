@@ -120,6 +120,7 @@ Kamandal V2 as short scheduled jobs rather than a long-running daemon:
 
 - `scripts/run_youtube_extraction.sh`: trading days at 9:15, 11:45, and 14:30 Central. Fetches configured YouTube captions and runs Codex LLM extraction into `data/ideas/active`.
 - `scripts/run_market_shadow.sh`: every 15 minutes, guarded to trading days and market hours. It validates and reloads `universe`/`playbooks` from Google Sheets on every run, then writes plan rows to `daily_plan`.
+- `scripts/run_iv_capture.sh`: trading days at 15:30 Central. Captures one local IV observation per enabled universe symbol from Public option chains.
 - `scripts/run_weekly_reviewer.sh`: Fridays at 10:00 Central, reviewing the latest local plan audit only.
 
 Install or refresh the cron schedule on oldmac:
