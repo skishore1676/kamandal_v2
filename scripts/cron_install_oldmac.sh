@@ -44,7 +44,7 @@ $BEGIN_MARKER
 45 11 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 30 14 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 */15 8-15 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_market_shadow.sh" >> "$REPO_ROOT/data/logs/cron_market_shadow.log" 2>&1
-30 15 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_iv_capture.sh" >> "$REPO_ROOT/data/logs/cron_iv_capture.log" 2>&1
+50 14 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_iv_capture.sh" >> "$REPO_ROOT/data/logs/cron_iv_capture.log" 2>&1
 0 10 * * 5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_weekly_reviewer.sh" >> "$REPO_ROOT/data/logs/cron_weekly_reviewer.log" 2>&1
 $END_MARKER
 CRON
