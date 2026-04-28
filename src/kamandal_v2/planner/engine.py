@@ -10,7 +10,7 @@ from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, Plan, Port
 from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflightClient
 from kamandal_v2.market.interfaces import MarketDataProvider
 from kamandal_v2.market.public import PublicAdapter
-from kamandal_v2.planner.candidate_builder import build_candidates
+from kamandal_v2.planner.candidate_builder import build_candidates, diagnose_idea_matches
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.idea_loader import load_ideas
@@ -31,6 +31,7 @@ class PlanRunResult:
     plans: list[Plan]
     daily_plan_rows: list[list[Any]]
     metrics: dict[str, Any]
+    idea_diagnostics: list[dict[str, object]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -39,6 +40,7 @@ class PlanRunResult:
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "plans": [plan.to_dict() for plan in self.plans],
             "metrics": dict(self.metrics),
+            "idea_diagnostics": list(self.idea_diagnostics),
         }
 
 
@@ -64,8 +66,9 @@ def run_plan(
     store.save_ideas(ideas)
     store.save_account_snapshot(plan_run_id, portfolio)
     candidates = build_candidates(ideas, universe, playbooks, market, preflight)
+    idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market)
     plans = generate_plans(candidates, portfolio, config)
-    metrics = _plan_metrics(ideas, candidates, plans, universe)
+    metrics = _plan_metrics(ideas, candidates, plans, universe, idea_diagnostics)
     mode = str((config.get("runtime") or {}).get("mode") or "shadow")
     rows = render_daily_plan_rows(plans, mode=mode)
 
@@ -78,13 +81,22 @@ def run_plan(
         "candidates": [candidate.to_dict() for candidate in candidates],
         "plans": [plan.to_dict() for plan in plans],
         "metrics": metrics,
+        "idea_diagnostics": idea_diagnostics,
         "daily_plan_rows": rows,
     })
     audit.event("plan_run_completed", {"plan_run_id": plan_run_id, **metrics})
 
     if write_sheet:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER)
-    return PlanRunResult(plan_run_id=plan_run_id, ideas=ideas, candidates=candidates, plans=plans, daily_plan_rows=rows, metrics=metrics)
+    return PlanRunResult(
+        plan_run_id=plan_run_id,
+        ideas=ideas,
+        candidates=candidates,
+        plans=plans,
+        daily_plan_rows=rows,
+        metrics=metrics,
+        idea_diagnostics=idea_diagnostics,
+    )
 
 
 def run_shadow_cycle(
@@ -180,7 +192,13 @@ def _market_provider(config: dict[str, Any], *, provider: str, store: LocalStore
     return _SnapshottingFixtureMarket(FixtureMarketDataProvider(), store)
 
 
-def _plan_metrics(ideas: list[Idea], candidates: list[Candidate], plans: list[Plan], universe: list[Any]) -> dict[str, Any]:
+def _plan_metrics(
+    ideas: list[Idea],
+    candidates: list[Candidate],
+    plans: list[Plan],
+    universe: list[Any],
+    idea_diagnostics: list[dict[str, object]],
+) -> dict[str, Any]:
     universe_symbols = {entry.symbol for entry in universe if entry.enabled}
     eligible_candidates = [candidate for candidate in candidates if candidate.eligible]
     rejected_candidates = [candidate for candidate in candidates if not candidate.eligible]
@@ -196,5 +214,7 @@ def _plan_metrics(ideas: list[Idea], candidates: list[Candidate], plans: list[Pl
         "candidates_eligible": len(eligible_candidates),
         "candidates_rejected": len(rejected_candidates),
         "preflight_failures": len(preflight_failures),
+        "ideas_with_playbook_match": sum(1 for item in idea_diagnostics if item.get("status") == "matched_playbooks"),
+        "ideas_without_playbook_match": sum(1 for item in idea_diagnostics if item.get("status") == "no_playbook_match"),
         "plans": len(plans),
     }

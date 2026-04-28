@@ -1,6 +1,6 @@
 from kamandal_v2.domain.models import Idea, Playbook, UniverseEntry
 from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflightClient
-from kamandal_v2.planner.candidate_builder import build_candidates
+from kamandal_v2.planner.candidate_builder import build_candidates, diagnose_idea_matches
 
 
 def _playbook(**overrides) -> Playbook:
@@ -217,3 +217,26 @@ def test_mentioned_strategy_can_satisfy_tag_gate_without_strategy_hint() -> None
     )
 
     assert any(candidate.structure == "jade_lizard" for candidate in candidates)
+
+
+def test_match_diagnostics_explain_zero_playbook_match() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_too_short",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 7,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+
+    diagnostics = diagnose_idea_matches(
+        [idea],
+        universe,
+        [_playbook(applicable_horizon_min=15)],
+        FixtureMarketDataProvider(),
+    )
+
+    assert diagnostics[0]["status"] == "no_playbook_match"
+    assert "No playbook matched" in diagnostics[0]["summary"]
+    assert diagnostics[0]["reason_counts"]["horizon_below_min:7<15"] == 1

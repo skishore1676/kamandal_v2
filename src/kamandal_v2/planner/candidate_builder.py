@@ -83,6 +83,71 @@ def build_candidates(
     return all_candidates
 
 
+def diagnose_idea_matches(
+    ideas: list[Idea],
+    universe: list[UniverseEntry],
+    playbooks: list[Playbook],
+    market: MarketDataProvider,
+) -> list[dict[str, object]]:
+    universe_by_symbol = {entry.symbol: entry for entry in universe if entry.enabled}
+    diagnostics: list[dict[str, object]] = []
+    for idea in ideas:
+        entry = universe_by_symbol.get(idea.underlying)
+        if entry is None:
+            diagnostics.append({
+                "idea_id": idea.idea_id,
+                "underlying": idea.underlying,
+                "status": "out_of_universe",
+                "matched_playbooks": [],
+                "summary": "No enabled universe entry for underlying.",
+                "reason_counts": {"underlying_not_enabled_or_missing": 1},
+                "playbooks": [],
+            })
+            continue
+        iv_pct = market.iv_percentile(idea.underlying)
+        iv_rank = market.iv_rank(idea.underlying)
+        iv_abs = market.iv_abs(idea.underlying)
+        event_status = market.event_status(idea.underlying)
+        playbook_rows: list[dict[str, object]] = []
+        reason_counts: dict[str, int] = {}
+        matched: list[str] = []
+        for playbook in playbooks:
+            reasons = _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+            if reasons:
+                for reason in reasons:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            else:
+                matched.append(playbook.playbook_id)
+            playbook_rows.append({
+                "playbook_id": playbook.playbook_id,
+                "structure": playbook.structure,
+                "enabled": playbook.enabled,
+                "matched": not reasons,
+                "reasons": reasons,
+            })
+        status = "matched_playbooks" if matched else "no_playbook_match"
+        diagnostics.append({
+            "idea_id": idea.idea_id,
+            "underlying": idea.underlying,
+            "direction": idea.direction,
+            "thesis_tags": list(idea.thesis_tags),
+            "horizon_days": idea.horizon_days,
+            "mentioned_strategy": idea.mentioned_strategy,
+            "status": status,
+            "matched_playbooks": matched,
+            "summary": _diagnostic_summary(matched, reason_counts),
+            "reason_counts": dict(sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))),
+            "market_context": {
+                "iv_percentile": iv_pct,
+                "iv_rank": iv_rank,
+                "iv_abs": iv_abs,
+                "event_status": event_status,
+            },
+            "playbooks": playbook_rows,
+        })
+    return diagnostics
+
+
 def _matches(
     idea: Idea,
     entry: UniverseEntry,
@@ -92,42 +157,68 @@ def _matches(
     iv_abs: float | None,
     event_status: str,
 ) -> bool:
+    return not _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+
+
+def _match_rejections(
+    idea: Idea,
+    entry: UniverseEntry,
+    playbook: Playbook,
+    iv_pct: float | None,
+    iv_rank: float | None,
+    iv_abs: float | None,
+    event_status: str,
+) -> list[str]:
+    reasons: list[str] = []
     if not playbook.enabled or playbook.structure not in SUPPORTED_STRUCTURES:
-        return False
+        if not playbook.enabled:
+            reasons.append("playbook_disabled")
+        if playbook.structure not in SUPPORTED_STRUCTURES:
+            reasons.append(f"unsupported_structure:{playbook.structure}")
+        return reasons
     if playbook.profiles and entry.profile not in playbook.profiles:
-        return False
+        reasons.append(f"profile_mismatch:{entry.profile}")
     if entry.allowed_playbooks and not {playbook.playbook_id, playbook.structure, playbook.strategy_family}.intersection(entry.allowed_playbooks):
-        return False
+        reasons.append("universe_playbook_not_allowed")
     if idea.strategy_hint and not _strategy_aliases(idea.strategy_hint).intersection({playbook.playbook_id, playbook.structure, playbook.strategy_family}):
-        return False
+        reasons.append(f"strategy_hint_mismatch:{idea.strategy_hint}")
     if playbook.applicable_direction and idea.direction not in playbook.applicable_direction:
-        return False
+        reasons.append(f"direction_mismatch:{idea.direction}")
     idea_tags = {tag.lower() for tag in idea.thesis_tags}
     mentioned_match = _mentioned_strategy_matches(idea, playbook)
     if playbook.applicable_thesis_tags and not idea_tags.intersection(playbook.applicable_thesis_tags) and not mentioned_match:
-        return False
+        reasons.append("thesis_tags_mismatch")
     if playbook.applicable_horizon_min is not None and idea.horizon_days < playbook.applicable_horizon_min:
-        return False
+        reasons.append(f"horizon_below_min:{idea.horizon_days}<{playbook.applicable_horizon_min}")
     if playbook.applicable_horizon_max is not None and idea.horizon_days > playbook.applicable_horizon_max:
-        return False
+        reasons.append(f"horizon_above_max:{idea.horizon_days}>{playbook.applicable_horizon_max}")
     if playbook.requires_iv_percentile and iv_pct is None:
-        return False
+        reasons.append("iv_percentile_missing")
     if iv_pct is not None:
         if iv_pct < entry.tradable_iv_percentile_min or iv_pct > entry.tradable_iv_percentile_max:
-            return False
+            reasons.append(f"universe_iv_percentile_out_of_range:{iv_pct}")
         if iv_pct < playbook.iv_percentile_min or iv_pct > playbook.iv_percentile_max:
-            return False
+            reasons.append(f"playbook_iv_percentile_out_of_range:{iv_pct}")
     if playbook.iv_rank_min is not None and (iv_rank is None or iv_rank < playbook.iv_rank_min):
-        return False
+        reasons.append("iv_rank_below_min" if iv_rank is not None else "iv_rank_missing")
     if playbook.iv_rank_max is not None and (iv_rank is None or iv_rank > playbook.iv_rank_max):
-        return False
+        reasons.append("iv_rank_above_max" if iv_rank is not None else "iv_rank_missing")
     if playbook.iv_abs_min is not None and (iv_abs is None or iv_abs < playbook.iv_abs_min):
-        return False
+        reasons.append("iv_abs_below_min" if iv_abs is not None else "iv_abs_missing")
     if playbook.iv_abs_max is not None and (iv_abs is None or iv_abs > playbook.iv_abs_max):
-        return False
+        reasons.append("iv_abs_above_max" if iv_abs is not None else "iv_abs_missing")
     if playbook.avoid_earnings and event_status not in {"clear", "unknown"}:
-        return False
-    return True
+        reasons.append(f"event_status_blocked:{event_status}")
+    return reasons
+
+
+def _diagnostic_summary(matched: list[str], reason_counts: dict[str, int]) -> str:
+    if matched:
+        return "Matched playbooks: " + ", ".join(matched[:5])
+    if not reason_counts:
+        return "No playbooks evaluated."
+    top_reasons = sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:3]
+    return "No playbook matched; top gates: " + ", ".join(f"{reason} ({count})" for reason, count in top_reasons)
 
 
 def _strategy_aliases(value: str) -> set[str]:

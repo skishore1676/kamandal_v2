@@ -116,3 +116,37 @@ ideas:
     assert result.candidates
     assert result.plans
     assert any(candidate.structure == "call_spread" for candidate in result.candidates)
+
+
+def test_plan_audit_includes_idea_match_diagnostics(tmp_path) -> None:
+    idea_file = tmp_path / "ideas.yaml"
+    idea_file.write_text(
+        """
+ideas:
+  - idea_id: qqq_short_horizon
+    source: test
+    underlying: QQQ
+    direction: bullish
+    strategy_hint: ""
+    thesis_tags: [momentum, breakout]
+    horizon_days: 7
+    operator_status: approved
+""",
+        encoding="utf-8",
+    )
+
+    result = run_plan(
+        load_control(),
+        idea_paths=[idea_file],
+        config_source="seed",
+        provider="fixture",
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert "ideas_without_playbook_match" in result.metrics
+    diagnostic = result.idea_diagnostics[0]
+    assert diagnostic["idea_id"] == "qqq_short_horizon"
+    assert diagnostic["status"] in {"matched_playbooks", "no_playbook_match"}
+    assert diagnostic["summary"]
+    assert diagnostic["reason_counts"]
