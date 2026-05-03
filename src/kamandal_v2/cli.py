@@ -196,6 +196,7 @@ def main() -> None:
             args.source_dir,
             digest_dir=args.digest_dir,
             ideas_dir=args.ideas_dir,
+            output_prefix=args.output_prefix,
             allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
         )
         print(json.dumps(result.to_dict(), indent=2))
@@ -241,6 +242,7 @@ def main() -> None:
             args.source_dir,
             digest_dir=args.digest_dir,
             ideas_dir=args.ideas_dir,
+            output_prefix=args.output_prefix,
             allowed_symbols=_universe_symbols(config, args.config_source),
         )
         iv_result = None
