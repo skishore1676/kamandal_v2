@@ -1,5 +1,6 @@
 from kamandal_v2.domain.models import OptionLeg
 from kamandal_v2.market.public import occ_symbol, parse_occ_symbol
+from kamandal_v2.planner.engine import _preflight_client
 
 
 def test_occ_symbol_round_trip() -> None:
@@ -30,3 +31,17 @@ def test_occ_symbol_round_trip() -> None:
         "option_type": "call",
         "strike": 465.0,
     }
+
+
+def test_preflight_client_unwraps_nested_market_adapters() -> None:
+    class PublicLike:
+        def preflight(self, candidate):  # noqa: ANN001
+            return candidate
+
+    class Wrapper:
+        def __init__(self, inner):
+            self.inner = inner
+
+    public = PublicLike()
+
+    assert _preflight_client(Wrapper(Wrapper(public))) is public

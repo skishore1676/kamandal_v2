@@ -60,7 +60,7 @@ def run_plan(
     universe, playbooks = load_planner_config(config, source=config_source)
     ideas = load_ideas(idea_paths)
     market = _market_provider(config, provider=provider, store=store)
-    preflight = getattr(market, "inner", market) if provider == "public" else FixturePreflightClient()
+    preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
     portfolio = market.account_state()
 
     store.save_ideas(ideas)
@@ -190,6 +190,15 @@ def _market_provider(config: dict[str, Any], *, provider: str, store: LocalStore
         )
         return _SnapshottingFixtureMarket(iv_market, store)
     return _SnapshottingFixtureMarket(FixtureMarketDataProvider(), store)
+
+
+def _preflight_client(market: Any) -> Any:
+    current = market
+    while current is not None:
+        if hasattr(current, "preflight"):
+            return current
+        current = getattr(current, "inner", None)
+    raise RuntimeError("public provider did not expose a preflight client")
 
 
 def _plan_metrics(

@@ -119,7 +119,7 @@ The oldmac server uses cron, matching Bhiksha's scheduling style while keeping
 Kamandal V2 as short scheduled jobs rather than a long-running daemon:
 
 - `scripts/run_youtube_extraction.sh`: trading days at 9:15, 11:45, and 14:30 Central. Fetches configured YouTube captions and runs Codex LLM extraction into `data/ideas/active`.
-- `scripts/run_market_shadow.sh`: every 15 minutes, guarded to trading days and market hours. It validates and reloads `universe`/`playbooks` from Google Sheets on every run, then writes plan rows to `daily_plan`.
+- `scripts/run_market_shadow.sh`: every 15 minutes during market hours except the 8:45 IV-capture slot. It validates and reloads `universe`/`playbooks` from Google Sheets on every run, then writes plan rows to `daily_plan`.
 - `scripts/run_iv_capture.sh`: trading days at 8:45 Central. Captures one fresh morning IV observation per enabled universe symbol from Public option chains for that day's planning loop.
 - `scripts/run_weekly_reviewer.sh`: Fridays at 10:00 Central, reviewing the latest local plan audit only.
 
