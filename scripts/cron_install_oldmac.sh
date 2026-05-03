@@ -27,6 +27,7 @@ remove_launch_agent() {
 }
 
 remove_launch_agent "$LABEL_PREFIX.youtube"
+remove_launch_agent "$LABEL_PREFIX.x_bookmarks"
 remove_launch_agent "$LABEL_PREFIX.market_shadow"
 remove_launch_agent "$LABEL_PREFIX.weekly_reviewer"
 
@@ -40,6 +41,7 @@ awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
 cat >> "$CRON_NEW" <<CRON
 
 $BEGIN_MARKER
+55 8 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_x_bookmark_extraction.sh" >> "$REPO_ROOT/data/logs/cron_x_bookmarks.log" 2>&1
 15 9 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 45 11 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 30 14 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1

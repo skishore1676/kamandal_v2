@@ -45,6 +45,7 @@ def extract_ideas_llm(
     *,
     digest_dir: str | Path = "data/digest",
     ideas_dir: str | Path = "data/ideas",
+    output_prefix: str = "llm_imported",
     run_date: date | None = None,
     allowed_symbols: set[str] | None = None,
     client: JsonLlmClient | None = None,
@@ -92,7 +93,7 @@ def extract_ideas_llm(
 
     output_ideas_file: Path | None = None
     if all_ideas:
-        output_ideas_file = ideas_path / f"llm_imported_{today.isoformat()}.yaml"
+        output_ideas_file = ideas_path / f"{_safe_output_prefix(output_prefix)}_{today.isoformat()}.yaml"
         output_ideas_file.write_text(
             yaml.safe_dump({"ideas": all_ideas}, sort_keys=False, default_flow_style=False),
             encoding="utf-8",
@@ -213,6 +214,11 @@ def _coerce_horizon(raw: Any) -> int:
     except (TypeError, ValueError):
         value = 45
     return max(1, min(value, 180))
+
+
+def _safe_output_prefix(raw: str) -> str:
+    safe = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in raw.strip())
+    return safe or "llm_imported"
 
 
 def _digest_lines(source: str, text: str, payload: dict[str, Any], ideas: list[dict[str, Any]]) -> list[str]:

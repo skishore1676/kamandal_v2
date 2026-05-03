@@ -129,6 +129,24 @@ def test_llm_extractor_keeps_same_ticker_ideas_unique(tmp_path) -> None:
     assert idea_ids[1].endswith("_02")
 
 
+def test_llm_extractor_uses_output_prefix(tmp_path) -> None:
+    transcripts = tmp_path / "transcripts"
+    transcripts.mkdir()
+    (transcripts / "sample.txt").write_text("TSLA looks stretched here.", encoding="utf-8")
+
+    result = extract_ideas_llm(
+        {},
+        transcripts,
+        digest_dir=tmp_path / "digest",
+        ideas_dir=tmp_path / "ideas",
+        output_prefix="x bookmarks",
+        allowed_symbols={"TSLA"},
+        client=_FakeExtractorClient(),
+    )
+
+    assert result.ideas_path.name.startswith("x_bookmarks_")
+
+
 def test_reviewer_writes_local_json_and_markdown(tmp_path) -> None:
     latest_run = tmp_path / "latest_plan_run.json"
     latest_run.write_text(

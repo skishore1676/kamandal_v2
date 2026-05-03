@@ -53,6 +53,7 @@ def main() -> None:
     llm_extract_parser.add_argument("--source-dir", default="data/transcripts")
     llm_extract_parser.add_argument("--digest-dir", default="data/digest")
     llm_extract_parser.add_argument("--ideas-dir", default="data/ideas")
+    llm_extract_parser.add_argument("--output-prefix", default="llm_imported")
     llm_extract_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     llm_extract_parser.add_argument("--filter-universe", action="store_true", help="Drop extracted tickers outside configured universe")
 
@@ -82,6 +83,7 @@ def main() -> None:
     llm_cycle_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
     llm_cycle_parser.add_argument("--no-write-sheet", action="store_true", help="Do not write daily_plan")
     llm_cycle_parser.add_argument("--skip-iv-capture", action="store_true", help="Skip IV capture for extracted symbols")
+    llm_cycle_parser.add_argument("--output-prefix", default="llm_imported")
 
     review_parser = subparsers.add_parser("review-rejections", help="Use Codex CLI to review rejected candidates and propose local changes")
     review_parser.add_argument("--latest-run", default="data/audit/latest_plan_run.json")
@@ -183,6 +185,7 @@ def main() -> None:
             args.source_dir,
             digest_dir=args.digest_dir,
             ideas_dir=args.ideas_dir,
+            output_prefix=args.output_prefix,
             allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
         )
         print(json.dumps(result.to_dict(), indent=2))
@@ -215,6 +218,7 @@ def main() -> None:
             args.source_dir,
             digest_dir=args.digest_dir,
             ideas_dir=args.ideas_dir,
+            output_prefix=args.output_prefix,
             allowed_symbols=_universe_symbols(config, args.config_source),
         )
         plan_result = None

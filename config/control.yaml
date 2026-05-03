@@ -68,3 +68,4 @@ source_intelligence:
   x_bookmarks:
     latest_state_file: ~/.openclaw/workspace-main/state/x_bookmark_shadow/latest.json
     trial_root: ~/.openclaw/workspace-main/experiments/birdclaw-trial
+    limit: 50
