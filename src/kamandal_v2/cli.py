@@ -8,6 +8,7 @@ from pathlib import Path
 
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
+from kamandal_v2.events.earnings import EarningsStore, capture_earnings_snapshots, earnings_event_status
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
 from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, fetch_youtube_transcript, import_transcripts, scrape_youtube_smoke
@@ -101,6 +102,15 @@ def main() -> None:
     iv_status_parser = subparsers.add_parser("iv-status", help="Show latest locally stored IV and percentile")
     iv_status_parser.add_argument("--symbols", nargs="*", help="Optional symbols; defaults to enabled sheet universe")
     iv_status_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+
+    earnings_parser = subparsers.add_parser("capture-earnings", help="Capture next earnings dates for universe symbols")
+    earnings_parser.add_argument("--symbols", nargs="*", help="Optional symbols; defaults to enabled sheet universe")
+    earnings_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    earnings_parser.add_argument("--provider", choices=["yfinance", "fixture"], default="yfinance")
+
+    earnings_status_parser = subparsers.add_parser("earnings-status", help="Show locally stored earnings event status")
+    earnings_status_parser.add_argument("--symbols", nargs="*", help="Optional symbols; defaults to enabled sheet universe")
+    earnings_status_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
 
     youtube_parser = subparsers.add_parser("scrape-youtube-smoke", help="Fetch captions for one YouTube video and archive locally")
     youtube_parser.add_argument("--video-id", required=True)
@@ -294,6 +304,19 @@ def main() -> None:
         symbols = [symbol.upper() for symbol in args.symbols] if args.symbols else sorted(_universe_symbols(config, args.config_source))
         print(json.dumps(_iv_status_json(symbols), indent=2))
         return
+    if args.command == "capture-earnings":
+        result = capture_earnings_snapshots(
+            config,
+            symbols=[symbol.upper() for symbol in args.symbols] if args.symbols else None,
+            config_source=args.config_source,
+            provider=args.provider,
+        )
+        print(json.dumps(result.to_dict(), indent=2))
+        return
+    if args.command == "earnings-status":
+        symbols = [symbol.upper() for symbol in args.symbols] if args.symbols else sorted(_universe_symbols(config, args.config_source))
+        print(json.dumps(_earnings_status_json(symbols), indent=2))
+        return
     if args.command == "scrape-youtube-smoke":
         transcript = scrape_youtube_smoke(
             args.video_id,
@@ -484,6 +507,24 @@ def _iv_status_json(symbols: list[str]) -> dict:
             "history_count": len(store.history(symbol, metric=latest.metric)),
             "iv_percentile": store.percentile(symbol, metric=latest.metric),
             "iv_rank": store.rank(symbol, metric=latest.metric),
+        })
+    return {"symbols": rows}
+
+
+def _earnings_status_json(symbols: list[str]) -> dict:
+    store = EarningsStore()
+    rows = []
+    for symbol in symbols:
+        latest = store.latest(symbol)
+        if latest is None:
+            rows.append({"symbol": symbol, "status": "missing", "event_status": "unknown"})
+            continue
+        rows.append({
+            "symbol": symbol,
+            "status": "ok",
+            "latest": latest.to_dict(),
+            "next_earnings_date": latest.next_earnings_date,
+            "event_status": earnings_event_status(latest),
         })
     return {"symbols": rows}
 

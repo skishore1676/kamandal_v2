@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, Plan, PortfolioState, utc_now
+from kamandal_v2.events.earnings import EarningsOverlayMarket, EarningsStore
 from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflightClient
 from kamandal_v2.market.interfaces import MarketDataProvider
 from kamandal_v2.market.public import PublicAdapter
@@ -214,8 +215,9 @@ def _market_provider(config: dict[str, Any], *, provider: str, store: LocalStore
             missing_policy=missing_policy,
             provisional_percentile=provisional_percentile,
         )
-        return _SnapshottingFixtureMarket(iv_market, store)
-    return _SnapshottingFixtureMarket(FixtureMarketDataProvider(), store)
+        event_market = EarningsOverlayMarket(iv_market, EarningsStore())
+        return _SnapshottingFixtureMarket(event_market, store)
+    return _SnapshottingFixtureMarket(EarningsOverlayMarket(FixtureMarketDataProvider(), EarningsStore()), store)
 
 
 def _preflight_client(market: Any) -> Any:
