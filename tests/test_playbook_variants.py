@@ -101,6 +101,43 @@ def test_candidate_filter_warn_mode_logs_without_rejecting() -> None:
     )
 
 
+def test_permissive_match_mode_warns_instead_of_blocking_iv_and_horizon() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_overextended",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 90,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    market = _LowAbsoluteIvFixture()
+
+    strict = build_candidates(
+        [idea],
+        universe,
+        [_playbook(applicable_horizon_max=45, iv_abs_min=30.0)],
+        market,
+        FixturePreflightClient(),
+    )
+    permissive = build_candidates(
+        [idea],
+        universe,
+        [_playbook(applicable_horizon_max=45, iv_abs_min=30.0)],
+        market,
+        FixturePreflightClient(),
+        match_gate_mode="permissive",
+    )
+
+    assert strict == []
+    assert any(candidate.eligible for candidate in permissive)
+    assert any(
+        "match_gate_warning=" in reason and "horizon_above_max" in reason and "iv_abs_below_min" in reason
+        for candidate in permissive
+        for reason in candidate.reasons
+    )
+
+
 def test_variant_with_iv_bounds_skips_when_iv_percentile_missing() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_overextended",

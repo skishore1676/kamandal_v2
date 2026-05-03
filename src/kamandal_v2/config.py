@@ -82,6 +82,7 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "shadow.account_size_override": _env_float("KAMANDAL_SHADOW_ACCOUNT_SIZE"),
         "shadow.buying_power_override": _env_float("KAMANDAL_SHADOW_BUYING_POWER"),
         "shadow.bpr_used_override": _env_float("KAMANDAL_SHADOW_BPR_USED"),
+        "shadow.match_gate_mode": os.environ.get("KAMANDAL_SHADOW_MATCH_GATE_MODE"),
         "shadow.candidate_filter_mode": os.environ.get("KAMANDAL_SHADOW_CANDIDATE_FILTER_MODE"),
         "execution.approval_mode": os.environ.get("KAMANDAL_APPROVAL_MODE"),
         "google_sheets.spreadsheet_id": os.environ.get("KAMANDAL_SHEET_ID"),

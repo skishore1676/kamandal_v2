@@ -25,6 +25,20 @@ SUPPORTED_STRUCTURES = {
     "jade_lizard",
 }
 
+PERMISSIVE_MATCH_GATE_PREFIXES = (
+    "horizon_above_max:",
+    "horizon_below_min:",
+    "iv_percentile_missing",
+    "iv_abs_above_max",
+    "iv_abs_below_min",
+    "iv_abs_missing",
+    "iv_rank_above_max",
+    "iv_rank_below_min",
+    "iv_rank_missing",
+    "playbook_iv_percentile_out_of_range:",
+    "universe_iv_percentile_out_of_range:",
+)
+
 
 def build_candidates(
     ideas: list[Idea],
@@ -34,6 +48,7 @@ def build_candidates(
     preflight: PreflightClient,
     *,
     per_idea_cap: int = 5,
+    match_gate_mode: str = "strict",
     candidate_filter_mode: str = "strict",
 ) -> list[Candidate]:
     universe_by_symbol = {entry.symbol: entry for entry in universe if entry.enabled}
@@ -50,7 +65,7 @@ def build_candidates(
         built_for_idea: list[Candidate] = []
         rejected_for_idea: list[Candidate] = []
         for playbook in playbooks:
-            if not _matches(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status):
+            if not _matches(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status, match_gate_mode=match_gate_mode):
                 continue
             raw_candidates = _build_for_playbook(idea, playbook, chain.underlying_price, chain.quotes)
             for candidate in raw_candidates:
@@ -81,6 +96,10 @@ def build_candidates(
                 candidate.reasons.append(f"iv_rank={iv_rank}")
                 candidate.reasons.append(f"iv_abs={iv_abs}")
                 candidate.reasons.append(f"event_status={event_status}")
+                if match_gate_mode == "permissive":
+                    ignored = _ignored_match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+                    if ignored:
+                        candidate.reasons.append("match_gate_warning=" + ",".join(ignored))
                 built_for_idea.append(candidate)
         all_candidates.extend(sorted(built_for_idea, key=lambda item: item.score, reverse=True)[:per_idea_cap])
         all_candidates.extend(rejected_for_idea)
@@ -92,6 +111,8 @@ def diagnose_idea_matches(
     universe: list[UniverseEntry],
     playbooks: list[Playbook],
     market: MarketDataProvider,
+    *,
+    match_gate_mode: str = "strict",
 ) -> list[dict[str, object]]:
     universe_by_symbol = {entry.symbol: entry for entry in universe if entry.enabled}
     diagnostics: list[dict[str, object]] = []
@@ -116,7 +137,8 @@ def diagnose_idea_matches(
         reason_counts: dict[str, int] = {}
         matched: list[str] = []
         for playbook in playbooks:
-            reasons = _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+            raw_reasons = _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+            reasons = _apply_match_gate_mode(raw_reasons, match_gate_mode)
             if reasons:
                 for reason in reasons:
                     reason_counts[reason] = reason_counts.get(reason, 0) + 1
@@ -128,6 +150,7 @@ def diagnose_idea_matches(
                 "enabled": playbook.enabled,
                 "matched": not reasons,
                 "reasons": reasons,
+                "ignored_reasons": [reason for reason in raw_reasons if reason not in reasons],
             })
         status = "matched_playbooks" if matched else "no_playbook_match"
         diagnostics.append({
@@ -160,8 +183,13 @@ def _matches(
     iv_rank: float | None,
     iv_abs: float | None,
     event_status: str,
+    *,
+    match_gate_mode: str = "strict",
 ) -> bool:
-    return not _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+    return not _apply_match_gate_mode(
+        _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status),
+        match_gate_mode,
+    )
 
 
 def _match_rejections(
@@ -214,6 +242,29 @@ def _match_rejections(
     if playbook.avoid_earnings and event_status not in {"clear", "unknown"}:
         reasons.append(f"event_status_blocked:{event_status}")
     return reasons
+
+
+def _ignored_match_rejections(
+    idea: Idea,
+    entry: UniverseEntry,
+    playbook: Playbook,
+    iv_pct: float | None,
+    iv_rank: float | None,
+    iv_abs: float | None,
+    event_status: str,
+) -> list[str]:
+    raw_reasons = _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+    strict_reasons = _apply_match_gate_mode(raw_reasons, "permissive")
+    return [reason for reason in raw_reasons if reason not in strict_reasons]
+
+
+def _apply_match_gate_mode(reasons: list[str], match_gate_mode: str) -> list[str]:
+    if match_gate_mode != "permissive":
+        return reasons
+    return [
+        reason for reason in reasons
+        if not any(reason.startswith(prefix) for prefix in PERMISSIVE_MATCH_GATE_PREFIXES)
+    ]
 
 
 def _diagnostic_summary(matched: list[str], reason_counts: dict[str, int]) -> str:

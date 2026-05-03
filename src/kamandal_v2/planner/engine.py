@@ -65,6 +65,7 @@ def run_plan(
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
     portfolio_raw = market.account_state()
     portfolio = _shadow_portfolio_override(portfolio_raw, config)
+    match_gate_mode = _match_gate_mode(config)
     candidate_filter_mode = _candidate_filter_mode(config)
 
     store.save_ideas(ideas)
@@ -75,9 +76,10 @@ def run_plan(
         playbooks,
         market,
         preflight,
+        match_gate_mode=match_gate_mode,
         candidate_filter_mode=candidate_filter_mode,
     )
-    idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market)
+    idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market, match_gate_mode=match_gate_mode)
     plans = generate_plans(candidates, portfolio, config)
     rejection_summary = _rejection_summary(ideas, candidates, idea_diagnostics)
     metrics = _plan_metrics(
@@ -88,6 +90,7 @@ def run_plan(
         idea_diagnostics,
         portfolio_raw,
         portfolio,
+        match_gate_mode,
         candidate_filter_mode,
     )
     mode = str((config.get("runtime") or {}).get("mode") or "shadow")
@@ -255,6 +258,14 @@ def _candidate_filter_mode(config: dict[str, Any]) -> str:
     return "warn" if requested == "warn" else "strict"
 
 
+def _match_gate_mode(config: dict[str, Any]) -> str:
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+    if mode != "shadow":
+        return "strict"
+    requested = str((config.get("shadow") or {}).get("match_gate_mode") or "strict").lower()
+    return "permissive" if requested == "permissive" else "strict"
+
+
 def _plan_metrics(
     ideas: list[Idea],
     candidates: list[Candidate],
@@ -263,6 +274,7 @@ def _plan_metrics(
     idea_diagnostics: list[dict[str, object]],
     portfolio_raw: PortfolioState,
     portfolio_effective: PortfolioState,
+    match_gate_mode: str,
     candidate_filter_mode: str,
 ) -> dict[str, Any]:
     universe_symbols = {entry.symbol for entry in universe if entry.enabled}
@@ -283,6 +295,7 @@ def _plan_metrics(
         "ideas_with_playbook_match": sum(1 for item in idea_diagnostics if item.get("status") == "matched_playbooks"),
         "ideas_without_playbook_match": sum(1 for item in idea_diagnostics if item.get("status") == "no_playbook_match"),
         "plans": len(plans),
+        "match_gate_mode": match_gate_mode,
         "candidate_filter_mode": candidate_filter_mode,
         "account_size_raw": portfolio_raw.account_size,
         "account_size_effective": portfolio_effective.account_size,
