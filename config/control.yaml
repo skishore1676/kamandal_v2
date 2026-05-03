@@ -63,3 +63,8 @@ llm:
   codex_binary: ""
   codex_workdir: ""
   codex_timeout_seconds: 300
+
+source_intelligence:
+  x_bookmarks:
+    latest_state_file: ~/.openclaw/workspace-main/state/x_bookmark_shadow/latest.json
+    trial_root: ~/.openclaw/workspace-main/experiments/birdclaw-trial

@@ -99,6 +99,8 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "llm.codex_binary": os.environ.get("KAMANDAL_CODEX_BINARY"),
         "llm.codex_workdir": os.environ.get("KAMANDAL_CODEX_WORKDIR"),
         "llm.codex_timeout_seconds": _env_int("KAMANDAL_CODEX_TIMEOUT_SECONDS"),
+        "source_intelligence.x_bookmarks.latest_state_file": os.environ.get("KAMANDAL_X_BOOKMARK_LATEST_STATE"),
+        "source_intelligence.x_bookmarks.trial_root": os.environ.get("KAMANDAL_X_BOOKMARK_TRIAL_ROOT"),
     }
     for key, value in overrides.items():
         if value is not None:

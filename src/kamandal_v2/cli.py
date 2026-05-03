@@ -11,6 +11,7 @@ from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
 from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, fetch_youtube_transcript, import_transcripts, scrape_youtube_smoke
+from kamandal_v2.intelligence.x_bookmarks import import_x_bookmarks
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.planner.config_loader import load_planner_config
@@ -54,6 +55,16 @@ def main() -> None:
     llm_extract_parser.add_argument("--ideas-dir", default="data/ideas")
     llm_extract_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     llm_extract_parser.add_argument("--filter-universe", action="store_true", help="Drop extracted tickers outside configured universe")
+
+    x_bookmarks_parser = subparsers.add_parser("import-x-bookmarks", help="Import sanitized X bookmark exports as LLM source docs")
+    x_bookmarks_parser.add_argument("--source-file", default="", help="Sanitized public-export/normalized JSON; defaults to latest OpenClaw state")
+    x_bookmarks_parser.add_argument("--latest-state", default="", help="OpenClaw x_bookmark_shadow latest.json")
+    x_bookmarks_parser.add_argument("--trial-root", default="", help="Birdclaw trial root containing sanitized exports")
+    x_bookmarks_parser.add_argument("--output-dir", default="data/source_docs/x_bookmarks")
+    x_bookmarks_parser.add_argument("--digest-dir", default="data/digest/x_bookmarks")
+    x_bookmarks_parser.add_argument("--limit", type=int, default=50)
+    x_bookmarks_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    x_bookmarks_parser.add_argument("--filter-universe", action="store_true", help="Report configured universe symbol hits")
 
     cycle_parser = subparsers.add_parser("run-intelligence-cycle", help="Import transcripts, build Public/fixture plan, and optionally write daily_plan")
     cycle_parser.add_argument("--source-dir", default="data/transcripts/archive/youtube")
@@ -182,6 +193,19 @@ def main() -> None:
             args.source_dir,
             digest_dir=args.digest_dir,
             ideas_dir=args.ideas_dir,
+            allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
+        )
+        print(json.dumps(result.to_dict(), indent=2))
+        return
+    if args.command == "import-x-bookmarks":
+        x_config = ((config.get("source_intelligence") or {}).get("x_bookmarks") or {})
+        result = import_x_bookmarks(
+            source_file=args.source_file or None,
+            latest_state=args.latest_state or x_config.get("latest_state_file") or "~/.openclaw/workspace-main/state/x_bookmark_shadow/latest.json",
+            trial_root=args.trial_root or x_config.get("trial_root") or "~/.openclaw/workspace-main/experiments/birdclaw-trial",
+            output_dir=args.output_dir,
+            digest_dir=args.digest_dir,
+            limit=args.limit,
             allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
         )
         print(json.dumps(result.to_dict(), indent=2))
