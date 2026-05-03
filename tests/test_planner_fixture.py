@@ -74,6 +74,29 @@ def test_shadow_cycle_creates_auto_approval_audit(tmp_path) -> None:
     assert result.plans[0].operator_action == "approve"
 
 
+def test_shadow_uses_paper_account_override(tmp_path) -> None:
+    control = load_control()
+    control["shadow"] = {
+        "account_size_override": 20_000,
+        "buying_power_override": 20_000,
+        "bpr_used_override": 0,
+        "candidate_filter_mode": "warn",
+    }
+
+    result = run_plan(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert result.metrics["account_size_raw"] == 5_000
+    assert result.metrics["account_size_effective"] == 20_000
+    assert result.plans[0].portfolio_before.account_size == 20_000
+
+
 def test_daily_plan_rows_include_json_drilldown(tmp_path) -> None:
     result = _run(tmp_path)
     row = result.daily_plan_rows[0]
@@ -150,3 +173,73 @@ ideas:
     assert diagnostic["status"] in {"matched_playbooks", "no_playbook_match"}
     assert diagnostic["summary"]
     assert diagnostic["reason_counts"]
+
+
+def test_rejection_summary_groups_zero_match_ideas(tmp_path) -> None:
+    idea_file = tmp_path / "ideas.yaml"
+    idea_file.write_text(
+        """
+ideas:
+  - idea_id: xyz_unknown
+    source: test
+    underlying: XYZ
+    direction: bullish
+    thesis_tags: [momentum]
+    horizon_days: 14
+    operator_status: approved
+""",
+        encoding="utf-8",
+    )
+
+    result = run_plan(
+        load_control(),
+        idea_paths=[idea_file],
+        config_source="seed",
+        provider="fixture",
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert result.rejection_summary == [
+        "1 XYZ: no playbook match - No enabled universe entry for underlying."
+    ]
+
+
+def test_shadow_warns_instead_of_rejecting_candidate_filters(tmp_path) -> None:
+    control = load_control()
+    control["shadow"] = {
+        "account_size_override": 20_000,
+        "buying_power_override": 20_000,
+        "candidate_filter_mode": "warn",
+    }
+    idea_file = tmp_path / "ideas.yaml"
+    idea_file.write_text(
+        """
+ideas:
+  - idea_id: qqq_overextended
+    source: test
+    underlying: QQQ
+    direction: bearish
+    thesis_tags: [overextended]
+    horizon_days: 14
+    operator_status: approved
+""",
+        encoding="utf-8",
+    )
+
+    result = run_plan(
+        control,
+        idea_paths=[idea_file],
+        config_source="seed",
+        provider="fixture",
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert result.metrics["candidate_filter_mode"] == "warn"
+    assert any(
+        reason.startswith("filter_warning=")
+        for candidate in result.candidates
+        for reason in candidate.reasons
+    )
+    assert any(candidate.eligible for candidate in result.candidates)

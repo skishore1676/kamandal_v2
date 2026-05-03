@@ -32,6 +32,7 @@ class PlanRunResult:
     daily_plan_rows: list[list[Any]]
     metrics: dict[str, Any]
     idea_diagnostics: list[dict[str, object]]
+    rejection_summary: list[str]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +42,7 @@ class PlanRunResult:
             "plans": [plan.to_dict() for plan in self.plans],
             "metrics": dict(self.metrics),
             "idea_diagnostics": list(self.idea_diagnostics),
+            "rejection_summary": list(self.rejection_summary),
         }
 
 
@@ -61,14 +63,33 @@ def run_plan(
     ideas = load_ideas(idea_paths)
     market = _market_provider(config, provider=provider, store=store)
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
-    portfolio = market.account_state()
+    portfolio_raw = market.account_state()
+    portfolio = _shadow_portfolio_override(portfolio_raw, config)
+    candidate_filter_mode = _candidate_filter_mode(config)
 
     store.save_ideas(ideas)
     store.save_account_snapshot(plan_run_id, portfolio)
-    candidates = build_candidates(ideas, universe, playbooks, market, preflight)
+    candidates = build_candidates(
+        ideas,
+        universe,
+        playbooks,
+        market,
+        preflight,
+        candidate_filter_mode=candidate_filter_mode,
+    )
     idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market)
     plans = generate_plans(candidates, portfolio, config)
-    metrics = _plan_metrics(ideas, candidates, plans, universe, idea_diagnostics)
+    rejection_summary = _rejection_summary(ideas, candidates, idea_diagnostics)
+    metrics = _plan_metrics(
+        ideas,
+        candidates,
+        plans,
+        universe,
+        idea_diagnostics,
+        portfolio_raw,
+        portfolio,
+        candidate_filter_mode,
+    )
     mode = str((config.get("runtime") or {}).get("mode") or "shadow")
     rows = render_daily_plan_rows(plans, mode=mode)
 
@@ -82,6 +103,7 @@ def run_plan(
         "plans": [plan.to_dict() for plan in plans],
         "metrics": metrics,
         "idea_diagnostics": idea_diagnostics,
+        "rejection_summary": rejection_summary,
         "daily_plan_rows": rows,
     })
     audit.event("plan_run_completed", {"plan_run_id": plan_run_id, **metrics})
@@ -96,6 +118,7 @@ def run_plan(
         daily_plan_rows=rows,
         metrics=metrics,
         idea_diagnostics=idea_diagnostics,
+        rejection_summary=rejection_summary,
     )
 
 
@@ -201,12 +224,46 @@ def _preflight_client(market: Any) -> Any:
     raise RuntimeError("public provider did not expose a preflight client")
 
 
+def _shadow_portfolio_override(portfolio: PortfolioState, config: dict[str, Any]) -> PortfolioState:
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+    if mode != "shadow":
+        return portfolio
+    shadow = config.get("shadow") or {}
+    account_size = shadow.get("account_size_override")
+    buying_power = shadow.get("buying_power_override")
+    bpr_used = shadow.get("bpr_used_override")
+    if account_size in (None, "") and buying_power in (None, "") and bpr_used in (None, ""):
+        return portfolio
+    next_account_size = float(account_size if account_size not in (None, "") else portfolio.account_size)
+    next_buying_power = float(buying_power if buying_power not in (None, "") else portfolio.buying_power)
+    next_bpr_used = float(bpr_used if bpr_used not in (None, "") else portfolio.bpr_used)
+    return PortfolioState(
+        account_size=next_account_size,
+        buying_power=next_buying_power,
+        bpr_used=next_bpr_used,
+        positions_count=portfolio.positions_count,
+        greeks=portfolio.greeks,
+        per_underlying_bpr=dict(portfolio.per_underlying_bpr),
+    )
+
+
+def _candidate_filter_mode(config: dict[str, Any]) -> str:
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+    if mode != "shadow":
+        return "strict"
+    requested = str((config.get("shadow") or {}).get("candidate_filter_mode") or "strict").lower()
+    return "warn" if requested == "warn" else "strict"
+
+
 def _plan_metrics(
     ideas: list[Idea],
     candidates: list[Candidate],
     plans: list[Plan],
     universe: list[Any],
     idea_diagnostics: list[dict[str, object]],
+    portfolio_raw: PortfolioState,
+    portfolio_effective: PortfolioState,
+    candidate_filter_mode: str,
 ) -> dict[str, Any]:
     universe_symbols = {entry.symbol for entry in universe if entry.enabled}
     eligible_candidates = [candidate for candidate in candidates if candidate.eligible]
@@ -226,4 +283,54 @@ def _plan_metrics(
         "ideas_with_playbook_match": sum(1 for item in idea_diagnostics if item.get("status") == "matched_playbooks"),
         "ideas_without_playbook_match": sum(1 for item in idea_diagnostics if item.get("status") == "no_playbook_match"),
         "plans": len(plans),
+        "candidate_filter_mode": candidate_filter_mode,
+        "account_size_raw": portfolio_raw.account_size,
+        "account_size_effective": portfolio_effective.account_size,
+        "buying_power_raw": portfolio_raw.buying_power,
+        "buying_power_effective": portfolio_effective.buying_power,
     }
+
+
+def _rejection_summary(
+    ideas: list[Idea],
+    candidates: list[Candidate],
+    idea_diagnostics: list[dict[str, object]],
+) -> list[str]:
+    diagnostics_by_id = {str(item.get("idea_id")): item for item in idea_diagnostics}
+    candidates_by_idea: dict[str, list[Candidate]] = {}
+    for candidate in candidates:
+        candidates_by_idea.setdefault(candidate.idea_id, []).append(candidate)
+
+    grouped: dict[str, int] = {}
+    for idea in ideas:
+        idea_candidates = candidates_by_idea.get(idea.idea_id, [])
+        eligible = [candidate for candidate in idea_candidates if candidate.eligible]
+        if eligible:
+            continue
+        diagnostic = diagnostics_by_id.get(idea.idea_id, {})
+        matched = diagnostic.get("matched_playbooks") or []
+        if not matched:
+            summary = str(diagnostic.get("summary") or "No matching playbook.")
+            _count_summary(grouped, f"{idea.underlying}: no playbook match - {summary}")
+            continue
+        if not idea_candidates:
+            _count_summary(
+                grouped,
+                f"{idea.underlying}: matched {', '.join(str(item) for item in matched[:4])} but built no option structures",
+            )
+            continue
+        reason_counts: dict[str, int] = {}
+        for candidate in idea_candidates:
+            reason = candidate.rejection_reason or "not_eligible"
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        top = sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:3]
+        reason_text = ", ".join(f"{reason} ({count})" for reason, count in top)
+        _count_summary(
+            grouped,
+            f"{idea.underlying}: matched {', '.join(str(item) for item in matched[:4])} but rejected candidates - {reason_text}",
+        )
+    return [f"{count} {line}" for line, count in sorted(grouped.items(), key=lambda item: (-item[1], item[0]))]
+
+
+def _count_summary(grouped: dict[str, int], line: str) -> None:
+    grouped[line] = grouped.get(line, 0) + 1

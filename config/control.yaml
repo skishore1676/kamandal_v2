@@ -13,6 +13,12 @@ portfolio:
   theta_policy: positive_theta_preferred
   vega_policy: record_only
 
+shadow:
+  account_size_override: 20000
+  buying_power_override: 20000
+  bpr_used_override: 0
+  candidate_filter_mode: warn   # strict | warn
+
 volatility:
   metric: atm_30_45_mean_iv
   lookback_days: 252

@@ -34,6 +34,7 @@ def build_candidates(
     preflight: PreflightClient,
     *,
     per_idea_cap: int = 5,
+    candidate_filter_mode: str = "strict",
 ) -> list[Candidate]:
     universe_by_symbol = {entry.symbol: entry for entry in universe if entry.enabled}
     all_candidates: list[Candidate] = []
@@ -60,9 +61,12 @@ def build_candidates(
                     continue
                 filter_rejection = _filter_rejection(candidate, playbook)
                 if filter_rejection:
-                    candidate.rejection_reason = filter_rejection
-                    rejected_for_idea.append(candidate)
-                    continue
+                    if candidate_filter_mode == "warn":
+                        candidate.reasons.append(f"filter_warning={filter_rejection}")
+                    else:
+                        candidate.rejection_reason = filter_rejection
+                        rejected_for_idea.append(candidate)
+                        continue
                 pf = preflight.preflight(candidate)
                 candidate.preflight = pf
                 if not pf.ok:
