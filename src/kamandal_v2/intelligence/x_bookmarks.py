@@ -148,6 +148,7 @@ def _source_doc_text(source_file: Path, records: list[dict[str, str]]) -> str:
         "Source: sanitized X bookmark public export",
         f"Source file: {source_file}",
         f"Record count: {len(records)}",
+        "Extraction guidance: treat $TICKER cashtags as ticker evidence; do not infer symbols from ordinary words.",
         "",
     ]
     for index, record in enumerate(records, start=1):
@@ -195,12 +196,12 @@ def _cashtags(records: list[dict[str, str]]) -> dict[str, int]:
 
 
 def _symbol_hits(records: list[dict[str, str]], symbols: set[str]) -> dict[str, int]:
+    cashtag_counts = _cashtags(records)
     counts: dict[str, int] = {}
-    for record in records:
-        text = record["text"]
-        for symbol in symbols:
-            if re.search(rf"(?<![A-Za-z])\$?{re.escape(symbol)}(?![A-Za-z])", text, re.IGNORECASE):
-                counts[symbol] = counts.get(symbol, 0) + 1
+    for symbol in symbols:
+        count = cashtag_counts.get(symbol.upper(), 0)
+        if count:
+            counts[symbol.upper()] = count
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
 

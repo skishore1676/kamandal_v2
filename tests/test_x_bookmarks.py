@@ -20,7 +20,7 @@ def test_import_x_bookmarks_from_public_export(tmp_path) -> None:
                 {
                     "id": "2",
                     "created_at": "2026-05-03T11:00:00Z",
-                    "text": "$GOOGL earnings beat but search risk remains.",
+                    "text": "$GOOGL earnings beat but search risk remains. Now is not ticker evidence.",
                     "url": "https://x.com/example/status/2",
                     "provenance": "test",
                 },
@@ -33,13 +33,15 @@ def test_import_x_bookmarks_from_public_export(tmp_path) -> None:
         source_file=source,
         output_dir=tmp_path / "source_docs",
         digest_dir=tmp_path / "digest",
-        allowed_symbols={"NVDA", "AMD", "GOOGL", "SPY"},
+        allowed_symbols={"NVDA", "AMD", "GOOGL", "SPY", "NOW"},
     )
 
     assert result.record_count == 2
     assert result.cashtags == {"AMD": 1, "GOOGL": 1, "NVDA": 1}
     assert result.symbol_hits == {"AMD": 1, "GOOGL": 1, "NVDA": 1}
-    assert "sanitized X bookmark public export" in result.source_doc_path.read_text(encoding="utf-8")
+    source_doc = result.source_doc_path.read_text(encoding="utf-8")
+    assert "sanitized X bookmark public export" in source_doc
+    assert "treat $TICKER cashtags as ticker evidence" in source_doc
     assert "$NVDA" in result.digest_path.read_text(encoding="utf-8")
 
 
