@@ -73,6 +73,34 @@ def test_put_diagonal_variant_matches_bearish_overextended_thesis() -> None:
     assert candidates[0].playbook_id == "put_diagonal_overextended"
 
 
+def test_candidate_filter_warn_mode_logs_without_rejecting() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_overextended",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 21,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+
+    candidates = build_candidates(
+        [idea],
+        universe,
+        [_playbook(min_option_oi=999_999)],
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+        candidate_filter_mode="warn",
+    )
+
+    assert any(candidate.eligible for candidate in candidates)
+    assert any(
+        reason.startswith("filter_warning=open_interest_below_min")
+        for candidate in candidates
+        for reason in candidate.reasons
+    )
+
+
 def test_variant_with_iv_bounds_skips_when_iv_percentile_missing() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_overextended",
