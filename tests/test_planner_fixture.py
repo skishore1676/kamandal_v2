@@ -129,6 +129,7 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
     assert first.plans[0].portfolio_after.positions_count == 1
     assert second.plans[0].portfolio_before.positions_count == 1
     assert second.plans[0].portfolio_before.bpr_used == first.plans[0].total_bpr
+    assert any(candidate.rejection_reason == "shadow_idea_already_open" for candidate in second.candidates)
     with sqlite3.connect(tmp_path / "kamandal.db") as conn:
         assert conn.execute("SELECT count(*) FROM shadow_fills WHERE status = 'open'").fetchone()[0] == 1
 

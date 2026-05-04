@@ -269,11 +269,14 @@ def _reject_open_shadow_candidates(candidates: list[Candidate], store: LocalStor
     if mode != "shadow":
         return
     open_candidate_ids = store.open_shadow_candidate_ids()
-    if not open_candidate_ids:
+    open_idea_ids = store.open_shadow_idea_ids()
+    if not open_candidate_ids and not open_idea_ids:
         return
     for candidate in candidates:
         if candidate.candidate_id in open_candidate_ids and candidate.eligible:
             candidate.rejection_reason = "shadow_candidate_already_open"
+        if candidate.idea_id in open_idea_ids and candidate.eligible:
+            candidate.rejection_reason = "shadow_idea_already_open"
 
 
 def _candidate_filter_mode(config: dict[str, Any]) -> str:

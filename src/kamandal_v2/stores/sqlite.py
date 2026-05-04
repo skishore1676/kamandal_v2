@@ -127,6 +127,7 @@ class LocalStore:
                 "plan_run_id": plan_run_id,
                 "plan_id": plan.plan_id,
                 "candidate_id": candidate.candidate_id,
+                "idea_id": candidate.idea_id,
                 "underlying": candidate.underlying,
                 "playbook_id": candidate.playbook_id,
                 "structure": candidate.structure,
@@ -159,6 +160,17 @@ class LocalStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT candidate_id FROM shadow_fills WHERE status = 'open'").fetchall()
         return {str(row["candidate_id"]) for row in rows}
+
+    def open_shadow_idea_ids(self) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM shadow_fills WHERE status = 'open'").fetchall()
+        idea_ids: set[str] = set()
+        for row in rows:
+            payload = json.loads(row["payload"])
+            idea_id = str(payload.get("idea_id") or "")
+            if idea_id:
+                idea_ids.add(idea_id)
+        return idea_ids
 
     def shadow_portfolio_state(self, base: PortfolioState) -> PortfolioState:
         with self._connect() as conn:
