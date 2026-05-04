@@ -57,6 +57,9 @@ broker:
     api_requests_per_second: 5.0
     api_burst_limit: 5
     require_preflight: true
+    option_chain_start_dte: 21
+    option_chain_end_dte: 90
+    option_chain_max_expirations: 8
 
 llm:
   provider: codex_cli

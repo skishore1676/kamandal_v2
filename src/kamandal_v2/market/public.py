@@ -51,7 +51,7 @@ class PublicAdapter:
         self.session_file = resolve_path(str(public_cfg.get("session_file") or "config/public_session.json"))
         self.account_cache_file = resolve_path(str(public_cfg.get("account_cache_file") or "config/public_account.json"))
         self.token_validity_minutes = int(public_cfg.get("token_validity_minutes") or 60)
-        self.expiration_dates = list(expiration_dates or _nearest_fridays())
+        self.expiration_dates = list(expiration_dates or _configured_expiration_dates(public_cfg))
         self._session = requests.Session()
         self._access_token = ""
         self._expires_at = 0.0
@@ -319,14 +319,21 @@ class PublicAdapter:
             raise RuntimeError("Public credentials are not configured")
 
 
-def _nearest_fridays(start_dte: int = 21, end_dte: int = 70) -> list[str]:
+def _configured_expiration_dates(public_cfg: dict[str, Any]) -> list[str]:
+    start_dte = int(public_cfg.get("option_chain_start_dte") or 21)
+    end_dte = int(public_cfg.get("option_chain_end_dte") or 90)
+    max_expirations = int(public_cfg.get("option_chain_max_expirations") or 8)
+    return _nearest_fridays(start_dte=start_dte, end_dte=end_dte, max_expirations=max_expirations)
+
+
+def _nearest_fridays(start_dte: int = 21, end_dte: int = 90, max_expirations: int = 8) -> list[str]:
     today = date.today()
     expirations: list[str] = []
     for days_ahead in range(start_dte, end_dte + 1):
         candidate = today + timedelta(days=days_ahead)
         if candidate.weekday() == 4:
             expirations.append(candidate.isoformat())
-    return expirations[:4]
+    return expirations[:max_expirations]
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:

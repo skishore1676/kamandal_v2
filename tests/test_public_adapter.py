@@ -1,5 +1,5 @@
 from kamandal_v2.domain.models import OptionLeg
-from kamandal_v2.market.public import occ_symbol, parse_occ_symbol
+from kamandal_v2.market.public import PublicAdapter, occ_symbol, parse_occ_symbol
 from kamandal_v2.planner.engine import _preflight_client
 
 
@@ -45,3 +45,17 @@ def test_preflight_client_unwraps_nested_market_adapters() -> None:
     public = PublicLike()
 
     assert _preflight_client(Wrapper(Wrapper(public))) is public
+
+
+def test_public_adapter_uses_configured_expiration_window() -> None:
+    adapter = PublicAdapter({
+        "broker": {
+            "public": {
+                "option_chain_start_dte": 21,
+                "option_chain_end_dte": 90,
+                "option_chain_max_expirations": 8,
+            }
+        }
+    })
+
+    assert len(adapter.expiration_dates) == 8
