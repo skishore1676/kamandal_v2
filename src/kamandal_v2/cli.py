@@ -14,6 +14,7 @@ from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
 from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, fetch_youtube_transcript, import_transcripts, scrape_youtube_smoke
 from kamandal_v2.intelligence.x_bookmarks import import_x_bookmarks
+from kamandal_v2.intelligence.x_digest import import_x_digest
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.planner.config_loader import load_planner_config
@@ -69,6 +70,19 @@ def main() -> None:
     x_bookmarks_parser.add_argument("--limit", type=int, default=50)
     x_bookmarks_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     x_bookmarks_parser.add_argument("--filter-universe", action="store_true", help="Report configured universe symbol hits")
+
+    x_digest_parser = subparsers.add_parser("import-x-digest", help="Import Birdclaw SQLite X digest posts as LLM source docs")
+    x_digest_parser.add_argument("--db-path", default="", help="Birdclaw x_digest SQLite DB; defaults to canonical_store in latest state")
+    x_digest_parser.add_argument("--latest-state", default="", help="OpenClaw x_daily_digest latest.json")
+    x_digest_parser.add_argument("--trial-root", default="", help="Birdclaw trial root used to resolve relative DB paths")
+    x_digest_parser.add_argument("--sources", default="", help="Comma-separated source lanes to import")
+    x_digest_parser.add_argument("--output-dir", default="data/source_docs/x_digest")
+    x_digest_parser.add_argument("--digest-dir", default="data/digest/x_digest")
+    x_digest_parser.add_argument("--limit", type=int, default=0, help="Max records per source lane")
+    x_digest_parser.add_argument("--since-hours", type=int, default=0)
+    x_digest_parser.add_argument("--include-resurfaced", action="store_true", help="Include posts seen in previous digest runs")
+    x_digest_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    x_digest_parser.add_argument("--filter-universe", action="store_true", help="Report configured universe symbol hits")
 
     cycle_parser = subparsers.add_parser("run-intelligence-cycle", help="Import transcripts, build Public/fixture plan, and optionally write daily_plan")
     cycle_parser.add_argument("--source-dir", default="data/transcripts/archive/youtube")
@@ -224,6 +238,22 @@ def main() -> None:
             output_dir=args.output_dir,
             digest_dir=args.digest_dir,
             limit=args.limit,
+            allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
+        )
+        print(json.dumps(result.to_dict(), indent=2))
+        return
+    if args.command == "import-x-digest":
+        x_config = ((config.get("source_intelligence") or {}).get("x_digest") or {})
+        result = import_x_digest(
+            db_path=args.db_path or x_config.get("db_path") or None,
+            latest_state=args.latest_state or x_config.get("latest_state_file") or "~/.openclaw/workspace-main/state/x_daily_digest/latest.json",
+            trial_root=args.trial_root or x_config.get("trial_root") or "~/.openclaw/workspace-main/experiments/birdclaw-trial",
+            sources=_csv(args.sources or x_config.get("sources") or "bookmarks,timeline"),
+            output_dir=args.output_dir,
+            digest_dir=args.digest_dir,
+            limit=args.limit or int(x_config.get("limit") or 50),
+            since_hours=args.since_hours or int(x_config.get("since_hours") or 96),
+            include_resurfaced=args.include_resurfaced,
             allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
         )
         print(json.dumps(result.to_dict(), indent=2))

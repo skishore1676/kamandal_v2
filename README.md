@@ -72,6 +72,8 @@ Current defaults:
 - `kamandal run-intelligence-cycle`
 - `kamandal extract-ideas-llm`
 - `kamandal run-llm-cycle`
+- `kamandal import-x-digest`
+- `kamandal import-x-bookmarks`
 - `kamandal review-rejections`
 - `kamandal public-smoke --symbol TSLA`
 - `kamandal capture-iv --config-source sheet --provider public`
@@ -118,6 +120,7 @@ The LLM loop keeps the same boundary: Codex CLI extracts thesis objects, optiona
 The oldmac server uses cron, matching Bhiksha's scheduling style while keeping
 Kamandal V2 as short scheduled jobs rather than a long-running daemon:
 
+- `scripts/run_x_bookmark_extraction.sh`: trading days at 8:55 Central. Imports Birdclaw's canonical X digest SQLite store first, preserving bookmark/timeline source lanes, author, post id, and seen count before Codex LLM extraction. The legacy bookmark JSON import remains a fallback if the canonical store is unavailable.
 - `scripts/run_youtube_extraction.sh`: trading days at 9:15, 11:45, and 14:30 Central. Fetches configured YouTube captions and runs Codex LLM extraction into `data/ideas/active`.
 - `scripts/run_market_shadow.sh`: every 15 minutes during market hours except the 8:45 IV-capture slot. It validates and reloads `universe`/`playbooks` from Google Sheets on every run, then writes plan rows to `daily_plan`.
 - `scripts/run_iv_capture.sh`: trading days at 8:45 Central. Captures one fresh morning IV observation per enabled universe symbol from Public option chains for that day's planning loop.
@@ -138,3 +141,5 @@ Approval behavior is controlled by `execution.approval_mode` in `config/control.
 YouTube can be configured either with explicit video IDs (`KAMANDAL_YOUTUBE_VIDEO_IDS` or `data/youtube_queue.txt`) or with channel IDs (`KAMANDAL_YOUTUBE_CHANNEL_IDS` or `config/youtube_channels.txt`). Channel discovery scans recent same-day videos, scores titles toward market/trade idea content, penalizes educational/tutorial titles, and selects the best `KAMANDAL_YOUTUBE_CHANNEL_LIMIT` videos per channel from `KAMANDAL_YOUTUBE_CHANNEL_SCAN_LIMIT` feed entries. For the current shadow experiment, oldmac is focused on the tastylive/tastytrade channel only so we can learn which show titles produce useful daily ideas.
 
 Transcript fetching defaults to `yt-dlp` in subtitle-only mode: no audio/video download and no `ffmpeg` required. The old `youtube-transcript-api` path remains available with `--provider api`. Slow-fetch controls live in env as `KAMANDAL_YTDLP_SLEEP_REQUESTS`, `KAMANDAL_YTDLP_SLEEP_SUBTITLES`, and `KAMANDAL_YTDLP_ARCHIVE_FILE`. If needed, oldmac can use browser cookies with `KAMANDAL_YTDLP_COOKIES_FROM_BROWSER=safari` or another supported browser.
+
+X source intelligence is read-only from Kamandal's perspective. Birdclaw/OpenClaw owns the X fetch, canonical post history, and SQLite dedup under `x_digest_posts`, `x_digest_post_sources`, and `x_digest_runs`; Kamandal reads that sanitized digest surface with `kamandal import-x-digest`. Bookmark-sourced posts are treated as higher operator-intent provenance than timeline posts, but source metadata is kept outside `thesis_tags`.

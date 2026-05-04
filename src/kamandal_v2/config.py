@@ -103,6 +103,10 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "llm.codex_timeout_seconds": _env_int("KAMANDAL_CODEX_TIMEOUT_SECONDS"),
         "source_intelligence.x_bookmarks.latest_state_file": os.environ.get("KAMANDAL_X_BOOKMARK_LATEST_STATE"),
         "source_intelligence.x_bookmarks.trial_root": os.environ.get("KAMANDAL_X_BOOKMARK_TRIAL_ROOT"),
+        "source_intelligence.x_digest.db_path": os.environ.get("KAMANDAL_X_DIGEST_DB_PATH"),
+        "source_intelligence.x_digest.latest_state_file": os.environ.get("KAMANDAL_X_DIGEST_LATEST_STATE"),
+        "source_intelligence.x_digest.trial_root": os.environ.get("KAMANDAL_X_DIGEST_TRIAL_ROOT"),
+        "source_intelligence.x_digest.sources": os.environ.get("KAMANDAL_X_DIGEST_SOURCES"),
     }
     for key, value in overrides.items():
         if value is not None:
