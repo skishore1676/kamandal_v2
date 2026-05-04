@@ -60,6 +60,107 @@ def test_mixed_fixture_produces_ranked_plan_bundles_with_guardrails(tmp_path) ->
     assert len({candidate.underlying for candidate in top_plan.candidates}) == len(top_plan.candidates)
 
 
+def test_total_position_cap_includes_open_shadow_positions(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    control = load_control()
+    control["runtime"]["mode"] = "shadow"
+    control["portfolio"]["max_positions"] = 1
+    control["shadow"] = {
+        "account_size_override": 20_000,
+        "buying_power_override": 20_000,
+        "bpr_used_override": 0,
+        "max_positions_override": "",
+        "candidate_filter_mode": "warn",
+    }
+
+    first = run_shadow_cycle(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    second = run_plan(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        store=store,
+        audit=AuditWriter(tmp_path / "audit2"),
+    )
+
+    assert first.plans
+    assert second.plans == []
+    assert second.metrics["candidates_eligible"] > 0
+
+
+def test_daily_plan_write_is_preserved_when_no_eligible_plans(tmp_path, monkeypatch) -> None:
+    from kamandal_v2.planner import engine
+
+    store = LocalStore(tmp_path / "kamandal.db")
+    control = load_control()
+    control["runtime"]["mode"] = "shadow"
+    control["portfolio"]["max_positions"] = 0
+    control["shadow"] = {
+        "account_size_override": 20_000,
+        "buying_power_override": 20_000,
+        "bpr_used_override": 0,
+        "max_positions_override": "",
+        "candidate_filter_mode": "warn",
+    }
+    calls = []
+    monkeypatch.setattr(engine, "write_daily_plan", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    result = engine.run_plan(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=True,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert result.plans == []
+    assert calls == []
+
+
+def test_shadow_position_cap_override_allows_exploration(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    control = load_control()
+    control["runtime"]["mode"] = "shadow"
+    control["portfolio"]["max_positions"] = 1
+    control["shadow"] = {
+        "account_size_override": 20_000,
+        "buying_power_override": 20_000,
+        "bpr_used_override": 0,
+        "max_positions_override": 20,
+        "candidate_filter_mode": "warn",
+    }
+
+    run_shadow_cycle(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    second = run_plan(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        store=store,
+        audit=AuditWriter(tmp_path / "audit2"),
+    )
+
+    assert second.plans
+
+
 def test_shadow_cycle_creates_auto_approval_audit(tmp_path) -> None:
     result = run_shadow_cycle(
         load_control(),
@@ -132,6 +233,15 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
     assert any(candidate.rejection_reason == "shadow_idea_already_open" for candidate in second.candidates)
     with sqlite3.connect(tmp_path / "kamandal.db") as conn:
         assert conn.execute("SELECT count(*) FROM shadow_fills WHERE status = 'open'").fetchone()[0] == 1
+        row = conn.execute(
+            "SELECT idea_id, playbook_id, net_credit, estimated_bpr, delta, theta FROM shadow_fills WHERE status = 'open'"
+        ).fetchone()
+        assert row[0]
+        assert row[1]
+        assert row[2] is not None
+        assert row[3] is not None
+        assert row[4] is not None
+        assert row[5] is not None
 
 
 def test_open_shadow_ideas_backfills_legacy_fills_from_candidates(tmp_path) -> None:

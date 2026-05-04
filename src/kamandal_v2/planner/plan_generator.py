@@ -16,13 +16,16 @@ def generate_plans(
     top_n: int = 5,
 ) -> list[Plan]:
     eligible = [candidate for candidate in candidates if candidate.eligible]
-    max_positions = int(((control.get("portfolio") or {}).get("max_positions") or 5))
+    max_positions = _max_positions(control)
+    remaining_positions = max(max_positions - portfolio.positions_count, 0)
+    if remaining_positions <= 0:
+        return []
     max_bpr_pct = float(((control.get("portfolio") or {}).get("hard_max_bpr_utilization_pct") or 90))
     max_underlying_pct = float(((control.get("portfolio") or {}).get("max_bpr_per_underlying_pct") or 25))
     partials: list[list[Candidate]] = [[]]
     completed: list[list[Candidate]] = []
 
-    for _depth in range(1, max_positions + 1):
+    for _depth in range(1, remaining_positions + 1):
         expanded: list[list[Candidate]] = []
         for partial in partials:
             used_ids = {candidate.candidate_id for candidate in partial}
@@ -51,6 +54,16 @@ def generate_plans(
         _materialize(plan, rank=index + 1, portfolio=portfolio, control=control)
         for index, plan in enumerate(ranked_plans)
     ]
+
+
+def _max_positions(control: dict) -> int:
+    portfolio_value = (control.get("portfolio") or {}).get("max_positions")
+    max_positions = int(5 if portfolio_value in (None, "") else portfolio_value)
+    mode = str((control.get("runtime") or {}).get("mode") or "shadow").lower()
+    shadow_override = (control.get("shadow") or {}).get("max_positions_override")
+    if mode == "shadow" and shadow_override not in (None, ""):
+        return int(shadow_override)
+    return max_positions
 
 
 def _constraint_violation(plan: list[Candidate], portfolio: PortfolioState, max_bpr_pct: float, max_underlying_pct: float) -> str:
@@ -136,4 +149,3 @@ def _reasons(plan: list[Candidate], greeks: Greeks, total_bpr: float) -> list[st
         f"theta_change={greeks.theta:.2f}",
         f"underlyings={','.join(candidate.underlying for candidate in plan)}",
     ]
-

@@ -66,14 +66,85 @@ class LocalStore:
                     plan_run_id TEXT NOT NULL,
                     plan_id TEXT NOT NULL,
                     candidate_id TEXT NOT NULL,
+                    idea_id TEXT,
                     underlying TEXT NOT NULL,
+                    playbook_id TEXT,
                     structure TEXT NOT NULL,
+                    net_credit REAL,
+                    estimated_bpr REAL,
+                    delta REAL,
+                    gamma REAL,
+                    theta REAL,
+                    vega REAL,
                     status TEXT NOT NULL DEFAULT 'open',
                     opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     closed_at TEXT,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS shadow_marks (
+                    id TEXT PRIMARY KEY,
+                    marked_at TEXT NOT NULL,
+                    position_count INTEGER NOT NULL,
+                    mid_pnl REAL NOT NULL,
+                    natural_pnl REAL NOT NULL,
+                    payload TEXT NOT NULL
+                );
                 """
+            )
+            self._ensure_shadow_fill_columns(conn)
+            self._backfill_shadow_fill_columns(conn)
+
+    def _ensure_shadow_fill_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(shadow_fills)").fetchall()}
+        columns = {
+            "idea_id": "TEXT",
+            "playbook_id": "TEXT",
+            "net_credit": "REAL",
+            "estimated_bpr": "REAL",
+            "delta": "REAL",
+            "gamma": "REAL",
+            "theta": "REAL",
+            "vega": "REAL",
+        }
+        for name, column_type in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE shadow_fills ADD COLUMN {name} {column_type}")
+
+    def _backfill_shadow_fill_columns(self, conn: sqlite3.Connection) -> None:
+        candidate_rows = conn.execute("SELECT id, payload FROM candidates").fetchall()
+        candidate_ideas = {
+            str(row["id"]): str((json.loads(row["payload"]) or {}).get("idea_id") or "")
+            for row in candidate_rows
+        }
+        rows = conn.execute("SELECT id, candidate_id, payload FROM shadow_fills").fetchall()
+        for row in rows:
+            payload = json.loads(row["payload"])
+            greeks = payload.get("greeks") or {}
+            idea_id = str(payload.get("idea_id") or candidate_ideas.get(str(row["candidate_id"]), "") or "")
+            conn.execute(
+                """
+                UPDATE shadow_fills
+                SET idea_id = COALESCE(NULLIF(idea_id, ''), ?),
+                    playbook_id = COALESCE(NULLIF(playbook_id, ''), ?),
+                    net_credit = COALESCE(net_credit, ?),
+                    estimated_bpr = COALESCE(estimated_bpr, ?),
+                    delta = COALESCE(delta, ?),
+                    gamma = COALESCE(gamma, ?),
+                    theta = COALESCE(theta, ?),
+                    vega = COALESCE(vega, ?)
+                WHERE id = ?
+                """,
+                (
+                    idea_id,
+                    payload.get("playbook_id"),
+                    payload.get("net_credit"),
+                    payload.get("estimated_bpr"),
+                    greeks.get("delta"),
+                    greeks.get("gamma"),
+                    greeks.get("theta"),
+                    greeks.get("vega"),
+                    row["id"],
+                ),
             )
 
     def save_ideas(self, ideas: list[Idea]) -> None:
@@ -141,8 +212,16 @@ class LocalStore:
                 plan_run_id,
                 plan.plan_id,
                 candidate.candidate_id,
+                candidate.idea_id,
                 candidate.underlying,
+                candidate.playbook_id,
                 candidate.structure,
+                candidate.net_credit,
+                candidate.estimated_bpr,
+                candidate.greeks.delta,
+                candidate.greeks.gamma,
+                candidate.greeks.theta,
+                candidate.greeks.vega,
                 "open",
                 json.dumps(payload, sort_keys=True),
             ))
@@ -150,8 +229,9 @@ class LocalStore:
             conn.executemany(
                 """
                 INSERT OR IGNORE INTO shadow_fills
-                (id, plan_run_id, plan_id, candidate_id, underlying, structure, status, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (id, plan_run_id, plan_id, candidate_id, idea_id, underlying, playbook_id, structure,
+                 net_credit, estimated_bpr, delta, gamma, theta, vega, status, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -163,6 +243,9 @@ class LocalStore:
 
     def open_shadow_idea_ids(self) -> set[str]:
         with self._connect() as conn:
+            rows = conn.execute("SELECT idea_id FROM shadow_fills WHERE status = 'open' AND idea_id IS NOT NULL AND idea_id != ''").fetchall()
+            if rows:
+                return {str(row["idea_id"]) for row in rows}
             rows = conn.execute("SELECT payload FROM shadow_fills WHERE status = 'open'").fetchall()
             candidate_rows = conn.execute("SELECT id, payload FROM candidates").fetchall()
         candidate_ideas = {
@@ -181,33 +264,55 @@ class LocalStore:
 
     def shadow_portfolio_state(self, base: PortfolioState) -> PortfolioState:
         with self._connect() as conn:
-            rows = conn.execute("SELECT payload FROM shadow_fills WHERE status = 'open'").fetchall()
-        fills = [json.loads(row["payload"]) for row in rows]
-        bpr_used = round(sum(float(fill.get("estimated_bpr") or 0.0) for fill in fills), 2)
+            rows = conn.execute(
+                """
+                SELECT underlying, estimated_bpr, delta, gamma, theta, vega
+                FROM shadow_fills
+                WHERE status = 'open'
+                """
+            ).fetchall()
+        bpr_used = round(sum(float(row["estimated_bpr"] or 0.0) for row in rows), 2)
         greeks = Greeks()
         per_underlying_bpr: dict[str, float] = {}
-        for fill in fills:
-            fill_greeks = fill.get("greeks") or {}
+        for row in rows:
             greeks = greeks + Greeks(
-                delta=float(fill_greeks.get("delta") or 0.0),
-                gamma=float(fill_greeks.get("gamma") or 0.0),
-                theta=float(fill_greeks.get("theta") or 0.0),
-                vega=float(fill_greeks.get("vega") or 0.0),
+                delta=float(row["delta"] or 0.0),
+                gamma=float(row["gamma"] or 0.0),
+                theta=float(row["theta"] or 0.0),
+                vega=float(row["vega"] or 0.0),
             )
-            underlying = str(fill.get("underlying") or "")
+            underlying = str(row["underlying"] or "")
             if underlying:
                 per_underlying_bpr[underlying] = round(
-                    per_underlying_bpr.get(underlying, 0.0) + float(fill.get("estimated_bpr") or 0.0),
+                    per_underlying_bpr.get(underlying, 0.0) + float(row["estimated_bpr"] or 0.0),
                     2,
                 )
         return PortfolioState(
             account_size=base.account_size,
             buying_power=round(max(base.buying_power - bpr_used, 0.0), 2),
             bpr_used=bpr_used,
-            positions_count=len(fills),
+            positions_count=len(rows),
             greeks=greeks,
             per_underlying_bpr=per_underlying_bpr,
         )
+
+    def save_shadow_mark(self, mark_id: str, payload: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO shadow_marks
+                (id, marked_at, position_count, mid_pnl, natural_pnl, payload)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    mark_id,
+                    str(payload.get("marked_at") or ""),
+                    int(payload.get("position_count") or 0),
+                    float(payload.get("total_mid_pnl") or 0.0),
+                    float(payload.get("total_natural_pnl") or 0.0),
+                    json.dumps(payload, sort_keys=True),
+                ),
+            )
 
     def event(self, event_type: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:

@@ -114,8 +114,11 @@ def run_plan(
     })
     audit.event("plan_run_completed", {"plan_run_id": plan_run_id, **metrics})
 
-    if write_sheet:
+    if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER)
+    elif write_sheet:
+        store.event("daily_plan_write_skipped", {"plan_run_id": plan_run_id, "reason": "no_eligible_plans"})
+        audit.event("daily_plan_write_skipped", {"plan_run_id": plan_run_id, "reason": "no_eligible_plans"})
     return PlanRunResult(
         plan_run_id=plan_run_id,
         ideas=ideas,
