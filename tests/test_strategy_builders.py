@@ -87,3 +87,47 @@ def test_long_call_and_long_put_builders_create_debit_candidates() -> None:
 
     assert any(candidate.eligible and candidate.structure == "long_call" for candidate in call_candidates)
     assert any(candidate.eligible and candidate.structure == "long_put" for candidate in put_candidates)
+
+
+def test_per_idea_cap_preserves_structure_diversity() -> None:
+    idea = _idea(direction="bullish", thesis_tags=["catalyst"], horizon_days=30)
+    playbooks = [
+        _playbook(
+            "put_spread",
+            playbook_id="put_spread_default",
+            applicable_direction=["bullish"],
+            applicable_thesis_tags=["catalyst"],
+            leg_count=2,
+        ),
+        _playbook(
+            "call_diagonal",
+            playbook_id="call_diagonal_oversold",
+            applicable_direction=["bullish"],
+            applicable_thesis_tags=["catalyst"],
+            leg_count=2,
+            dte_min=25,
+            dte_max=35,
+            long_dte_min=55,
+            long_dte_max=80,
+            short_delta_min=0.2,
+            short_delta_max=0.3,
+            long_delta_min=0.35,
+            long_delta_max=0.5,
+        ),
+    ]
+
+    candidates = build_candidates(
+        [idea],
+        [UniverseEntry(
+            symbol="NVDA",
+            enabled=True,
+            profile="large_stocks",
+            allowed_playbooks=["put_spread", "call_diagonal"],
+        )],
+        playbooks,
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+        per_idea_cap=2,
+    )
+
+    assert {candidate.structure for candidate in candidates if candidate.eligible} == {"put_spread", "call_diagonal"}

@@ -101,7 +101,7 @@ def build_candidates(
                     if ignored:
                         candidate.reasons.append("match_gate_warning=" + ",".join(ignored))
                 built_for_idea.append(candidate)
-        all_candidates.extend(sorted(built_for_idea, key=lambda item: item.score, reverse=True)[:per_idea_cap])
+        all_candidates.extend(_select_diverse_candidates(built_for_idea, per_idea_cap))
         all_candidates.extend(rejected_for_idea)
     return all_candidates
 
@@ -601,6 +601,31 @@ def _candidate_score(candidate: Candidate, *, thesis_fit: float = 0.0) -> float:
     credit_yield = max(candidate.net_credit, 0.0) * 100 / max(candidate.estimated_bpr, 1.0)
     theta = candidate.greeks.theta
     return round(credit_yield * 35 + candidate.liquidity_score * 25 + theta * 3 + thesis_fit - abs(candidate.greeks.gamma) * 5, 4)
+
+
+def _select_diverse_candidates(candidates: list[Candidate], limit: int) -> list[Candidate]:
+    if limit <= 0:
+        return []
+    ranked = sorted(candidates, key=lambda item: item.score, reverse=True)
+    selected: list[Candidate] = []
+    selected_ids: set[str] = set()
+    seen_structures: set[str] = set()
+    for candidate in ranked:
+        if candidate.structure in seen_structures:
+            continue
+        selected.append(candidate)
+        selected_ids.add(candidate.candidate_id)
+        seen_structures.add(candidate.structure)
+        if len(selected) >= limit:
+            return sorted(selected, key=lambda item: item.score, reverse=True)
+    for candidate in ranked:
+        if candidate.candidate_id in selected_ids:
+            continue
+        selected.append(candidate)
+        selected_ids.add(candidate.candidate_id)
+        if len(selected) >= limit:
+            break
+    return sorted(selected, key=lambda item: item.score, reverse=True)
 
 
 def _thesis_fit_score(idea: Idea, candidate: Candidate) -> float:
