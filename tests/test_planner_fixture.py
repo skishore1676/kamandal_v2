@@ -134,6 +134,33 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
         assert conn.execute("SELECT count(*) FROM shadow_fills WHERE status = 'open'").fetchone()[0] == 1
 
 
+def test_open_shadow_ideas_backfills_legacy_fills_from_candidates(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    control = load_control()
+    first = run_shadow_cycle(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    candidate = first.plans[0].candidates[0]
+    with sqlite3.connect(tmp_path / "kamandal.db") as conn:
+        fill_payload = json.loads(conn.execute(
+            "SELECT payload FROM shadow_fills WHERE candidate_id = ?",
+            (candidate.candidate_id,),
+        ).fetchone()[0])
+        fill_payload.pop("idea_id", None)
+        conn.execute(
+            "UPDATE shadow_fills SET payload = ? WHERE candidate_id = ?",
+            (json.dumps(fill_payload), candidate.candidate_id),
+        )
+
+    assert candidate.idea_id in store.open_shadow_idea_ids()
+
+
 def test_daily_plan_rows_include_json_drilldown(tmp_path) -> None:
     result = _run(tmp_path)
     row = result.daily_plan_rows[0]

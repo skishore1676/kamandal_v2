@@ -164,10 +164,17 @@ class LocalStore:
     def open_shadow_idea_ids(self) -> set[str]:
         with self._connect() as conn:
             rows = conn.execute("SELECT payload FROM shadow_fills WHERE status = 'open'").fetchall()
+            candidate_rows = conn.execute("SELECT id, payload FROM candidates").fetchall()
+        candidate_ideas = {
+            str(row["id"]): str((json.loads(row["payload"]) or {}).get("idea_id") or "")
+            for row in candidate_rows
+        }
         idea_ids: set[str] = set()
         for row in rows:
             payload = json.loads(row["payload"])
             idea_id = str(payload.get("idea_id") or "")
+            if not idea_id:
+                idea_id = candidate_ideas.get(str(payload.get("candidate_id") or ""), "")
             if idea_id:
                 idea_ids.add(idea_id)
         return idea_ids
