@@ -66,6 +66,7 @@ def run_plan(
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
     portfolio_raw = market.account_state()
     portfolio = _shadow_portfolio_override(portfolio_raw, config)
+    portfolio = _shadow_portfolio_with_open_fills(portfolio, store, config)
     match_gate_mode = _match_gate_mode(config)
     candidate_filter_mode = _candidate_filter_mode(config)
 
@@ -80,6 +81,7 @@ def run_plan(
         match_gate_mode=match_gate_mode,
         candidate_filter_mode=candidate_filter_mode,
     )
+    _reject_open_shadow_candidates(candidates, store, config)
     idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market, match_gate_mode=match_gate_mode)
     plans = generate_plans(candidates, portfolio, config)
     rejection_summary = _rejection_summary(ideas, candidates, idea_diagnostics)
@@ -149,9 +151,12 @@ def run_shadow_cycle(
     )
     top_plan = result.plans[0] if result.plans else None
     if top_plan is not None and top_plan.operator_action == "approve":
+        store.save_shadow_fills(result.plan_run_id, top_plan)
         payload = {
             "plan_id": top_plan.plan_id,
             "plan_run_id": result.plan_run_id,
+            "portfolio_before": top_plan.portfolio_before.to_dict(),
+            "portfolio_after": top_plan.portfolio_after.to_dict(),
             "shadow_fills": [
                 {
                     "candidate_id": candidate.candidate_id,
@@ -250,6 +255,25 @@ def _shadow_portfolio_override(portfolio: PortfolioState, config: dict[str, Any]
         greeks=portfolio.greeks,
         per_underlying_bpr=dict(portfolio.per_underlying_bpr),
     )
+
+
+def _shadow_portfolio_with_open_fills(portfolio: PortfolioState, store: LocalStore, config: dict[str, Any]) -> PortfolioState:
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+    if mode != "shadow":
+        return portfolio
+    return store.shadow_portfolio_state(portfolio)
+
+
+def _reject_open_shadow_candidates(candidates: list[Candidate], store: LocalStore, config: dict[str, Any]) -> None:
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+    if mode != "shadow":
+        return
+    open_candidate_ids = store.open_shadow_candidate_ids()
+    if not open_candidate_ids:
+        return
+    for candidate in candidates:
+        if candidate.candidate_id in open_candidate_ids and candidate.eligible:
+            candidate.rejection_reason = "shadow_candidate_already_open"
 
 
 def _candidate_filter_mode(config: dict[str, Any]) -> str:

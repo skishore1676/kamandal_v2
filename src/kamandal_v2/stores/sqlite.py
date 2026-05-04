@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, Plan, PortfolioState, PreflightResult
+from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, Idea, Plan, PortfolioState, PreflightResult
 from kamandal_v2.paths import resolve_path
 
 
@@ -61,6 +61,18 @@ class LocalStore:
                     event_type TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS shadow_fills (
+                    id TEXT PRIMARY KEY,
+                    plan_run_id TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    candidate_id TEXT NOT NULL,
+                    underlying TEXT NOT NULL,
+                    structure TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TEXT,
+                    payload TEXT NOT NULL
+                );
                 """
             )
 
@@ -106,10 +118,81 @@ class LocalStore:
                 (result_id, json.dumps(result.to_dict(), sort_keys=True)),
             )
 
+    def save_shadow_fills(self, plan_run_id: str, plan: Plan) -> None:
+        rows = []
+        for candidate in plan.candidates:
+            fill_id = f"{plan_run_id}:{candidate.candidate_id}"
+            payload = {
+                "fill_id": fill_id,
+                "plan_run_id": plan_run_id,
+                "plan_id": plan.plan_id,
+                "candidate_id": candidate.candidate_id,
+                "underlying": candidate.underlying,
+                "playbook_id": candidate.playbook_id,
+                "structure": candidate.structure,
+                "net_credit": candidate.net_credit,
+                "estimated_bpr": candidate.estimated_bpr,
+                "greeks": candidate.greeks.to_dict(),
+                "legs": [leg.to_dict() for leg in candidate.legs],
+            }
+            rows.append((
+                fill_id,
+                plan_run_id,
+                plan.plan_id,
+                candidate.candidate_id,
+                candidate.underlying,
+                candidate.structure,
+                "open",
+                json.dumps(payload, sort_keys=True),
+            ))
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT OR IGNORE INTO shadow_fills
+                (id, plan_run_id, plan_id, candidate_id, underlying, structure, status, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def open_shadow_candidate_ids(self) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT candidate_id FROM shadow_fills WHERE status = 'open'").fetchall()
+        return {str(row["candidate_id"]) for row in rows}
+
+    def shadow_portfolio_state(self, base: PortfolioState) -> PortfolioState:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT payload FROM shadow_fills WHERE status = 'open'").fetchall()
+        fills = [json.loads(row["payload"]) for row in rows]
+        bpr_used = round(sum(float(fill.get("estimated_bpr") or 0.0) for fill in fills), 2)
+        greeks = Greeks()
+        per_underlying_bpr: dict[str, float] = {}
+        for fill in fills:
+            fill_greeks = fill.get("greeks") or {}
+            greeks = greeks + Greeks(
+                delta=float(fill_greeks.get("delta") or 0.0),
+                gamma=float(fill_greeks.get("gamma") or 0.0),
+                theta=float(fill_greeks.get("theta") or 0.0),
+                vega=float(fill_greeks.get("vega") or 0.0),
+            )
+            underlying = str(fill.get("underlying") or "")
+            if underlying:
+                per_underlying_bpr[underlying] = round(
+                    per_underlying_bpr.get(underlying, 0.0) + float(fill.get("estimated_bpr") or 0.0),
+                    2,
+                )
+        return PortfolioState(
+            account_size=base.account_size,
+            buying_power=round(max(base.buying_power - bpr_used, 0.0), 2),
+            bpr_used=bpr_used,
+            positions_count=len(fills),
+            greeks=greeks,
+            per_underlying_bpr=per_underlying_bpr,
+        )
+
     def event(self, event_type: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO events (event_type, payload) VALUES (?, ?)",
                 (event_type, json.dumps(payload, sort_keys=True)),
             )
-

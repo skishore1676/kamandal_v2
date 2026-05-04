@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 from kamandal_v2.config import load_control
 from kamandal_v2.planner.engine import run_plan, run_shadow_cycle
@@ -95,6 +96,41 @@ def test_shadow_uses_paper_account_override(tmp_path) -> None:
     assert result.metrics["account_size_raw"] == 5_000
     assert result.metrics["account_size_effective"] == 20_000
     assert result.plans[0].portfolio_before.account_size == 20_000
+
+
+def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    control = load_control()
+    control["shadow"] = {
+        "account_size_override": 20_000,
+        "buying_power_override": 20_000,
+        "bpr_used_override": 0,
+        "candidate_filter_mode": "warn",
+    }
+
+    first = run_shadow_cycle(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    second = run_plan(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        store=store,
+        audit=AuditWriter(tmp_path / "audit2"),
+    )
+
+    assert first.plans[0].portfolio_after.positions_count == 1
+    assert second.plans[0].portfolio_before.positions_count == 1
+    assert second.plans[0].portfolio_before.bpr_used == first.plans[0].total_bpr
+    with sqlite3.connect(tmp_path / "kamandal.db") as conn:
+        assert conn.execute("SELECT count(*) FROM shadow_fills WHERE status = 'open'").fetchone()[0] == 1
 
 
 def test_daily_plan_rows_include_json_drilldown(tmp_path) -> None:
@@ -203,4 +239,3 @@ ideas:
     assert result.rejection_summary == [
         "1 XYZ: no playbook match - No enabled universe entry for underlying."
     ]
-
