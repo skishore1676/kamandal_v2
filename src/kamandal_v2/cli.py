@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 from pathlib import Path
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, utc_now
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
 from kamandal_v2.events.earnings import EarningsStore, capture_earnings_snapshots, earnings_event_status
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
 from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, fetch_youtube_transcript, import_transcripts, scrape_youtube_smoke
 from kamandal_v2.intelligence.x_bookmarks import import_x_bookmarks
 from kamandal_v2.intelligence.x_digest import import_x_digest
+from kamandal_v2.management.shadow import manage_shadow_positions, mark_shadow_portfolio, write_shadow_eod_report
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.planner.config_loader import load_planner_config
@@ -23,7 +23,6 @@ from kamandal_v2.planner.engine import run_plan, run_shadow_cycle
 from kamandal_v2.seed import build_seed_tables, seed_headers
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import bootstrap_sheet, pull_sheet_tables, write_daily_plan
-from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.volatility.iv import capture_iv_snapshots
 from kamandal_v2.volatility.iv_store import IvStore
 
@@ -129,6 +128,12 @@ def main() -> None:
     earnings_status_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
 
     subparsers.add_parser("mark-shadow-portfolio", help="Mark open shadow fills from latest stored option-chain midpoint quotes")
+    manage_shadow_parser = subparsers.add_parser("manage-shadow-positions", help="Apply shadow close rules to open positions")
+    manage_shadow_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    manage_shadow_parser.add_argument("--dry-run", action="store_true")
+    eod_parser = subparsers.add_parser("shadow-eod-report", help="Write a local shadow end-of-day report")
+    eod_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    eod_parser.add_argument("--output-dir", default="data/reports/eod")
 
     youtube_parser = subparsers.add_parser("scrape-youtube-smoke", help="Fetch captions for one YouTube video and archive locally")
     youtube_parser.add_argument("--video-id", required=True)
@@ -352,7 +357,13 @@ def main() -> None:
         print(json.dumps(_earnings_status_json(symbols), indent=2))
         return
     if args.command == "mark-shadow-portfolio":
-        print(json.dumps(_mark_shadow_portfolio(), indent=2))
+        print(json.dumps(mark_shadow_portfolio(), indent=2))
+        return
+    if args.command == "manage-shadow-positions":
+        print(json.dumps(manage_shadow_positions(config, config_source=args.config_source, dry_run=args.dry_run).to_dict(), indent=2))
+        return
+    if args.command == "shadow-eod-report":
+        print(json.dumps(write_shadow_eod_report(config, config_source=args.config_source, output_dir=args.output_dir), indent=2))
         return
     if args.command == "scrape-youtube-smoke":
         transcript = scrape_youtube_smoke(
@@ -564,110 +575,6 @@ def _earnings_status_json(symbols: list[str]) -> dict:
             "event_status": earnings_event_status(latest),
         })
     return {"symbols": rows}
-
-
-def _mark_shadow_portfolio() -> dict:
-    store = LocalStore()
-    sqlite_path = resolve_path("data/kamandal_v2.db")
-    conn = sqlite3.connect(sqlite_path)
-    conn.row_factory = sqlite3.Row
-    fills = conn.execute(
-        """
-        SELECT id, opened_at, plan_run_id, plan_id, candidate_id, idea_id, underlying, playbook_id,
-               structure, net_credit, estimated_bpr, delta, gamma, theta, vega, payload
-        FROM shadow_fills
-        WHERE status = 'open'
-        ORDER BY opened_at
-        """
-    ).fetchall()
-    chain_by_underlying = _latest_chain_quote_maps(conn, {str(fill["underlying"]) for fill in fills})
-    rows = []
-    total_entry = 0.0
-    total_mid_pnl = 0.0
-    total_natural_pnl = 0.0
-    for fill in fills:
-        payload = json.loads(fill["payload"] or "{}")
-        legs = payload.get("legs") or []
-        chain = chain_by_underlying.get(str(fill["underlying"]))
-        entry_credit = float(fill["net_credit"] if fill["net_credit"] is not None else payload.get("net_credit") or 0.0) * 100.0
-        mid_close_value = 0.0
-        natural_close_value = 0.0
-        missing_quotes = []
-        if chain is None:
-            missing_quotes = [f"{leg.get('expiration')}:{leg.get('option_type')}:{leg.get('strike')}" for leg in legs]
-        else:
-            _captured_at, _underlying_price, quote_map = chain
-            for leg in legs:
-                key = (str(leg.get("expiration")), str(leg.get("option_type")), float(leg.get("strike") or 0.0))
-                quote = quote_map.get(key)
-                if quote is None:
-                    missing_quotes.append(":".join(map(str, key)))
-                    continue
-                qty = int(leg.get("quantity") or 1)
-                bid = float(quote.get("bid") or 0.0)
-                ask = float(quote.get("ask") or 0.0)
-                mid = (bid + ask) / 2.0
-                if leg.get("side") == "sell":
-                    mid_close_value += -mid * qty * 100.0
-                    natural_close_value += -ask * qty * 100.0
-                else:
-                    mid_close_value += mid * qty * 100.0
-                    natural_close_value += bid * qty * 100.0
-        captured_at, underlying_price = (chain[0], chain[1]) if chain is not None else ("", None)
-        mid_pnl = entry_credit + mid_close_value
-        natural_pnl = entry_credit + natural_close_value
-        total_entry += entry_credit
-        total_mid_pnl += mid_pnl
-        total_natural_pnl += natural_pnl
-        rows.append({
-            "fill_id": fill["id"],
-            "opened_at": fill["opened_at"],
-            "underlying": fill["underlying"],
-            "structure": fill["structure"],
-            "idea_id": fill["idea_id"] or payload.get("idea_id"),
-            "playbook_id": fill["playbook_id"] or payload.get("playbook_id"),
-            "estimated_bpr": fill["estimated_bpr"] if fill["estimated_bpr"] is not None else payload.get("estimated_bpr"),
-            "entry_credit": round(entry_credit, 2),
-            "mid_pnl": round(mid_pnl, 2),
-            "natural_pnl": round(natural_pnl, 2),
-            "mark_time": captured_at,
-            "underlying_price": underlying_price,
-            "missing_quotes": missing_quotes,
-        })
-    mark = {
-        "mark_id": "shadow_mark_" + utc_now().replace(":", "").replace("-", ""),
-        "marked_at": utc_now(),
-        "position_count": len(rows),
-        "total_entry_credit": round(total_entry, 2),
-        "total_mid_pnl": round(total_mid_pnl, 2),
-        "total_natural_pnl": round(total_natural_pnl, 2),
-        "rows": rows,
-    }
-    store.save_shadow_mark(str(mark["mark_id"]), mark)
-    store.event("shadow_portfolio_marked", {
-        "mark_id": mark["mark_id"],
-        "position_count": mark["position_count"],
-        "total_mid_pnl": mark["total_mid_pnl"],
-        "total_natural_pnl": mark["total_natural_pnl"],
-    })
-    return mark
-
-
-def _latest_chain_quote_maps(conn: sqlite3.Connection, underlyings: set[str]) -> dict[str, tuple[str, float | None, dict[tuple[str, str, float], dict]]]:
-    result = {}
-    for underlying in underlyings:
-        rows = conn.execute("SELECT payload FROM chain_snapshots WHERE underlying = ?", (underlying,)).fetchall()
-        if not rows:
-            continue
-        payloads = [json.loads(row["payload"]) for row in rows]
-        payloads.sort(key=lambda item: str(item.get("captured_at") or ""))
-        latest = payloads[-1]
-        quote_map = {}
-        for quote in latest.get("quotes") or []:
-            key = (str(quote.get("expiration")), str(quote.get("option_type")), float(quote.get("strike") or 0.0))
-            quote_map[key] = quote
-        result[underlying] = (str(latest.get("captured_at") or ""), latest.get("underlying_price"), quote_map)
-    return result
 
 
 if __name__ == "__main__":

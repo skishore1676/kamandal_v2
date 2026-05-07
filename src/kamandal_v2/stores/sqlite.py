@@ -105,6 +105,9 @@ class LocalStore:
             "gamma": "REAL",
             "theta": "REAL",
             "vega": "REAL",
+            "close_reason": "TEXT",
+            "close_pnl": "REAL",
+            "close_payload": "TEXT",
         }
         for name, column_type in columns.items():
             if name not in existing:
@@ -312,6 +315,21 @@ class LocalStore:
                     float(payload.get("total_natural_pnl") or 0.0),
                     json.dumps(payload, sort_keys=True),
                 ),
+            )
+
+    def close_shadow_fill(self, fill_id: str, *, reason: str, pnl: float, payload: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE shadow_fills
+                SET status = 'closed',
+                    closed_at = CURRENT_TIMESTAMP,
+                    close_reason = ?,
+                    close_pnl = ?,
+                    close_payload = ?
+                WHERE id = ? AND status = 'open'
+                """,
+                (reason, float(pnl), json.dumps(payload, sort_keys=True), fill_id),
             )
 
     def event(self, event_type: str, payload: dict[str, Any]) -> None:

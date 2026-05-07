@@ -22,6 +22,9 @@ run_market_shadow() {
   log "Validating sheet config."
   "$KAMANDAL_BIN" validate-config --config-source sheet
 
+  log "Managing open shadow positions before planning."
+  "$KAMANDAL_BIN" manage-shadow-positions --config-source sheet
+
   local write_args
   write_args=()
   if [[ "${KAMANDAL_MARKET_WRITE_SHEET:-true}" == "true" ]]; then
