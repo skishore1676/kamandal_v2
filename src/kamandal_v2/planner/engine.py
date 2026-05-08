@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime, time, timedelta
+import os
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, Plan, PortfolioState, utc_now
 from kamandal_v2.events.earnings import EarningsOverlayMarket, EarningsStore
@@ -273,13 +276,28 @@ def _reject_open_shadow_candidates(candidates: list[Candidate], store: LocalStor
         return
     open_candidate_ids = store.open_shadow_candidate_ids()
     open_idea_ids = store.open_shadow_idea_ids()
-    if not open_candidate_ids and not open_idea_ids:
+    traded_idea_ids = _shadow_traded_idea_ids(store, config)
+    if not open_candidate_ids and not open_idea_ids and not traded_idea_ids:
         return
     for candidate in candidates:
         if candidate.candidate_id in open_candidate_ids and candidate.eligible:
             candidate.rejection_reason = "shadow_candidate_already_open"
-        if candidate.idea_id in open_idea_ids and candidate.eligible:
+        elif candidate.idea_id in open_idea_ids and candidate.eligible:
             candidate.rejection_reason = "shadow_idea_already_open"
+        elif candidate.idea_id in traded_idea_ids and candidate.eligible:
+            candidate.rejection_reason = "shadow_idea_already_traded_today"
+
+
+def _shadow_traded_idea_ids(store: LocalStore, config: dict[str, Any]) -> set[str]:
+    cooldown_days = int((config.get("shadow") or {}).get("idea_cooldown_days") or 0)
+    if cooldown_days <= 0:
+        return set()
+    market_tz = os.environ.get("KAMANDAL_MARKET_TZ") or str((config.get("runtime") or {}).get("market_timezone") or "America/Chicago")
+    today = datetime.now(ZoneInfo(market_tz)).date()
+    start_date = today - timedelta(days=max(cooldown_days - 1, 0))
+    local_start = datetime.combine(start_date, time.min, tzinfo=ZoneInfo(market_tz))
+    utc_start = local_start.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    return store.shadow_idea_ids_opened_since(utc_start)
 
 
 def _candidate_filter_mode(config: dict[str, Any]) -> str:

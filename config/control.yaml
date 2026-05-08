@@ -18,6 +18,7 @@ shadow:
   buying_power_override: 20000
   bpr_used_override: 0
   max_positions_override: 60
+  idea_cooldown_days: 1
   match_gate_mode: permissive # strict | permissive
   candidate_filter_mode: warn   # strict | warn
 

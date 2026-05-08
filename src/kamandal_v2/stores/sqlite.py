@@ -265,6 +265,31 @@ class LocalStore:
                 idea_ids.add(idea_id)
         return idea_ids
 
+    def shadow_idea_ids_opened_since(self, opened_since: str) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT idea_id, candidate_id, payload
+                FROM shadow_fills
+                WHERE opened_at >= ?
+                """,
+                (opened_since,),
+            ).fetchall()
+            candidate_rows = conn.execute("SELECT id, payload FROM candidates").fetchall()
+        candidate_ideas = {
+            str(row["id"]): str((json.loads(row["payload"]) or {}).get("idea_id") or "")
+            for row in candidate_rows
+        }
+        idea_ids: set[str] = set()
+        for row in rows:
+            payload = json.loads(row["payload"])
+            idea_id = str(row["idea_id"] or payload.get("idea_id") or "")
+            if not idea_id:
+                idea_id = candidate_ideas.get(str(row["candidate_id"] or payload.get("candidate_id") or ""), "")
+            if idea_id:
+                idea_ids.add(idea_id)
+        return idea_ids
+
     def shadow_portfolio_state(self, base: PortfolioState) -> PortfolioState:
         with self._connect() as conn:
             rows = conn.execute(

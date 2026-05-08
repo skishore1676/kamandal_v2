@@ -206,6 +206,7 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "idea_cooldown_days": 1,
         "candidate_filter_mode": "warn",
     }
 
@@ -242,6 +243,82 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
         assert row[3] is not None
         assert row[4] is not None
         assert row[5] is not None
+
+
+def test_shadow_cycle_blocks_same_day_reentry_after_close(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    control = load_control()
+    control["shadow"] = {
+        "account_size_override": 20_000,
+        "buying_power_override": 20_000,
+        "bpr_used_override": 0,
+        "idea_cooldown_days": 1,
+        "candidate_filter_mode": "warn",
+    }
+
+    first = run_shadow_cycle(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    fill_id = f"{first.plan_run_id}:{first.plans[0].candidates[0].candidate_id}"
+    store.close_shadow_fill(fill_id, reason="profit_target", pnl=50.0, payload={"test": True})
+
+    second = run_plan(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        store=store,
+        audit=AuditWriter(tmp_path / "audit2"),
+    )
+
+    first_idea_id = first.plans[0].candidates[0].idea_id
+    reentry_candidates = [candidate for candidate in second.candidates if candidate.idea_id == first_idea_id]
+    assert reentry_candidates
+    assert all(candidate.rejection_reason == "shadow_idea_already_traded_today" for candidate in reentry_candidates)
+
+
+def test_shadow_idea_cooldown_can_be_disabled(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    control = load_control()
+    control["shadow"] = {
+        "account_size_override": 20_000,
+        "buying_power_override": 20_000,
+        "bpr_used_override": 0,
+        "idea_cooldown_days": 0,
+        "candidate_filter_mode": "warn",
+    }
+
+    first = run_shadow_cycle(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    fill_id = f"{first.plan_run_id}:{first.plans[0].candidates[0].candidate_id}"
+    store.close_shadow_fill(fill_id, reason="profit_target", pnl=50.0, payload={"test": True})
+
+    second = run_plan(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        store=store,
+        audit=AuditWriter(tmp_path / "audit2"),
+    )
+
+    first_idea_id = first.plans[0].candidates[0].idea_id
+    reentry_candidates = [candidate for candidate in second.candidates if candidate.idea_id == first_idea_id]
+    assert reentry_candidates
+    assert not any(candidate.rejection_reason == "shadow_idea_already_traded_today" for candidate in reentry_candidates)
 
 
 def test_open_shadow_ideas_backfills_legacy_fills_from_candidates(tmp_path) -> None:

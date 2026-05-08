@@ -88,12 +88,12 @@ run_youtube_extraction() {
     log "Fetching YouTube transcript: $video_id"
     fetch_args=(
       fetch-youtube-transcript
-      --video-id "$video_id" \
-      --transcript-dir "$transcript_dir" \
-      --languages "$languages" \
-      --provider "$provider" \
-      --sleep-requests "$sleep_requests" \
-      --sleep-subtitles "$sleep_subtitles" \
+      "--video-id=$video_id"
+      --transcript-dir "$transcript_dir"
+      --languages "$languages"
+      --provider "$provider"
+      --sleep-requests "$sleep_requests"
+      --sleep-subtitles "$sleep_subtitles"
       --archive-file "$archive_file"
     )
     if [[ -n "$cookies_from_browser" ]]; then
