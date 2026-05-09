@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/common.sh"
+
+run_live_advisory() {
+  require_trading_day
+  export KAMANDAL_MODE=live
+  export KAMANDAL_APPROVAL_MODE=live_plan_only
+  local ideas_dir="${KAMANDAL_ACTIVE_IDEAS_DIR:-data/ideas/active}"
+  log "Running live advisory provider=public ideas=$ideas_dir write_sheet=true."
+  "$KAMANDAL_BIN" live-advisory-plan \
+    --ideas "$ideas_dir" \
+    --config-source sheet \
+    --provider public \
+    --write-sheet
+}
+
+with_lock live_advisory run_live_advisory

@@ -89,6 +89,67 @@ class LocalStore:
                     natural_pnl REAL NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS live_order_intents (
+                    ticket_hash TEXT PRIMARY KEY,
+                    order_id TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    candidate_id TEXT NOT NULL,
+                    idea_id TEXT,
+                    intent_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS live_order_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ticket_hash TEXT NOT NULL,
+                    order_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    submit INTEGER NOT NULL,
+                    ok INTEGER NOT NULL,
+                    request_payload TEXT NOT NULL,
+                    response_payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS live_order_status (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ticket_hash TEXT,
+                    order_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS live_positions (
+                    id TEXT PRIMARY KEY,
+                    group_id TEXT NOT NULL,
+                    order_id TEXT,
+                    plan_id TEXT,
+                    candidate_id TEXT,
+                    idea_id TEXT,
+                    underlying TEXT NOT NULL,
+                    playbook_id TEXT,
+                    structure TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TEXT,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS live_position_groups (
+                    group_id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    opened_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TEXT,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS live_management_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    group_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
                 """
             )
             self._ensure_shadow_fill_columns(conn)
@@ -355,6 +416,166 @@ class LocalStore:
                 WHERE id = ? AND status = 'open'
                 """,
                 (reason, float(pnl), json.dumps(payload, sort_keys=True), fill_id),
+            )
+
+    def save_live_order_intent(self, ticket: dict[str, Any], *, status: str = "pending_approval") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO live_order_intents
+                (ticket_hash, order_id, plan_id, candidate_id, idea_id, intent_type, status, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                """,
+                (
+                    str(ticket["ticket_hash"]),
+                    str(ticket["order_id"]),
+                    str(ticket["plan_id"]),
+                    str(ticket["candidate_id"]),
+                    str(ticket.get("idea_id") or ""),
+                    str(ticket["intent_type"]),
+                    status,
+                    json.dumps(ticket, sort_keys=True),
+                ),
+            )
+
+    def live_order_intent(self, ticket_hash: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM live_order_intents WHERE ticket_hash = ?",
+                (ticket_hash,),
+            ).fetchone()
+        return json.loads(row["payload"]) if row else None
+
+    def live_order_intents_by_status(self, statuses: set[str]) -> list[dict[str, Any]]:
+        if not statuses:
+            return []
+        placeholders = ",".join("?" for _ in statuses)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT payload FROM live_order_intents WHERE status IN ({placeholders})",
+                tuple(sorted(statuses)),
+            ).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def update_live_order_intent_status(self, ticket_hash: str, status: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE live_order_intents SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE ticket_hash = ?",
+                (status, ticket_hash),
+            )
+
+    def record_live_order_attempt(
+        self,
+        ticket: dict[str, Any],
+        *,
+        action: str,
+        submit: bool,
+        ok: bool,
+        request_payload: dict[str, Any],
+        response_payload: dict[str, Any],
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO live_order_attempts
+                (ticket_hash, order_id, action, submit, ok, request_payload, response_payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(ticket["ticket_hash"]),
+                    str(ticket["order_id"]),
+                    action,
+                    int(submit),
+                    int(ok),
+                    json.dumps(request_payload, sort_keys=True),
+                    json.dumps(response_payload, sort_keys=True),
+                ),
+            )
+
+    def record_live_order_status(self, order_id: str, status: str, payload: dict[str, Any], *, ticket_hash: str = "") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO live_order_status (ticket_hash, order_id, status, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                (ticket_hash, order_id, status, json.dumps(payload, sort_keys=True)),
+            )
+
+    def save_live_position_group(self, group_id: str, payload: dict[str, Any], *, status: str = "open") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO live_position_groups
+                (group_id, status, payload)
+                VALUES (?, ?, ?)
+                """,
+                (group_id, status, json.dumps(payload, sort_keys=True)),
+            )
+
+    def save_live_position(self, position_id: str, group_id: str, payload: dict[str, Any], *, status: str = "open") -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO live_positions
+                (id, group_id, order_id, plan_id, candidate_id, idea_id, underlying, playbook_id, structure, status, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    position_id,
+                    group_id,
+                    payload.get("order_id"),
+                    payload.get("plan_id"),
+                    payload.get("candidate_id"),
+                    payload.get("idea_id"),
+                    payload.get("underlying"),
+                    payload.get("playbook_id"),
+                    payload.get("structure"),
+                    status,
+                    json.dumps(payload, sort_keys=True),
+                ),
+            )
+
+    def open_live_idea_ids(self) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT idea_id FROM live_positions WHERE status = 'open' AND idea_id IS NOT NULL AND idea_id != ''"
+            ).fetchall()
+        return {str(row["idea_id"]) for row in rows}
+
+    def live_idea_ids_opened_since(self, opened_since: str) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT idea_id FROM live_positions
+                WHERE opened_at >= ? AND idea_id IS NOT NULL AND idea_id != ''
+                """,
+                (opened_since,),
+            ).fetchall()
+        return {str(row["idea_id"]) for row in rows}
+
+    def open_live_position_groups(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            group_rows = conn.execute("SELECT group_id, payload FROM live_position_groups WHERE status = 'open'").fetchall()
+            position_rows = conn.execute("SELECT group_id, payload FROM live_positions WHERE status = 'open'").fetchall()
+        positions_by_group: dict[str, list[dict[str, Any]]] = {}
+        for row in position_rows:
+            positions_by_group.setdefault(str(row["group_id"]), []).append(json.loads(row["payload"]))
+        groups = []
+        for row in group_rows:
+            payload = json.loads(row["payload"])
+            payload["positions"] = positions_by_group.get(str(row["group_id"]), [])
+            groups.append(payload)
+        return groups
+
+    def record_live_management_decision(self, group_id: str, action: str, reason: str, payload: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO live_management_decisions (group_id, action, reason, payload)
+                VALUES (?, ?, ?, ?)
+                """,
+                (group_id, action, reason, json.dumps(payload, sort_keys=True)),
             )
 
     def event(self, event_type: str, payload: dict[str, Any]) -> None:

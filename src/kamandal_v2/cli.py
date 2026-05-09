@@ -7,13 +7,17 @@ import json
 from pathlib import Path
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState, PreflightResult
 from kamandal_v2.events.earnings import EarningsStore, capture_earnings_snapshots, earnings_event_status
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
 from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, fetch_youtube_transcript, import_transcripts, scrape_youtube_smoke
 from kamandal_v2.intelligence.x_bookmarks import import_x_bookmarks
 from kamandal_v2.intelligence.x_digest import import_x_digest
+from kamandal_v2.live.advisory import run_live_advisory_plan
+from kamandal_v2.live.execution import execute_live_approved, record_manual_live_fill, sync_live_orders
+from kamandal_v2.live.management import run_live_management_plan
+from kamandal_v2.live.orders import build_open_ticket
 from kamandal_v2.management.shadow import manage_shadow_positions, mark_shadow_portfolio, write_shadow_eod_report
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.paths import resolve_path
@@ -44,6 +48,18 @@ def main() -> None:
 
     shadow_parser = subparsers.add_parser("run-shadow-cycle", help="Build plans and auto-approve the top shadow plan when configured")
     _add_planner_args(shadow_parser)
+    live_advisory_parser = subparsers.add_parser("live-advisory-plan", help="Build strict live advisory plans and optional sheet rows")
+    _add_planner_args(live_advisory_parser)
+    live_execute_parser = subparsers.add_parser("execute-live-approved", help="Execute sheet-approved live opening orders")
+    live_execute_parser.add_argument("--submit", action="store_true", help="Submit real orders; default is dry-run")
+    live_close_execute_parser = subparsers.add_parser("execute-live-approved-closes", help="Execute sheet-approved live close orders")
+    live_close_execute_parser.add_argument("--submit", action="store_true", help="Submit real close orders; default is dry-run")
+    subparsers.add_parser("sync-live-orders", help="Poll Public order status for submitted live orders")
+    manual_fill_parser = subparsers.add_parser("record-manual-live-fill", help="Record a manually filled live order ticket")
+    manual_fill_parser.add_argument("--ticket-hash", required=True)
+    live_manage_parser = subparsers.add_parser("live-management-plan", help="Build strict live close advisory rows")
+    live_manage_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    live_manage_parser.add_argument("--write-sheet", action="store_true")
 
     import_parser = subparsers.add_parser("import-transcripts", help="Import local transcripts into digest and rough idea YAML")
     import_parser.add_argument("--source-dir", default="data/transcripts")
@@ -108,6 +124,8 @@ def main() -> None:
 
     smoke_parser = subparsers.add_parser("public-smoke", help="Fetch Public account, chain, and preflight one defined-risk spread")
     smoke_parser.add_argument("--symbol", default="TSLA")
+    live_smoke_parser = subparsers.add_parser("public-live-dry-run", help="Fetch Public account, preflight, and build live submit payload without submitting")
+    live_smoke_parser.add_argument("--symbol", default="TSLA")
 
     iv_parser = subparsers.add_parser("capture-iv", help="Capture current option-chain IV snapshots for universe symbols")
     iv_parser.add_argument("--symbols", nargs="*", help="Optional symbols; defaults to enabled sheet/seed universe")
@@ -212,6 +230,31 @@ def main() -> None:
             write_sheet=args.write_sheet,
         )
         print(_plan_result_json(result))
+        return
+    if args.command == "live-advisory-plan":
+        result = run_live_advisory_plan(
+            config,
+            idea_paths=_expand_paths(args.ideas),
+            config_source=args.config_source,
+            provider=args.provider,
+            write_sheet=args.write_sheet,
+        )
+        print(_plan_result_json(result))
+        return
+    if args.command == "execute-live-approved":
+        print(json.dumps(execute_live_approved(config, submit=args.submit), indent=2))
+        return
+    if args.command == "execute-live-approved-closes":
+        print(json.dumps(execute_live_approved(config, submit=args.submit, close=True), indent=2))
+        return
+    if args.command == "sync-live-orders":
+        print(json.dumps(sync_live_orders(config), indent=2))
+        return
+    if args.command == "record-manual-live-fill":
+        print(json.dumps(record_manual_live_fill(args.ticket_hash), indent=2))
+        return
+    if args.command == "live-management-plan":
+        print(json.dumps(run_live_management_plan(config, config_source=args.config_source, write_sheet=args.write_sheet), indent=2))
         return
     if args.command == "import-transcripts":
         result = import_transcripts(
@@ -329,6 +372,9 @@ def main() -> None:
         return
     if args.command == "public-smoke":
         print(json.dumps(_public_smoke(config, args.symbol), indent=2))
+        return
+    if args.command == "public-live-dry-run":
+        print(json.dumps(_public_live_dry_run(config, args.symbol), indent=2))
         return
     if args.command == "capture-iv":
         result = capture_iv_snapshots(
@@ -519,6 +565,50 @@ def _public_smoke(config: dict, symbol: str) -> dict:
         "preflight": preflight.to_dict(),
         "live_order_submitted": False,
     }
+
+
+def _public_live_dry_run(config: dict, symbol: str) -> dict:
+    smoke = _public_smoke(config, symbol)
+    candidate = _candidate_from_smoke(smoke["candidate"])
+    portfolio = PortfolioState(account_size=smoke["account"]["account_size"], buying_power=smoke["account"]["buying_power"], bpr_used=0, positions_count=0)
+    plan = Plan(
+        plan_id="public_live_dry_run",
+        plan_rank=1,
+        status="eligible",
+        candidates=[candidate],
+        score=0,
+        total_bpr=candidate.estimated_bpr,
+        bpr_utilization_pct=0,
+        buying_power_after=portfolio.buying_power - candidate.estimated_bpr,
+        portfolio_before=portfolio,
+        portfolio_after=portfolio,
+    )
+    candidate.preflight = PreflightResult(
+        ok=bool(smoke["preflight"]["ok"]),
+        bpr=float(smoke["preflight"]["bpr"]),
+        message=str(smoke["preflight"].get("message") or ""),
+        raw=dict(smoke["preflight"].get("raw") or {}),
+    )
+    ticket = build_open_ticket(plan, candidate)
+    return {**smoke, "order_ticket": ticket, "live_order_submitted": False}
+
+
+def _candidate_from_smoke(payload: dict) -> Candidate:
+    return Candidate(
+        candidate_id=str(payload["candidate_id"]),
+        idea_id=str(payload["idea_id"]),
+        underlying=str(payload["underlying"]),
+        playbook_id=str(payload["playbook_id"]),
+        structure=str(payload["structure"]),
+        legs=[OptionLeg(**leg) for leg in payload["legs"]],
+        net_credit=float(payload["net_credit"]),
+        estimated_bpr=float(payload["estimated_bpr"]),
+        greeks=Greeks(**payload["greeks"]),
+        liquidity_score=float(payload["liquidity_score"]),
+        score=float(payload["score"]),
+        reasons=list(payload.get("reasons") or []),
+        rejection_reason=str(payload.get("rejection_reason") or ""),
+    )
 
 
 def _iv_capture_json(result: object) -> dict:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import json
+from datetime import date
 from typing import Any, Sequence
 
 from kamandal_v2.config import google_credentials_path, spreadsheet_id
@@ -110,13 +112,33 @@ def pull_sheet_tables(config: dict[str, Any]) -> dict[str, list[dict[str, str]]]
     }
 
 
-def write_daily_plan(config: dict[str, Any], rows: list[list[Any]], header: list[str]) -> int:
+def write_daily_plan(
+    config: dict[str, Any],
+    rows: list[list[Any]],
+    header: list[str],
+    *,
+    replace_lanes: set[str] | None = None,
+) -> int:
     client = GoogleSheetClient.from_config(config)
     tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    title = str(tab_names.get("daily_plan") or "daily_plan")
+    merged_rows = rows
+    if replace_lanes:
+        existing = client.read_tab(title)
+        today = date.today().isoformat()
+        keep = [
+            _row_from_dict(row, header)
+            for row in existing
+            if not (
+                str(row.get("plan_date") or "") == today
+                and _row_lane(row) in replace_lanes
+            )
+        ]
+        merged_rows = keep + rows
     return client.replace_tab(
-        str(tab_names.get("daily_plan") or "daily_plan"),
+        title,
         header=header,
-        rows=rows,
+        rows=merged_rows,
     )
 
 
@@ -126,6 +148,23 @@ def _cell(value: Any) -> Any:
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
     return value
+
+
+def _row_from_dict(row: dict[str, Any], header: list[str]) -> list[Any]:
+    return [row.get(column, "") for column in header]
+
+
+def _row_lane(row: dict[str, Any]) -> str:
+    detail = row.get("plan_detail_json") or ""
+    if detail:
+        try:
+            parsed = json.loads(detail)
+            lane = str(parsed.get("lane") or "")
+            if lane:
+                return lane
+        except Exception:
+            pass
+    return str(row.get("mode") or "")
 
 
 def _col_letter(index: int) -> str:

@@ -1,8 +1,4 @@
-"""Public.com market/preflight adapter.
-
-The adapter intentionally supports only read and preflight operations. It never
-submits live orders.
-"""
+"""Public.com market, preflight, and guarded order adapter."""
 
 from __future__ import annotations
 
@@ -134,6 +130,41 @@ class PublicAdapter:
             return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="Public preflight ok", raw={"request": payload, "response": response})
         except Exception as exc:  # noqa: BLE001
             return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"Public preflight failed: {exc}", raw={"source": "public"})
+
+    def preflight_ticket(self, ticket: dict[str, Any]) -> PreflightResult:
+        self._require_available()
+        try:
+            payload = dict(ticket.get("submit_payload") or {})
+            payload.pop("orderId", None)
+            if "type" in payload and "orderType" not in payload:
+                payload["orderType"] = payload.pop("type")
+            endpoint = "single-leg" if payload.get("instrument") else "multi-leg"
+            response = self._post(
+                f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
+                payload,
+            )
+            bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=0.0)
+            if not bpr:
+                return PreflightResult(ok=False, bpr=0.0, message="Public preflight missing buyingPowerRequirement", raw={"request": payload, "response": response})
+            return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="Public ticket preflight ok", raw={"request": payload, "response": response})
+        except Exception as exc:  # noqa: BLE001
+            return PreflightResult(ok=False, bpr=0.0, message=f"Public ticket preflight failed: {exc}", raw={"source": "public"})
+
+    def place_order_ticket(self, ticket: dict[str, Any]) -> dict[str, Any]:
+        self._require_available()
+        submit_payload = dict(ticket.get("submit_payload") or {})
+        if not submit_payload.get("orderId"):
+            raise ValueError("live order ticket missing orderId")
+        endpoint = "order" if len(submit_payload.get("legs") or []) <= 1 and submit_payload.get("instrument") else "order/multileg"
+        return self._post(f"/userapigateway/trading/{self._account_id()}/{endpoint}", submit_payload)
+
+    def get_order(self, order_id: str) -> dict[str, Any]:
+        self._require_available()
+        return self._get(f"/userapigateway/trading/{self._account_id()}/order/{order_id}")
+
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        self._require_available()
+        return self._delete(f"/userapigateway/trading/{self._account_id()}/order/{order_id}")
 
     def _order_payload(self, candidate: Candidate) -> dict[str, Any]:
         quantity = "1"
@@ -286,6 +317,9 @@ class PublicAdapter:
 
     def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", endpoint, json_data=payload)
+
+    def _delete(self, endpoint: str) -> dict[str, Any]:
+        return self._request("DELETE", endpoint)
 
     def _request(self, method: str, endpoint: str, *, params: Any = None, json_data: dict[str, Any] | None = None) -> dict[str, Any]:
         response = self._session.request(

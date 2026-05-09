@@ -14,10 +14,13 @@ def generate_plans(
     *,
     beam_width: int = 20,
     top_n: int = 5,
+    max_new_positions: int | None = None,
 ) -> list[Plan]:
     eligible = [candidate for candidate in candidates if candidate.eligible]
     max_positions = _max_positions(control)
     remaining_positions = max(max_positions - portfolio.positions_count, 0)
+    if max_new_positions is not None:
+        remaining_positions = min(remaining_positions, max_new_positions)
     if remaining_positions <= 0:
         return []
     max_bpr_pct = float(((control.get("portfolio") or {}).get("hard_max_bpr_utilization_pct") or 90))

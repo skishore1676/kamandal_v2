@@ -31,6 +31,9 @@ remove_launch_agent "$LABEL_PREFIX.x_bookmarks"
 remove_launch_agent "$LABEL_PREFIX.market_shadow"
 remove_launch_agent "$LABEL_PREFIX.weekly_reviewer"
 remove_launch_agent "$LABEL_PREFIX.shadow_eod_report"
+remove_launch_agent "$LABEL_PREFIX.live_advisory"
+remove_launch_agent "$LABEL_PREFIX.live_approved_orders"
+remove_launch_agent "$LABEL_PREFIX.live_management"
 
 crontab -l > "$CRON_TMP" 2>/dev/null || true
 awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
@@ -48,6 +51,7 @@ $BEGIN_MARKER
 30 14 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 30 8 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_market_shadow.sh" >> "$REPO_ROOT/data/logs/cron_market_shadow.log" 2>&1
 */15 9-15 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_market_shadow.sh" >> "$REPO_ROOT/data/logs/cron_market_shadow.log" 2>&1
+20 9 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_live_advisory.sh" >> "$REPO_ROOT/data/logs/cron_live_advisory.log" 2>&1
 40 8 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_earnings_capture.sh" >> "$REPO_ROOT/data/logs/cron_earnings.log" 2>&1
 45 8 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_iv_capture.sh" >> "$REPO_ROOT/data/logs/cron_iv_capture.log" 2>&1
 50 15 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_shadow_eod_report.sh" >> "$REPO_ROOT/data/logs/cron_shadow_eod_report.log" 2>&1

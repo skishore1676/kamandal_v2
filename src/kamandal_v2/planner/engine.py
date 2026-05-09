@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, Plan, PortfolioState, utc_now
@@ -59,6 +59,9 @@ def run_plan(
     write_sheet: bool = False,
     store: LocalStore | None = None,
     audit: AuditWriter | None = None,
+    candidate_postprocessor: Callable[[list[Candidate], LocalStore, dict[str, Any]], None] | None = None,
+    plan_top_n: int = 5,
+    plan_max_new_positions: int | None = None,
 ) -> PlanRunResult:
     plan_run_id = "run_" + utc_now().replace(":", "").replace("-", "")
     store = store or LocalStore()
@@ -84,9 +87,11 @@ def run_plan(
         match_gate_mode=match_gate_mode,
         candidate_filter_mode=candidate_filter_mode,
     )
+    if candidate_postprocessor is not None:
+        candidate_postprocessor(candidates, store, config)
     _reject_open_shadow_candidates(candidates, store, config)
     idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market, match_gate_mode=match_gate_mode)
-    plans = generate_plans(candidates, portfolio, config)
+    plans = generate_plans(candidates, portfolio, config, top_n=plan_top_n, max_new_positions=plan_max_new_positions)
     rejection_summary = _rejection_summary(ideas, candidates, idea_diagnostics)
     metrics = _plan_metrics(
         ideas,
@@ -118,7 +123,7 @@ def run_plan(
     audit.event("plan_run_completed", {"plan_run_id": plan_run_id, **metrics})
 
     if write_sheet and rows:
-        write_daily_plan(config, rows, DAILY_PLAN_HEADER)
+        write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={mode})
     elif write_sheet:
         store.event("daily_plan_write_skipped", {"plan_run_id": plan_run_id, "reason": "no_eligible_plans"})
         audit.event("daily_plan_write_skipped", {"plan_run_id": plan_run_id, "reason": "no_eligible_plans"})
