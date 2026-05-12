@@ -46,9 +46,14 @@ def execute_live_approved(
             if not fresh_preflight.ok:
                 results.append(_failure(ticket, fresh_preflight.message or "fresh_preflight_failed"))
                 continue
-            response = adapter.place_order_ticket(ticket)
-            ok = bool(response.get("orderId"))
-            status = "submitted" if ok else "submit_failed"
+            try:
+                response = adapter.place_order_ticket(ticket)
+                ok = bool(response.get("orderId"))
+                status = "submitted" if ok else "submit_failed"
+            except Exception as exc:  # noqa: BLE001
+                response = {"error": str(exc)}
+                ok = False
+                status = "submit_failed"
         else:
             response = {"dry_run": True, "orderId": ticket.get("order_id"), "request": request_payload}
             ok = True

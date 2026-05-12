@@ -3,7 +3,7 @@ import sqlite3
 from datetime import date, timedelta
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Playbook, UniverseEntry
+from kamandal_v2.domain.models import Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.live.advisory import live_config, run_live_advisory_plan
 from kamandal_v2.live.execution import execute_live_approved, record_manual_live_fill
 from kamandal_v2.live.management import run_live_management_plan
@@ -169,6 +169,8 @@ def test_live_advisory_uses_real_account_and_writes_blank_approval(tmp_path, mon
     assert row["operator_action"] == ""
     assert detail["lane"] == "live_advisory"
     assert detail["order_ticket_json"]["intent_type"] == "open"
+    assert detail["order_ticket_json"]["submit_payload"]["orderType"] == "LIMIT"
+    assert "type" not in detail["order_ticket_json"]["submit_payload"]
 
 
 def test_live_execute_approved_dry_run_uses_sheet_gate(tmp_path, monkeypatch) -> None:
@@ -196,6 +198,46 @@ def test_live_execute_approved_dry_run_uses_sheet_gate(tmp_path, monkeypatch) ->
     assert executed["results"][0]["status"] == "dry_run"
     with sqlite3.connect(store.sqlite_path) as conn:
         assert conn.execute("SELECT count(*) FROM live_order_attempts").fetchone()[0] == 1
+
+
+def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    row["operator_action"] = APPROVE_LIVE
+
+    class FailingPublicAdapter:
+        def __init__(self, _config):
+            pass
+
+        def preflight_ticket(self, _ticket):
+            return PreflightResult(ok=True, bpr=50.0, message="ok")
+
+        def place_order_ticket(self, _ticket):
+            raise RuntimeError("broker rejected payload")
+
+    live_control = _live_control()
+    live_control["runtime"]["mode"] = "live"
+    live_control["runtime"]["trading_enabled"] = True
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    monkeypatch.setattr("kamandal_v2.live.execution.PublicAdapter", FailingPublicAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [row]})
+
+    executed = execute_live_approved(live_control, submit=True, store=store)
+
+    assert executed["processed"] == 1
+    assert executed["results"][0]["status"] == "submit_failed"
+    with sqlite3.connect(store.sqlite_path) as conn:
+        assert conn.execute("SELECT count(*) FROM live_order_attempts WHERE ok = 0").fetchone()[0] == 1
 
 
 def test_close_ticket_reverses_sides_and_uses_close_indicator(tmp_path, monkeypatch) -> None:

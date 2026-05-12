@@ -141,8 +141,8 @@ def _submit_payload(order_id: str, underlying: str, legs: list[OptionLeg], limit
         }
     return {
         "orderId": order_id,
-        "quantity": 1,
-        "type": "LIMIT",
+        "quantity": "1",
+        "orderType": "LIMIT",
         "limitPrice": limit_price,
         "expiration": {"timeInForce": "DAY"},
         "legs": [_leg_ticket_payload(underlying, leg, open_close_indicator) for leg in legs],

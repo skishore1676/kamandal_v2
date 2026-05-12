@@ -152,7 +152,7 @@ class PublicAdapter:
 
     def place_order_ticket(self, ticket: dict[str, Any]) -> dict[str, Any]:
         self._require_available()
-        submit_payload = dict(ticket.get("submit_payload") or {})
+        submit_payload = _normalise_order_payload(dict(ticket.get("submit_payload") or {}))
         if not submit_payload.get("orderId"):
             raise ValueError("live order ticket missing orderId")
         endpoint = "order" if len(submit_payload.get("legs") or []) <= 1 and submit_payload.get("instrument") else "order/multileg"
@@ -330,7 +330,9 @@ class PublicAdapter:
             json=json_data,
             timeout=30,
         )
-        response.raise_for_status()
+        if not response.ok:
+            body = response.text[:1000] if response.text else ""
+            raise RuntimeError(f"Public API {method} {endpoint} failed status={response.status_code}: {body}")
         return response.json() if response.text else {}
 
     def _account_id(self) -> str:
@@ -405,6 +407,14 @@ def _find_number(payload: dict[str, Any], keys: tuple[str, ...], *, default: flo
         elif isinstance(item, list):
             stack.extend(item)
     return default
+
+
+def _normalise_order_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if "type" in payload and "orderType" not in payload:
+        payload["orderType"] = payload.pop("type")
+    if "quantity" in payload:
+        payload["quantity"] = str(payload["quantity"])
+    return payload
 
 
 def _find_list(payload: dict[str, Any], keys: tuple[str, ...]) -> list[Any]:
