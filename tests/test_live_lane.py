@@ -7,7 +7,7 @@ from kamandal_v2.domain.models import Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.live.advisory import live_config, run_live_advisory_plan
 from kamandal_v2.live.execution import execute_live_approved, record_manual_live_fill
 from kamandal_v2.live.management import run_live_management_plan
-from kamandal_v2.live.orders import APPROVE_LIVE, build_close_ticket
+from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, build_close_ticket
 from kamandal_v2.planner.engine import run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.stores.audit import AuditWriter
@@ -305,9 +305,87 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
             ),
         )
 
-    managed = run_live_management_plan(load_control(), config_source="seed", write_sheet=False, store=store)
+    control = load_control()
+    control["live"]["allow_same_day_exits"] = True
+    managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
 
     assert managed["close_recommendations"] == 1
     detail = json.loads(dict(zip(DAILY_PLAN_HEADER, managed["daily_plan_rows"][0], strict=False))["plan_detail_json"])
     assert detail["lane"] == "live_close_advisory"
     assert detail["order_ticket_json"]["intent_type"] == "close"
+
+
+def test_live_management_blocks_same_day_close_by_default(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    ticket = json.loads(row["plan_detail_json"])["order_ticket_json"]
+    record_manual_live_fill(ticket["ticket_hash"], store=store)
+    candidate = result.plans[0].candidates[0]
+    expiration = candidate.legs[0].expiration
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO chain_snapshots VALUES (?, ?, ?)",
+            (
+                "cheap_chain",
+                candidate.underlying,
+                json.dumps({
+                    "captured_at": "2099-01-01T14:00:00Z",
+                    "underlying": candidate.underlying,
+                    "underlying_price": 100.0,
+                    "quotes": [
+                        {"expiration": expiration, "option_type": leg.option_type, "strike": leg.strike, "bid": 0.01, "ask": 0.02}
+                        for leg in candidate.legs
+                    ],
+                }),
+            ),
+        )
+
+    managed = run_live_management_plan(load_control(), config_source="seed", write_sheet=False, store=store)
+
+    assert managed["close_recommendations"] == 0
+    assert managed["decisions"][0]["action"] == "hold"
+    assert managed["decisions"][0]["reason"] == "same_day_live_exit_blocked"
+
+
+def test_execute_live_close_blocks_same_day_approved_ticket(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    open_ticket = json.loads(row["plan_detail_json"])["order_ticket_json"]
+    record_manual_live_fill(open_ticket["ticket_hash"], store=store)
+    group = store.open_live_position_groups()[0]
+    close_ticket = build_close_ticket(group)
+    store.save_live_order_intent(close_ticket, status="pending_approval")
+    close_row = dict(zip(DAILY_PLAN_HEADER, ["" for _ in DAILY_PLAN_HEADER], strict=False))
+    close_row["operator_action"] = APPROVE_LIVE_CLOSE
+    close_row["mode"] = "live_close_advisory"
+    close_row["plan_detail_json"] = json.dumps({"lane": "live_close_advisory", "order_ticket_json": close_ticket})
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [close_row]})
+
+    live_control = _live_control()
+    live_control["runtime"]["mode"] = "live"
+    live_control["runtime"]["trading_enabled"] = True
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    executed = execute_live_approved(live_control, submit=True, close=True, store=store)
+
+    assert executed["processed"] == 1
+    assert executed["results"][0]["reason"] == "same_day_live_exit_blocked"

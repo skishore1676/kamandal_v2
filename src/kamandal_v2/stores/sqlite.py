@@ -560,17 +560,32 @@ class LocalStore:
 
     def open_live_position_groups(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            group_rows = conn.execute("SELECT group_id, payload FROM live_position_groups WHERE status = 'open'").fetchall()
-            position_rows = conn.execute("SELECT group_id, payload FROM live_positions WHERE status = 'open'").fetchall()
+            group_rows = conn.execute("SELECT group_id, opened_at, payload FROM live_position_groups WHERE status = 'open'").fetchall()
+            position_rows = conn.execute("SELECT group_id, opened_at, payload FROM live_positions WHERE status = 'open'").fetchall()
         positions_by_group: dict[str, list[dict[str, Any]]] = {}
         for row in position_rows:
-            positions_by_group.setdefault(str(row["group_id"]), []).append(json.loads(row["payload"]))
+            payload = json.loads(row["payload"])
+            payload["opened_at"] = row["opened_at"]
+            positions_by_group.setdefault(str(row["group_id"]), []).append(payload)
         groups = []
         for row in group_rows:
             payload = json.loads(row["payload"])
+            payload["opened_at"] = row["opened_at"]
             payload["positions"] = positions_by_group.get(str(row["group_id"]), [])
             groups.append(payload)
         return groups
+
+    def live_position_group(self, group_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT group_id, opened_at, payload FROM live_position_groups WHERE group_id = ?",
+                (group_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        payload["opened_at"] = row["opened_at"]
+        return payload
 
     def record_live_management_decision(self, group_id: str, action: str, reason: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:

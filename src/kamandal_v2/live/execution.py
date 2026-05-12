@@ -6,6 +6,7 @@ import json
 import os
 from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.market.public import PublicAdapter
@@ -40,6 +41,9 @@ def execute_live_approved(
         ledger_status = str(intent.get("_ledger_status") or "")
         if ledger_status and ledger_status not in {"pending_approval", "dry_run"}:
             results.append(_failure(ticket, f"ticket_already_{ledger_status}"))
+            continue
+        if close and _same_day_close_blocked(config, store, ticket):
+            results.append(_failure(ticket, "same_day_live_exit_blocked"))
             continue
         if submit and not _ticket_fresh(config, ticket):
             results.append(_failure(ticket, "ticket_preflight_stale"))
@@ -153,6 +157,28 @@ def _ticket_fresh(config: dict[str, Any], ticket: dict[str, Any]) -> bool:
         return False
     parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
     return (datetime.now(UTC) - parsed).total_seconds() <= max_minutes * 60
+
+
+def _same_day_close_blocked(config: dict[str, Any], store: LocalStore, ticket: dict[str, Any]) -> bool:
+    if str(os.environ.get("KAMANDAL_ALLOW_SAME_DAY_LIVE_EXITS") or "").lower() in {"1", "true", "yes", "on"}:
+        return False
+    if bool((config.get("live") or {}).get("allow_same_day_exits")):
+        return False
+    group = store.live_position_group(str(ticket.get("group_id") or ""))
+    opened_at = str((group or {}).get("opened_at") or "")
+    if not opened_at:
+        return True
+    market_tz = ZoneInfo(str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago"))
+    opened = _parse_db_timestamp(opened_at).astimezone(market_tz).date()
+    return opened == datetime.now(market_tz).date()
+
+
+def _parse_db_timestamp(value: str) -> datetime:
+    normalized = value.strip().replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _save_live_position_from_ticket(store: LocalStore, ticket: dict[str, Any], *, status: str, order_status: dict[str, Any]) -> None:

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from kamandal_v2.events.earnings import EarningsStore
 from kamandal_v2.live.orders import build_close_ticket
@@ -35,6 +37,14 @@ def run_live_management_plan(
         mark_row = _mark_live_group(store, group)
         decision = _decision_for_mark_row(mark_row, playbook_by_id, earnings)
         decision["group_id"] = group.get("group_id")
+        if decision["action"] == "close" and _same_day_exit_blocked(config, group):
+            decision = {
+                **decision,
+                "action": "hold",
+                "blocked_action": "close",
+                "blocked_reason": str(decision.get("reason") or ""),
+                "reason": "same_day_live_exit_blocked",
+            }
         decisions.append(decision)
         store.record_live_management_decision(str(group.get("group_id")), str(decision["action"]), str(decision["reason"]), decision)
         if decision["action"] != "close":
@@ -45,6 +55,27 @@ def run_live_management_plan(
     if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_close_advisory"})
     return {"groups": len(groups), "close_recommendations": len(rows), "decisions": decisions, "daily_plan_rows": rows}
+
+
+def _same_day_exit_blocked(config: dict[str, Any], group: dict[str, Any]) -> bool:
+    if str(os.environ.get("KAMANDAL_ALLOW_SAME_DAY_LIVE_EXITS") or "").lower() in {"1", "true", "yes", "on"}:
+        return False
+    if bool((config.get("live") or {}).get("allow_same_day_exits")):
+        return False
+    opened_at = str(group.get("opened_at") or "")
+    if not opened_at:
+        return True
+    market_tz = ZoneInfo(str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago"))
+    opened = _parse_db_timestamp(opened_at).astimezone(market_tz).date()
+    return opened == datetime.now(market_tz).date()
+
+
+def _parse_db_timestamp(value: str) -> datetime:
+    normalized = value.strip().replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 def _mark_live_group(store: LocalStore, group: dict[str, Any]) -> dict[str, Any]:
