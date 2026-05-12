@@ -15,7 +15,7 @@ from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, f
 from kamandal_v2.intelligence.x_bookmarks import import_x_bookmarks
 from kamandal_v2.intelligence.x_digest import import_x_digest
 from kamandal_v2.live.advisory import run_live_advisory_plan
-from kamandal_v2.live.execution import execute_live_approved, record_manual_live_fill, sync_live_orders
+from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill, sync_live_orders
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.orders import build_open_ticket
 from kamandal_v2.management.shadow import manage_shadow_positions, mark_shadow_portfolio, write_shadow_eod_report
@@ -55,6 +55,7 @@ def main() -> None:
     live_close_execute_parser = subparsers.add_parser("execute-live-approved-closes", help="Execute sheet-approved live close orders")
     live_close_execute_parser.add_argument("--submit", action="store_true", help="Submit real close orders; default is dry-run")
     subparsers.add_parser("sync-live-orders", help="Poll Public order status for submitted live orders")
+    subparsers.add_parser("cleanup-live-approvals", help="Clear stale live approval cells after submit/fill/failure")
     manual_fill_parser = subparsers.add_parser("record-manual-live-fill", help="Record a manually filled live order ticket")
     manual_fill_parser.add_argument("--ticket-hash", required=True)
     live_manage_parser = subparsers.add_parser("live-management-plan", help="Build strict live close advisory rows")
@@ -249,6 +250,9 @@ def main() -> None:
         return
     if args.command == "sync-live-orders":
         print(json.dumps(sync_live_orders(config), indent=2))
+        return
+    if args.command == "cleanup-live-approvals":
+        print(json.dumps(cleanup_live_approvals(config), indent=2))
         return
     if args.command == "record-manual-live-fill":
         print(json.dumps(record_manual_live_fill(args.ticket_hash), indent=2))

@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.market.public import PublicAdapter
-from kamandal_v2.sheets import pull_sheet_tables
+from kamandal_v2.schemas import DAILY_PLAN_HEADER
+from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -101,6 +102,36 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None)
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "close_filled")
         results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status})
     return {"synced": len(results), "orders": results}
+
+
+def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None = None) -> dict[str, Any]:
+    store = store or LocalStore()
+    client = GoogleSheetClient.from_config(config)
+    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    title = str(tab_names.get("daily_plan") or "daily_plan")
+    rows = client.read_tab(title)
+    cleared = []
+    for row in rows:
+        action = str(row.get("operator_action") or "").strip().upper()
+        if action not in {APPROVE_LIVE, APPROVE_LIVE_CLOSE}:
+            continue
+        detail = _loads(row.get("plan_detail_json"))
+        ticket = detail.get("order_ticket_json") or {}
+        ticket_hash = str(ticket.get("ticket_hash") or "")
+        intent = store.live_order_intent(ticket_hash) if ticket_hash else None
+        status = str((intent or {}).get("_ledger_status") or "")
+        if status in {"pending_approval", "pending_close_approval", "dry_run"}:
+            continue
+        if not status:
+            continue
+        row["operator_action"] = ""
+        row["operator_notes"] = f"auto-cleared stale {action}; ledger_status={status}"
+        row["plan_status"] = status
+        cleared.append({"ticket_hash": ticket_hash, "status": status, "trade_bundle": row.get("trade_bundle")})
+    if cleared:
+        client.replace_tab(title, header=DAILY_PLAN_HEADER, rows=[[row.get(column, "") for column in DAILY_PLAN_HEADER] for row in rows])
+    store.event("live_approval_cleanup_completed", {"cleared": cleared})
+    return {"cleared": len(cleared), "rows": cleared}
 
 
 def record_manual_live_fill(ticket_hash: str, *, store: LocalStore | None = None) -> dict[str, Any]:

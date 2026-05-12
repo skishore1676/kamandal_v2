@@ -17,6 +17,8 @@ run_live_approved_orders() {
   "$KAMANDAL_BIN" execute-live-approved "${submit_args[@]}"
   log "Syncing live order status."
   "$KAMANDAL_BIN" sync-live-orders
+  log "Cleaning stale live approval cells."
+  "$KAMANDAL_BIN" cleanup-live-approvals
 }
 
 with_lock live_approved_orders run_live_approved_orders

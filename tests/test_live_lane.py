@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.live.advisory import live_config, run_live_advisory_plan
-from kamandal_v2.live.execution import execute_live_approved, record_manual_live_fill
+from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, build_close_ticket
 from kamandal_v2.planner.engine import run_plan
@@ -389,3 +389,43 @@ def test_execute_live_close_blocks_same_day_approved_ticket(tmp_path, monkeypatc
 
     assert executed["processed"] == 1
     assert executed["results"][0]["reason"] == "same_day_live_exit_blocked"
+
+
+def test_cleanup_live_approvals_clears_terminal_ticket_status(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    row["operator_action"] = APPROVE_LIVE
+    ticket = json.loads(row["plan_detail_json"])["order_ticket_json"]
+    store.update_live_order_intent_status(ticket["ticket_hash"], "filled")
+    written = {}
+
+    class FakeSheetClient:
+        @classmethod
+        def from_config(cls, _config):
+            return cls()
+
+        def read_tab(self, _title):
+            return [row]
+
+        def replace_tab(self, _title, *, header, rows):
+            written["rows"] = [dict(zip(header, item, strict=False)) for item in rows]
+            return len(rows)
+
+    monkeypatch.setattr("kamandal_v2.live.execution.GoogleSheetClient", FakeSheetClient)
+
+    cleaned = cleanup_live_approvals(load_control(), store=store)
+
+    assert cleaned["cleared"] == 1
+    assert written["rows"][0]["operator_action"] == ""
+    assert written["rows"][0]["plan_status"] == "filled"
+    assert "auto-cleared stale APPROVE_LIVE" in written["rows"][0]["operator_notes"]

@@ -17,6 +17,7 @@ run_live_management() {
   fi
   "$KAMANDAL_BIN" execute-live-approved-closes "${submit_args[@]}"
   "$KAMANDAL_BIN" sync-live-orders
+  "$KAMANDAL_BIN" cleanup-live-approvals
 }
 
 with_lock live_management run_live_management
