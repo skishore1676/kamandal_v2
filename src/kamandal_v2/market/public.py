@@ -152,10 +152,11 @@ class PublicAdapter:
 
     def place_order_ticket(self, ticket: dict[str, Any]) -> dict[str, Any]:
         self._require_available()
-        submit_payload = _normalise_order_payload(dict(ticket.get("submit_payload") or {}))
+        submit_payload = dict(ticket.get("submit_payload") or {})
         if not submit_payload.get("orderId"):
             raise ValueError("live order ticket missing orderId")
         endpoint = "order" if len(submit_payload.get("legs") or []) <= 1 and submit_payload.get("instrument") else "order/multileg"
+        submit_payload = _normalise_order_payload(submit_payload, multileg=endpoint == "order/multileg")
         return self._post(f"/userapigateway/trading/{self._account_id()}/{endpoint}", submit_payload)
 
     def get_order(self, order_id: str) -> dict[str, Any]:
@@ -409,9 +410,11 @@ def _find_number(payload: dict[str, Any], keys: tuple[str, ...], *, default: flo
     return default
 
 
-def _normalise_order_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    if "orderType" in payload and "type" not in payload:
+def _normalise_order_payload(payload: dict[str, Any], *, multileg: bool) -> dict[str, Any]:
+    if multileg and "orderType" in payload and "type" not in payload:
         payload["type"] = payload.pop("orderType")
+    if not multileg and "type" in payload and "orderType" not in payload:
+        payload["orderType"] = payload.pop("type")
     if "quantity" in payload:
         payload["quantity"] = str(payload["quantity"])
     return payload
