@@ -15,7 +15,7 @@ run_live_management() {
   if [[ "${KAMANDAL_LIVE_SUBMIT:-0}" == "1" ]]; then
     submit_args+=(--submit)
   fi
-  "$KAMANDAL_BIN" execute-live-approved-closes "${submit_args[@]}"
+  "$KAMANDAL_BIN" execute-live-approved-closes ${submit_args+"${submit_args[@]}"}
   "$KAMANDAL_BIN" sync-live-orders
   "$KAMANDAL_BIN" cleanup-live-approvals
 }

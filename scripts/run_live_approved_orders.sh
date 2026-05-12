@@ -14,7 +14,7 @@ run_live_approved_orders() {
     submit_args+=(--submit)
   fi
   log "Evaluating sheet-approved live open orders submit=${KAMANDAL_LIVE_SUBMIT:-0}."
-  "$KAMANDAL_BIN" execute-live-approved "${submit_args[@]}"
+  "$KAMANDAL_BIN" execute-live-approved ${submit_args+"${submit_args[@]}"}
   log "Syncing live order status."
   "$KAMANDAL_BIN" sync-live-orders
   log "Cleaning stale live approval cells."
