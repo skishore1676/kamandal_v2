@@ -169,8 +169,8 @@ def test_live_advisory_uses_real_account_and_writes_blank_approval(tmp_path, mon
     assert row["operator_action"] == ""
     assert detail["lane"] == "live_advisory"
     assert detail["order_ticket_json"]["intent_type"] == "open"
-    assert detail["order_ticket_json"]["submit_payload"]["orderType"] == "LIMIT"
-    assert "type" not in detail["order_ticket_json"]["submit_payload"]
+    assert detail["order_ticket_json"]["submit_payload"]["type"] == "LIMIT"
+    assert detail["order_ticket_json"]["submit_payload"]["quantity"] == "1"
 
 
 def test_live_execute_approved_dry_run_uses_sheet_gate(tmp_path, monkeypatch) -> None:

@@ -410,8 +410,8 @@ def _find_number(payload: dict[str, Any], keys: tuple[str, ...], *, default: flo
 
 
 def _normalise_order_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    if "type" in payload and "orderType" not in payload:
-        payload["orderType"] = payload.pop("type")
+    if "orderType" in payload and "type" not in payload:
+        payload["type"] = payload.pop("orderType")
     if "quantity" in payload:
         payload["quantity"] = str(payload["quantity"])
     return payload
