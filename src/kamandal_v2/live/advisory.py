@@ -27,6 +27,10 @@ def live_config(base: dict[str, Any]) -> dict[str, Any]:
     config = copy.deepcopy(base)
     runtime = config.setdefault("runtime", {})
     runtime["mode"] = "live"
+    portfolio = config.setdefault("portfolio", {})
+    live = config.get("live") or {}
+    if live.get("max_bpr_per_underlying_pct") not in (None, ""):
+        portfolio["max_bpr_per_underlying_pct"] = live["max_bpr_per_underlying_pct"]
     execution = config.setdefault("execution", {})
     execution["approval_mode"] = "live_plan_only"
     execution["max_contracts_per_order"] = 1
