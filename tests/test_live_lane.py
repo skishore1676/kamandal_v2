@@ -8,6 +8,7 @@ from kamandal_v2.live.advisory import live_config, run_live_advisory_plan
 from kamandal_v2.live.execution import execute_live_approved, record_manual_live_fill
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.orders import APPROVE_LIVE, build_close_ticket
+from kamandal_v2.planner.engine import run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
@@ -77,6 +78,73 @@ def test_live_config_ignores_shadow_overrides() -> None:
     assert config["runtime"]["mode"] == "live"
     assert config["execution"]["approval_mode"] == "live_plan_only"
     assert config["shadow"]["account_size_override"] == 20_000
+
+
+def test_live_can_warn_on_quality_filters_without_permissive_matching(tmp_path, monkeypatch) -> None:
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_cap", allowed_playbooks=["call_spread"])]
+    playbooks = [
+        Playbook(
+            playbook_id="call_spread",
+            enabled=True,
+            strategy_family="call_spread",
+            structure="call_spread",
+            variant="default",
+            leg_count=2,
+            profiles=["large_cap"],
+            applicable_direction=["bearish"],
+            applicable_thesis_tags=["overextended"],
+            applicable_horizon_min=14,
+            applicable_horizon_max=60,
+            dte_min=30,
+            dte_max=45,
+            spread_width=5,
+            short_delta_min=0.15,
+            short_delta_max=0.30,
+            min_credit_to_width_ratio=0.95,
+            max_bid_ask_pct=0.01,
+            min_option_oi=10_000,
+            profit_target_pct=50,
+            exit_dte_min=21,
+        ),
+        Playbook(
+            playbook_id="call_spread_permissive_only",
+            enabled=True,
+            strategy_family="call_spread",
+            structure="call_spread",
+            variant="bad_horizon",
+            leg_count=2,
+            profiles=["large_cap"],
+            applicable_direction=["bearish"],
+            applicable_thesis_tags=["overextended"],
+            applicable_horizon_min=90,
+            applicable_horizon_max=120,
+            dte_min=30,
+            dte_max=45,
+            spread_width=5,
+            short_delta_min=0.15,
+            short_delta_max=0.30,
+            profit_target_pct=50,
+            exit_dte_min=21,
+        ),
+    ]
+    monkeypatch.setattr("kamandal_v2.planner.engine.load_planner_config", lambda _config, source="sheet": (universe, playbooks))
+    control = _live_control()
+    control["live"]["candidate_filter_mode"] = "warn"
+    control["live"]["match_gate_mode"] = "strict"
+    result = run_plan(
+        live_config(control),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert result.metrics["candidate_filter_mode"] == "warn"
+    assert result.metrics["match_gate_mode"] == "strict"
+    assert any(candidate.eligible and candidate.playbook_id == "call_spread" for candidate in result.candidates)
+    assert not any(candidate.playbook_id == "call_spread_permissive_only" for candidate in result.candidates)
 
 
 def test_live_advisory_uses_real_account_and_writes_blank_approval(tmp_path, monkeypatch) -> None:

@@ -24,6 +24,8 @@ shadow:
 
 live:
   allowed_structures: [put_spread, call_spread]
+  match_gate_mode: strict
+  candidate_filter_mode: warn
   max_new_positions_per_plan: 1
   max_new_plans_per_day: 1
   max_bpr_per_order: 300

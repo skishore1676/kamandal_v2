@@ -308,7 +308,8 @@ def _shadow_traded_idea_ids(store: LocalStore, config: dict[str, Any]) -> set[st
 def _candidate_filter_mode(config: dict[str, Any]) -> str:
     mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
     if mode != "shadow":
-        return "strict"
+        requested = str((config.get("live") or {}).get("candidate_filter_mode") or "strict").lower()
+        return "warn" if requested == "warn" else "strict"
     requested = str((config.get("shadow") or {}).get("candidate_filter_mode") or "strict").lower()
     return "warn" if requested == "warn" else "strict"
 
@@ -316,7 +317,8 @@ def _candidate_filter_mode(config: dict[str, Any]) -> str:
 def _match_gate_mode(config: dict[str, Any]) -> str:
     mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
     if mode != "shadow":
-        return "strict"
+        requested = str((config.get("live") or {}).get("match_gate_mode") or "strict").lower()
+        return "permissive" if requested == "permissive" else "strict"
     requested = str((config.get("shadow") or {}).get("match_gate_mode") or "strict").lower()
     return "permissive" if requested == "permissive" else "strict"
 
