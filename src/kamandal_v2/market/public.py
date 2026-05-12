@@ -90,7 +90,7 @@ class PublicAdapter:
                         "expirationDate": expiration,
                     },
                 )
-            except requests.HTTPError:
+            except Exception:
                 continue
             quotes.extend(self._parse_chain_items(chain.get("calls", []) or [], seen))
             quotes.extend(self._parse_chain_items(chain.get("puts", []) or [], seen))

@@ -37,6 +37,10 @@ def execute_live_approved(
         if intent.get("ticket_hash") != ticket.get("ticket_hash"):
             results.append(_failure(ticket, "ticket_hash_mismatch"))
             continue
+        ledger_status = str(intent.get("_ledger_status") or "")
+        if ledger_status and ledger_status not in {"pending_approval", "dry_run"}:
+            results.append(_failure(ticket, f"ticket_already_{ledger_status}"))
+            continue
         if submit and not _ticket_fresh(config, ticket):
             results.append(_failure(ticket, "ticket_preflight_stale"))
             continue

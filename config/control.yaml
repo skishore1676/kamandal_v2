@@ -23,12 +23,12 @@ shadow:
   candidate_filter_mode: warn   # strict | warn
 
 live:
-  allowed_structures: [put_spread, call_spread]
-  match_gate_mode: strict
+  allowed_structures: [long_call, long_put]
+  match_gate_mode: permissive
   candidate_filter_mode: warn
   max_new_positions_per_plan: 1
   max_new_plans_per_day: 1
-  max_bpr_per_order: 300
+  max_bpr_per_order: 1000
   preflight_max_age_minutes: 10
 
 volatility:

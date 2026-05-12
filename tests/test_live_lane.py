@@ -17,6 +17,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 def _live_control() -> dict:
     control = load_control()
     control["live"]["max_bpr_per_order"] = 1000
+    control["live"]["allowed_structures"] = ["call_spread"]
     return control
 
 
@@ -236,6 +237,9 @@ def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypa
 
     assert executed["processed"] == 1
     assert executed["results"][0]["status"] == "submit_failed"
+    retried = execute_live_approved(live_control, submit=True, store=store)
+    assert retried["processed"] == 1
+    assert retried["results"][0]["reason"] == "ticket_already_submit_failed"
     with sqlite3.connect(store.sqlite_path) as conn:
         assert conn.execute("SELECT count(*) FROM live_order_attempts WHERE ok = 0").fetchone()[0] == 1
 

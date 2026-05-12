@@ -441,10 +441,14 @@ class LocalStore:
     def live_order_intent(self, ticket_hash: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT payload FROM live_order_intents WHERE ticket_hash = ?",
+                "SELECT status, payload FROM live_order_intents WHERE ticket_hash = ?",
                 (ticket_hash,),
             ).fetchone()
-        return json.loads(row["payload"]) if row else None
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        payload["_ledger_status"] = row["status"]
+        return payload
 
     def live_order_intents_by_status(self, statuses: set[str]) -> list[dict[str, Any]]:
         if not statuses:
