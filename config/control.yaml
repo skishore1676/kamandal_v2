@@ -28,8 +28,8 @@ live:
   exit_approval_mode: auto_rules      # sheet_approval | auto_rules | disabled
   auto_submit_entries: false
   auto_submit_exits: true
-  match_gate_mode: permissive
-  candidate_filter_mode: warn
+  match_gate_mode: strict
+  candidate_filter_mode: strict
   max_new_positions_per_plan: 1
   max_new_plans_per_day: 1
   max_bpr_per_order: 1000
