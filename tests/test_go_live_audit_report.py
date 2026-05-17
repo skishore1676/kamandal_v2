@@ -102,3 +102,60 @@ def test_go_live_audit_report_writes_reviewable_csvs(tmp_path) -> None:
         candidates = list(csv.DictReader(handle))
     assert candidates[0]["machine_verdict"] == "good_plan_candidate"
     assert candidates[0]["suman_review"] == ""
+
+
+def test_go_live_audit_range_attributes_used_ideas_to_candidate_day(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "INSERT INTO events (created_at, event_type, payload) VALUES (?, ?, ?)",
+            ("2026-05-10 14:00:00", "plan_run_completed", json.dumps({"plan_run_id": "run_20260510T140000Z"})),
+        )
+        conn.execute(
+            "INSERT INTO ideas VALUES (?, ?, ?)",
+            (
+                "2026-05-09_x_MSFT_01",
+                "pending",
+                json.dumps(
+                    {
+                        "idea_id": "2026-05-09_x_MSFT_01",
+                        "source": "x",
+                        "underlying": "MSFT",
+                        "direction": "bullish",
+                        "horizon_days": 30,
+                        "confidence": "medium",
+                        "extraction_confidence": "medium",
+                        "thesis_tags": ["momentum"],
+                        "quote_evidence": "MSFT momentum continues with institutional buying after the recent breakout.",
+                    }
+                ),
+            ),
+        )
+        candidate = {
+            "candidate_id": "cand-msft",
+            "idea_id": "2026-05-09_x_MSFT_01",
+            "underlying": "MSFT",
+            "playbook_id": "put_spread_default",
+            "structure": "put_spread",
+            "net_credit": 1.0,
+            "estimated_bpr": 400,
+            "greeks": {"delta": 0.1, "theta": 0.04, "gamma": -0.01},
+            "liquidity_score": 0.9,
+            "rejection_reason": "",
+            "preflight": {"ok": True},
+        }
+        conn.execute("INSERT INTO candidates VALUES (?, ?, ?)", ("cand-msft", "run_20260510T140000Z", json.dumps(candidate)))
+
+    result = build_go_live_audit_report(
+        sqlite_path=store.sqlite_path,
+        output_dir=tmp_path / "reports",
+        since="2026-05-10",
+        until="2026-05-10",
+    )
+
+    with result.files["ideas_csv"].open(encoding="utf-8") as handle:
+        ideas = list(csv.DictReader(handle))
+
+    assert result.selected_dates == ["2026-05-10"]
+    assert ideas[0]["date"] == "2026-05-10"
+    assert ideas[0]["idea_id"] == "2026-05-09_x_MSFT_01"

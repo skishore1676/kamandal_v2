@@ -160,6 +160,8 @@ def main() -> None:
     eod_parser.add_argument("--output-dir", default="data/reports/eod")
     audit_parser = subparsers.add_parser("go-live-audit-report", help="Write a two-day idea/plan/shadow quality audit report")
     audit_parser.add_argument("--dates", nargs="*", default=[], help="Optional YYYY-MM-DD dates; defaults to one active and one quiet day")
+    audit_parser.add_argument("--since", default="", help="Start date YYYY-MM-DD for full-range triage")
+    audit_parser.add_argument("--until", default="", help="End date YYYY-MM-DD for full-range triage")
     audit_parser.add_argument("--db", default="data/kamandal_v2.db")
     audit_parser.add_argument("--output-dir", default="data/reports/go_live_audit")
 
@@ -425,7 +427,13 @@ def main() -> None:
         print(json.dumps(write_shadow_eod_report(config, config_source=args.config_source, output_dir=args.output_dir), indent=2))
         return
     if args.command == "go-live-audit-report":
-        result = build_go_live_audit_report(sqlite_path=args.db, output_dir=args.output_dir, dates=args.dates or None)
+        result = build_go_live_audit_report(
+            sqlite_path=args.db,
+            output_dir=args.output_dir,
+            dates=args.dates or None,
+            since=args.since or None,
+            until=args.until or None,
+        )
         print(json.dumps(result.to_dict(), indent=2))
         return
     if args.command == "scrape-youtube-smoke":

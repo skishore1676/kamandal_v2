@@ -39,6 +39,8 @@ def build_go_live_audit_report(
     sqlite_path: str | Path = "data/kamandal_v2.db",
     output_dir: str | Path = "data/reports/go_live_audit",
     dates: list[str] | None = None,
+    since: str | None = None,
+    until: str | None = None,
 ) -> AuditResult:
     db_path = resolve_path(sqlite_path)
     if not db_path.exists():
@@ -47,7 +49,7 @@ def build_go_live_audit_report(
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
-        selected_dates = _normalize_dates(dates) if dates else _select_representative_dates(conn)
+        selected_dates = _selected_dates(conn, dates=dates, since=since, until=until)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         out_dir = out_root / f"{stamp}_{'_'.join(selected_dates)}"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -180,6 +182,28 @@ SHADOW_OUTCOME_FIELDS = [
 ]
 
 
+def _selected_dates(conn: sqlite3.Connection, *, dates: list[str] | None, since: str | None, until: str | None) -> list[str]:
+    if dates:
+        return _normalize_dates(dates)
+    if since or until:
+        return _date_range(conn, since=since, until=until)
+    return _select_representative_dates(conn)
+
+
+def _date_range(conn: sqlite3.Connection, *, since: str | None, until: str | None) -> list[str]:
+    summary = _all_daily_summary(conn)
+    if not summary:
+        raise RuntimeError("no Kamandal shadow evidence found in database")
+    start = _parse_day(_date_from_text(since or "") or min(row["date"] for row in summary))
+    end = _parse_day(_date_from_text(until or "") or max(row["date"] for row in summary))
+    if start > end:
+        raise ValueError(f"invalid audit range: since {start.date()} is after until {end.date()}")
+    selected = [row["date"] for row in summary if start <= _parse_day(row["date"]) <= end]
+    if not selected:
+        raise RuntimeError(f"no Kamandal evidence found between {start.date()} and {end.date()}")
+    return sorted(dict.fromkeys(selected))
+
+
 def _select_representative_dates(conn: sqlite3.Connection) -> list[str]:
     summary = _all_daily_summary(conn)
     if not summary:
@@ -231,10 +255,29 @@ def _load_context(conn: sqlite3.Connection, dates: list[str]) -> dict[str, Any]:
     plans = _plans_by_date(conn, selected)
     candidates = _candidates_by_date(conn, selected)
     fills = _fills_by_date(conn, selected)
+    idea_usage_dates = _idea_usage_dates(candidates, fills)
     idea_ids = {payload.get("idea_id") for rows in candidates.values() for payload in rows}
     idea_ids.update(payload.get("idea_id") for rows in fills.values() for payload in rows)
-    ideas = _ideas_by_date(conn, selected, idea_ids)
+    ideas = _ideas_by_date(conn, selected, idea_ids, idea_usage_dates)
     return {"dates": dates, "events": events, "plans": plans, "candidates": candidates, "fills": fills, "ideas": ideas}
+
+
+def _idea_usage_dates(
+    candidates: dict[str, list[dict[str, Any]]],
+    fills: dict[str, list[dict[str, Any]]],
+) -> dict[str, set[str]]:
+    usage: dict[str, set[str]] = defaultdict(set)
+    for day, rows in candidates.items():
+        for row in rows:
+            idea_id = str(row.get("idea_id") or "")
+            if idea_id:
+                usage[idea_id].add(day)
+    for day, rows in fills.items():
+        for row in rows:
+            idea_id = str(row.get("_idea_id") or row.get("idea_id") or "")
+            if idea_id:
+                usage[idea_id].add(day)
+    return usage
 
 
 def _events_by_date(conn: sqlite3.Connection, dates: set[str]) -> dict[str, list[dict[str, Any]]]:
@@ -320,7 +363,12 @@ def _fills_by_date(conn: sqlite3.Connection, dates: set[str]) -> dict[str, list[
     return out
 
 
-def _ideas_by_date(conn: sqlite3.Connection, dates: set[str], idea_ids: set[Any]) -> dict[str, list[dict[str, Any]]]:
+def _ideas_by_date(
+    conn: sqlite3.Connection,
+    dates: set[str],
+    idea_ids: set[Any],
+    idea_usage_dates: dict[str, set[str]],
+) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = defaultdict(list)
     if not _table_exists(conn, "ideas"):
         return out
@@ -329,13 +377,21 @@ def _ideas_by_date(conn: sqlite3.Connection, dates: set[str], idea_ids: set[Any]
         payload = _loads(row["payload"])
         payload["_id"] = row["id"]
         payload["_status"] = row["status"]
-        day = _date_from_text(str(payload.get("idea_id") or row["id"]) + " " + str(payload.get("source") or ""))
-        if day not in dates and str(row["id"]) not in ids:
-            continue
-        if day not in dates:
-            day = _infer_date_for_idea(str(row["id"]), dates, ids)
+        idea_id = str(payload.get("idea_id") or row["id"])
+        usage_days = sorted(idea_usage_dates.get(idea_id, set()) & dates)
+        day = _date_from_text(idea_id + " " + str(payload.get("source") or ""))
         if day in dates:
-            out[day].append(payload)
+            usage_days.append(day)
+        usage_days = sorted(dict.fromkeys(usage_days))
+        if not usage_days and idea_id not in ids:
+            continue
+        if not usage_days:
+            usage_days = [_infer_date_for_idea(idea_id, dates, ids)]
+        for usage_day in usage_days:
+            if usage_day in dates:
+                stamped = dict(payload)
+                stamped["_audit_date"] = usage_day
+                out[usage_day].append(stamped)
     return out
 
 
