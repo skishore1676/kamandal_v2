@@ -1,4 +1,4 @@
-"""Two-day go-live quality audit for ideas, plans, and shadow outcomes."""
+"""Go-live quality audit for ideas, plans, and shadow outcomes."""
 
 from __future__ import annotations
 
@@ -102,6 +102,9 @@ DAILY_SUMMARY_FIELDS = [
     "shadow_opened",
     "shadow_closed",
     "closed_pnl",
+    "portfolio_positions",
+    "portfolio_bpr_used_pct",
+    "no_plan_diagnosis",
     "top_rejection_reasons",
     "machine_verdict",
     "suman_review",
@@ -252,6 +255,7 @@ def _all_daily_summary(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 def _load_context(conn: sqlite3.Connection, dates: list[str]) -> dict[str, Any]:
     selected = set(dates)
     events = _events_by_date(conn, selected)
+    portfolio_snapshots = _portfolio_snapshots_by_date(conn, selected)
     plans = _plans_by_date(conn, selected)
     candidates = _candidates_by_date(conn, selected)
     fills = _fills_by_date(conn, selected)
@@ -259,7 +263,15 @@ def _load_context(conn: sqlite3.Connection, dates: list[str]) -> dict[str, Any]:
     idea_ids = {payload.get("idea_id") for rows in candidates.values() for payload in rows}
     idea_ids.update(payload.get("idea_id") for rows in fills.values() for payload in rows)
     ideas = _ideas_by_date(conn, selected, idea_ids, idea_usage_dates)
-    return {"dates": dates, "events": events, "plans": plans, "candidates": candidates, "fills": fills, "ideas": ideas}
+    return {
+        "dates": dates,
+        "events": events,
+        "portfolio_snapshots": portfolio_snapshots,
+        "plans": plans,
+        "candidates": candidates,
+        "fills": fills,
+        "ideas": ideas,
+    }
 
 
 def _idea_usage_dates(
@@ -291,6 +303,21 @@ def _events_by_date(conn: sqlite3.Connection, dates: set[str]) -> dict[str, list
         payload = _loads(row["payload"])
         payload["_created_at"] = row["created_at"]
         payload["_event_type"] = row["event_type"]
+        out[day].append(payload)
+    return out
+
+
+def _portfolio_snapshots_by_date(conn: sqlite3.Connection, dates: set[str]) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if not _table_exists(conn, "account_snapshots"):
+        return out
+    for row in conn.execute("SELECT id, payload FROM account_snapshots ORDER BY id").fetchall():
+        run_id = str(row["id"] or "")
+        day = _date_from_run_id(run_id)
+        if day not in dates:
+            continue
+        payload = _loads(row["payload"])
+        payload["_plan_run_id"] = run_id
         out[day].append(payload)
     return out
 
@@ -402,6 +429,7 @@ def _daily_summary_rows(context: dict[str, Any]) -> list[dict[str, Any]]:
         plans = context["plans"].get(day, [])
         candidates = context["candidates"].get(day, [])
         fills = context["fills"].get(day, [])
+        portfolio_summary = _portfolio_summary(context["portfolio_snapshots"].get(day, []))
         rejection_counts = Counter(_candidate_rejection(candidate) for candidate in candidates if _candidate_rejection(candidate))
         closed_pnl = sum(float(fill.get("_close_pnl") or 0.0) for fill in fills if fill.get("_close_pnl") is not None)
         rows.append(
@@ -418,12 +446,59 @@ def _daily_summary_rows(context: dict[str, Any]) -> list[dict[str, Any]]:
                 "shadow_opened": len(fills),
                 "shadow_closed": sum(1 for fill in fills if fill.get("_status") == "closed"),
                 "closed_pnl": round(closed_pnl, 2),
+                "portfolio_positions": portfolio_summary["positions_count"],
+                "portfolio_bpr_used_pct": portfolio_summary["bpr_used_pct"],
+                "no_plan_diagnosis": _no_plan_diagnosis(plans, candidates, fills, portfolio_summary, events),
                 "top_rejection_reasons": _format_counter(rejection_counts, limit=4),
                 "machine_verdict": _daily_verdict(plans, candidates, fills, rejection_counts),
                 "suman_review": "",
             }
         )
     return rows
+
+
+def _portfolio_summary(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+    if not snapshots:
+        return {"positions_count": "", "bpr_used_pct": ""}
+    positions = [_float_or_none(snapshot.get("positions_count")) for snapshot in snapshots]
+    bpr_pcts = [_float_or_none(snapshot.get("bpr_used_pct")) for snapshot in snapshots]
+    positions = [item for item in positions if item is not None]
+    bpr_pcts = [item for item in bpr_pcts if item is not None]
+    return {
+        "positions_count": int(max(positions)) if positions else "",
+        "bpr_used_pct": round(max(bpr_pcts), 2) if bpr_pcts else "",
+    }
+
+
+def _no_plan_diagnosis(
+    plans: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    fills: list[dict[str, Any]],
+    portfolio_summary: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> str:
+    if plans or fills:
+        return ""
+    eligible = [candidate for candidate in candidates if not _candidate_rejection(candidate)]
+    if not eligible:
+        return ""
+    skipped = [event for event in events if event.get("_event_type") == "daily_plan_write_skipped"]
+    reasons = sorted({str(event.get("reason") or "") for event in skipped if event.get("reason")})
+    positions = portfolio_summary.get("positions_count")
+    bpr_pct = portfolio_summary.get("bpr_used_pct")
+    parts = []
+    if reasons:
+        parts.append("sheet_skipped=" + "|".join(reasons))
+    if positions != "":
+        parts.append(f"portfolio_positions={positions}")
+    if bpr_pct != "":
+        parts.append(f"bpr_used_pct={bpr_pct}")
+    parts.append(f"eligible_candidates={len(eligible)}")
+    if positions not in ("", 0, 0.0):
+        parts.append("likely_position_capacity_or_portfolio_constraint")
+    else:
+        parts.append("inspect_plan_constraints")
+    return "; ".join(parts)
 
 
 def _idea_rows(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -550,7 +625,7 @@ def _markdown_verdict(context: dict[str, Any]) -> str:
     closed = [row for row in outcomes if row["status"] == "closed"]
     closed_pnl = sum(float(row["close_pnl"] or 0.0) for row in closed)
     lines = [
-        "# Kamandal Go-Live Audit Pilot",
+        "# Kamandal Go-Live Audit",
         "",
         f"Selected dates: {', '.join(context['dates'])}",
         "",
@@ -560,13 +635,14 @@ def _markdown_verdict(context: dict[str, Any]) -> str:
         "",
         "## Daily Summary",
         "",
-        "| Date | Plan runs | Plans | Auto-approved | Ideas | Candidates | Eligible | Shadow opened | Closed PnL | Verdict |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Date | Plan runs | Plans | Auto-approved | Ideas | Candidates | Eligible | Shadow opened | Closed PnL | No-plan diagnosis | Verdict |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in daily:
         lines.append(
             f"| {row['date']} | {row['plan_runs']} | {row['plans']} | {row['auto_approved']} | {row['ideas']} | "
-            f"{row['candidates']} | {row['eligible_candidates']} | {row['shadow_opened']} | {row['closed_pnl']} | {row['machine_verdict']} |"
+            f"{row['candidates']} | {row['eligible_candidates']} | {row['shadow_opened']} | {row['closed_pnl']} | "
+            f"{row['no_plan_diagnosis']} | {row['machine_verdict']} |"
         )
     lines.extend(
         [
@@ -674,6 +750,15 @@ def _count_events(events: list[dict[str, Any]], event_type: str) -> int:
 
 def _format_counter(counter: Counter[str], *, limit: int) -> str:
     return "; ".join(f"{key}:{value}" for key, value in counter.most_common(limit))
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]], fields: list[str]) -> None:

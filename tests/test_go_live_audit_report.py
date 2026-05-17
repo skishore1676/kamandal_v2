@@ -159,3 +159,62 @@ def test_go_live_audit_range_attributes_used_ideas_to_candidate_day(tmp_path) ->
     assert result.selected_dates == ["2026-05-10"]
     assert ideas[0]["date"] == "2026-05-10"
     assert ideas[0]["idea_id"] == "2026-05-09_x_MSFT_01"
+
+
+def test_go_live_audit_explains_eligible_candidates_without_plans(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "INSERT INTO events (created_at, event_type, payload) VALUES (?, ?, ?)",
+            ("2026-05-06 14:00:00", "plan_run_completed", json.dumps({"plan_run_id": "run_20260506T140000Z"})),
+        )
+        conn.execute(
+            "INSERT INTO events (created_at, event_type, payload) VALUES (?, ?, ?)",
+            (
+                "2026-05-06 14:00:01",
+                "daily_plan_write_skipped",
+                json.dumps({"plan_run_id": "run_20260506T140000Z", "reason": "no_eligible_plans"}),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO account_snapshots VALUES (?, ?)",
+            (
+                "run_20260506T140000Z",
+                json.dumps(
+                    {
+                        "account_size": 20000,
+                        "buying_power": 16000,
+                        "bpr_used": 4000,
+                        "bpr_used_pct": 20,
+                        "positions_count": 20,
+                    }
+                ),
+            ),
+        )
+        candidate = {
+            "candidate_id": "cand-xle",
+            "idea_id": "2026-05-06_x_XLE_01",
+            "underlying": "XLE",
+            "playbook_id": "put_spread_default",
+            "structure": "put_spread",
+            "net_credit": 0.4,
+            "estimated_bpr": 40,
+            "greeks": {"delta": 0.1, "theta": 0.02, "gamma": -0.01},
+            "liquidity_score": 0.8,
+            "rejection_reason": "",
+            "preflight": {"ok": True},
+        }
+        conn.execute("INSERT INTO candidates VALUES (?, ?, ?)", ("cand-xle", "run_20260506T140000Z", json.dumps(candidate)))
+
+    result = build_go_live_audit_report(
+        sqlite_path=store.sqlite_path,
+        output_dir=tmp_path / "reports",
+        dates=["2026-05-06"],
+    )
+
+    with result.files["daily_summary_csv"].open(encoding="utf-8") as handle:
+        summary = list(csv.DictReader(handle))
+
+    assert summary[0]["machine_verdict"] == "eligible_candidates_no_plan"
+    assert summary[0]["portfolio_positions"] == "20"
+    assert "likely_position_capacity_or_portfolio_constraint" in summary[0]["no_plan_diagnosis"]
