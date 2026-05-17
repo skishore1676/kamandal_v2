@@ -8,7 +8,7 @@ import re
 import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -184,18 +184,24 @@ def _select_representative_dates(conn: sqlite3.Connection) -> list[str]:
     summary = _all_daily_summary(conn)
     if not summary:
         raise RuntimeError("no Kamandal shadow evidence found in database")
-    active = sorted(summary, key=lambda row: (row["shadow_opened"], row["plans"], row["plan_runs"], row["date"]), reverse=True)[0]["date"]
-    quiet_pool = [row for row in summary if row["date"] != active]
+    max_day = max(_parse_day(row["date"]) for row in summary)
+    cutoff = max_day - timedelta(days=14)
+    recent = [row for row in summary if _parse_day(row["date"]) >= cutoff and row["plan_runs"] > 0]
+    if not recent:
+        recent = summary
+    active = sorted(recent, key=lambda row: (row["shadow_opened"], row["plans"], row["plan_runs"], _date_ordinal(row["date"])), reverse=True)[0]["date"]
+    quiet_pool = [row for row in recent if row["date"] != active and (row["plans"] == 0 or row["shadow_opened"] == 0)]
+    if not quiet_pool:
+        quiet_pool = [row for row in recent if row["date"] != active]
     quiet = None
     if quiet_pool:
         quiet = sorted(
             quiet_pool,
             key=lambda row: (
-                row["plans"] > 0,
                 row["shadow_opened"],
                 row["plans"],
                 -row["plan_runs"],
-                row["date"],
+                -_date_ordinal(row["date"]),
             ),
         )[0]["date"]
     return sorted([date for date in [active, quiet] if date])[:2]
@@ -630,6 +636,14 @@ def _normalize_dates(dates: list[str]) -> list[str]:
             raise ValueError(f"invalid audit date: {value}")
         normalized.append(day)
     return sorted(dict.fromkeys(normalized))
+
+
+def _parse_day(value: str) -> datetime:
+    return datetime.strptime(value, "%Y-%m-%d")
+
+
+def _date_ordinal(value: str) -> int:
+    return _parse_day(value).toordinal()
 
 
 def _date_from_run_id(run_id: str) -> str:
