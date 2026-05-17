@@ -40,7 +40,8 @@ def execute_live_approved(
             results.append(_failure(ticket, "ticket_hash_mismatch"))
             continue
         ledger_status = str(intent.get("_ledger_status") or "")
-        if ledger_status and ledger_status not in {"pending_approval", "dry_run"}:
+        allowed_statuses = {"dry_run", "pending_close_approval" if close else "pending_approval"}
+        if ledger_status and ledger_status not in allowed_statuses:
             results.append(_failure(ticket, f"ticket_already_{ledger_status}"))
             continue
         if close and _same_day_close_blocked(config, store, ticket):

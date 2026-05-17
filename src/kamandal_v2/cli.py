@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState, PreflightResult
@@ -52,8 +54,10 @@ def main() -> None:
     _add_planner_args(live_advisory_parser)
     live_execute_parser = subparsers.add_parser("execute-live-approved", help="Execute sheet-approved live opening orders")
     live_execute_parser.add_argument("--submit", action="store_true", help="Submit real orders; default is dry-run")
+    live_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_entries are enabled")
     live_close_execute_parser = subparsers.add_parser("execute-live-approved-closes", help="Execute sheet-approved live close orders")
     live_close_execute_parser.add_argument("--submit", action="store_true", help="Submit real close orders; default is dry-run")
+    live_close_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_exits are enabled")
     subparsers.add_parser("sync-live-orders", help="Poll Public order status for submitted live orders")
     subparsers.add_parser("cleanup-live-approvals", help="Clear stale live approval cells after submit/fill/failure")
     manual_fill_parser = subparsers.add_parser("record-manual-live-fill", help="Record a manually filled live order ticket")
@@ -243,10 +247,10 @@ def main() -> None:
         print(_plan_result_json(result))
         return
     if args.command == "execute-live-approved":
-        print(json.dumps(execute_live_approved(config, submit=args.submit), indent=2))
+        print(json.dumps(execute_live_approved(config, submit=_live_submit_requested(config, args, close=False)), indent=2))
         return
     if args.command == "execute-live-approved-closes":
-        print(json.dumps(execute_live_approved(config, submit=args.submit, close=True), indent=2))
+        print(json.dumps(execute_live_approved(config, submit=_live_submit_requested(config, args, close=True), close=True), indent=2))
         return
     if args.command == "sync-live-orders":
         print(json.dumps(sync_live_orders(config), indent=2))
@@ -462,6 +466,21 @@ def _add_planner_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     parser.add_argument("--provider", choices=["fixture", "public"], default="fixture")
     parser.add_argument("--write-sheet", action="store_true", help="Write generated plan rows to daily_plan")
+
+
+def _live_submit_requested(config: dict[str, Any], args: argparse.Namespace, *, close: bool) -> bool:
+    if bool(getattr(args, "submit", False)):
+        return True
+    if not bool(getattr(args, "submit_auto", False)):
+        return False
+    if not _truthy(os.environ.get("KAMANDAL_LIVE_SUBMIT")):
+        return False
+    key = "auto_submit_exits" if close else "auto_submit_entries"
+    return _truthy((config.get("live") or {}).get(key))
+
+
+def _truthy(value: Any) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _expand_paths(values: list[str]) -> list[Path]:

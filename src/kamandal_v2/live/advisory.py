@@ -11,7 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.domain.models import Candidate
-from kamandal_v2.live.orders import build_open_ticket
+from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.engine import PlanRunResult, run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
@@ -84,6 +84,9 @@ def run_live_advisory_plan(
 
 def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, store: LocalStore) -> list[list[Any]]:
     rows = render_daily_plan_rows(result.plans, mode="live_advisory")
+    entry_mode = _entry_approval_mode(config)
+    if entry_mode == "disabled":
+        return []
     account_json = {
         "account_size": result.metrics.get("account_size_raw"),
         "buying_power": result.metrics.get("buying_power_raw"),
@@ -107,11 +110,19 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
         detail["public_preflight_json"] = candidate.preflight.to_dict() if candidate.preflight else None
         detail["real_account_json"] = account_json
         row["mode"] = "live_advisory"
-        row["operator_action"] = ""
+        row["operator_action"] = APPROVE_LIVE if entry_mode == "auto_top_plan" and index == 0 else ""
         row["plan_metrics_json"] = json.dumps(metrics, sort_keys=True)
         row["plan_detail_json"] = json.dumps(detail, sort_keys=True)
         rows[index] = [row.get(column, "") for column in DAILY_PLAN_HEADER]
     return rows
+
+
+def _entry_approval_mode(config: dict[str, Any]) -> str:
+    raw = str(((config.get("live") or {}).get("entry_approval_mode") or "sheet_approval")).strip().lower()
+    allowed = {"sheet_approval", "auto_top_plan", "disabled"}
+    if raw not in allowed:
+        raise ValueError(f"unsupported live.entry_approval_mode={raw!r}; expected one of {sorted(allowed)}")
+    return raw
 
 
 def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, config: dict[str, Any]) -> None:

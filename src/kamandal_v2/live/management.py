@@ -11,7 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.events.earnings import EarningsStore
-from kamandal_v2.live.orders import build_close_ticket
+from kamandal_v2.live.orders import APPROVE_LIVE_CLOSE, build_close_ticket
 from kamandal_v2.management.shadow import _decision_for_mark_row
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
@@ -31,6 +31,7 @@ def run_live_management_plan(
     playbook_by_id = {playbook.playbook_id: playbook for playbook in playbooks}
     earnings = EarningsStore()
     groups = store.open_live_position_groups()
+    exit_mode = _exit_approval_mode(config)
     rows: list[list[Any]] = []
     decisions = []
     for index, group in enumerate(groups, start=1):
@@ -49,12 +50,22 @@ def run_live_management_plan(
         store.record_live_management_decision(str(group.get("group_id")), str(decision["action"]), str(decision["reason"]), decision)
         if decision["action"] != "close":
             continue
+        if exit_mode == "disabled":
+            continue
         ticket = build_close_ticket(group)
         store.save_live_order_intent(ticket, status="pending_close_approval")
-        rows.append(_close_plan_row(index, group, decision, ticket))
+        rows.append(_close_plan_row(index, group, decision, ticket, approval_mode=exit_mode))
     if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_close_advisory"})
     return {"groups": len(groups), "close_recommendations": len(rows), "decisions": decisions, "daily_plan_rows": rows}
+
+
+def _exit_approval_mode(config: dict[str, Any]) -> str:
+    raw = str(((config.get("live") or {}).get("exit_approval_mode") or "sheet_approval")).strip().lower()
+    allowed = {"sheet_approval", "auto_rules", "disabled"}
+    if raw not in allowed:
+        raise ValueError(f"unsupported live.exit_approval_mode={raw!r}; expected one of {sorted(allowed)}")
+    return raw
 
 
 def _same_day_exit_blocked(config: dict[str, Any], group: dict[str, Any]) -> bool:
@@ -140,7 +151,7 @@ def _latest_chain(store: LocalStore, underlying: str) -> dict[tuple[str, str, fl
     }
 
 
-def _close_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any], ticket: dict[str, Any]) -> list[Any]:
+def _close_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any], ticket: dict[str, Any], *, approval_mode: str) -> list[Any]:
     detail = {
         "lane": "live_close_advisory",
         "live_gate_status": "eligible",
@@ -167,7 +178,7 @@ def _close_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any],
         "blocked_by": "",
         "plan_metrics_json": json.dumps({"decision": decision}, sort_keys=True),
         "plan_detail_json": json.dumps(detail, sort_keys=True),
-        "operator_action": "",
+        "operator_action": APPROVE_LIVE_CLOSE if approval_mode == "auto_rules" else "",
         "operator_notes": "",
     }
     return [row.get(column, "") for column in DAILY_PLAN_HEADER]

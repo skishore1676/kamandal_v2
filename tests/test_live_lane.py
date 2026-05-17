@@ -3,6 +3,7 @@ import sqlite3
 from datetime import date, timedelta
 
 from kamandal_v2.config import load_control
+from kamandal_v2.cli import _live_submit_requested
 from kamandal_v2.domain.models import Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.live.advisory import live_config, run_live_advisory_plan
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill
@@ -79,6 +80,33 @@ def test_live_config_ignores_shadow_overrides() -> None:
     assert config["runtime"]["mode"] == "live"
     assert config["execution"]["approval_mode"] == "live_plan_only"
     assert config["shadow"]["account_size_override"] == 20_000
+
+
+def test_live_approval_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("KAMANDAL_LIVE_ENTRY_APPROVAL_MODE", "auto_top_plan")
+    monkeypatch.setenv("KAMANDAL_LIVE_EXIT_APPROVAL_MODE", "auto_rules")
+    monkeypatch.setenv("KAMANDAL_LIVE_AUTO_SUBMIT_ENTRIES", "true")
+    monkeypatch.setenv("KAMANDAL_LIVE_AUTO_SUBMIT_EXITS", "false")
+
+    control = load_control()
+
+    assert control["live"]["entry_approval_mode"] == "auto_top_plan"
+    assert control["live"]["exit_approval_mode"] == "auto_rules"
+    assert control["live"]["auto_submit_entries"] is True
+    assert control["live"]["auto_submit_exits"] is False
+
+
+def test_live_submit_auto_respects_global_and_lane_flags(monkeypatch) -> None:
+    args = type("Args", (), {"submit": False, "submit_auto": True})()
+    config = {"live": {"auto_submit_entries": True, "auto_submit_exits": False}}
+
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT", "1")
+
+    assert _live_submit_requested(config, args, close=False) is True
+    assert _live_submit_requested(config, args, close=True) is False
+
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT", "0")
+    assert _live_submit_requested(config, args, close=False) is False
 
 
 def test_live_can_warn_on_quality_filters_without_permissive_matching(tmp_path, monkeypatch) -> None:
@@ -172,6 +200,25 @@ def test_live_advisory_uses_real_account_and_writes_blank_approval(tmp_path, mon
     assert detail["order_ticket_json"]["intent_type"] == "open"
     assert detail["order_ticket_json"]["submit_payload"]["type"] == "LIMIT"
     assert detail["order_ticket_json"]["submit_payload"]["quantity"] == "1"
+
+
+def test_live_advisory_auto_top_plan_sets_sheet_approval(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    control = _live_control()
+    control["live"]["entry_approval_mode"] = "auto_top_plan"
+    result = run_live_advisory_plan(
+        control,
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+
+    assert row["operator_action"] == APPROVE_LIVE
 
 
 def test_live_execute_approved_dry_run_uses_sheet_gate(tmp_path, monkeypatch) -> None:
@@ -310,9 +357,11 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
     managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
 
     assert managed["close_recommendations"] == 1
-    detail = json.loads(dict(zip(DAILY_PLAN_HEADER, managed["daily_plan_rows"][0], strict=False))["plan_detail_json"])
+    row = dict(zip(DAILY_PLAN_HEADER, managed["daily_plan_rows"][0], strict=False))
+    detail = json.loads(row["plan_detail_json"])
     assert detail["lane"] == "live_close_advisory"
     assert detail["order_ticket_json"]["intent_type"] == "close"
+    assert row["operator_action"] == APPROVE_LIVE_CLOSE
 
 
 def test_live_management_blocks_same_day_close_by_default(tmp_path, monkeypatch) -> None:
@@ -374,7 +423,7 @@ def test_execute_live_close_blocks_same_day_approved_ticket(tmp_path, monkeypatc
     record_manual_live_fill(open_ticket["ticket_hash"], store=store)
     group = store.open_live_position_groups()[0]
     close_ticket = build_close_ticket(group)
-    store.save_live_order_intent(close_ticket, status="pending_approval")
+    store.save_live_order_intent(close_ticket, status="pending_close_approval")
     close_row = dict(zip(DAILY_PLAN_HEADER, ["" for _ in DAILY_PLAN_HEADER], strict=False))
     close_row["operator_action"] = APPROVE_LIVE_CLOSE
     close_row["mode"] = "live_close_advisory"

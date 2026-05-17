@@ -12,9 +12,7 @@ run_live_management() {
   log "Running live close advisory and evaluating approved close orders."
   "$KAMANDAL_BIN" live-management-plan --config-source sheet --write-sheet
   local submit_args=()
-  if [[ "${KAMANDAL_LIVE_SUBMIT:-0}" == "1" ]]; then
-    submit_args+=(--submit)
-  fi
+  submit_args+=(--submit-auto)
   "$KAMANDAL_BIN" execute-live-approved-closes ${submit_args+"${submit_args[@]}"}
   "$KAMANDAL_BIN" sync-live-orders
   "$KAMANDAL_BIN" cleanup-live-approvals

@@ -10,9 +10,7 @@ run_live_approved_orders() {
   require_market_window
   export KAMANDAL_MODE=live
   local submit_args=()
-  if [[ "${KAMANDAL_LIVE_SUBMIT:-0}" == "1" ]]; then
-    submit_args+=(--submit)
-  fi
+  submit_args+=(--submit-auto)
   log "Evaluating sheet-approved live open orders submit=${KAMANDAL_LIVE_SUBMIT:-0}."
   "$KAMANDAL_BIN" execute-live-approved ${submit_args+"${submit_args[@]}"}
   log "Syncing live order status."
