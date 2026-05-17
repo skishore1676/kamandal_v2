@@ -26,6 +26,7 @@ from kamandal_v2.paths import resolve_path
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.planner.config_validator import validate_config
 from kamandal_v2.planner.engine import run_plan, run_shadow_cycle
+from kamandal_v2.reports.go_live_audit import build_go_live_audit_report
 from kamandal_v2.seed import build_seed_tables, seed_headers
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import bootstrap_sheet, pull_sheet_tables, write_daily_plan
@@ -157,6 +158,10 @@ def main() -> None:
     eod_parser = subparsers.add_parser("shadow-eod-report", help="Write a local shadow end-of-day report")
     eod_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     eod_parser.add_argument("--output-dir", default="data/reports/eod")
+    audit_parser = subparsers.add_parser("go-live-audit-report", help="Write a two-day idea/plan/shadow quality audit report")
+    audit_parser.add_argument("--dates", nargs="*", default=[], help="Optional YYYY-MM-DD dates; defaults to one active and one quiet day")
+    audit_parser.add_argument("--db", default="data/kamandal_v2.db")
+    audit_parser.add_argument("--output-dir", default="data/reports/go_live_audit")
 
     youtube_parser = subparsers.add_parser("scrape-youtube-smoke", help="Fetch captions for one YouTube video and archive locally")
     youtube_parser.add_argument("--video-id", required=True)
@@ -418,6 +423,10 @@ def main() -> None:
         return
     if args.command == "shadow-eod-report":
         print(json.dumps(write_shadow_eod_report(config, config_source=args.config_source, output_dir=args.output_dir), indent=2))
+        return
+    if args.command == "go-live-audit-report":
+        result = build_go_live_audit_report(sqlite_path=args.db, output_dir=args.output_dir, dates=args.dates or None)
+        print(json.dumps(result.to_dict(), indent=2))
         return
     if args.command == "scrape-youtube-smoke":
         transcript = scrape_youtube_smoke(
