@@ -52,6 +52,11 @@ run_x_bookmark_extraction() {
     exit 0
   fi
 
+  if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" == "1" ]]; then
+    log "Import-only smoke mode complete; source docs produced in $source_doc_dir."
+    exit 0
+  fi
+
   find "$ideas_dir" -maxdepth 1 -type f -name 'x_bookmarks_imported_*.yaml' ! -name "x_bookmarks_imported_$today.yaml" -delete
 
   log "Extracting X ideas with Codex LLM from $source_doc_dir."

@@ -120,7 +120,7 @@ The LLM loop keeps the same boundary: Codex CLI extracts thesis objects, optiona
 The oldmac server uses cron, matching Bhiksha's scheduling style while keeping
 Kamandal V2 as short scheduled jobs rather than a long-running daemon:
 
-- `scripts/run_x_bookmark_extraction.sh`: trading days at 8:55 Central. Imports Birdclaw's canonical X digest SQLite store first, preserving bookmark/timeline source lanes, author, post id, and seen count before Codex LLM extraction. The legacy bookmark JSON import remains a fallback if the canonical store is unavailable.
+- `scripts/run_x_bookmark_extraction.sh`: trading days at 8:55 Central. Imports Birdclaw's canonical X digest SQLite store first, preserving bookmark/timeline source lanes, author, post id, and seen count before Codex LLM extraction. Set `KAMANDAL_X_EXTRACTION_IMPORT_ONLY=1` for a source-doc smoke run without LLM extraction. The legacy bookmark JSON import remains a fallback if the canonical store is unavailable.
 - `scripts/run_youtube_extraction.sh`: trading days at 9:15, 11:45, and 14:30 Central. Fetches configured YouTube captions and runs Codex LLM extraction into `data/ideas/active`.
 - `scripts/run_market_shadow.sh`: every 15 minutes during market hours except the 8:45 IV-capture slot. It validates and reloads `universe`/`playbooks` from Google Sheets on every run, then writes plan rows to `daily_plan`.
 - `scripts/run_iv_capture.sh`: trading days at 8:45 Central. Captures one fresh morning IV observation per enabled universe symbol from Public option chains for that day's planning loop.
