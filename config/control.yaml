@@ -88,12 +88,12 @@ llm:
 source_intelligence:
   x_digest:
     latest_state_file: ~/.openclaw/workspace-main/state/x_daily_digest/latest.json
-    trial_root: ~/.openclaw/workspace-main/experiments/birdclaw-trial
+    trial_root: ~/Documents/birdclaw
     db_path: ""
     sources: bookmarks,timeline
     limit: 50
     since_hours: 96
   x_bookmarks:
     latest_state_file: ~/.openclaw/workspace-main/state/x_bookmark_shadow/latest.json
-    trial_root: ~/.openclaw/workspace-main/experiments/birdclaw-trial
+    trial_root: ~/Documents/birdclaw
     limit: 50

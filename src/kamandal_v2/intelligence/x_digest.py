@@ -14,8 +14,8 @@ from kamandal_v2.paths import resolve_path
 
 
 DEFAULT_DAILY_STATE = "~/.openclaw/workspace-main/state/x_daily_digest/latest.json"
-DEFAULT_TRIAL_ROOT = "~/.openclaw/workspace-main/experiments/birdclaw-trial"
-DEFAULT_DIGEST_DB = "~/.openclaw/workspace-main/experiments/birdclaw-trial/birdclaw-home/birdclaw.sqlite"
+DEFAULT_TRIAL_ROOT = "~/Documents/birdclaw"
+DEFAULT_DIGEST_DB = "~/Documents/birdclaw/birdclaw-home/birdclaw.sqlite"
 SOURCE_PRIORITIES = {"bookmarks": 3, "bookmark": 3, "timeline": 1}
 
 

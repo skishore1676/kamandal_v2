@@ -297,7 +297,7 @@ def main() -> None:
         result = import_x_bookmarks(
             source_file=args.source_file or None,
             latest_state=args.latest_state or x_config.get("latest_state_file") or "~/.openclaw/workspace-main/state/x_bookmark_shadow/latest.json",
-            trial_root=args.trial_root or x_config.get("trial_root") or "~/.openclaw/workspace-main/experiments/birdclaw-trial",
+            trial_root=args.trial_root or x_config.get("trial_root") or "~/Documents/birdclaw",
             output_dir=args.output_dir,
             digest_dir=args.digest_dir,
             limit=args.limit,
@@ -310,7 +310,7 @@ def main() -> None:
         result = import_x_digest(
             db_path=args.db_path or x_config.get("db_path") or None,
             latest_state=args.latest_state or x_config.get("latest_state_file") or "~/.openclaw/workspace-main/state/x_daily_digest/latest.json",
-            trial_root=args.trial_root or x_config.get("trial_root") or "~/.openclaw/workspace-main/experiments/birdclaw-trial",
+            trial_root=args.trial_root or x_config.get("trial_root") or "~/Documents/birdclaw",
             sources=_csv(args.sources or x_config.get("sources") or "bookmarks,timeline"),
             output_dir=args.output_dir,
             digest_dir=args.digest_dir,

@@ -13,7 +13,7 @@ from kamandal_v2.paths import resolve_path
 
 
 DEFAULT_LATEST_STATE = "~/.openclaw/workspace-main/state/x_bookmark_shadow/latest.json"
-DEFAULT_TRIAL_ROOT = "~/.openclaw/workspace-main/experiments/birdclaw-trial"
+DEFAULT_TRIAL_ROOT = "~/Documents/birdclaw"
 
 
 @dataclass(slots=True)
