@@ -412,6 +412,7 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
 
     control = load_control()
     control["live"]["allow_same_day_exits"] = True
+    control["live"]["exit_approval_mode"] = "auto_rules"
     managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
 
     assert managed["close_recommendations"] == 1
