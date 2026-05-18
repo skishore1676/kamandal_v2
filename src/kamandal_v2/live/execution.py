@@ -9,7 +9,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
-from kamandal_v2.market.public import PublicAdapter
+from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
 from kamandal_v2.stores.sqlite import LocalStore
@@ -28,7 +28,7 @@ def execute_live_approved(
     if not rows:
         return {"action": action, "submit": submit, "processed": 0, "results": []}
     _assert_submit_allowed(config, submit=submit)
-    adapter = PublicAdapter(config)
+    adapter = broker_adapter(config)
     results = []
     for row in rows[:1]:
         ticket = _ticket_from_row(row)
@@ -90,7 +90,7 @@ def execute_live_approved(
 
 def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None) -> dict[str, Any]:
     store = store or LocalStore()
-    adapter = PublicAdapter(config)
+    adapter = broker_adapter(config)
     tickets = store.live_order_intents_by_status({"submitted"})
     results = []
     for ticket in tickets:

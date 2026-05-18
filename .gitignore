@@ -16,3 +16,5 @@ data/ideas/imported_*.yaml
 data/transcripts/
 config/public_session.json
 config/public_account.json
+config/tastytrade_session.json
+config/tastytrade_account.json

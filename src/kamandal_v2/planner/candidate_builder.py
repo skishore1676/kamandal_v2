@@ -220,6 +220,9 @@ def _match_rejections(
     mentioned_match = _mentioned_strategy_matches(idea, playbook)
     if playbook.applicable_thesis_tags and not idea_tags.intersection(playbook.applicable_thesis_tags) and not mentioned_match:
         reasons.append("thesis_tags_mismatch")
+    if playbook.strategy_family == "narrative_ignition" or playbook.playbook_id.startswith("narrative_ignition"):
+        if "structural_break:pass" not in idea.notes:
+            reasons.append("structural_break_gate_blocked")
     if playbook.applicable_horizon_min is not None and idea.horizon_days < playbook.applicable_horizon_min:
         reasons.append(f"horizon_below_min:{idea.horizon_days}<{playbook.applicable_horizon_min}")
     if playbook.applicable_horizon_max is not None and idea.horizon_days > playbook.applicable_horizon_max:

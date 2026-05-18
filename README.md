@@ -14,7 +14,7 @@ The current scaffold implements the first execution-grade planning loop:
 - local SQLite/audit artifacts
 - shadow auto-approval of the top eligible plan
 - local transcript import into digest and rough idea YAML
-- local IV snapshot history and IV percentile overlay for Public planning
+- local IV snapshot history and IV percentile overlay for market-provider planning
 
 ## Sheet
 
@@ -54,7 +54,7 @@ Current defaults:
 - `mode: shadow`
 - `trading_enabled: false`
 - `halt: false`
-- Public runs use broker-reported account size and buying power
+- live broker defaults to tastytrade; planning market data remains selected per command
 - portfolio BPR cap: `90%`
 - per-underlying BPR cap: `25%`
 - max positions: `5`
@@ -75,6 +75,7 @@ Current defaults:
 - `kamandal import-x-digest`
 - `kamandal import-x-bookmarks`
 - `kamandal review-rejections`
+- `kamandal tastytrade-smoke --symbol TSLA`
 - `kamandal public-smoke --symbol TSLA`
 - `kamandal capture-iv --config-source sheet --provider public`
 - `kamandal iv-status --symbols TSLA NVDA`
@@ -83,7 +84,7 @@ Current defaults:
 - `kamandal fetch-youtube-transcript --video-id VIDEO_ID`
 - `kamandal list-youtube-channel-videos --channel-id CHANNEL_ID --limit 1`
 
-Public integration is intentionally conservative at this stage: the fixture adapter is the deterministic test path, and live order submission remains gated off.
+Broker integration is intentionally conservative at this stage: the fixture adapter is the deterministic test path, Public can still provide option-chain/IV planning data, and tastytrade is the default account/preflight/order broker once local OAuth env vars are set (`TASTYTRADE_CLIENT_SECRET`, `TASTYTRADE_REFRESH_TOKEN`, and optionally `TASTYTRADE_CLIENT_ID` / `TASTYTRADE_API_VERSION`). Live order submission remains gated.
 
 ## Monday Shadow Runbook
 
@@ -91,6 +92,7 @@ Dry smoke, no sheet write:
 
 ```bash
 .venv/bin/kamandal public-smoke --symbol TSLA
+.venv/bin/kamandal tastytrade-smoke --symbol TSLA
 .venv/bin/kamandal capture-iv --config-source sheet --provider public
 .venv/bin/kamandal iv-status --symbols TSLA NVDA SPY
 .venv/bin/kamandal run-intelligence-cycle \
@@ -109,7 +111,7 @@ Operator shadow cycle, writes `daily_plan` and local shadow artifacts only:
   --provider public
 ```
 
-The command imports transcripts as thesis objects, filters extracted symbols to the configured universe, builds Public-preflighted candidates, ranks plan-level bundles, writes `daily_plan`, and records the auto-approved top shadow plan locally. It does not submit live orders.
+The command imports transcripts as thesis objects, filters extracted symbols to the configured universe, builds provider-backed candidates, ranks plan-level bundles, writes `daily_plan`, and records the auto-approved top shadow plan locally. It does not submit live orders; live execution rechecks the active broker before submit.
 
 Transcript extraction emits semantic idea fields such as `direction`, controlled `thesis_tags`, `horizon_days`, `mentioned_strategy`, `extraction_confidence`, and `quote_evidence`. It does not choose executable legs; playbook matching remains deterministic.
 
@@ -136,7 +138,7 @@ The installer writes a marked `KAMANDAL_V2` block in the user's crontab and
 removes the older Kamandal V2 LaunchAgents so macOS does not show them as Login
 Items. Existing non-Kamandal cron entries are preserved.
 
-Shadow approval behavior is controlled by `execution.approval_mode` in `config/control.yaml`, or by the env override `KAMANDAL_APPROVAL_MODE`. Current shadow automation uses `shadow_auto_top_plan`. Live entry/exit approval is controlled separately under `live.entry_approval_mode` and `live.exit_approval_mode`, with env overrides `KAMANDAL_LIVE_ENTRY_APPROVAL_MODE` and `KAMANDAL_LIVE_EXIT_APPROVAL_MODE`. Live broker submission still requires `KAMANDAL_MODE=live`, `KAMANDAL_TRADING_ENABLED=true`, no halt, `KAMANDAL_LIVE_SUBMIT=1`, the lane-specific `live.auto_submit_entries` / `live.auto_submit_exits` switch, and valid Public preflight.
+Shadow approval behavior is controlled by `execution.approval_mode` in `config/control.yaml`, or by the env override `KAMANDAL_APPROVAL_MODE`. Current shadow automation uses `shadow_auto_top_plan`. Live entry/exit approval is controlled separately under `live.entry_approval_mode` and `live.exit_approval_mode`, with env overrides `KAMANDAL_LIVE_ENTRY_APPROVAL_MODE` and `KAMANDAL_LIVE_EXIT_APPROVAL_MODE`. Live broker submission still requires `KAMANDAL_MODE=live`, `KAMANDAL_TRADING_ENABLED=true`, no halt, `KAMANDAL_LIVE_SUBMIT=1`, the lane-specific `live.auto_submit_entries` / `live.auto_submit_exits` switch, and valid active-broker preflight.
 
 YouTube can be configured either with explicit video IDs (`KAMANDAL_YOUTUBE_VIDEO_IDS` or `data/youtube_queue.txt`) or with channel IDs (`KAMANDAL_YOUTUBE_CHANNEL_IDS` or `config/youtube_channels.txt`). Channel discovery scans recent same-day videos, scores titles toward market/trade idea content, penalizes educational/tutorial titles, and selects the best `KAMANDAL_YOUTUBE_CHANNEL_LIMIT` videos per channel from `KAMANDAL_YOUTUBE_CHANNEL_SCAN_LIMIT` feed entries. For the current shadow experiment, oldmac is focused on the tastylive/tastytrade channel only so we can learn which show titles produce useful daily ideas.
 

@@ -18,7 +18,6 @@ from kamandal_v2.stores.sqlite import LocalStore
 def _live_control() -> dict:
     control = load_control()
     control["live"]["max_bpr_per_order"] = 1000
-    control["live"]["allowed_structures"] = ["call_spread"]
     return control
 
 
@@ -176,6 +175,65 @@ def test_live_can_warn_on_quality_filters_without_permissive_matching(tmp_path, 
     assert not any(candidate.playbook_id == "call_spread_permissive_only" for candidate in result.candidates)
 
 
+def test_live_advisory_uses_sheet_playbooks_not_legacy_structure_allowlist(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    control = load_control()
+    control["live"]["allowed_structures"] = ["long_call", "long_put"]
+
+    result = run_live_advisory_plan(
+        control,
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert result.plans
+    assert result.plans[0].candidates[0].structure == "call_spread"
+    assert "live_structure_not_allowed" not in result.rejection_summary
+
+
+def test_live_advisory_prefers_tastytrade_iv_metrics(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+
+    class FakeTastytradeAdapter:
+        def __init__(self, _config):
+            pass
+
+        def available(self):
+            return True
+
+        def iv_percentile(self, _underlying):
+            return 71.2
+
+        def iv_rank(self, _underlying):
+            return 23.5
+
+        def iv_abs(self, _underlying):
+            return 0.42
+
+    monkeypatch.setattr("kamandal_v2.planner.engine.TastytradeAdapter", FakeTastytradeAdapter)
+    control = _live_control()
+    control["broker"]["active"] = "tastytrade"
+
+    result = run_live_advisory_plan(
+        control,
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    reasons = result.plans[0].candidates[0].reasons
+    assert "iv_pct=71.2" in reasons
+    assert "iv_rank=23.5" in reasons
+    assert "iv_abs=0.42" in reasons
+
+
 def test_live_advisory_uses_real_account_and_writes_blank_approval(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")
@@ -263,7 +321,7 @@ def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypa
     row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
     row["operator_action"] = APPROVE_LIVE
 
-    class FailingPublicAdapter:
+    class FailingBrokerAdapter:
         def __init__(self, _config):
             pass
 
@@ -277,7 +335,7 @@ def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypa
     live_control["runtime"]["mode"] = "live"
     live_control["runtime"]["trading_enabled"] = True
     monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
-    monkeypatch.setattr("kamandal_v2.live.execution.PublicAdapter", FailingPublicAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", FailingBrokerAdapter)
     monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [row]})
 
     executed = execute_live_approved(live_control, submit=True, store=store)

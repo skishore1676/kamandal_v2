@@ -19,10 +19,6 @@ from kamandal_v2.sheets import write_daily_plan
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
 
-
-DEFAULT_LIVE_STRUCTURES = {"put_spread", "call_spread"}
-
-
 def live_config(base: dict[str, Any]) -> dict[str, Any]:
     config = copy.deepcopy(base)
     runtime = config.setdefault("runtime", {})
@@ -127,7 +123,6 @@ def _entry_approval_mode(config: dict[str, Any]) -> str:
 
 def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, config: dict[str, Any]) -> None:
     live_cfg = config.get("live") or {}
-    allowed = {str(item).strip() for item in live_cfg.get("allowed_structures", []) if str(item).strip()} or DEFAULT_LIVE_STRUCTURES
     max_bpr = float(live_cfg.get("max_bpr_per_order") or 300.0)
     max_contracts = int((config.get("execution") or {}).get("max_contracts_per_order") or 1)
     traded_ids = store.live_idea_ids_opened_since(_market_day_start())
@@ -135,9 +130,7 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
     for candidate in candidates:
         if not candidate.eligible:
             continue
-        if candidate.structure not in allowed:
-            candidate.rejection_reason = "live_structure_not_allowed"
-        elif any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs):
+        if any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs):
             candidate.rejection_reason = "live_contract_limit"
         elif candidate.idea_id in open_ids:
             candidate.rejection_reason = "live_idea_already_open"
