@@ -14,16 +14,18 @@ from kamandal_v2.events.earnings import EarningsOverlayMarket, EarningsStore
 from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflightClient
 from kamandal_v2.market.interfaces import MarketDataProvider
 from kamandal_v2.market.public import PublicAdapter
+from kamandal_v2.market.tastytrade import TastytradeAdapter
 from kamandal_v2.planner.candidate_builder import build_candidates, diagnose_idea_matches
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.idea_loader import load_ideas
 from kamandal_v2.planner.plan_generator import generate_plans
+from kamandal_v2.planner.structural_break_gates import annotate_structural_breaks
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import write_daily_plan
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
-from kamandal_v2.volatility.iv import IvOverlayMarket
+from kamandal_v2.volatility.iv import IvOverlayMarket, PrimaryIvOverlayMarket
 from kamandal_v2.volatility.iv_store import IvStore
 
 
@@ -67,7 +69,7 @@ def run_plan(
     store = store or LocalStore()
     audit = audit or AuditWriter()
     universe, playbooks = load_planner_config(config, source=config_source)
-    ideas = load_ideas(idea_paths)
+    ideas = annotate_structural_breaks(load_ideas(idea_paths), config)
     market = _market_provider(config, provider=provider, store=store)
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
     portfolio_raw = market.account_state()
@@ -214,17 +216,20 @@ class _SnapshottingFixtureMarket:
 
 
 def _market_provider(config: dict[str, Any], *, provider: str, store: LocalStore) -> MarketDataProvider:
+    volatility_config = config.get("volatility") or {}
+    metric = str(volatility_config.get("metric") or "atm_30_45_mean_iv")
+    lookback = int(volatility_config.get("lookback_days") or 252)
+    min_observations = int(volatility_config.get("min_observations_for_percentile") or 1)
+    missing_policy = str(volatility_config.get("missing_iv_policy") or "strict").lower()
+    provisional_percentile = float(volatility_config.get("provisional_percentile") or 50.0)
+    iv_store = IvStore()
+
     if provider == "public":
-        volatility_config = config.get("volatility") or {}
-        metric = str(volatility_config.get("metric") or "atm_30_45_mean_iv")
-        lookback = int(volatility_config.get("lookback_days") or 252)
-        min_observations = int(volatility_config.get("min_observations_for_percentile") or 1)
-        missing_policy = str(volatility_config.get("missing_iv_policy") or "strict").lower()
-        provisional_percentile = float(volatility_config.get("provisional_percentile") or 50.0)
         public_market = PublicAdapter(config)
-        iv_market = IvOverlayMarket(
+        iv_market = _iv_market(
+            config,
             public_market,
-            IvStore(),
+            iv_store,
             metric=metric,
             lookback=lookback,
             min_observations=min_observations,
@@ -233,7 +238,59 @@ def _market_provider(config: dict[str, Any], *, provider: str, store: LocalStore
         )
         event_market = EarningsOverlayMarket(iv_market, EarningsStore())
         return _SnapshottingFixtureMarket(event_market, store)
-    return _SnapshottingFixtureMarket(EarningsOverlayMarket(FixtureMarketDataProvider(), EarningsStore()), store)
+    fixture_market = FixtureMarketDataProvider()
+    iv_market = _iv_market(
+        config,
+        fixture_market,
+        iv_store,
+        metric=metric,
+        lookback=lookback,
+        min_observations=min_observations,
+        missing_policy=missing_policy,
+        provisional_percentile=provisional_percentile,
+    )
+    return _SnapshottingFixtureMarket(EarningsOverlayMarket(iv_market, EarningsStore()), store)
+
+
+def _iv_market(
+    config: dict[str, Any],
+    inner: MarketDataProvider,
+    iv_store: IvStore,
+    *,
+    metric: str,
+    lookback: int,
+    min_observations: int,
+    missing_policy: str,
+    provisional_percentile: float,
+) -> MarketDataProvider:
+    if _use_tastytrade_live_iv(config):
+        tastytrade = TastytradeAdapter(config)
+        if tastytrade.available():
+            return PrimaryIvOverlayMarket(
+                inner,
+                iv_store,
+                primary=tastytrade,
+                metric=metric,
+                lookback=lookback,
+                min_observations=min_observations,
+                missing_policy=missing_policy,
+                provisional_percentile=provisional_percentile,
+            )
+    return IvOverlayMarket(
+        inner,
+        iv_store,
+        metric=metric,
+        lookback=lookback,
+        min_observations=min_observations,
+        missing_policy=missing_policy,
+        provisional_percentile=provisional_percentile,
+    )
+
+
+def _use_tastytrade_live_iv(config: dict[str, Any]) -> bool:
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+    active_broker = str((config.get("broker") or {}).get("active") or "").lower()
+    return mode == "live" and active_broker in {"tastytrade", "tasty"}
 
 
 def _preflight_client(market: Any) -> Any:

@@ -23,7 +23,6 @@ shadow:
   candidate_filter_mode: warn   # strict | warn
 
 live:
-  allowed_structures: [long_call, long_put]
   entry_approval_mode: sheet_approval # sheet_approval | auto_top_plan | disabled
   exit_approval_mode: auto_rules      # sheet_approval | auto_rules | disabled
   auto_submit_entries: false
@@ -64,7 +63,7 @@ google_sheets:
     daily_plan: daily_plan
 
 broker:
-  active: public
+  active: tastytrade
   public:
     api_base_url: https://api.public.com
     auth_endpoint: https://api.public.com/userapiauthservice/personal/access-tokens
@@ -77,6 +76,14 @@ broker:
     option_chain_start_dte: 21
     option_chain_end_dte: 90
     option_chain_max_expirations: 8
+  tastytrade:
+    api_base_url: https://api.tastytrade.com
+    client_id: ""
+    api_version: ""
+    account_number: ""
+    oauth_scopes: [read, trade]
+    session_file: config/tastytrade_session.json
+    account_cache_file: config/tastytrade_account.json
 
 llm:
   provider: codex_cli

@@ -1,7 +1,7 @@
 from datetime import date, timedelta
 
 from kamandal_v2.market.fixture import FixtureMarketDataProvider
-from kamandal_v2.volatility.iv import IvOverlayMarket, snapshot_from_chain
+from kamandal_v2.volatility.iv import IvOverlayMarket, PrimaryIvOverlayMarket, snapshot_from_chain
 from kamandal_v2.volatility.iv_store import IvSnapshot, IvStore
 
 
@@ -85,3 +85,64 @@ def test_iv_overlay_can_use_neutral_policy_when_history_is_missing(tmp_path) -> 
     )
 
     assert overlay.iv_percentile("UNKNOWN") == 50.0
+
+
+def test_primary_iv_overlay_prefers_primary_market_metrics(tmp_path) -> None:
+    class PrimaryMarket:
+        def iv_percentile(self, underlying: str) -> float | None:
+            return 71.2
+
+        def iv_rank(self, underlying: str) -> float | None:
+            return 0.0
+
+        def iv_abs(self, underlying: str) -> float | None:
+            return 42.0
+
+    store = IvStore(tmp_path / "iv.db")
+    store.save(
+        IvSnapshot(
+            symbol="TSLA",
+            snapshot_date=date.today().isoformat(),
+            iv=30.0,
+            source="test",
+            metric="atm_30_45_mean_iv",
+            quote_count=10,
+            raw={},
+        )
+    )
+    overlay = PrimaryIvOverlayMarket(FixtureMarketDataProvider(), store, primary=PrimaryMarket())
+
+    assert overlay.iv_percentile("TSLA") == 71.2
+    assert overlay.iv_rank("TSLA") == 0.0
+    assert overlay.iv_abs("TSLA") == 42.0
+
+
+def test_primary_iv_overlay_falls_back_to_local_history(tmp_path) -> None:
+    class MissingPrimaryMarket:
+        def iv_percentile(self, underlying: str) -> float | None:
+            return None
+
+        def iv_rank(self, underlying: str) -> float | None:
+            raise RuntimeError("primary temporarily unavailable")
+
+        def iv_abs(self, underlying: str) -> float | None:
+            return None
+
+    store = IvStore(tmp_path / "iv.db")
+    for offset, iv in enumerate([40.0, 30.0]):
+        store.save(
+            IvSnapshot(
+                symbol="TSLA",
+                snapshot_date=(date.today() - timedelta(days=1 - offset)).isoformat(),
+                iv=iv,
+                source="test",
+                metric="atm_30_45_mean_iv",
+                quote_count=10,
+                raw={},
+            )
+        )
+    overlay = PrimaryIvOverlayMarket(FixtureMarketDataProvider(), store, primary=MissingPrimaryMarket())
+
+    assert overlay.iv_percentile("TSLA") == 50.0
+    assert overlay.iv_rank("TSLA") == 0.0
+    assert overlay.iv_abs("TSLA") == 30.0

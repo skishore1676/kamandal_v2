@@ -17,6 +17,8 @@ CORE_ENABLED_PLAYBOOKS = {
     "call_spread",
     "iron_condor",
     "call_calendar",
+    "narrative_ignition_long",
+    "narrative_ignition_short",
 }
 
 STRUCTURE_LEG_COUNT = {
@@ -31,6 +33,8 @@ STRUCTURE_LEG_COUNT = {
     "calendar_spread": 2,
     "iron_condor": 4,
     "jade_lizard": 3,
+    "call_diagonal": 2,
+    "put_diagonal": 2,
 }
 
 STRATEGY_ID_TO_STRUCTURE = {
@@ -147,6 +151,7 @@ FALLBACK_PROFILES = [
 
 def build_seed_tables(control: dict[str, Any]) -> dict[str, list[list[Any]]]:
     playbooks = _playbook_rows()
+    playbooks.extend(_narrative_ignition_rows())
     return {
         "universe": _universe_rows(control, playbooks),
         "playbooks": playbooks,
@@ -313,6 +318,111 @@ def _profiles_for_structure(structure: str) -> list[str]:
             if extra not in matched:
                 matched.append(extra)
     return [value for value in matched if value]
+
+
+def _narrative_ignition_rows() -> list[list[Any]]:
+    base = {
+        "profiles": "large_stocks, index_etf",
+        "horizon_min": 5,
+        "horizon_max": 60,
+        "iv_min": 0,
+        "iv_max": 50,
+        "long_dte_min": 45,
+        "long_dte_max": 60,
+        "short_delta_min": 0.20,
+        "short_delta_max": 0.35,
+        "long_delta_min": 0.35,
+        "long_delta_max": 0.60,
+    }
+    return [
+        _narrative_row(
+            playbook_id="narrative_ignition_long",
+            structure="call_diagonal",
+            direction="bullish",
+            tags="breakout",
+            rationale="Shadow-only Big Ideas playbook: Mala structural break plus bullish narrative confirmation.",
+            **base,
+        ),
+        _narrative_row(
+            playbook_id="narrative_ignition_short",
+            structure="put_diagonal",
+            direction="bearish",
+            tags="breakdown",
+            rationale="Shadow-only Big Ideas playbook: Mala structural break plus bearish narrative confirmation.",
+            **base,
+        ),
+    ]
+
+
+def _narrative_row(
+    *,
+    playbook_id: str,
+    structure: str,
+    direction: str,
+    tags: str,
+    profiles: str,
+    horizon_min: int,
+    horizon_max: int,
+    iv_min: int,
+    iv_max: int,
+    long_dte_min: int,
+    long_dte_max: int,
+    short_delta_min: float,
+    short_delta_max: float,
+    long_delta_min: float,
+    long_delta_max: float,
+    rationale: str,
+) -> list[Any]:
+    return [
+        playbook_id,
+        "TRUE",
+        "narrative_ignition",
+        structure,
+        "shadow",
+        2,
+        profiles,
+        direction,
+        tags,
+        horizon_min,
+        horizon_max,
+        iv_min,
+        iv_max,
+        "",
+        "",
+        "",
+        "",
+        "",
+        30,
+        45,
+        long_dte_min,
+        long_dte_max,
+        short_delta_min,
+        short_delta_max,
+        long_delta_min,
+        long_delta_max,
+        5,
+        "",
+        "",
+        60,
+        0.25,
+        100,
+        50,
+        1.0,
+        21,
+        "TRUE",
+        "FALSE",
+        3,
+        "fixed_contracts",
+        1,
+        1,
+        "",
+        "",
+        "",
+        "",
+        50,
+        rationale,
+        "Requires structural_break:pass annotation from Mala feed.",
+    ]
 
 
 def _universe_rows(control: dict[str, Any], playbooks: list[list[Any]]) -> list[list[Any]]:

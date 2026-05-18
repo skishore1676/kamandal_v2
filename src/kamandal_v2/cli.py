@@ -22,6 +22,7 @@ from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.orders import build_open_ticket
 from kamandal_v2.management.shadow import manage_shadow_positions, mark_shadow_portfolio, write_shadow_eod_report
 from kamandal_v2.market.public import PublicAdapter
+from kamandal_v2.market.tastytrade import TastytradeAdapter
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.planner.config_validator import validate_config
@@ -59,7 +60,7 @@ def main() -> None:
     live_close_execute_parser = subparsers.add_parser("execute-live-approved-closes", help="Execute sheet-approved live close orders")
     live_close_execute_parser.add_argument("--submit", action="store_true", help="Submit real close orders; default is dry-run")
     live_close_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_exits are enabled")
-    subparsers.add_parser("sync-live-orders", help="Poll Public order status for submitted live orders")
+    subparsers.add_parser("sync-live-orders", help="Poll active broker order status for submitted live orders")
     subparsers.add_parser("cleanup-live-approvals", help="Clear stale live approval cells after submit/fill/failure")
     manual_fill_parser = subparsers.add_parser("record-manual-live-fill", help="Record a manually filled live order ticket")
     manual_fill_parser.add_argument("--ticket-hash", required=True)
@@ -132,6 +133,9 @@ def main() -> None:
     smoke_parser.add_argument("--symbol", default="TSLA")
     live_smoke_parser = subparsers.add_parser("public-live-dry-run", help="Fetch Public account, preflight, and build live submit payload without submitting")
     live_smoke_parser.add_argument("--symbol", default="TSLA")
+    tasty_smoke_parser = subparsers.add_parser("tastytrade-smoke", help="Fetch tastytrade OAuth/account state without submitting orders")
+    tasty_smoke_parser.add_argument("--include-market-metrics", action="store_true", help="Also fetch IV metrics for the symbol")
+    tasty_smoke_parser.add_argument("--symbol", default="TSLA")
 
     iv_parser = subparsers.add_parser("capture-iv", help="Capture current option-chain IV snapshots for universe symbols")
     iv_parser.add_argument("--symbols", nargs="*", help="Optional symbols; defaults to enabled sheet/seed universe")
@@ -391,6 +395,9 @@ def main() -> None:
     if args.command == "public-live-dry-run":
         print(json.dumps(_public_live_dry_run(config, args.symbol), indent=2))
         return
+    if args.command == "tastytrade-smoke":
+        print(json.dumps(_tastytrade_smoke(config, args.symbol, include_market_metrics=args.include_market_metrics), indent=2))
+        return
     if args.command == "capture-iv":
         result = capture_iv_snapshots(
             config,
@@ -631,6 +638,29 @@ def _public_live_dry_run(config: dict, symbol: str) -> dict:
     )
     ticket = build_open_ticket(plan, candidate)
     return {**smoke, "order_ticket": ticket, "live_order_submitted": False}
+
+
+def _tastytrade_smoke(config: dict, symbol: str, *, include_market_metrics: bool = False) -> dict:
+    adapter = TastytradeAdapter(config)
+    account = adapter.account_state()
+    result: dict[str, Any] = {
+        "broker": "tastytrade",
+        "available": adapter.available(),
+        "account": {
+            "account_size": account.account_size,
+            "buying_power": account.buying_power,
+            "bpr_used": account.bpr_used,
+            "positions_count": account.positions_count,
+        },
+    }
+    if include_market_metrics:
+        result["market_metrics"] = {
+            "symbol": symbol.upper(),
+            "iv_rank": adapter.iv_rank(symbol),
+            "iv_percentile": adapter.iv_percentile(symbol),
+            "iv_abs": adapter.iv_abs(symbol),
+        }
+    return result
 
 
 def _candidate_from_smoke(payload: dict) -> Candidate:

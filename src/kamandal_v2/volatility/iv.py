@@ -89,6 +89,87 @@ class IvOverlayMarket:
         return self.inner.event_status(underlying)
 
 
+class PrimaryIvOverlayMarket:
+    def __init__(
+        self,
+        inner: MarketDataProvider,
+        iv_store: IvStore,
+        *,
+        primary: MarketDataProvider,
+        metric: str = "atm_30_45_mean_iv",
+        lookback: int = 252,
+        min_observations: int = 1,
+        missing_policy: str = "strict",
+        provisional_percentile: float = 50.0,
+    ) -> None:
+        self.inner = inner
+        self.iv_store = iv_store
+        self.primary = primary
+        self.metric = metric
+        self.lookback = lookback
+        self.min_observations = min_observations
+        self.missing_policy = missing_policy
+        self.provisional_percentile = provisional_percentile
+
+    def account_state(self):
+        return self.inner.account_state()
+
+    def chain_snapshot(self, underlying: str):
+        return self.inner.chain_snapshot(underlying)
+
+    def iv_percentile(self, underlying: str) -> float | None:
+        primary = self._primary_iv("iv_percentile", underlying)
+        if primary is not None:
+            return primary
+        local = self.iv_store.percentile(
+            underlying,
+            metric=self.metric,
+            lookback=self.lookback,
+            min_observations=self.min_observations,
+        )
+        if local is not None:
+            return local
+        fallback = self.inner.iv_percentile(underlying)
+        if fallback is not None:
+            return fallback
+        if self.missing_policy == "neutral":
+            return self.provisional_percentile
+        return None
+
+    def iv_rank(self, underlying: str) -> float | None:
+        primary = self._primary_iv("iv_rank", underlying)
+        if primary is not None:
+            return primary
+        local = self.iv_store.rank(
+            underlying,
+            metric=self.metric,
+            lookback=self.lookback,
+            min_observations=self.min_observations,
+        )
+        if local is not None:
+            return local
+        return self.inner.iv_rank(underlying)
+
+    def iv_abs(self, underlying: str) -> float | None:
+        primary = self._primary_iv("iv_abs", underlying)
+        if primary is not None:
+            return primary
+        latest = self.iv_store.latest(underlying, metric=self.metric)
+        if latest is not None:
+            return latest.iv
+        return self.inner.iv_abs(underlying)
+
+    def event_status(self, underlying: str) -> str:
+        return self.inner.event_status(underlying)
+
+    def _primary_iv(self, attr: str, underlying: str) -> float | None:
+        try:
+            value = getattr(self.primary, attr)(underlying)
+        except Exception:
+            return None
+        return value
+
+
 def capture_iv_snapshots(
     config: dict[str, Any],
     *,
