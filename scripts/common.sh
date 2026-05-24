@@ -51,6 +51,27 @@ require_trading_day() {
     log "Outside trading days; exiting."
     exit 0
   fi
+  if market_holiday; then
+    log "Market holiday; exiting."
+    exit 0
+  fi
+}
+
+market_holiday() {
+  if [[ "${KAMANDAL_MARKET_HOLIDAY_CALENDAR:-nyse}" == "off" ]]; then
+    return 1
+  fi
+  local today
+  today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
+  case "$today" in
+    2026-01-01|2026-01-19|2026-02-16|2026-04-03|2026-05-25|2026-06-19|2026-07-03|2026-09-07|2026-11-26|2026-12-25|\
+    2027-01-01|2027-01-18|2027-02-15|2027-03-26|2027-05-31|2027-06-18|2027-07-05|2027-09-06|2027-11-25|2027-12-24)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 require_market_window() {
@@ -80,4 +101,46 @@ with_lock() {
   fi
   trap "rmdir '$lockdir'" EXIT
   "$@"
+}
+
+send_telegram() {
+  if [[ "${KAMANDAL_TELEGRAM_ENABLED:-true}" != "true" ]]; then
+    return 0
+  fi
+  local message="$1"
+  local target="${KAMANDAL_TELEGRAM_TARGET:-5425926875}"
+  if ! command -v openclaw >/dev/null 2>&1; then
+    log "openclaw unavailable; telegram not sent."
+    return 0
+  fi
+  openclaw message send --channel telegram --target "$target" --message "$message" --json >/dev/null 2>&1 || log "telegram send failed."
+}
+
+notify_live_execution_result() {
+  local lane="$1"
+  local json_file="$2"
+  python3 - "$lane" "$json_file" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+lane = sys.argv[1]
+path = Path(sys.argv[2])
+try:
+    payload = json.loads(path.read_text())
+except Exception:
+    sys.exit(0)
+processed = int(payload.get("processed") or 0)
+if processed <= 0:
+    sys.exit(0)
+lines = [f"Kamandal live {lane}: processed={processed} submit={payload.get('submit')}"]
+for item in payload.get("results") or []:
+    if not isinstance(item, dict):
+        continue
+    status = item.get("status") or item.get("reason") or "unknown"
+    order_id = str(item.get("order_id") or "")
+    ticket_hash = str(item.get("ticket_hash") or "")
+    lines.append(f"- status={status} order={order_id[:8]} ticket={ticket_hash[:8]}")
+print("\n".join(lines))
+PY
 }

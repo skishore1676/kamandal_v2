@@ -49,14 +49,11 @@ $BEGIN_MARKER
 15 9 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 45 11 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 30 14 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
-30 8 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_market_shadow.sh" >> "$REPO_ROOT/data/logs/cron_market_shadow.log" 2>&1
-*/15 9-15 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_market_shadow.sh" >> "$REPO_ROOT/data/logs/cron_market_shadow.log" 2>&1
 20 9 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_live_advisory.sh" >> "$REPO_ROOT/data/logs/cron_live_advisory.log" 2>&1
 */5 9-15 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_live_approved_orders.sh" >> "$REPO_ROOT/data/logs/cron_live_approved_orders.log" 2>&1
 */15 9-15 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_live_management.sh" >> "$REPO_ROOT/data/logs/cron_live_management.log" 2>&1
 40 8 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_earnings_capture.sh" >> "$REPO_ROOT/data/logs/cron_earnings.log" 2>&1
 45 8 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_iv_capture.sh" >> "$REPO_ROOT/data/logs/cron_iv_capture.log" 2>&1
-50 15 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_shadow_eod_report.sh" >> "$REPO_ROOT/data/logs/cron_shadow_eod_report.log" 2>&1
 0 10 * * 5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_weekly_reviewer.sh" >> "$REPO_ROOT/data/logs/cron_weekly_reviewer.log" 2>&1
 $END_MARKER
 CRON

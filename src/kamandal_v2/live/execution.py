@@ -198,9 +198,16 @@ def _same_day_close_blocked(config: dict[str, Any], store: LocalStore, ticket: d
         return False
     group = store.live_position_group(str(ticket.get("group_id") or ""))
     opened_at = str((group or {}).get("opened_at") or "")
+    market_tz = ZoneInfo(str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago"))
+    allow_after = (config.get("live") or {}).get("allow_same_day_exits_after")
+    if allow_after:
+        try:
+            if datetime.now(market_tz).date() >= datetime.fromisoformat(str(allow_after)).date():
+                return False
+        except ValueError:
+            pass
     if not opened_at:
         return True
-    market_tz = ZoneInfo(str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago"))
     opened = _parse_db_timestamp(opened_at).astimezone(market_tz).date()
     return opened == datetime.now(market_tz).date()
 

@@ -206,6 +206,7 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "max_positions_override": 1,
         "idea_cooldown_days": 1,
         "candidate_filter_mode": "warn",
     }
@@ -219,6 +220,7 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
         store=store,
         audit=AuditWriter(tmp_path / "audit"),
     )
+    control["shadow"]["max_positions_override"] = 2
     second = run_plan(
         control,
         idea_paths=[SAMPLE_IDEAS],

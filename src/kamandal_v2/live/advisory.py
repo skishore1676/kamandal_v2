@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from kamandal_v2.domain.models import Candidate
+from kamandal_v2.domain.models import Candidate, PortfolioState
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.engine import PlanRunResult, run_plan
@@ -121,15 +121,15 @@ def _entry_approval_mode(config: dict[str, Any]) -> str:
     return raw
 
 
-def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, config: dict[str, Any]) -> None:
+def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, config: dict[str, Any], portfolio: PortfolioState) -> None:
     live_cfg = config.get("live") or {}
-    max_bpr = float(live_cfg.get("max_bpr_per_order") or 300.0)
     max_contracts = int((config.get("execution") or {}).get("max_contracts_per_order") or 1)
     traded_ids = store.live_idea_ids_opened_since(_market_day_start())
     open_ids = store.open_live_idea_ids()
     for candidate in candidates:
         if not candidate.eligible:
             continue
+        max_bpr = _candidate_bpr_cap(candidate, portfolio, live_cfg)
         if any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs):
             candidate.rejection_reason = "live_contract_limit"
         elif candidate.idea_id in open_ids:
@@ -142,6 +142,27 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
             candidate.rejection_reason = "live_preflight_required"
         elif _preflight_bpr_incomplete(candidate):
             candidate.rejection_reason = "live_preflight_bpr_incomplete"
+
+
+def _candidate_bpr_cap(candidate: Candidate, portfolio: PortfolioState, live_cfg: dict[str, Any]) -> float:
+    absolute = _structure_bpr_cap(candidate.structure, live_cfg)
+    pct_raw = live_cfg.get("max_bpr_per_order_pct")
+    if pct_raw in (None, ""):
+        return absolute
+    pct_cap = max(float(portfolio.account_size or 0.0), 1.0) * (float(pct_raw) / 100.0)
+    return round(min(absolute, pct_cap), 2)
+
+
+def _structure_bpr_cap(structure: str, live_cfg: dict[str, Any]) -> float:
+    fallback = float(live_cfg.get("max_bpr_per_order") or 300.0)
+    by_structure = live_cfg.get("max_bpr_per_order_by_structure") or {}
+    if not isinstance(by_structure, dict):
+        return fallback
+    key = str(structure or "").strip().lower()
+    raw = by_structure.get(key, by_structure.get("default", fallback))
+    if raw in (None, ""):
+        return fallback
+    return float(raw)
 
 
 def _preflight_bpr_incomplete(candidate: Candidate) -> bool:

@@ -1,13 +1,13 @@
 runtime:
-  mode: shadow                 # shadow | live
-  trading_enabled: false
+  mode: live                   # shadow | live
+  trading_enabled: true
   halt: false
 
 portfolio:
-  target_max_bpr_utilization_pct: 90
-  hard_max_bpr_utilization_pct: 90
-  max_bpr_per_underlying_pct: 25
-  max_positions: 5
+  target_max_bpr_utilization_pct: 55
+  hard_max_bpr_utilization_pct: 55
+  max_bpr_per_underlying_pct: 55
+  max_positions: 15
   delta_bias: slightly_negative
   gamma_policy: record_and_research
   theta_policy: positive_theta_preferred
@@ -23,18 +23,23 @@ shadow:
   candidate_filter_mode: warn   # strict | warn
 
 live:
-  entry_approval_mode: sheet_approval # sheet_approval | auto_top_plan | disabled
+  entry_approval_mode: auto_top_plan  # sheet_approval | auto_top_plan | disabled
   exit_approval_mode: auto_rules      # sheet_approval | auto_rules | disabled
-  auto_submit_entries: false
+  auto_submit_entries: true
   auto_submit_exits: true
   match_gate_mode: strict
   candidate_filter_mode: strict
   max_new_positions_per_plan: 1
-  max_new_plans_per_day: 1
-  max_bpr_per_order: 1000
-  max_bpr_per_underlying_pct: 50
+  max_new_plans_per_day: 2
+  max_bpr_per_order: 2500
+  max_bpr_per_order_pct: 25
+  max_bpr_per_order_by_structure:
+    default: 500
+    strangle: 2500
+  max_bpr_per_underlying_pct: 55
   preflight_max_age_minutes: 10
   allow_same_day_exits: false
+  allow_same_day_exits_after: 2026-06-06
 
 volatility:
   metric: atm_30_45_mean_iv
@@ -63,7 +68,8 @@ google_sheets:
     daily_plan: daily_plan
 
 broker:
-  active: tastytrade
+  active: public
+  market_metrics_provider: tastytrade
   public:
     api_base_url: https://api.public.com
     auth_endpoint: https://api.public.com/userapiauthservice/personal/access-tokens

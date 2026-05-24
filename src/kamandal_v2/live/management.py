@@ -73,10 +73,17 @@ def _same_day_exit_blocked(config: dict[str, Any], group: dict[str, Any]) -> boo
         return False
     if bool((config.get("live") or {}).get("allow_same_day_exits")):
         return False
+    market_tz = ZoneInfo(str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago"))
+    allow_after = (config.get("live") or {}).get("allow_same_day_exits_after")
+    if allow_after:
+        try:
+            if datetime.now(market_tz).date() >= date.fromisoformat(str(allow_after)):
+                return False
+        except ValueError:
+            pass
     opened_at = str(group.get("opened_at") or "")
     if not opened_at:
         return True
-    market_tz = ZoneInfo(str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago"))
     opened = _parse_db_timestamp(opened_at).astimezone(market_tz).date()
     return opened == datetime.now(market_tz).date()
 

@@ -216,7 +216,8 @@ def test_live_advisory_prefers_tastytrade_iv_metrics(tmp_path, monkeypatch) -> N
 
     monkeypatch.setattr("kamandal_v2.planner.engine.TastytradeAdapter", FakeTastytradeAdapter)
     control = _live_control()
-    control["broker"]["active"] = "tastytrade"
+    control["broker"]["active"] = "public"
+    control["broker"]["market_metrics_provider"] = "tastytrade"
 
     result = run_live_advisory_plan(
         control,
@@ -234,7 +235,47 @@ def test_live_advisory_prefers_tastytrade_iv_metrics(tmp_path, monkeypatch) -> N
     assert "iv_abs=0.42" in reasons
 
 
-def test_live_advisory_uses_real_account_and_writes_blank_approval(tmp_path, monkeypatch) -> None:
+def test_live_bpr_cap_uses_structure_absolute_and_account_percent(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    control = _live_control()
+    control["live"]["max_bpr_per_order"] = 2500
+    control["live"]["max_bpr_per_order_pct"] = 25
+    control["live"]["max_bpr_per_order_by_structure"] = {"default": 500, "strangle": 2500}
+    result = run_live_advisory_plan(
+        control,
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert result.plans
+    assert result.plans[0].candidates[0].estimated_bpr <= 500
+
+
+def test_live_bpr_cap_rejects_default_structure_above_default_absolute(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    control = _live_control()
+    control["live"]["max_bpr_per_order"] = 2500
+    control["live"]["max_bpr_per_order_pct"] = 25
+    control["live"]["max_bpr_per_order_by_structure"] = {"default": 10, "strangle": 2500}
+    result = run_live_advisory_plan(
+        control,
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert not result.plans
+    assert any("live_bpr_above_max" in item for item in result.rejection_summary)
+
+
+def test_live_advisory_uses_real_account_and_writes_live_approval(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")
     result = run_live_advisory_plan(
@@ -253,7 +294,7 @@ def test_live_advisory_uses_real_account_and_writes_blank_approval(tmp_path, mon
     assert len(result.plans[0].candidates) == 1
     row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
     detail = json.loads(row["plan_detail_json"])
-    assert row["operator_action"] == ""
+    assert row["operator_action"] == APPROVE_LIVE
     assert detail["lane"] == "live_advisory"
     assert detail["order_ticket_json"]["intent_type"] == "open"
     assert detail["order_ticket_json"]["submit_payload"]["type"] == "LIMIT"
@@ -497,6 +538,53 @@ def test_execute_live_close_blocks_same_day_approved_ticket(tmp_path, monkeypatc
 
     assert executed["processed"] == 1
     assert executed["results"][0]["reason"] == "same_day_live_exit_blocked"
+
+
+def test_execute_live_close_allows_same_day_after_configured_date(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    open_ticket = json.loads(row["plan_detail_json"])["order_ticket_json"]
+    record_manual_live_fill(open_ticket["ticket_hash"], store=store)
+    group = store.open_live_position_groups()[0]
+    close_ticket = build_close_ticket(group)
+    store.save_live_order_intent(close_ticket, status="pending_close_approval")
+    close_row = dict(zip(DAILY_PLAN_HEADER, ["" for _ in DAILY_PLAN_HEADER], strict=False))
+    close_row["operator_action"] = APPROVE_LIVE_CLOSE
+    close_row["mode"] = "live_close_advisory"
+    close_row["plan_detail_json"] = json.dumps({"lane": "live_close_advisory", "order_ticket_json": close_ticket})
+
+    class PassingBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def preflight_ticket(self, _ticket):
+            return PreflightResult(ok=True, bpr=0.0, message="ok")
+
+        def place_order_ticket(self, ticket):
+            return {"orderId": ticket["order_id"]}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", PassingBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [close_row]})
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    live_control = _live_control()
+    live_control["runtime"]["mode"] = "live"
+    live_control["runtime"]["trading_enabled"] = True
+    live_control["live"]["allow_same_day_exits_after"] = "2000-01-01"
+
+    executed = execute_live_approved(live_control, submit=True, close=True, store=store)
+
+    assert executed["processed"] == 1
+    assert executed["results"][0]["status"] == "submitted"
 
 
 def test_cleanup_live_approvals_clears_terminal_ticket_status(tmp_path, monkeypatch) -> None:

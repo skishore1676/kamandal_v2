@@ -61,7 +61,7 @@ def run_plan(
     write_sheet: bool = False,
     store: LocalStore | None = None,
     audit: AuditWriter | None = None,
-    candidate_postprocessor: Callable[[list[Candidate], LocalStore, dict[str, Any]], None] | None = None,
+    candidate_postprocessor: Callable[[list[Candidate], LocalStore, dict[str, Any], PortfolioState], None] | None = None,
     plan_top_n: int = 5,
     plan_max_new_positions: int | None = None,
 ) -> PlanRunResult:
@@ -90,7 +90,7 @@ def run_plan(
         candidate_filter_mode=candidate_filter_mode,
     )
     if candidate_postprocessor is not None:
-        candidate_postprocessor(candidates, store, config)
+        candidate_postprocessor(candidates, store, config, portfolio)
     _reject_open_shadow_candidates(candidates, store, config)
     idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market, match_gate_mode=match_gate_mode)
     plans = generate_plans(candidates, portfolio, config, top_n=plan_top_n, max_new_positions=plan_max_new_positions)
@@ -289,8 +289,9 @@ def _iv_market(
 
 def _use_tastytrade_live_iv(config: dict[str, Any]) -> bool:
     mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+    metrics_provider = str((config.get("broker") or {}).get("market_metrics_provider") or "").lower()
     active_broker = str((config.get("broker") or {}).get("active") or "").lower()
-    return mode == "live" and active_broker in {"tastytrade", "tasty"}
+    return mode == "live" and (metrics_provider or active_broker) in {"tastytrade", "tasty"}
 
 
 def _preflight_client(market: Any) -> Any:
