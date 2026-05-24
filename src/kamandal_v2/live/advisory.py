@@ -159,6 +159,8 @@ def _structure_bpr_cap(structure: str, live_cfg: dict[str, Any]) -> float:
     if not isinstance(by_structure, dict):
         return fallback
     key = str(structure or "").strip().lower()
+    if key == "short_strangle" and "strangle" in by_structure and key not in by_structure:
+        key = "strangle"
     raw = by_structure.get(key, by_structure.get("default", fallback))
     if raw in (None, ""):
         return fallback

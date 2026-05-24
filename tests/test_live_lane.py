@@ -275,6 +275,20 @@ def test_live_bpr_cap_rejects_default_structure_above_default_absolute(tmp_path,
     assert any("live_bpr_above_max" in item for item in result.rejection_summary)
 
 
+def test_live_bpr_cap_treats_short_strangle_as_strangle() -> None:
+    from kamandal_v2.live.advisory import _candidate_bpr_cap
+
+    candidate = type("Candidate", (), {"structure": "short_strangle"})()
+    portfolio = type("Portfolio", (), {"account_size": 10_000})()
+    live_cfg = {
+        "max_bpr_per_order": 2500,
+        "max_bpr_per_order_pct": 25,
+        "max_bpr_per_order_by_structure": {"default": 500, "strangle": 2500},
+    }
+
+    assert _candidate_bpr_cap(candidate, portfolio, live_cfg) == 2500
+
+
 def test_live_advisory_uses_real_account_and_writes_live_approval(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")

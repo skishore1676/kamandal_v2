@@ -35,6 +35,7 @@ def validate_config(universe: list[UniverseEntry], playbooks: list[Playbook]) ->
 
     _validate_required_tables(universe, playbooks, enabled_playbooks, errors)
     _validate_support(enabled_playbooks, errors)
+    _validate_enabled_playbook_reachability(universe, enabled_playbooks, errors)
     _validate_thesis_tags(enabled_playbooks, errors)
     _validate_universe_allowlists(universe, playbooks, warnings)
     _validate_variant_overlap(enabled_playbooks, warnings)
@@ -62,6 +63,21 @@ def _validate_support(playbooks: list[Playbook], errors: list[str]) -> None:
             errors.append(f"enabled_playbook_missing_builder:{playbook.playbook_id}:{playbook.structure}")
         if playbook.structure not in SUPPORTED_VALIDATOR_STRUCTURES:
             errors.append(f"enabled_playbook_missing_validator:{playbook.playbook_id}:{playbook.structure}")
+
+
+def _validate_enabled_playbook_reachability(universe: list[UniverseEntry], playbooks: list[Playbook], errors: list[str]) -> None:
+    enabled_universe = [entry for entry in universe if entry.enabled]
+    for playbook in playbooks:
+        if not any(_entry_can_route_playbook(entry, playbook) for entry in enabled_universe):
+            errors.append(f"enabled_playbook_unreachable_from_universe:{playbook.playbook_id}:{playbook.structure}")
+
+
+def _entry_can_route_playbook(entry: UniverseEntry, playbook: Playbook) -> bool:
+    if playbook.profiles and entry.profile not in playbook.profiles:
+        return False
+    if not entry.allowed_playbooks:
+        return True
+    return bool({playbook.playbook_id, playbook.structure, playbook.strategy_family}.intersection(entry.allowed_playbooks))
 
 
 def _validate_thesis_tags(playbooks: list[Playbook], errors: list[str]) -> None:

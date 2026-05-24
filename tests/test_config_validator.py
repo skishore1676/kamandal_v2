@@ -49,6 +49,25 @@ def test_validate_config_errors_when_no_playbooks_enabled() -> None:
     assert "config_missing_enabled_playbooks" in result.errors
 
 
+def test_validate_config_errors_when_enabled_playbook_is_unreachable_from_universe() -> None:
+    result = validate_config(
+        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks", allowed_playbooks=["put_spread"])],
+        [_playbook("short_strangle_high_iv", strategy_family="short_strangle", structure="short_strangle", profiles=["index_etf"])],
+    )
+
+    assert not result.ok
+    assert "enabled_playbook_unreachable_from_universe:short_strangle_high_iv:short_strangle" in result.errors
+
+
+def test_validate_config_allows_enabled_playbook_routed_by_structure() -> None:
+    result = validate_config(
+        [UniverseEntry(symbol="SPY", enabled=True, profile="index_etf", allowed_playbooks=["short_strangle"])],
+        [_playbook("short_strangle_high_iv", strategy_family="short_strangle", structure="short_strangle", profiles=["index_etf"])],
+    )
+
+    assert result.ok
+
+
 def test_validate_config_errors_for_enabled_unknown_thesis_tag() -> None:
     result = validate_config(
         [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],

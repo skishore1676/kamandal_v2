@@ -35,6 +35,7 @@ live:
   max_bpr_per_order_pct: 25
   max_bpr_per_order_by_structure:
     default: 500
+    short_strangle: 2500
     strangle: 2500
   max_bpr_per_underlying_pct: 55
   preflight_max_age_minutes: 10
