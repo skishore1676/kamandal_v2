@@ -39,7 +39,8 @@ def build_close_ticket(group: dict[str, Any], *, limit_price: float | None = Non
     if not legs:
         raise ValueError(f"live position group {group.get('group_id')} has no legs to close")
     net_credit = float(candidate_payload.get("net_credit") or 0.0)
-    close_limit = _limit_price(-(limit_price if limit_price is not None else net_credit))
+    close_net_credit = -(limit_price if limit_price is not None else net_credit)
+    close_limit = _close_limit_price(legs, close_net_credit)
     fake_candidate = _TicketCandidate(
         candidate_id=str(group.get("candidate_id") or candidate_payload.get("candidate_id") or group.get("group_id")),
         idea_id=str(group.get("idea_id") or candidate_payload.get("idea_id") or ""),
@@ -163,6 +164,13 @@ def _limit_price(net_credit: float) -> str:
     if net_credit > 0:
         return f"-{_nickel_price(abs(net_credit), rounding=ROUND_FLOOR)}"
     return _nickel_price(abs(net_credit), rounding=ROUND_CEILING)
+
+
+def _close_limit_price(legs: list[OptionLeg], net_credit: float) -> str:
+    if len(legs) == 1:
+        rounding = ROUND_FLOOR if net_credit > 0 else ROUND_CEILING
+        return _nickel_price(abs(net_credit), rounding=rounding)
+    return _limit_price(net_credit)
 
 
 def _accepted_preflight_limit_price(candidate: Candidate) -> str:

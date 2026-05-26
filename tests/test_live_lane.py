@@ -518,6 +518,50 @@ def test_close_ticket_reverses_sides_and_uses_close_indicator(tmp_path, monkeypa
     assert close_sides == ["BUY" if side == "SELL" else "SELL" for side in open_sides]
 
 
+def test_single_leg_close_ticket_uses_positive_public_limit_price() -> None:
+    group = {
+        "group_id": "live_group_1",
+        "plan_id": "plan",
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "underlying": "AMZN",
+        "playbook_id": "long_call_directional",
+        "structure": "long_call",
+        "candidate": {
+            "candidate_id": "cand",
+            "idea_id": "idea",
+            "underlying": "AMZN",
+            "playbook_id": "long_call_directional",
+            "structure": "long_call",
+            "net_credit": -18.75,
+            "legs": [
+                {
+                    "role": "long_call",
+                    "side": "buy",
+                    "option_type": "call",
+                    "strike": 265,
+                    "expiration": "2026-08-21",
+                    "quantity": 1,
+                    "mid": 18.75,
+                    "bid": 18.55,
+                    "ask": 18.95,
+                    "delta": 0.5,
+                    "gamma": 0.0,
+                    "theta": 0.0,
+                    "vega": 0.0,
+                    "open_interest": 1000,
+                }
+            ],
+        },
+    }
+
+    close_ticket = build_close_ticket(group)
+
+    assert close_ticket["submit_payload"]["orderSide"] == "SELL"
+    assert close_ticket["submit_payload"]["openCloseIndicator"] == "CLOSE"
+    assert close_ticket["submit_payload"]["limitPrice"] == "18.75"
+
+
 def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")
