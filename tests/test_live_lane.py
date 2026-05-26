@@ -8,7 +8,7 @@ from kamandal_v2.domain.models import Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.live.advisory import live_config, run_live_advisory_plan
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill
 from kamandal_v2.live.management import run_live_management_plan
-from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, build_close_ticket
+from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, _limit_price, build_close_ticket
 from kamandal_v2.planner.engine import run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.stores.audit import AuditWriter
@@ -287,6 +287,11 @@ def test_live_bpr_cap_treats_short_strangle_as_strangle() -> None:
     }
 
     assert _candidate_bpr_cap(candidate, portfolio, live_cfg) == 2500
+
+
+def test_live_ticket_limit_prices_use_public_nickel_ticks() -> None:
+    assert _limit_price(-12.425) == "12.45"
+    assert _limit_price(1.127) == "-1.10"
 
 
 def test_live_advisory_uses_real_account_and_writes_live_approval(tmp_path, monkeypatch) -> None:

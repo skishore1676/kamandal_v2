@@ -6,6 +6,7 @@ import json
 import re
 import time
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -170,9 +171,9 @@ class PublicAdapter:
     def _order_payload(self, candidate: Candidate) -> dict[str, Any]:
         quantity = "1"
         if len(candidate.legs) > 1 and candidate.net_credit > 0:
-            limit_price = f"-{abs(candidate.net_credit):.2f}"
+            limit_price = f"-{_nickel_price(abs(candidate.net_credit), rounding=ROUND_FLOOR)}"
         else:
-            limit_price = f"{abs(candidate.net_credit):.2f}"
+            limit_price = _nickel_price(abs(candidate.net_credit), rounding=ROUND_CEILING)
         if len(candidate.legs) == 1:
             leg = candidate.legs[0]
             return {
@@ -408,6 +409,13 @@ def _find_number(payload: dict[str, Any], keys: tuple[str, ...], *, default: flo
         elif isinstance(item, list):
             stack.extend(item)
     return default
+
+
+def _nickel_price(value: float, *, rounding: str) -> str:
+    price = Decimal(str(value))
+    nickel = Decimal("0.05")
+    rounded = (price / nickel).to_integral_value(rounding=rounding) * nickel
+    return f"{rounded.quantize(Decimal('0.01'))}"
 
 
 def _normalise_order_payload(payload: dict[str, Any], *, multileg: bool) -> dict[str, Any]:

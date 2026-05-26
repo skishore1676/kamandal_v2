@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
@@ -160,8 +161,15 @@ def _leg_ticket_payload(underlying: str, leg: OptionLeg, open_close_indicator: s
 
 def _limit_price(net_credit: float) -> str:
     if net_credit > 0:
-        return f"-{abs(net_credit):.2f}"
-    return f"{abs(net_credit):.2f}"
+        return f"-{_nickel_price(abs(net_credit), rounding=ROUND_FLOOR)}"
+    return _nickel_price(abs(net_credit), rounding=ROUND_CEILING)
+
+
+def _nickel_price(value: float, *, rounding: str) -> str:
+    price = Decimal(str(value))
+    nickel = Decimal("0.05")
+    rounded = (price / nickel).to_integral_value(rounding=rounding) * nickel
+    return f"{rounded.quantize(Decimal('0.01'))}"
 
 
 def _closing_leg(leg_payload: dict[str, Any]) -> OptionLeg:
