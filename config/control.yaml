@@ -49,6 +49,10 @@ live:
     max_improvement: 0.10
     apply_to_credit: true    # sell/credit entries ask for more credit than mid
     apply_to_debit: true     # buy/debit entries bid below mid
+  exit_pricing:
+    profit_target_trigger_pct: 95
+    min_profit_to_trigger: 5
+    require_fresh_quotes: true
   allow_same_day_exits: false
   allow_same_day_exits_after: 2026-06-06
 

@@ -600,6 +600,7 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
     control = load_control()
     control["live"]["allow_same_day_exits"] = True
     control["live"]["exit_approval_mode"] = "auto_rules"
+    control["live"]["exit_pricing"]["require_fresh_quotes"] = False
     managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
 
     assert managed["close_recommendations"] == 1
@@ -645,7 +646,9 @@ def test_live_management_blocks_same_day_close_by_default(tmp_path, monkeypatch)
             ),
         )
 
-    managed = run_live_management_plan(load_control(), config_source="seed", write_sheet=False, store=store)
+    control = load_control()
+    control["live"]["exit_pricing"]["require_fresh_quotes"] = False
+    managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
 
     assert managed["close_recommendations"] == 0
     assert managed["decisions"][0]["action"] == "hold"

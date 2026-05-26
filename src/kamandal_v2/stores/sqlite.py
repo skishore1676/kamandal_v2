@@ -150,6 +150,18 @@ class LocalStore:
                     reason TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS live_position_marks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    group_id TEXT NOT NULL,
+                    underlying TEXT,
+                    entry_kind TEXT,
+                    pnl REAL NOT NULL,
+                    target_profit REAL NOT NULL,
+                    target_progress_pct REAL NOT NULL,
+                    quote_fresh INTEGER NOT NULL,
+                    payload TEXT NOT NULL
+                );
                 """
             )
             self._ensure_shadow_fill_columns(conn)
@@ -595,6 +607,26 @@ class LocalStore:
                 VALUES (?, ?, ?, ?)
                 """,
                 (group_id, action, reason, json.dumps(payload, sort_keys=True)),
+            )
+
+    def record_live_position_mark(self, group_id: str, payload: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO live_position_marks
+                (group_id, underlying, entry_kind, pnl, target_profit, target_progress_pct, quote_fresh, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    group_id,
+                    payload.get("underlying"),
+                    payload.get("entry_kind"),
+                    float(payload.get("pnl_mid") or 0.0),
+                    float(payload.get("target_profit") or 0.0),
+                    float(payload.get("target_progress_pct") or 0.0),
+                    int(bool(payload.get("quote_fresh"))),
+                    json.dumps(payload, sort_keys=True),
+                ),
             )
 
     def event(self, event_type: str, payload: dict[str, Any]) -> None:

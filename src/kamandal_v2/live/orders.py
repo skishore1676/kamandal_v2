@@ -30,7 +30,7 @@ def build_open_ticket(plan: Plan, candidate: Candidate) -> dict[str, Any]:
     )
 
 
-def build_close_ticket(group: dict[str, Any], *, limit_price: float | None = None) -> dict[str, Any]:
+def build_close_ticket(group: dict[str, Any], *, limit_price: float | None = None, close_net_credit: float | None = None) -> dict[str, Any]:
     candidate_payload = group.get("candidate") or {}
     legs = [
         _closing_leg(leg)
@@ -39,7 +39,8 @@ def build_close_ticket(group: dict[str, Any], *, limit_price: float | None = Non
     if not legs:
         raise ValueError(f"live position group {group.get('group_id')} has no legs to close")
     net_credit = float(candidate_payload.get("net_credit") or 0.0)
-    close_net_credit = -(limit_price if limit_price is not None else net_credit)
+    if close_net_credit is None:
+        close_net_credit = _close_net_credit_from_legs(legs) if limit_price is None else -(limit_price)
     close_limit = _close_limit_price(legs, close_net_credit)
     fake_candidate = _TicketCandidate(
         candidate_id=str(group.get("candidate_id") or candidate_payload.get("candidate_id") or group.get("group_id")),
@@ -48,7 +49,7 @@ def build_close_ticket(group: dict[str, Any], *, limit_price: float | None = Non
         playbook_id=str(group.get("playbook_id") or candidate_payload.get("playbook_id") or ""),
         structure=str(group.get("structure") or candidate_payload.get("structure") or ""),
         legs=legs,
-        net_credit=-(limit_price if limit_price is not None else net_credit),
+        net_credit=close_net_credit,
         preflight=None,
     )
     fake_plan = _TicketPlan(str(group.get("plan_id") or ""), str(group.get("group_id") or ""))
@@ -171,6 +172,14 @@ def _close_limit_price(legs: list[OptionLeg], net_credit: float) -> str:
         rounding = ROUND_FLOOR if net_credit > 0 else ROUND_CEILING
         return _nickel_price(abs(net_credit), rounding=rounding)
     return _limit_price(net_credit)
+
+
+def _close_net_credit_from_legs(legs: list[OptionLeg]) -> float:
+    total = 0.0
+    for leg in legs:
+        qty = int(leg.quantity or 1)
+        total += (float(leg.mid) if leg.side == "sell" else -float(leg.mid)) * qty
+    return total
 
 
 def _accepted_preflight_limit_price(candidate: Candidate) -> str:

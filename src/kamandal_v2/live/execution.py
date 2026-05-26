@@ -232,6 +232,7 @@ def _save_live_position_from_ticket(store: LocalStore, ticket: dict[str, Any], *
         "playbook_id": ticket.get("playbook_id"),
         "structure": ticket.get("structure"),
         "candidate": _candidate_from_ticket(ticket),
+        "entry_snapshot": _entry_snapshot_from_ticket(ticket, order_status),
         "order_status": order_status,
     }
     store.save_live_position_group(group_id, payload, status="open")
@@ -255,6 +256,25 @@ def _candidate_from_ticket(ticket: dict[str, Any]) -> dict[str, Any]:
 def _net_credit_from_ticket(ticket: dict[str, Any]) -> float:
     limit_price = float(ticket.get("limit_price") or 0.0)
     return abs(limit_price) if limit_price < 0 else -abs(limit_price)
+
+
+def _entry_snapshot_from_ticket(ticket: dict[str, Any], order_status: dict[str, Any]) -> dict[str, Any]:
+    net_credit = _net_credit_from_ticket(ticket)
+    if len(ticket.get("legs") or []) == 1 and order_status.get("averagePrice") not in (None, ""):
+        fill_price = float(order_status.get("averagePrice") or abs(net_credit))
+        side = str(order_status.get("side") or "").upper()
+        net_credit = fill_price if side == "SELL" else -fill_price
+    entry_net_cashflow = round(net_credit * 100.0, 2)
+    return {
+        "entry_kind": "credit" if entry_net_cashflow > 0 else "debit",
+        "entry_net_credit": round(net_credit, 4),
+        "entry_net_cashflow": entry_net_cashflow,
+        "entry_value": abs(entry_net_cashflow),
+        "fill_price": order_status.get("averagePrice"),
+        "fill_quantity": order_status.get("filledQuantity"),
+        "source_order_id": ticket.get("order_id"),
+        "source_ticket_hash": ticket.get("ticket_hash"),
+    }
 
 
 def _group_id(ticket: dict[str, Any]) -> str:

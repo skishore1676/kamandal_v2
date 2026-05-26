@@ -6,13 +6,13 @@ import json
 import os
 import sqlite3
 from datetime import UTC, date, datetime
-from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.events.earnings import EarningsStore
 from kamandal_v2.live.orders import APPROVE_LIVE_CLOSE, build_close_ticket
-from kamandal_v2.management.shadow import _decision_for_mark_row
+from kamandal_v2.live.position_management import live_exit_decision, live_exit_policy, mark_live_group
+from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import write_daily_plan
@@ -31,12 +31,24 @@ def run_live_management_plan(
     playbook_by_id = {playbook.playbook_id: playbook for playbook in playbooks}
     earnings = EarningsStore()
     groups = store.open_live_position_groups()
+    fresh_underlyings = _refresh_live_group_quotes(config, store, groups)
     exit_mode = _exit_approval_mode(config)
     rows: list[list[Any]] = []
     decisions = []
+    marks = []
     for index, group in enumerate(groups, start=1):
-        mark_row = _mark_live_group(store, group)
-        decision = _decision_for_mark_row(mark_row, playbook_by_id, earnings)
+        underlying = str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or "")
+        playbook = playbook_by_id.get(str(group.get("playbook_id") or (group.get("candidate") or {}).get("playbook_id") or ""))
+        mark = mark_live_group(
+            group,
+            _latest_chain(store, underlying),
+            playbook,
+            quote_fresh=underlying in fresh_underlyings,
+            config=config,
+        )
+        marks.append(mark)
+        store.record_live_position_mark(str(group.get("group_id")), mark)
+        decision = live_exit_decision(mark, playbook, earnings, config)
         decision["group_id"] = group.get("group_id")
         if decision["action"] == "close" and _same_day_exit_blocked(config, group):
             decision = {
@@ -52,12 +64,12 @@ def run_live_management_plan(
             continue
         if exit_mode == "disabled":
             continue
-        ticket = build_close_ticket(group)
+        ticket = build_close_ticket(group, close_net_credit=float(decision.get("recommended_close_net") or 0.0) / 100.0)
         store.save_live_order_intent(ticket, status="pending_close_approval")
         rows.append(_close_plan_row(index, group, decision, ticket, approval_mode=exit_mode))
     if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_close_advisory"})
-    return {"groups": len(groups), "close_recommendations": len(rows), "decisions": decisions, "daily_plan_rows": rows}
+    return {"groups": len(groups), "close_recommendations": len(rows), "marks": marks, "decisions": decisions, "daily_plan_rows": rows}
 
 
 def _exit_approval_mode(config: dict[str, Any]) -> str:
@@ -96,46 +108,31 @@ def _parse_db_timestamp(value: str) -> datetime:
     return parsed
 
 
-def _mark_live_group(store: LocalStore, group: dict[str, Any]) -> dict[str, Any]:
-    candidate = group.get("candidate") or {}
-    legs = candidate.get("legs") or []
-    entry_credit = float(candidate.get("net_credit") or 0.0) * 100.0
-    chain = _latest_chain(store, str(group.get("underlying") or candidate.get("underlying") or ""))
-    mid_close_value = 0.0
-    natural_close_value = 0.0
-    missing_quotes = []
-    for leg in legs:
-        quote = None
-        if chain:
-            quote = chain.get((str(leg.get("expiration")), str(leg.get("option_type")), float(leg.get("strike") or 0.0)))
-        if quote is None:
-            missing_quotes.append(f"{leg.get('expiration')}:{leg.get('option_type')}:{leg.get('strike')}")
+def _refresh_live_group_quotes(config: dict[str, Any], store: LocalStore, groups: list[dict[str, Any]]) -> set[str]:
+    if not live_exit_policy(config).require_fresh_quotes:
+        return {str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or "") for group in groups}
+    underlyings = sorted({str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or "") for group in groups if group})
+    refreshed: set[str] = set()
+    if not underlyings:
+        return refreshed
+    try:
+        adapter = broker_adapter(config)
+    except Exception as exc:  # noqa: BLE001
+        store.event("live_quote_refresh_failed", {"stage": "adapter", "error": str(exc), "underlyings": underlyings})
+        return refreshed
+    if hasattr(adapter, "available") and not adapter.available():
+        store.event("live_quote_refresh_skipped", {"reason": "broker_unavailable", "underlyings": underlyings})
+        return refreshed
+    for underlying in underlyings:
+        if not underlying:
             continue
-        qty = int(leg.get("quantity") or 1)
-        bid = float(quote.get("bid") or 0.0)
-        ask = float(quote.get("ask") or 0.0)
-        mid = (bid + ask) / 2.0
-        if leg.get("side") == "sell":
-            mid_close_value += -mid * qty * 100.0
-            natural_close_value += -ask * qty * 100.0
-        else:
-            mid_close_value += mid * qty * 100.0
-            natural_close_value += bid * qty * 100.0
-    mid_pnl = entry_credit + mid_close_value
-    natural_pnl = entry_credit + natural_close_value
-    return {
-        "fill_id": group.get("group_id"),
-        "underlying": group.get("underlying") or candidate.get("underlying"),
-        "playbook_id": group.get("playbook_id") or candidate.get("playbook_id"),
-        "structure": group.get("structure") or candidate.get("structure"),
-        "entry_credit": round(entry_credit, 2),
-        "mid_pnl": round(mid_pnl, 2),
-        "natural_pnl": round(natural_pnl, 2),
-        "pnl_pct_of_credit": round((mid_pnl / abs(entry_credit)) * 100.0, 2) if abs(entry_credit) >= 0.01 else 0.0,
-        "missing_quotes": missing_quotes,
-        "legs": legs,
-        "mark_time": "",
-    }
+        try:
+            snapshot = adapter.chain_snapshot(underlying)
+            store.save_chain_snapshot(snapshot)
+            refreshed.add(underlying)
+        except Exception as exc:  # noqa: BLE001
+            store.event("live_quote_refresh_failed", {"stage": "chain_snapshot", "underlying": underlying, "error": str(exc)})
+    return refreshed
 
 
 def _latest_chain(store: LocalStore, underlying: str) -> dict[tuple[str, str, float], dict[str, Any]]:
