@@ -12,6 +12,7 @@ import requests
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, OptionLeg, PortfolioState, PreflightResult
 from kamandal_v2.paths import resolve_path
+from kamandal_v2.volatility.scale import normalize_iv_abs, normalize_iv_percentile, normalize_iv_rank
 
 
 DEFAULT_API_BASE_URL = "https://api.tastytrade.com"
@@ -98,15 +99,15 @@ class TastytradeAdapter:
 
     def iv_percentile(self, underlying: str) -> float | None:
         metric = self._market_metric(underlying)
-        return _find_optional_number(metric, ("iv-percentile", "implied-volatility-percentile"))
+        return normalize_iv_percentile(_find_optional_number(metric, ("iv-percentile", "implied-volatility-percentile")))
 
     def iv_rank(self, underlying: str) -> float | None:
         metric = self._market_metric(underlying)
-        return _find_optional_number(metric, ("iv-rank", "implied-volatility-rank"))
+        return normalize_iv_rank(_find_optional_number(metric, ("iv-rank", "implied-volatility-rank")))
 
     def iv_abs(self, underlying: str) -> float | None:
         metric = self._market_metric(underlying)
-        return _find_optional_number(metric, ("implied-volatility-index", "implied-volatility", "iv-index"))
+        return normalize_iv_abs(_find_optional_number(metric, ("implied-volatility-index", "implied-volatility", "iv-index")))
 
     def event_status(self, underlying: str) -> str:
         return "unknown"

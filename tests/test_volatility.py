@@ -117,6 +117,42 @@ def test_primary_iv_overlay_prefers_primary_market_metrics(tmp_path) -> None:
     assert overlay.iv_abs("TSLA") == 42.0
 
 
+def test_primary_iv_overlay_normalizes_fractional_primary_market_metrics(tmp_path) -> None:
+    class FractionalPrimaryMarket:
+        def iv_percentile(self, underlying: str) -> float | None:
+            return 0.226038885
+
+        def iv_rank(self, underlying: str) -> float | None:
+            return 0.1063
+
+        def iv_abs(self, underlying: str) -> float | None:
+            return 0.317353744
+
+    overlay = PrimaryIvOverlayMarket(FixtureMarketDataProvider(), IvStore(tmp_path / "iv.db"), primary=FractionalPrimaryMarket())
+
+    assert overlay.iv_percentile("AMZN") == 22.6039
+    assert overlay.iv_rank("AMZN") == 10.63
+    assert overlay.iv_abs("AMZN") == 31.7354
+
+
+def test_iv_overlay_normalizes_fractional_fallback_market_metrics(tmp_path) -> None:
+    class FractionalFallbackMarket(FixtureMarketDataProvider):
+        def iv_percentile(self, underlying: str) -> float | None:
+            return 0.488159524
+
+        def iv_rank(self, underlying: str) -> float | None:
+            return 0.42
+
+        def iv_abs(self, underlying: str) -> float | None:
+            return 0.5652961
+
+    overlay = IvOverlayMarket(FractionalFallbackMarket(), IvStore(tmp_path / "iv.db"))
+
+    assert overlay.iv_percentile("SHOP") == 48.816
+    assert overlay.iv_rank("SHOP") == 42.0
+    assert overlay.iv_abs("SHOP") == 56.5296
+
+
 def test_primary_iv_overlay_falls_back_to_local_history(tmp_path) -> None:
     class MissingPrimaryMarket:
         def iv_percentile(self, underlying: str) -> float | None:

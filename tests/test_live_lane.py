@@ -280,7 +280,7 @@ def test_live_advisory_prefers_tastytrade_iv_metrics(tmp_path, monkeypatch) -> N
     reasons = result.plans[0].candidates[0].reasons
     assert "iv_pct=71.2" in reasons
     assert "iv_rank=23.5" in reasons
-    assert "iv_abs=0.42" in reasons
+    assert "iv_abs=42.0" in reasons
 
 
 def test_live_bpr_cap_uses_structure_absolute_and_account_percent(tmp_path, monkeypatch) -> None:

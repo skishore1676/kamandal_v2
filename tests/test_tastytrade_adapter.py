@@ -154,7 +154,7 @@ def test_tastytrade_preflight_builds_open_option_order(tmp_path) -> None:
 def test_tastytrade_market_metrics_use_symbols_query(tmp_path) -> None:
     adapter = _adapter(tmp_path)
 
-    assert adapter.iv_abs("TSLA") == 0.42
+    assert adapter.iv_abs("TSLA") == 42.0
     assert adapter.iv_rank("TSLA") == 0.0
     assert adapter.iv_percentile("TSLA") == 71.2
 
@@ -166,6 +166,20 @@ def test_tastytrade_market_metrics_use_symbols_query(tmp_path) -> None:
     assert metric_requests
     assert metric_requests[0]["params"] == {"symbols": "TSLA"}
     assert len(metric_requests) == 1
+
+
+def test_tastytrade_market_metrics_normalize_fractional_scale(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+    adapter._market_metric_cache["AMZN"] = {
+        "symbol": "AMZN",
+        "implied-volatility-index": "0.317353744",
+        "implied-volatility-rank": "0.1063",
+        "implied-volatility-percentile": "0.226038885",
+    }
+
+    assert adapter.iv_abs("AMZN") == 31.7354
+    assert adapter.iv_rank("AMZN") == 10.63
+    assert adapter.iv_percentile("AMZN") == 22.6039
 
 
 def test_broker_adapter_uses_tastytrade_when_active() -> None:

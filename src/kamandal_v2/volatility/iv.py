@@ -12,6 +12,7 @@ from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.volatility.iv_store import IvSnapshot, IvStore, today_iso
+from kamandal_v2.volatility.scale import normalize_iv_abs, normalize_iv_percentile, normalize_iv_rank
 
 
 @dataclass(slots=True)
@@ -63,9 +64,9 @@ class IvOverlayMarket:
             return local
         fallback = self.inner.iv_percentile(underlying)
         if fallback is not None:
-            return fallback
+            return normalize_iv_percentile(fallback)
         if self.missing_policy == "neutral":
-            return self.provisional_percentile
+            return normalize_iv_percentile(self.provisional_percentile)
         return None
 
     def iv_rank(self, underlying: str) -> float | None:
@@ -77,13 +78,13 @@ class IvOverlayMarket:
         )
         if local is not None:
             return local
-        return self.inner.iv_rank(underlying)
+        return normalize_iv_rank(self.inner.iv_rank(underlying))
 
     def iv_abs(self, underlying: str) -> float | None:
         latest = self.iv_store.latest(underlying, metric=self.metric)
         if latest is not None:
             return latest.iv
-        return self.inner.iv_abs(underlying)
+        return normalize_iv_abs(self.inner.iv_abs(underlying))
 
     def event_status(self, underlying: str) -> str:
         return self.inner.event_status(underlying)
@@ -120,7 +121,7 @@ class PrimaryIvOverlayMarket:
     def iv_percentile(self, underlying: str) -> float | None:
         primary = self._primary_iv("iv_percentile", underlying)
         if primary is not None:
-            return primary
+            return normalize_iv_percentile(primary)
         local = self.iv_store.percentile(
             underlying,
             metric=self.metric,
@@ -131,15 +132,15 @@ class PrimaryIvOverlayMarket:
             return local
         fallback = self.inner.iv_percentile(underlying)
         if fallback is not None:
-            return fallback
+            return normalize_iv_percentile(fallback)
         if self.missing_policy == "neutral":
-            return self.provisional_percentile
+            return normalize_iv_percentile(self.provisional_percentile)
         return None
 
     def iv_rank(self, underlying: str) -> float | None:
         primary = self._primary_iv("iv_rank", underlying)
         if primary is not None:
-            return primary
+            return normalize_iv_rank(primary)
         local = self.iv_store.rank(
             underlying,
             metric=self.metric,
@@ -148,16 +149,16 @@ class PrimaryIvOverlayMarket:
         )
         if local is not None:
             return local
-        return self.inner.iv_rank(underlying)
+        return normalize_iv_rank(self.inner.iv_rank(underlying))
 
     def iv_abs(self, underlying: str) -> float | None:
         primary = self._primary_iv("iv_abs", underlying)
         if primary is not None:
-            return primary
+            return normalize_iv_abs(primary)
         latest = self.iv_store.latest(underlying, metric=self.metric)
         if latest is not None:
             return latest.iv
-        return self.inner.iv_abs(underlying)
+        return normalize_iv_abs(self.inner.iv_abs(underlying))
 
     def event_status(self, underlying: str) -> str:
         return self.inner.event_status(underlying)
