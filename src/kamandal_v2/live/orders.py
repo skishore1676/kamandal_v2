@@ -25,7 +25,7 @@ def build_open_ticket(plan: Plan, candidate: Candidate) -> dict[str, Any]:
         intent_type="open",
         open_close_indicator="OPEN",
         legs=candidate.legs,
-        limit_price=_limit_price(candidate.net_credit),
+        limit_price=_accepted_preflight_limit_price(candidate) or _limit_price(candidate.net_credit),
         preflight=candidate.preflight.to_dict() if candidate.preflight else None,
     )
 
@@ -163,6 +163,14 @@ def _limit_price(net_credit: float) -> str:
     if net_credit > 0:
         return f"-{_nickel_price(abs(net_credit), rounding=ROUND_FLOOR)}"
     return _nickel_price(abs(net_credit), rounding=ROUND_CEILING)
+
+
+def _accepted_preflight_limit_price(candidate: Candidate) -> str:
+    if candidate.preflight is None or not candidate.preflight.ok:
+        return ""
+    request = (candidate.preflight.raw or {}).get("request") or {}
+    value = request.get("limitPrice")
+    return str(value) if value not in (None, "") else ""
 
 
 def _nickel_price(value: float, *, rounding: str) -> str:

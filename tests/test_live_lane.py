@@ -4,11 +4,11 @@ from datetime import date, timedelta
 
 from kamandal_v2.config import load_control
 from kamandal_v2.cli import _live_submit_requested
-from kamandal_v2.domain.models import Playbook, PreflightResult, UniverseEntry
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.live.advisory import live_config, run_live_advisory_plan
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill
 from kamandal_v2.live.management import run_live_management_plan
-from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, _limit_price, build_close_ticket
+from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, _limit_price, build_close_ticket, build_open_ticket
 from kamandal_v2.planner.engine import run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.stores.audit import AuditWriter
@@ -292,6 +292,46 @@ def test_live_bpr_cap_treats_short_strangle_as_strangle() -> None:
 def test_live_ticket_limit_prices_use_public_nickel_ticks() -> None:
     assert _limit_price(-12.425) == "12.45"
     assert _limit_price(1.127) == "-1.10"
+
+
+def test_live_open_ticket_uses_accepted_public_preflight_limit_price() -> None:
+    candidate = Candidate(
+        candidate_id="cand",
+        idea_id="idea",
+        underlying="AMZN",
+        playbook_id="long_call_directional",
+        structure="long_call",
+        legs=[
+            OptionLeg(
+                role="long_call",
+                side="buy",
+                option_type="call",
+                strike=265,
+                expiration="2026-08-21",
+                quantity=1,
+                mid=12.425,
+                bid=12.4,
+                ask=12.45,
+                delta=0.5,
+                gamma=0.0,
+                theta=0.0,
+                vega=0.0,
+                open_interest=1000,
+            )
+        ],
+        net_credit=-12.425,
+        estimated_bpr=1245,
+        greeks=Greeks(),
+        liquidity_score=1.0,
+        score=1.0,
+        preflight=PreflightResult(ok=True, bpr=1245, message="ok", raw={"request": {"limitPrice": "12.45"}}),
+    )
+    plan = type("Plan", (), {"plan_id": "plan", "plan_rank": 1})()
+
+    ticket = build_open_ticket(plan, candidate)
+
+    assert ticket["limit_price"] == "12.45"
+    assert ticket["submit_payload"]["limitPrice"] == "12.45"
 
 
 def test_live_advisory_uses_real_account_and_writes_live_approval(tmp_path, monkeypatch) -> None:

@@ -120,9 +120,9 @@ class PublicAdapter:
 
     def preflight(self, candidate: Candidate) -> PreflightResult:
         self._require_available()
+        payload = self._order_payload(candidate)
         try:
             endpoint = "single-leg" if len(candidate.legs) == 1 else "multi-leg"
-            payload = self._order_payload(candidate)
             response = self._post(
                 f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
                 payload,
@@ -130,6 +130,23 @@ class PublicAdapter:
             bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
             return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="Public preflight ok", raw={"request": payload, "response": response})
         except Exception as exc:  # noqa: BLE001
+            if _is_nickel_increment_rejection(exc):
+                retry_payload = dict(payload)
+                retry_payload["limitPrice"] = _candidate_nickel_limit_price(candidate)
+                try:
+                    response = self._post(
+                        f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
+                        retry_payload,
+                    )
+                    bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
+                    return PreflightResult(
+                        ok=True,
+                        bpr=round(abs(bpr), 2),
+                        message="Public preflight ok after nickel tick retry",
+                        raw={"request": retry_payload, "response": response, "retry_reason": str(exc)},
+                    )
+                except Exception as retry_exc:  # noqa: BLE001
+                    return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"Public preflight failed: {retry_exc}", raw={"source": "public", "first_error": str(exc)})
             return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"Public preflight failed: {exc}", raw={"source": "public"})
 
     def preflight_ticket(self, ticket: dict[str, Any]) -> PreflightResult:
@@ -170,10 +187,7 @@ class PublicAdapter:
 
     def _order_payload(self, candidate: Candidate) -> dict[str, Any]:
         quantity = "1"
-        if len(candidate.legs) > 1 and candidate.net_credit > 0:
-            limit_price = f"-{_nickel_price(abs(candidate.net_credit), rounding=ROUND_FLOOR)}"
-        else:
-            limit_price = _nickel_price(abs(candidate.net_credit), rounding=ROUND_CEILING)
+        limit_price = _candidate_raw_limit_price(candidate)
         if len(candidate.legs) == 1:
             leg = candidate.legs[0]
             return {
@@ -409,6 +423,23 @@ def _find_number(payload: dict[str, Any], keys: tuple[str, ...], *, default: flo
         elif isinstance(item, list):
             stack.extend(item)
     return default
+
+
+def _candidate_raw_limit_price(candidate: Candidate) -> str:
+    if len(candidate.legs) > 1 and candidate.net_credit > 0:
+        return f"-{abs(candidate.net_credit):.2f}"
+    return f"{abs(candidate.net_credit):.2f}"
+
+
+def _candidate_nickel_limit_price(candidate: Candidate) -> str:
+    if len(candidate.legs) > 1 and candidate.net_credit > 0:
+        return f"-{_nickel_price(abs(candidate.net_credit), rounding=ROUND_FLOOR)}"
+    return _nickel_price(abs(candidate.net_credit), rounding=ROUND_CEILING)
+
+
+def _is_nickel_increment_rejection(exc: Exception) -> bool:
+    message = str(exc)
+    return "increments of $0.05" in message or '"code":104' in message or "'code': 104" in message
 
 
 def _nickel_price(value: float, *, rounding: str) -> str:
