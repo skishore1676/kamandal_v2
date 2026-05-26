@@ -92,6 +92,7 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "live.auto_submit_exits": _env_bool("KAMANDAL_LIVE_AUTO_SUBMIT_EXITS"),
         "live.allow_same_day_exits": _env_bool("KAMANDAL_ALLOW_SAME_DAY_LIVE_EXITS"),
         "live.allow_same_day_exits_after": os.environ.get("KAMANDAL_ALLOW_SAME_DAY_LIVE_EXITS_AFTER"),
+        "live.min_entry_legs": _env_int("KAMANDAL_LIVE_MIN_ENTRY_LEGS"),
         "live.max_new_positions_per_plan": _env_int("KAMANDAL_LIVE_MAX_NEW_POSITIONS_PER_PLAN"),
         "live.max_new_plans_per_day": _env_int("KAMANDAL_LIVE_MAX_NEW_PLANS_PER_DAY"),
         "live.max_bpr_per_order": _env_float("KAMANDAL_LIVE_MAX_BPR_PER_ORDER"),

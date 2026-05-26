@@ -29,6 +29,7 @@ live:
   auto_submit_exits: true
   match_gate_mode: strict
   candidate_filter_mode: strict
+  min_entry_legs: 2
   max_new_positions_per_plan: 1
   max_new_plans_per_day: 2
   max_bpr_per_order: 2500

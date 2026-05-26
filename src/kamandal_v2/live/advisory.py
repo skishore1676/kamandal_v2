@@ -124,13 +124,16 @@ def _entry_approval_mode(config: dict[str, Any]) -> str:
 def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, config: dict[str, Any], portfolio: PortfolioState) -> None:
     live_cfg = config.get("live") or {}
     max_contracts = int((config.get("execution") or {}).get("max_contracts_per_order") or 1)
+    min_entry_legs = int(live_cfg.get("min_entry_legs") or 1)
     traded_ids = store.live_idea_ids_opened_since(_market_day_start())
     open_ids = store.open_live_idea_ids()
     for candidate in candidates:
         if not candidate.eligible:
             continue
         max_bpr = _candidate_bpr_cap(candidate, portfolio, live_cfg)
-        if any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs):
+        if len(candidate.legs) < min_entry_legs:
+            candidate.rejection_reason = f"live_leg_count_below_min:{len(candidate.legs)}<{min_entry_legs}"
+        elif any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs):
             candidate.rejection_reason = "live_contract_limit"
         elif candidate.idea_id in open_ids:
             candidate.rejection_reason = "live_idea_already_open"

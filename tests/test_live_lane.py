@@ -4,8 +4,8 @@ from datetime import date, timedelta
 
 from kamandal_v2.config import load_control
 from kamandal_v2.cli import _live_submit_requested
-from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PreflightResult, UniverseEntry
-from kamandal_v2.live.advisory import live_config, run_live_advisory_plan
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PortfolioState, PreflightResult, UniverseEntry
+from kamandal_v2.live.advisory import _live_candidate_policy, live_config, run_live_advisory_plan
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, _limit_price, build_close_ticket, build_open_ticket
@@ -106,6 +106,49 @@ def test_live_submit_auto_respects_global_and_lane_flags(monkeypatch) -> None:
 
     monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT", "0")
     assert _live_submit_requested(config, args, close=False) is False
+
+
+def test_live_policy_blocks_single_leg_entries_when_min_entry_legs_is_two(tmp_path) -> None:
+    candidate = Candidate(
+        candidate_id="cand",
+        idea_id="idea",
+        underlying="AMZN",
+        playbook_id="long_call_directional",
+        structure="long_call",
+        legs=[
+            OptionLeg(
+                role="long_call",
+                side="buy",
+                option_type="call",
+                strike=265,
+                expiration="2026-08-21",
+                quantity=1,
+                mid=18.75,
+                bid=18.55,
+                ask=18.95,
+                delta=0.5,
+                gamma=0.0,
+                theta=0.0,
+                vega=0.0,
+                open_interest=1000,
+            )
+        ],
+        net_credit=-18.75,
+        estimated_bpr=1875,
+        greeks=Greeks(),
+        liquidity_score=1.0,
+        score=1.0,
+        preflight=PreflightResult(ok=True, bpr=1875, message="ok", raw={"request": {}, "response": {"buyingPowerRequirement": "1875"}}),
+    )
+
+    _live_candidate_policy(
+        [candidate],
+        LocalStore(tmp_path / "kamandal.db"),
+        {"live": {"min_entry_legs": 2, "max_bpr_per_order": 2500}, "execution": {"max_contracts_per_order": 1}},
+        PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0),
+    )
+
+    assert candidate.rejection_reason == "live_leg_count_below_min:1<2"
 
 
 def test_live_can_warn_on_quality_filters_without_permissive_matching(tmp_path, monkeypatch) -> None:
