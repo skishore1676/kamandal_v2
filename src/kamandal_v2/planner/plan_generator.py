@@ -83,19 +83,123 @@ def _constraint_violation(plan: list[Candidate], portfolio: PortfolioState, max_
 
 
 def _score(plan: list[Candidate], portfolio: PortfolioState, control: dict) -> float:
+    return round(sum(_score_components(plan, portfolio, control).values()), 4)
+
+
+def _score_components(plan: list[Candidate], portfolio: PortfolioState, control: dict) -> dict[str, float]:
     total_bpr = sum(candidate.estimated_bpr for candidate in plan)
     greeks = _plan_greeks(plan)
     after_delta = portfolio.greeks.delta + greeks.delta
-    bpr_pct = (portfolio.bpr_used + total_bpr) / max(portfolio.account_size, 1.0) * 100
-    target_bpr = float(((control.get("portfolio") or {}).get("target_max_bpr_utilization_pct") or 90))
-    bpr_fit = max(0.0, 1.0 - abs(target_bpr - bpr_pct) / max(target_bpr, 1.0))
-    delta_fit = max(0.0, 1.0 - abs(after_delta + 5.0) / 50.0)
-    theta_gain = max(greeks.theta, 0.0)
-    gamma_penalty = abs(greeks.gamma)
+    delta_fit = _delta_fit_score(after_delta, portfolio, control)
+    theta_capture = _theta_capture_score(greeks.theta, total_bpr)
+    volatility_capture = sum(_volatility_capture_score(candidate) for candidate in plan) / max(len(plan), 1)
     diversification = len({candidate.underlying for candidate in plan}) / max(len(plan), 1)
     liquidity = sum(candidate.liquidity_score for candidate in plan) / max(len(plan), 1)
-    candidate_quality = sum(candidate.score for candidate in plan) / max(len(plan), 1)
-    return round(candidate_quality + bpr_fit * 30 + delta_fit * 20 + theta_gain * 5 + diversification * 10 + liquidity * 10 - gamma_penalty * 10, 4)
+    thesis_quality = sum(candidate.score for candidate in plan) / max(len(plan), 1)
+    gamma_penalty = _gamma_stress_penalty(greeks.gamma)
+    concentration_penalty = _concentration_penalty(plan, portfolio)
+    slippage_penalty = _slippage_penalty(plan)
+    return {
+        "delta_fit": delta_fit,
+        "theta_capture": theta_capture,
+        "volatility_capture": volatility_capture,
+        "liquidity": liquidity * 12.0,
+        "diversification": diversification * 4.0,
+        "thesis_quality": thesis_quality * 0.35,
+        "gamma_stress_penalty": -gamma_penalty,
+        "concentration_penalty": -concentration_penalty,
+        "slippage_penalty": -slippage_penalty,
+    }
+
+
+def _delta_fit_score(after_delta: float, portfolio: PortfolioState, control: dict) -> float:
+    portfolio_cfg = control.get("portfolio") or {}
+    account_units = max(portfolio.account_size, 1.0) / 1000.0
+    raw_target = portfolio_cfg.get("target_delta")
+    if raw_target not in (None, ""):
+        target_delta = float(raw_target)
+    else:
+        bias = str(portfolio_cfg.get("delta_bias") or "slightly_negative").lower()
+        if bias in {"slightly_negative", "negative"}:
+            target_delta = -0.5 * account_units
+        elif bias in {"slightly_positive", "positive"}:
+            target_delta = 0.5 * account_units
+        else:
+            target_delta = 0.0
+    raw_band = portfolio_cfg.get("delta_band")
+    band = float(raw_band) if raw_band not in (None, "") else max(5.0, 2.5 * account_units)
+    return max(0.0, 25.0 * (1.0 - abs(after_delta - target_delta) / max(band, 1.0)))
+
+
+def _theta_capture_score(theta: float, total_bpr: float) -> float:
+    theta_dollars_per_day = theta * 100.0
+    theta_per_1k_bpr = theta_dollars_per_day / max(total_bpr / 1000.0, 0.001)
+    if theta_per_1k_bpr >= 0:
+        return min(theta_per_1k_bpr * 4.0, 35.0)
+    return max(theta_per_1k_bpr * 8.0, -45.0)
+
+
+def _volatility_capture_score(candidate: Candidate) -> float:
+    iv_context = _candidate_iv_context(candidate)
+    if iv_context is None:
+        iv_context = 50.0
+    vega = candidate.greeks.vega
+    credit_yield = max(candidate.net_credit, 0.0) * 100.0 / max(candidate.estimated_bpr, 1.0)
+    short_vol_structures = {"short_put", "put_spread", "call_spread", "iron_condor", "short_strangle", "jade_lizard"}
+    long_vol_structures = {"call_calendar", "put_calendar", "put_diagonal", "call_diagonal", "long_call", "long_put"}
+    if candidate.structure in short_vol_structures or vega < 0:
+        return min((iv_context / 100.0) * 24.0 + min(credit_yield * 8.0, 8.0), 32.0)
+    if candidate.structure in long_vol_structures or vega > 0:
+        return min(((100.0 - iv_context) / 100.0) * 12.0, 12.0)
+    return 4.0
+
+
+def _candidate_iv_context(candidate: Candidate) -> float | None:
+    values = [
+        _reason_float(candidate, "iv_pct="),
+        _reason_float(candidate, "iv_rank="),
+    ]
+    values = [value for value in values if value is not None]
+    if not values:
+        return None
+    return max(0.0, min(100.0, max(values)))
+
+
+def _reason_float(candidate: Candidate, prefix: str) -> float | None:
+    for reason in candidate.reasons:
+        if reason.startswith(prefix):
+            try:
+                return float(reason[len(prefix):])
+            except ValueError:
+                return None
+    return None
+
+
+def _gamma_stress_penalty(gamma: float) -> float:
+    return min(abs(gamma) * 500.0, 30.0)
+
+
+def _concentration_penalty(plan: list[Candidate], portfolio: PortfolioState) -> float:
+    total_after = portfolio.bpr_used + sum(candidate.estimated_bpr for candidate in plan)
+    if total_after <= 0:
+        return 0.0
+    by_underlying: dict[str, float] = dict(portfolio.per_underlying_bpr)
+    for candidate in plan:
+        by_underlying[candidate.underlying] = by_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
+    max_share = max(by_underlying.values(), default=0.0) / total_after
+    return max(0.0, (max_share - 0.35) * 30.0)
+
+
+def _slippage_penalty(plan: list[Candidate]) -> float:
+    penalties = []
+    for candidate in plan:
+        spreads = [
+            (leg.ask - leg.bid) / max(leg.mid, 0.01)
+            for leg in candidate.legs
+        ]
+        penalties.append(sum(spreads) / max(len(spreads), 1))
+    avg_spread_pct = sum(penalties) / max(len(penalties), 1)
+    return min(avg_spread_pct * 20.0, 20.0)
 
 
 def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState, control: dict) -> Plan:
@@ -124,7 +228,7 @@ def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState,
         buying_power_after=after.buying_power,
         portfolio_before=portfolio,
         portfolio_after=after,
-        reasons=_reasons(plan, greeks, total_bpr),
+        reasons=_reasons(plan, greeks, total_bpr, _score_components(plan, portfolio, control)),
         blocked_by=[],
         operator_action=operator_action,
     )
@@ -144,11 +248,13 @@ def _after_underlying_bpr(portfolio: PortfolioState, plan: list[Candidate]) -> d
     return result
 
 
-def _reasons(plan: list[Candidate], greeks: Greeks, total_bpr: float) -> list[str]:
+def _reasons(plan: list[Candidate], greeks: Greeks, total_bpr: float, score_components: dict[str, float]) -> list[str]:
     return [
         f"{len(plan)} trades",
         f"bpr={total_bpr:.2f}",
         f"delta_change={greeks.delta:.2f}",
         f"theta_change={greeks.theta:.2f}",
+        f"vega_change={greeks.vega:.2f}",
+        "score_components=" + ",".join(f"{key}:{value:.2f}" for key, value in score_components.items()),
         f"underlyings={','.join(candidate.underlying for candidate in plan)}",
     ]

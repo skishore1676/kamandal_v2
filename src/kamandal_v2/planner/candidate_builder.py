@@ -602,8 +602,21 @@ def _estimate_bpr(structure: str, legs: list[OptionLeg], net_credit: float) -> f
 
 def _candidate_score(candidate: Candidate, *, thesis_fit: float = 0.0) -> float:
     credit_yield = max(candidate.net_credit, 0.0) * 100 / max(candidate.estimated_bpr, 1.0)
-    theta = candidate.greeks.theta
-    return round(credit_yield * 35 + candidate.liquidity_score * 25 + theta * 3 + thesis_fit - abs(candidate.greeks.gamma) * 5, 4)
+    theta_dollars_per_day = candidate.greeks.theta * 100.0
+    theta_per_1k_bpr = theta_dollars_per_day / max(candidate.estimated_bpr / 1000.0, 0.001)
+    if theta_per_1k_bpr >= 0:
+        theta_score = min(theta_per_1k_bpr * 3.0, 25.0)
+    else:
+        theta_score = max(theta_per_1k_bpr * 6.0, -35.0)
+    gamma_penalty = min(abs(candidate.greeks.gamma) * 250.0, 20.0)
+    return round(
+        thesis_fit
+        + credit_yield * 20.0
+        + candidate.liquidity_score * 15.0
+        + theta_score
+        - gamma_penalty,
+        4,
+    )
 
 
 def _select_diverse_candidates(candidates: list[Candidate], limit: int) -> list[Candidate]:
