@@ -13,6 +13,7 @@ from typing import Any, Sequence
 import requests
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, OptionLeg, OptionQuote, PortfolioState, PreflightResult, utc_now
+from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_price_metadata
 from kamandal_v2.paths import resolve_path
 
 
@@ -40,6 +41,7 @@ def parse_occ_symbol(symbol: str) -> dict[str, Any]:
 
 class PublicAdapter:
     def __init__(self, config: dict[str, Any], *, expiration_dates: Sequence[str] | None = None) -> None:
+        self._config = config
         public_cfg = ((config.get("broker") or {}).get("public") or {})
         self.secret_token = str(public_cfg.get("secret_token") or "")
         self.api_base_url = str(public_cfg.get("api_base_url") or "https://api.public.com").rstrip("/")
@@ -128,11 +130,16 @@ class PublicAdapter:
                 payload,
             )
             bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
-            return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="Public preflight ok", raw={"request": payload, "response": response})
+            return PreflightResult(
+                ok=True,
+                bpr=round(abs(bpr), 2),
+                message="Public preflight ok",
+                raw={"request": payload, "response": response, "entry_pricing": entry_price_metadata(candidate, self._config)},
+            )
         except Exception as exc:  # noqa: BLE001
             if _is_nickel_increment_rejection(exc):
                 retry_payload = dict(payload)
-                retry_payload["limitPrice"] = _candidate_nickel_limit_price(candidate)
+                retry_payload["limitPrice"] = candidate_entry_limit_price(candidate, self._config, nickel=True)
                 try:
                     response = self._post(
                         f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
@@ -143,7 +150,12 @@ class PublicAdapter:
                         ok=True,
                         bpr=round(abs(bpr), 2),
                         message="Public preflight ok after nickel tick retry",
-                        raw={"request": retry_payload, "response": response, "retry_reason": str(exc)},
+                        raw={
+                            "request": retry_payload,
+                            "response": response,
+                            "retry_reason": str(exc),
+                            "entry_pricing": entry_price_metadata(candidate, self._config),
+                        },
                     )
                 except Exception as retry_exc:  # noqa: BLE001
                     return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"Public preflight failed: {retry_exc}", raw={"source": "public", "first_error": str(exc)})
@@ -187,7 +199,7 @@ class PublicAdapter:
 
     def _order_payload(self, candidate: Candidate) -> dict[str, Any]:
         quantity = "1"
-        limit_price = _candidate_raw_limit_price(candidate)
+        limit_price = candidate_entry_limit_price(candidate, self._config)
         if len(candidate.legs) == 1:
             leg = candidate.legs[0]
             return {

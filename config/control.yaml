@@ -41,6 +41,13 @@ live:
     strangle: 2500
   max_bpr_per_underlying_pct: 55
   preflight_max_age_minutes: 10
+  entry_pricing:
+    mode: improved_mid       # improved_mid | mid | disabled
+    improvement_pct_of_spread: 10
+    min_improvement: 0.01
+    max_improvement: 0.10
+    apply_to_credit: true    # sell/credit entries ask for more credit than mid
+    apply_to_debit: true     # buy/debit entries bid below mid
   allow_same_day_exits: false
   allow_same_day_exits_after: 2026-06-06
 
