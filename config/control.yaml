@@ -81,8 +81,8 @@ broker:
     api_burst_limit: 5
     require_preflight: true
     option_chain_start_dte: 21
-    option_chain_end_dte: 90
-    option_chain_max_expirations: 8
+    option_chain_end_dte: 140
+    option_chain_max_expirations: 12
   tastytrade:
     api_base_url: https://api.tastytrade.com
     client_id: ""
