@@ -53,6 +53,12 @@ live:
     profit_target_trigger_pct: 95
     min_profit_to_trigger: 5
     require_fresh_quotes: true
+  telegram_approval:
+    enabled: true
+    target: "5425926875"
+    account: ""
+    expiry_minutes: 8
+    max_pending_requests: 3
   allow_same_day_exits: false
   allow_same_day_exits_after: 2026-06-06
 

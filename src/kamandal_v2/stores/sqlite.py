@@ -162,6 +162,20 @@ class LocalStore:
                     quote_fresh INTEGER NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS live_approval_requests (
+                    request_id TEXT PRIMARY KEY,
+                    ticket_hash TEXT NOT NULL,
+                    plan_id TEXT,
+                    candidate_id TEXT,
+                    idea_id TEXT,
+                    underlying TEXT,
+                    structure TEXT,
+                    status TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    payload TEXT NOT NULL
+                );
                 """
             )
             self._ensure_shadow_fill_columns(conn)
@@ -627,6 +641,74 @@ class LocalStore:
                     int(bool(payload.get("quote_fresh"))),
                     json.dumps(payload, sort_keys=True),
                 ),
+            )
+
+    def save_live_approval_request(self, request: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO live_approval_requests
+                (request_id, ticket_hash, plan_id, candidate_id, idea_id, underlying, structure,
+                 status, expires_at, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                """,
+                (
+                    str(request["request_id"]),
+                    str(request["ticket_hash"]),
+                    str(request.get("plan_id") or ""),
+                    str(request.get("candidate_id") or ""),
+                    str(request.get("idea_id") or ""),
+                    str(request.get("underlying") or ""),
+                    str(request.get("structure") or ""),
+                    str(request.get("status") or "pending"),
+                    str(request["expires_at"]),
+                    json.dumps(request, sort_keys=True),
+                ),
+            )
+
+    def live_approval_request(self, request_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, payload FROM live_approval_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        payload["_ledger_status"] = row["status"]
+        return payload
+
+    def live_approval_requests_by_status(self, statuses: set[str]) -> list[dict[str, Any]]:
+        if not statuses:
+            return []
+        placeholders = ",".join("?" for _ in statuses)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT status, payload FROM live_approval_requests WHERE status IN ({placeholders})",
+                tuple(sorted(statuses)),
+            ).fetchall()
+        requests = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["_ledger_status"] = row["status"]
+            requests.append(payload)
+        return requests
+
+    def update_live_approval_request_status(self, request_id: str, status: str, payload_updates: dict[str, Any] | None = None) -> None:
+        existing = self.live_approval_request(request_id)
+        payload = dict(existing or {})
+        payload.pop("_ledger_status", None)
+        if payload_updates:
+            payload.update(payload_updates)
+        payload["status"] = status
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE live_approval_requests
+                SET status = ?, updated_at = CURRENT_TIMESTAMP, payload = ?
+                WHERE request_id = ?
+                """,
+                (status, json.dumps(payload, sort_keys=True), request_id),
             )
 
     def event(self, event_type: str, payload: dict[str, Any]) -> None:

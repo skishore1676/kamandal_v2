@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.domain.models import Candidate, PortfolioState
+from kamandal_v2.live.approval import create_live_approval_request
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.engine import PlanRunResult, run_plan
@@ -109,13 +110,18 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
         row["operator_action"] = APPROVE_LIVE if entry_mode == "auto_top_plan" and index == 0 else ""
         row["plan_metrics_json"] = json.dumps(metrics, sort_keys=True)
         row["plan_detail_json"] = json.dumps(detail, sort_keys=True)
+        if entry_mode == "telegram_approval" and index == 0:
+            request = create_live_approval_request(config, row=row, plan=plan, candidate=candidate, ticket=ticket, store=store)
+            detail["live_approval_request_id"] = request["request_id"]
+            detail["live_gate_status"] = "telegram_pending"
+            row["plan_detail_json"] = json.dumps(detail, sort_keys=True)
         rows[index] = [row.get(column, "") for column in DAILY_PLAN_HEADER]
     return rows
 
 
 def _entry_approval_mode(config: dict[str, Any]) -> str:
     raw = str(((config.get("live") or {}).get("entry_approval_mode") or "sheet_approval")).strip().lower()
-    allowed = {"sheet_approval", "auto_top_plan", "disabled"}
+    allowed = {"sheet_approval", "auto_top_plan", "telegram_approval", "disabled"}
     if raw not in allowed:
         raise ValueError(f"unsupported live.entry_approval_mode={raw!r}; expected one of {sorted(allowed)}")
     return raw

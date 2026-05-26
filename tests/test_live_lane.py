@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from kamandal_v2.config import load_control
 from kamandal_v2.cli import _live_submit_requested
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PortfolioState, PreflightResult, UniverseEntry
+from kamandal_v2.live.approval import approve_live_request, expire_live_approval_requests, send_pending_live_approval_requests
 from kamandal_v2.live.advisory import _live_candidate_policy, live_config, run_live_advisory_plan
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill
 from kamandal_v2.live.management import run_live_management_plan
@@ -86,6 +87,8 @@ def test_live_approval_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_LIVE_EXIT_APPROVAL_MODE", "auto_rules")
     monkeypatch.setenv("KAMANDAL_LIVE_AUTO_SUBMIT_ENTRIES", "true")
     monkeypatch.setenv("KAMANDAL_LIVE_AUTO_SUBMIT_EXITS", "false")
+    monkeypatch.setenv("KAMANDAL_TELEGRAM_APPROVAL_TARGET", "123")
+    monkeypatch.setenv("KAMANDAL_TELEGRAM_APPROVAL_EXPIRY_MINUTES", "7")
 
     control = load_control()
 
@@ -93,6 +96,8 @@ def test_live_approval_env_overrides(monkeypatch) -> None:
     assert control["live"]["exit_approval_mode"] == "auto_rules"
     assert control["live"]["auto_submit_entries"] is True
     assert control["live"]["auto_submit_exits"] is False
+    assert control["live"]["telegram_approval"]["target"] == "123"
+    assert control["live"]["telegram_approval"]["expiry_minutes"] == 7
 
 
 def test_live_submit_auto_respects_global_and_lane_flags(monkeypatch) -> None:
@@ -420,6 +425,157 @@ def test_live_advisory_auto_top_plan_sets_sheet_approval(tmp_path, monkeypatch) 
     row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
 
     assert row["operator_action"] == APPROVE_LIVE
+
+
+def test_live_advisory_telegram_mode_creates_pending_request_without_sheet_approval(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    control = _live_control()
+    control["live"]["entry_approval_mode"] = "telegram_approval"
+    control["live"]["telegram_approval"]["enabled"] = False
+    store = LocalStore(tmp_path / "kamandal.db")
+
+    result = run_live_advisory_plan(
+        control,
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    detail = json.loads(row["plan_detail_json"])
+    requests = store.live_approval_requests_by_status({"pending"})
+
+    assert row["operator_action"] == ""
+    assert detail["live_gate_status"] == "telegram_pending"
+    assert detail["live_approval_request_id"]
+    assert len(requests) == 1
+    assert requests[0]["request_id"] == detail["live_approval_request_id"]
+    assert requests[0]["ticket_hash"] == detail["order_ticket_json"]["ticket_hash"]
+    assert "Approve: approve" in requests[0]["message"]
+
+
+def test_approve_live_request_updates_matching_sheet_row(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    control = _live_control()
+    control["live"]["entry_approval_mode"] = "telegram_approval"
+    control["live"]["telegram_approval"]["enabled"] = False
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        control,
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    request = store.live_approval_requests_by_status({"pending"})[0]
+    written = {}
+
+    class FakeSheetClient:
+        @classmethod
+        def from_config(cls, _config):
+            return cls()
+
+        def read_tab(self, _title):
+            return [dict(row)]
+
+        def replace_tab(self, title, *, header, rows):
+            written["title"] = title
+            written["header"] = header
+            written["rows"] = rows
+            return len(rows)
+
+    monkeypatch.setattr("kamandal_v2.live.approval.GoogleSheetClient", FakeSheetClient)
+
+    approved = approve_live_request(control, request["request_id"], source="telegram", store=store)
+
+    updated_row = dict(zip(DAILY_PLAN_HEADER, written["rows"][0], strict=False))
+    assert approved["status"] == "approved"
+    assert updated_row["operator_action"] == APPROVE_LIVE
+    assert "approved via telegram" in updated_row["operator_notes"]
+    assert updated_row["plan_status"] == "telegram_approved"
+    assert store.live_approval_request(request["request_id"])["_ledger_status"] == "approved"
+
+
+def test_expire_live_approval_requests_marks_old_pending_request(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    request = {
+        "request_id": "KAM-OLD",
+        "ticket_hash": "hash",
+        "plan_id": "plan",
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "underlying": "TSLA",
+        "structure": "call_spread",
+        "status": "pending",
+        "expires_at": "2020-01-01T00:00:00Z",
+    }
+    store.save_live_approval_request(request)
+
+    result = expire_live_approval_requests(store=store)
+
+    assert result["expired"] == 1
+    assert store.live_approval_request("KAM-OLD")["_ledger_status"] == "expired"
+
+
+def test_send_pending_live_approval_requests_sends_unsent_pending_request(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    request = {
+        "request_id": "KAM-SEND",
+        "ticket_hash": "hash",
+        "plan_id": "plan",
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "underlying": "TSLA",
+        "structure": "call_spread",
+        "status": "pending",
+        "expires_at": (date.today() + timedelta(days=1)).isoformat() + "T00:00:00Z",
+        "message": "Kamandal live approval\n\nKAM-SEND",
+    }
+    sent = []
+    store.save_live_approval_request(request)
+    monkeypatch.setattr("kamandal_v2.live.approval.send_live_approval_message", lambda _config, message: sent.append(message))
+
+    result = send_pending_live_approval_requests(_live_control(), store=store)
+
+    updated = store.live_approval_request("KAM-SEND")
+    assert result["sent"] == 1
+    assert sent == ["Kamandal live approval\n\nKAM-SEND"]
+    assert updated["_ledger_status"] == "pending"
+    assert updated["sent_at"]
+
+
+def test_live_advisory_records_telegram_send_failure_without_blocking_sheet_row(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    control = _live_control()
+    control["live"]["entry_approval_mode"] = "telegram_approval"
+    control["live"]["telegram_approval"]["enabled"] = True
+    store = LocalStore(tmp_path / "kamandal.db")
+
+    def fail_send(_config, _message):
+        raise RuntimeError("telegram unavailable")
+
+    monkeypatch.setattr("kamandal_v2.live.approval.send_live_approval_message", fail_send)
+
+    result = run_live_advisory_plan(
+        control,
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    request = store.live_approval_requests_by_status({"pending"})[0]
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    assert row["operator_action"] == ""
+    assert request["send_error"] == "telegram unavailable"
 
 
 def test_live_execute_approved_dry_run_uses_sheet_gate(tmp_path, monkeypatch) -> None:

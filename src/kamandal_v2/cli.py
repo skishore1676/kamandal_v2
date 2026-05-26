@@ -16,6 +16,13 @@ from kamandal_v2.intelligence.reviewer import review_rejections
 from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, fetch_youtube_transcript, import_transcripts, scrape_youtube_smoke
 from kamandal_v2.intelligence.x_bookmarks import import_x_bookmarks
 from kamandal_v2.intelligence.x_digest import import_x_digest
+from kamandal_v2.live.approval import (
+    approve_live_request,
+    expire_live_approval_requests,
+    live_approval_status,
+    reject_live_request,
+    send_pending_live_approval_requests,
+)
 from kamandal_v2.live.advisory import run_live_advisory_plan
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill, sync_live_orders
 from kamandal_v2.live.management import run_live_management_plan
@@ -62,6 +69,18 @@ def main() -> None:
     live_close_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_exits are enabled")
     subparsers.add_parser("sync-live-orders", help="Poll active broker order status for submitted live orders")
     subparsers.add_parser("cleanup-live-approvals", help="Clear stale live approval cells after submit/fill/failure")
+    approve_request_parser = subparsers.add_parser("approve-live-request", help="Approve a pending Telegram live request and update daily_plan")
+    approve_request_parser.add_argument("--request-id", required=True)
+    approve_request_parser.add_argument("--source", default="manual")
+    approve_request_parser.add_argument("--approved-by", default="Suman")
+    reject_request_parser = subparsers.add_parser("reject-live-request", help="Reject a pending Telegram live request")
+    reject_request_parser.add_argument("--request-id", required=True)
+    reject_request_parser.add_argument("--reason", required=True)
+    reject_request_parser.add_argument("--source", default="manual")
+    reject_request_parser.add_argument("--rejected-by", default="Suman")
+    subparsers.add_parser("send-live-approval-requests", help="Send unsent pending Telegram live approval requests")
+    subparsers.add_parser("expire-live-approval-requests", help="Expire stale pending Telegram live requests")
+    subparsers.add_parser("live-approval-status", help="Show live Telegram approval request status")
     manual_fill_parser = subparsers.add_parser("record-manual-live-fill", help="Record a manually filled live order ticket")
     manual_fill_parser.add_argument("--ticket-hash", required=True)
     live_manage_parser = subparsers.add_parser("live-management-plan", help="Build strict live close advisory rows")
@@ -268,6 +287,21 @@ def main() -> None:
         return
     if args.command == "cleanup-live-approvals":
         print(json.dumps(cleanup_live_approvals(config), indent=2))
+        return
+    if args.command == "approve-live-request":
+        print(json.dumps(approve_live_request(config, args.request_id, source=args.source, approved_by=args.approved_by), indent=2))
+        return
+    if args.command == "reject-live-request":
+        print(json.dumps(reject_live_request(args.request_id, reason=args.reason, source=args.source, rejected_by=args.rejected_by), indent=2))
+        return
+    if args.command == "send-live-approval-requests":
+        print(json.dumps(send_pending_live_approval_requests(config), indent=2))
+        return
+    if args.command == "expire-live-approval-requests":
+        print(json.dumps(expire_live_approval_requests(), indent=2))
+        return
+    if args.command == "live-approval-status":
+        print(json.dumps(live_approval_status(), indent=2))
         return
     if args.command == "record-manual-live-fill":
         print(json.dumps(record_manual_live_fill(args.ticket_hash), indent=2))
