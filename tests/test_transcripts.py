@@ -1,6 +1,9 @@
+from types import SimpleNamespace
+
 import yaml
 
-from kamandal_v2.intelligence.transcripts import import_transcripts
+from kamandal_v2.intelligence import transcripts as transcript_module
+from kamandal_v2.intelligence.transcripts import fetch_youtube_transcript_ytdlp, import_transcripts
 
 
 def test_local_transcript_import_writes_digest_and_ideas(tmp_path) -> None:
@@ -109,3 +112,30 @@ def test_transcript_import_recurses_and_filters_symbols(tmp_path) -> None:
     assert result.idea_count == 1
     assert result.skipped_symbol_count == 1
     assert payload["ideas"][0]["underlying"] == "TSLA"
+
+
+def test_ytdlp_fetch_passes_node_js_runtime_when_available(tmp_path, monkeypatch) -> None:
+    captured = {}
+
+    def fake_which(name: str) -> str | None:
+        return {
+            "yt-dlp": "/usr/local/bin/yt-dlp",
+            "node": "/usr/local/opt/node@22/bin/node",
+        }.get(name)
+
+    def fake_run(args, **_kwargs):
+        captured["args"] = list(args)
+        (tmp_path / "youtube_ABC123.en.vtt").write_text(
+            "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nAMZN trade setup.\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(transcript_module.shutil, "which", fake_which)
+    monkeypatch.setattr(transcript_module.subprocess, "run", fake_run)
+
+    path = fetch_youtube_transcript_ytdlp("ABC123", transcript_dir=tmp_path, archive_file=tmp_path / "archive.txt")
+
+    assert path.read_text(encoding="utf-8") == "AMZN trade setup.\n"
+    assert "--js-runtimes" in captured["args"]
+    assert "node:/usr/local/opt/node@22/bin/node" in captured["args"]

@@ -449,6 +449,7 @@ def fetch_youtube_transcript_ytdlp(
     ]
     if executable is None:
         args.extend(["-m", "yt_dlp"])
+    node_runtime = shutil.which("node")
     args.extend([
         "--skip-download",
         "--write-subs",
@@ -466,8 +467,10 @@ def fetch_youtube_transcript_ytdlp(
         "--no-progress",
         "--output",
         output_template,
-        f"https://www.youtube.com/watch?v={video_id}",
     ])
+    if node_runtime:
+        args.extend(["--js-runtimes", f"node:{node_runtime}"])
+    args.append(f"https://www.youtube.com/watch?v={video_id}")
     if cookies_from_browser:
         args.extend(["--cookies-from-browser", cookies_from_browser])
     result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=240)

@@ -27,6 +27,9 @@ run_youtube_extraction() {
   channel_scan_limit="${KAMANDAL_YOUTUBE_CHANNEL_SCAN_LIMIT:-20}"
   published_date="${KAMANDAL_YOUTUBE_PUBLISHED_DATE:-$today}"
   min_title_score="${KAMANDAL_YOUTUBE_MIN_TITLE_SCORE:-1}"
+  recent_fallback="${KAMANDAL_YOUTUBE_RECENT_FALLBACK:-true}"
+  recent_fallback_limit="${KAMANDAL_YOUTUBE_RECENT_FALLBACK_LIMIT:-5}"
+  recent_fallback_scan_limit="${KAMANDAL_YOUTUBE_RECENT_FALLBACK_SCAN_LIMIT:-50}"
 
   mkdir -p "$transcript_dir" "$digest_dir" "$ideas_dir"
 
@@ -76,15 +79,20 @@ run_youtube_extraction() {
   fi
 
   IFS=',' read -r -a ids <<< "$raw_ids"
-  local fetched_count failed_count
+  local fetched_count failed_count attempted_ids
   fetched_count=0
   failed_count=0
+  attempted_ids=","
   for raw_id in "${ids[@]}"; do
     local video_id
     video_id="$(printf '%s' "$raw_id" | xargs)"
     if [[ -z "$video_id" ]]; then
       continue
     fi
+    if [[ "$attempted_ids" == *",$video_id,"* ]]; then
+      continue
+    fi
+    attempted_ids="${attempted_ids}${video_id},"
     log "Fetching YouTube transcript: $video_id"
     fetch_args=(
       fetch-youtube-transcript
@@ -106,6 +114,53 @@ run_youtube_extraction() {
       log "Transcript fetch failed for $video_id; continuing with remaining videos."
     fi
   done
+  if (( fetched_count == 0 )) && [[ "$recent_fallback" == "true" && -n "$channel_ids" && -n "$published_date" ]]; then
+    local fallback_file fallback_ids fallback_id
+    fallback_file="data/youtube_discovered_recent_$today.txt"
+    log "No same-day transcripts fetched; discovering recent channel videos without published-date filter."
+    "$KAMANDAL_BIN" list-youtube-channel-videos \
+      "${channel_args[@]}" \
+      --limit "$recent_fallback_limit" \
+      --scan-limit "$recent_fallback_scan_limit" \
+      --timezone "$KAMANDAL_MARKET_TZ" \
+      "${score_args[@]}" \
+      --include-keywords "${KAMANDAL_YOUTUBE_INCLUDE_KEYWORDS:-}" \
+      --exclude-keywords "${KAMANDAL_YOUTUBE_EXCLUDE_KEYWORDS:-}" \
+      --output "$fallback_file"
+    if [[ -s "$fallback_file" ]]; then
+      fallback_ids="$(paste -sd, - < "$fallback_file")"
+      IFS=',' read -r -a ids <<< "$fallback_ids"
+      for raw_id in "${ids[@]}"; do
+        fallback_id="$(printf '%s' "$raw_id" | xargs)"
+        if [[ -z "$fallback_id" || "$attempted_ids" == *",$fallback_id,"* ]]; then
+          continue
+        fi
+        attempted_ids="${attempted_ids}${fallback_id},"
+        log "Fetching fallback YouTube transcript: $fallback_id"
+        fetch_args=(
+          fetch-youtube-transcript
+          "--video-id=$fallback_id"
+          --transcript-dir "$transcript_dir"
+          --languages "$languages"
+          --provider "$provider"
+          --sleep-requests "$sleep_requests"
+          --sleep-subtitles "$sleep_subtitles"
+          --archive-file "$archive_file"
+        )
+        if [[ -n "$cookies_from_browser" ]]; then
+          fetch_args+=(--cookies-from-browser "$cookies_from_browser")
+        fi
+        if "$KAMANDAL_BIN" "${fetch_args[@]}"; then
+          fetched_count=$((fetched_count + 1))
+        else
+          failed_count=$((failed_count + 1))
+          log "Fallback transcript fetch failed for $fallback_id; continuing with remaining videos."
+        fi
+      done
+    else
+      log "Recent fallback discovery returned no videos."
+    fi
+  fi
   if (( fetched_count == 0 )); then
     log "No transcripts fetched successfully; failed_count=$failed_count."
     exit 1

@@ -95,3 +95,76 @@ def test_manage_shadow_positions_closes_profit_target(tmp_path) -> None:
         status, close_reason = conn.execute("SELECT status, close_reason FROM shadow_fills WHERE id = 'fill1'").fetchone()
     assert status == "closed"
     assert close_reason == "profit_target"
+
+
+def test_shadow_mark_uses_live_debit_position_math(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    expiration = (date.today() + timedelta(days=90)).isoformat()
+    payload = {
+        "fill_id": "fill_debit",
+        "plan_run_id": "run1",
+        "plan_id": "plan1",
+        "candidate_id": "cand_debit",
+        "idea_id": "idea_debit",
+        "underlying": "AMZN",
+        "playbook_id": "long_call_directional",
+        "structure": "long_call",
+        "net_credit": -10.0,
+        "estimated_bpr": 1000.0,
+        "legs": [
+            {"side": "buy", "quantity": 1, "expiration": expiration, "option_type": "call", "strike": 100.0},
+        ],
+    }
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO shadow_fills
+            (id, plan_run_id, plan_id, candidate_id, idea_id, underlying, playbook_id, structure,
+             net_credit, estimated_bpr, delta, gamma, theta, vega, status, opened_at, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+            """,
+            (
+                "fill_debit",
+                "run1",
+                "plan1",
+                "cand_debit",
+                "idea_debit",
+                "AMZN",
+                "long_call_directional",
+                "long_call",
+                -10.0,
+                1000.0,
+                0.5,
+                0.01,
+                -0.02,
+                0.1,
+                date.today().isoformat() + " 09:30:00",
+                json.dumps(payload),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO chain_snapshots VALUES (?, ?, ?)",
+            (
+                "chain_debit",
+                "AMZN",
+                json.dumps({
+                    "captured_at": "2026-05-26T14:00:00Z",
+                    "underlying": "AMZN",
+                    "underlying_price": 110.0,
+                    "quotes": [
+                        {"expiration": expiration, "option_type": "call", "strike": 100.0, "bid": 14.7, "ask": 15.3},
+                    ],
+                }),
+            ),
+        )
+
+    mark = mark_shadow_portfolio(store)
+    row = mark["rows"][0]
+
+    assert row["entry_kind"] == "debit"
+    assert row["entry_credit"] == -1000.0
+    assert row["entry_value"] == 1000.0
+    assert row["target_profit"] == 500.0
+    assert row["target_close_net"] == 1500.0
+    assert row["mid_pnl"] == 500.0
+    assert row["pnl_pct_of_entry_value"] == 50.0
