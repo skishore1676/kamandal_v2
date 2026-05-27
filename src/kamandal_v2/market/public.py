@@ -62,12 +62,14 @@ class PublicAdapter:
         self._require_available()
         account_id = self._account_id()
         payload = self._get(f"/userapigateway/trading/{account_id}/portfolio/v2")
-        buying_power = _find_number(payload, ("optionsBuyingPower", "buyingPower", "cashOnlyBuyingPower"), default=0.0)
-        account_size = _find_number(payload, ("netLiquidationValue", "equityValue", "accountValue"), default=buying_power)
-        if account_size <= 0 and buying_power <= 0:
+        buying_power_raw = _find_optional_number(payload, ("optionsBuyingPower", "buyingPower", "cashOnlyBuyingPower"))
+        account_size_raw = _find_optional_number(payload, ("netLiquidationValue", "equityValue", "accountValue"))
+        account_size = account_size_raw if account_size_raw is not None else _equity_total(payload)
+        buying_power = buying_power_raw if buying_power_raw is not None else account_size
+        if (account_size is None or account_size <= 0) and (buying_power is None or buying_power <= 0):
             raise RuntimeError("Public account payload did not include account size or buying power")
-        account_size = account_size or buying_power
-        buying_power = buying_power or account_size
+        account_size = float(account_size or buying_power or 0.0)
+        buying_power = float(buying_power if buying_power is not None else account_size)
         positions = _find_list(payload, ("positions", "optionPositions", "equityPositions"))
         return PortfolioState(
             account_size=account_size,
@@ -435,6 +437,40 @@ def _find_number(payload: dict[str, Any], keys: tuple[str, ...], *, default: flo
         elif isinstance(item, list):
             stack.extend(item)
     return default
+
+
+def _find_optional_number(payload: Any, keys: tuple[str, ...]) -> float | None:
+    stack: list[Any] = [payload]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key in keys:
+                if key in item:
+                    try:
+                        return float(str(item[key]).replace(",", ""))
+                    except (TypeError, ValueError):
+                        continue
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return None
+
+
+def _equity_total(payload: dict[str, Any]) -> float | None:
+    equity_rows = payload.get("equity")
+    if not isinstance(equity_rows, list):
+        return None
+    total = 0.0
+    found = False
+    for row in equity_rows:
+        if not isinstance(row, dict) or "value" not in row:
+            continue
+        try:
+            total += float(str(row["value"]).replace(",", ""))
+            found = True
+        except (TypeError, ValueError):
+            continue
+    return total if found else None
 
 
 def _candidate_raw_limit_price(candidate: Candidate) -> str:
