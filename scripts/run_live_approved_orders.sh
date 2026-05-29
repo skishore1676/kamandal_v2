@@ -19,7 +19,7 @@ run_live_approved_orders() {
   message="$(notify_live_execution_result "entry" "$result_file" || true)"
   rm -f "$result_file"
   if [[ -n "$message" ]]; then
-    send_telegram "$message"
+    send_telegram_receipt "$message"
   fi
   log "Syncing live order status."
   "$KAMANDAL_BIN" sync-live-orders

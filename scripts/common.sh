@@ -108,12 +108,24 @@ send_telegram() {
     return 0
   fi
   local message="$1"
-  local target="${KAMANDAL_TELEGRAM_TARGET:-5425926875}"
+  local target="${2:-${KAMANDAL_TELEGRAM_TARGET:-5425926875}}"
+  local account="${3:-${KAMANDAL_TELEGRAM_ACCOUNT:-}}"
   if ! command -v openclaw >/dev/null 2>&1; then
     log "openclaw unavailable; telegram not sent."
     return 0
   fi
-  openclaw message send --channel telegram --target "$target" --message "$message" --json >/dev/null 2>&1 || log "telegram send failed."
+  local command=(openclaw message send --channel telegram --target "$target" --message "$message" --json)
+  if [[ -n "$account" ]]; then
+    command+=(--account "$account")
+  fi
+  "${command[@]}" >/dev/null 2>&1 || log "telegram send failed."
+}
+
+send_telegram_receipt() {
+  local message="$1"
+  local target="${KAMANDAL_TELEGRAM_RECEIPT_TARGET:-${KAMANDAL_TELEGRAM_TARGET:-5425926875}}"
+  local account="${KAMANDAL_TELEGRAM_RECEIPT_ACCOUNT:-receipts}"
+  send_telegram "$message" "$target" "$account"
 }
 
 prepare_current_ideas_dir() {

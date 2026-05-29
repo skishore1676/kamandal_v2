@@ -122,6 +122,8 @@ def send_operator_review_message(config: dict[str, Any], request: dict[str, Any]
     presentation = _presentation_payload(request) if policy["use_inline_buttons"] else {}
     if presentation:
         command.extend(["--presentation", json.dumps(presentation, sort_keys=True)])
+    if policy["account"]:
+        command.extend(["--account", str(policy["account"])])
     completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
     payload = {
         "sent_at": _now(),

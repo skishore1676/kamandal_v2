@@ -23,7 +23,7 @@ run_live_management() {
   message="$(notify_live_execution_result "exit" "$result_file" || true)"
   rm -f "$result_file"
   if [[ -n "$message" ]]; then
-    send_telegram "$message"
+    send_telegram_receipt "$message"
   fi
   "$KAMANDAL_BIN" sync-live-orders
   "$KAMANDAL_BIN" cleanup-live-approvals

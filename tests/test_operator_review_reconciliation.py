@@ -70,7 +70,7 @@ def _config() -> dict:
                 "auto_retire_ghost_after_confirmations": True,
                 "block_management_on_open_issues": True,
             },
-            "operator_review": {"enabled": True, "target": "123", "use_inline_buttons": True, "text_fallback": True},
+            "operator_review": {"enabled": True, "target": "123", "account": "default", "use_inline_buttons": True, "text_fallback": True},
             "telegram_approval": {"target": "123"},
         },
         "broker": {"active": "public"},
@@ -113,6 +113,7 @@ def test_send_operator_review_uses_presentation_buttons(tmp_path, monkeypatch) -
 
     assert result["status"] == "sent"
     assert "--presentation" in calls[0]
+    assert calls[0][calls[0].index("--account") + 1] == "default"
     presentation = json.loads(calls[0][calls[0].index("--presentation") + 1])
     values = [button["value"] for button in presentation["blocks"][0]["buttons"]]
     assert f"kamandal:review:{request['request_id']}:retire_local" in values
