@@ -9,6 +9,8 @@ from kamandal_v2.intelligence.reviewer import review_rejections
 class _FakeExtractorClient:
     def chat_json(self, system_prompt: str, user_prompt: str):
         assert "Allowed thesis_tags" in system_prompt
+        assert "catalyst_horizon_days" in system_prompt
+        assert "trade_horizon_days" in system_prompt
         assert "put_spread_default" not in system_prompt
         assert "jade_lizard_high_iv" not in system_prompt
         return {
@@ -22,7 +24,8 @@ class _FakeExtractorClient:
                     "underlying": "TSLA",
                     "direction": "bearish",
                     "thesis_tags": ["overextended", "resistance_rejection"],
-                    "horizon_days": 14,
+                    "catalyst_horizon_days": 14,
+                    "trade_horizon_days": None,
                     "mentioned_strategy": "put_diagonal",
                     "extraction_confidence": "high",
                     "quote_evidence": "TSLA looks stretched here.",
@@ -93,6 +96,9 @@ def test_llm_extractor_writes_thesis_ideas_and_filters_universe(tmp_path) -> Non
     assert idea["underlying"] == "TSLA"
     assert idea["strategy_hint"] == ""
     assert idea["mentioned_strategy"] == "put_diagonal"
+    assert idea["horizon_days"] == 14
+    assert idea["catalyst_horizon_days"] == 14
+    assert idea["trade_horizon_days"] is None
     assert idea["extraction_confidence"] == "high"
     assert idea["idea_id"].endswith("_01")
     assert "&id" not in result.ideas_path.read_text(encoding="utf-8")

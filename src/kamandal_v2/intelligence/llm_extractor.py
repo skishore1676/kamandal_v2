@@ -129,7 +129,8 @@ Return JSON only:
       "underlying": "TSLA",
       "direction": "bullish|bearish|neutral|vol_up|vol_down",
       "thesis_tags": ["controlled_tag"],
-      "horizon_days": 14,
+      "catalyst_horizon_days": 14,
+      "trade_horizon_days": null,
       "mentioned_strategy": "put_spread|call_spread|short_strangle|jade_lizard|short_put|call_calendar|put_calendar|put_diagonal|call_diagonal|long_call|long_put|none",
       "extraction_confidence": "low|medium|high",
       "quote_evidence": "short direct transcript evidence under 25 words",
@@ -151,6 +152,8 @@ Rules:
 - Use medium confidence for clear ticker bias without a concrete setup.
 - Use high confidence only for explicit current setup, trade example, or strong ticker thesis.
 - Keep mentioned_strategy as a mention only. Do not force tags to fit the strategy.
+- catalyst_horizon_days is when the source expects the thesis/catalyst to matter; it is not option DTE.
+- Leave trade_horizon_days null unless the source explicitly discusses a trade holding period. Do not infer option DTE.
 - If no useful thesis exists, return "ideas": [].
 """
 
@@ -188,7 +191,8 @@ def _normalize_idea(raw: Any, *, transcript_file: Path, today: date, idea_index:
     confidence = str(raw.get("extraction_confidence") or raw.get("confidence") or "low").lower().strip()
     if confidence not in {"low", "medium", "high"}:
         confidence = "low"
-    horizon_days = _coerce_horizon(raw.get("horizon_days"))
+    catalyst_horizon_days = _coerce_horizon(raw.get("catalyst_horizon_days", raw.get("horizon_days")))
+    trade_horizon_days = _coerce_optional_horizon(raw.get("trade_horizon_days"))
     idea_id = f"{today.isoformat()}_{transcript_file.stem}_{underlying}_{idea_index:02d}"
     return {
         "idea_id": idea_id,
@@ -198,7 +202,9 @@ def _normalize_idea(raw: Any, *, transcript_file: Path, today: date, idea_index:
         "strategy_hint": "",
         "mentioned_strategy": mentioned_strategy,
         "thesis_tags": list(tags),
-        "horizon_days": horizon_days,
+        "horizon_days": catalyst_horizon_days,
+        "catalyst_horizon_days": catalyst_horizon_days,
+        "trade_horizon_days": trade_horizon_days,
         "confidence": confidence,
         "extraction_confidence": confidence,
         "quote_evidence": str(raw.get("quote_evidence") or "")[:300],
@@ -214,6 +220,12 @@ def _coerce_horizon(raw: Any) -> int:
     except (TypeError, ValueError):
         value = 45
     return max(1, min(value, 180))
+
+
+def _coerce_optional_horizon(raw: Any) -> int | None:
+    if raw in (None, "", "none", "null"):
+        return None
+    return _coerce_horizon(raw)
 
 
 def _safe_output_prefix(raw: str) -> str:

@@ -305,3 +305,56 @@ def test_match_diagnostics_explain_zero_playbook_match() -> None:
     assert diagnostics[0]["status"] == "no_playbook_match"
     assert "No playbook matched" in diagnostics[0]["summary"]
     assert diagnostics[0]["reason_counts"]["horizon_below_min:7<15"] == 1
+
+
+def test_llm_short_catalyst_horizon_uses_playbook_horizon_for_matching() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_tomorrow_short",
+        "source": "llm_transcript:x_timeline.txt",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 1,
+        "catalyst_horizon_days": 1,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+
+    candidates = build_candidates(
+        [idea],
+        universe,
+        [_playbook(applicable_horizon_min=15, applicable_horizon_max=45)],
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+    )
+
+    assert candidates
+    assert all("horizon_below_min" not in candidate.rejection_reason for candidate in candidates)
+    assert any(
+        "match_horizon_source=playbook_horizon_for_short_catalyst" in candidate.reasons
+        for candidate in candidates
+    )
+
+
+def test_explicit_trade_horizon_still_controls_matching() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_short_trade_horizon",
+        "source": "llm_transcript:x_timeline.txt",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 1,
+        "catalyst_horizon_days": 1,
+        "trade_horizon_days": 7,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+
+    diagnostics = diagnose_idea_matches(
+        [idea],
+        universe,
+        [_playbook(applicable_horizon_min=15)],
+        FixtureMarketDataProvider(),
+    )
+
+    assert diagnostics[0]["status"] == "no_playbook_match"
+    assert diagnostics[0]["reason_counts"]["horizon_below_min:7<15"] == 1
+    assert diagnostics[0]["match_context"]["trade_horizon_days"] == 7

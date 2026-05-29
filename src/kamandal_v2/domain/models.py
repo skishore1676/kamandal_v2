@@ -50,6 +50,8 @@ class Idea:
     mentioned_strategy: str = ""
     thesis_tags: list[str] = field(default_factory=list)
     horizon_days: int = 45
+    catalyst_horizon_days: int | None = None
+    trade_horizon_days: int | None = None
     confidence: str = ""
     extraction_confidence: str = ""
     quote_evidence: str = ""
@@ -73,6 +75,8 @@ class Idea:
             mentioned_strategy=str(payload.get("mentioned_strategy") or "").strip(),
             thesis_tags=list(tags),
             horizon_days=int(payload.get("horizon_days") or 45),
+            catalyst_horizon_days=_optional_int(payload.get("catalyst_horizon_days")),
+            trade_horizon_days=_optional_int(payload.get("trade_horizon_days")),
             confidence=str(payload.get("confidence") or ""),
             extraction_confidence=str(payload.get("extraction_confidence") or payload.get("confidence") or ""),
             quote_evidence=str(payload.get("quote_evidence") or ""),

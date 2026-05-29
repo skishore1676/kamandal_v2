@@ -25,6 +25,8 @@ SUPPORTED_STRUCTURES = {
     "jade_lizard",
 }
 
+SHORT_CATALYST_MAX_DAYS = 14
+
 PERMISSIVE_MATCH_GATE_PREFIXES = (
     "horizon_above_max:",
     "horizon_below_min:",
@@ -69,6 +71,9 @@ def build_candidates(
                 continue
             raw_candidates = _build_for_playbook(idea, playbook, chain.underlying_price, chain.quotes)
             for candidate in raw_candidates:
+                match_horizon, match_horizon_source = _match_horizon(idea, playbook)
+                candidate.reasons.append(f"match_horizon_days={match_horizon}")
+                candidate.reasons.append(f"match_horizon_source={match_horizon_source}")
                 result = validate_structure(candidate.structure, candidate.legs, chain.underlying_price)
                 if not result.valid:
                     candidate.rejection_reason = result.reason
@@ -159,6 +164,8 @@ def diagnose_idea_matches(
             "direction": idea.direction,
             "thesis_tags": list(idea.thesis_tags),
             "horizon_days": idea.horizon_days,
+            "catalyst_horizon_days": idea.catalyst_horizon_days,
+            "trade_horizon_days": idea.trade_horizon_days,
             "mentioned_strategy": idea.mentioned_strategy,
             "status": status,
             "matched_playbooks": matched,
@@ -170,6 +177,7 @@ def diagnose_idea_matches(
                 "iv_abs": iv_abs,
                 "event_status": event_status,
             },
+            "match_context": _match_context(idea),
             "playbooks": playbook_rows,
         })
     return diagnostics
@@ -223,10 +231,11 @@ def _match_rejections(
     if playbook.strategy_family == "narrative_ignition" or playbook.playbook_id.startswith("narrative_ignition"):
         if "structural_break:pass" not in idea.notes:
             reasons.append("structural_break_gate_blocked")
-    if playbook.applicable_horizon_min is not None and idea.horizon_days < playbook.applicable_horizon_min:
-        reasons.append(f"horizon_below_min:{idea.horizon_days}<{playbook.applicable_horizon_min}")
-    if playbook.applicable_horizon_max is not None and idea.horizon_days > playbook.applicable_horizon_max:
-        reasons.append(f"horizon_above_max:{idea.horizon_days}>{playbook.applicable_horizon_max}")
+    match_horizon, _source = _match_horizon(idea, playbook)
+    if playbook.applicable_horizon_min is not None and match_horizon < playbook.applicable_horizon_min:
+        reasons.append(f"horizon_below_min:{match_horizon}<{playbook.applicable_horizon_min}")
+    if playbook.applicable_horizon_max is not None and match_horizon > playbook.applicable_horizon_max:
+        reasons.append(f"horizon_above_max:{match_horizon}>{playbook.applicable_horizon_max}")
     if playbook.requires_iv_percentile and iv_pct is None:
         reasons.append("iv_percentile_missing")
     if iv_pct is not None:
@@ -277,6 +286,45 @@ def _diagnostic_summary(matched: list[str], reason_counts: dict[str, int]) -> st
         return "No playbooks evaluated."
     top_reasons = sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:3]
     return "No playbook matched; top gates: " + ", ".join(f"{reason} ({count})" for reason, count in top_reasons)
+
+
+def _match_context(idea: Idea) -> dict[str, object]:
+    catalyst = _catalyst_horizon(idea)
+    return {
+        "catalyst_horizon_days": catalyst,
+        "trade_horizon_days": idea.trade_horizon_days,
+        "uses_playbook_horizon_for_short_catalyst": _uses_playbook_horizon(idea, catalyst),
+    }
+
+
+def _match_horizon(idea: Idea, playbook: Playbook) -> tuple[int, str]:
+    if idea.trade_horizon_days is not None:
+        return idea.trade_horizon_days, "trade_horizon_days"
+    catalyst = _catalyst_horizon(idea)
+    if _uses_playbook_horizon(idea, catalyst):
+        low = playbook.applicable_horizon_min or playbook.dte_min
+        high = playbook.applicable_horizon_max or playbook.dte_max
+        return int(round((low + high) / 2.0)), "playbook_horizon_for_short_catalyst"
+    return idea.horizon_days, "horizon_days"
+
+
+def _catalyst_horizon(idea: Idea) -> int | None:
+    if idea.catalyst_horizon_days is not None:
+        return idea.catalyst_horizon_days
+    if str(idea.source).startswith("llm_transcript:"):
+        return idea.horizon_days
+    return None
+
+
+def _uses_playbook_horizon(idea: Idea, catalyst_horizon: int | None) -> bool:
+    if catalyst_horizon is None:
+        return False
+    if catalyst_horizon > SHORT_CATALYST_MAX_DAYS:
+        return False
+    source = str(idea.source)
+    if source.startswith("llm_transcript:"):
+        return True
+    return idea.catalyst_horizon_days is not None
 
 
 def _strategy_aliases(value: str) -> set[str]:
