@@ -116,6 +116,38 @@ send_telegram() {
   openclaw message send --channel telegram --target "$target" --message "$message" --json >/dev/null 2>&1 || log "telegram send failed."
 }
 
+prepare_current_ideas_dir() {
+  local source_dir="$1"
+  local lane="$2"
+  CURRENT_IDEAS_DIR="$source_dir"
+  if [[ "${KAMANDAL_FILTER_ACTIVE_IDEAS_TODAY:-true}" != "true" ]]; then
+    return 0
+  fi
+
+  local today dest
+  today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
+  dest="$REPO_ROOT/data/run/current_ideas/$lane"
+  rm -rf "$dest"
+  mkdir -p "$dest"
+
+  local file target
+  local -i kept=0
+  while IFS= read -r -d '' file; do
+    target="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
+    ln -s "$target" "$dest/$(basename "$file")"
+    kept+=1
+  done < <(
+    find "$source_dir" -maxdepth 1 -type f \( \
+      -name "*$today*.yaml" -o \
+      -name "*$today*.yml" -o \
+      -name "*$today*.json" \
+    \) -print0 2>/dev/null
+  )
+
+  CURRENT_IDEAS_DIR="$dest"
+  log "Filtered active ideas to current day: source=$source_dir current=$dest kept=$kept date=$today."
+}
+
 notify_live_execution_result() {
   local lane="$1"
   local json_file="$2"

@@ -22,24 +22,11 @@ run_weekly_reviewer() {
   fi
 
   log "Running weekly rejection reviewer."
-  local result_file
-  result_file="$(mktemp)"
-
-  if "$KAMANDAL_BIN" review-rejections \
+  # shellcheck disable=SC2086
+  "$KAMANDAL_BIN" review-rejections \
     --latest-run data/audit/latest_plan_run.json \
     $ideas_arg \
-    --output-dir "data/reviews/weekly/$today" > "$result_file" 2>&1; then
-    
-    log "Weekly reviewer completed. Requesting kamandal_ops analysis..."
-    if ! timeout 90 openclaw run kamandal_ops "Review the latest weekly rejection output. Identify anomalies and suggest Kamandal improvements. Output: $(cat "$result_file")" > /dev/null 2>&1; then
-      log "kamandal_ops timeout or failure. Falling back to mechanical telegram."
-      send_telegram "Weekly Reviewer Fallback: $(cat "$result_file" | tail -n 20)"
-    fi
-  else
-    log "Weekly reviewer failed."
-    send_telegram "Weekly Reviewer Failed: $(cat "$result_file" | tail -n 20)"
-  fi
-  rm -f "$result_file"
+    --output-dir "data/reviews/weekly/$today"
 }
 
 with_lock weekly_reviewer run_weekly_reviewer

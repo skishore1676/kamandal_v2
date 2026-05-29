@@ -11,11 +11,13 @@ run_market_shadow() {
 
   local ideas_dir provider
   ideas_dir="${KAMANDAL_ACTIVE_IDEAS_DIR:-data/ideas/active}"
+  prepare_current_ideas_dir "$ideas_dir" market_shadow
+  ideas_dir="$CURRENT_IDEAS_DIR"
   provider="${KAMANDAL_MARKET_PROVIDER:-public}"
 
   mkdir -p "$ideas_dir" data/logs
   if ! find "$ideas_dir" -maxdepth 1 \( -name '*.yaml' -o -name '*.yml' -o -name '*.json' \) | grep -q .; then
-    log "No active idea files in $ideas_dir; exiting without sheet/Public work."
+    log "No current-day active idea files in $ideas_dir; exiting without sheet/Public work."
     exit 0
   fi
 
