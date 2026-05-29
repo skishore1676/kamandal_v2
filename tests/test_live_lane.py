@@ -7,7 +7,7 @@ from kamandal_v2.cli import _live_submit_requested
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PortfolioState, PreflightResult, UniverseEntry
 from kamandal_v2.live.approval import approve_live_request, expire_live_approval_requests, send_pending_live_approval_requests
 from kamandal_v2.live.advisory import _live_candidate_policy, live_config, run_live_advisory_plan
-from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill
+from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill, sync_live_orders
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, _limit_price, build_close_ticket, build_open_ticket
 from kamandal_v2.planner.engine import run_plan
@@ -930,3 +930,35 @@ def test_cleanup_live_approvals_clears_terminal_ticket_status(tmp_path, monkeypa
     assert written["rows"][0]["operator_action"] == ""
     assert written["rows"][0]["plan_status"] == "filled"
     assert "auto-cleared stale APPROVE_LIVE" in written["rows"][0]["operator_notes"]
+
+
+def test_sync_live_orders_marks_cancelled_intent_terminal(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    ticket = json.loads(row["plan_detail_json"])["order_ticket_json"]
+    store.update_live_order_intent_status(ticket["ticket_hash"], "submitted")
+
+    class CancelledBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, _order_id):
+            return {"status": "CANCELLED"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", CancelledBrokerAdapter)
+
+    synced = sync_live_orders(_live_control(), store=store)
+
+    assert synced["synced"] == 1
+    assert synced["orders"][0]["status"] == "CANCELLED"
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "cancelled"

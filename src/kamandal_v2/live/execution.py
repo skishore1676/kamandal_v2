@@ -15,6 +15,9 @@ from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
 from kamandal_v2.stores.sqlite import LocalStore
 
 
+TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED"}
+
+
 def execute_live_approved(
     config: dict[str, Any],
     *,
@@ -112,6 +115,8 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None)
             _save_live_position_from_ticket(store, ticket, status=status.lower(), order_status=response)
         if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "close":
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "close_filled")
+        if status in TERMINAL_UNFILLED_ORDER_STATUSES:
+            store.update_live_order_intent_status(str(ticket["ticket_hash"]), status.lower().replace("canceled", "cancelled"))
         results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status})
     return {"synced": len(results), "orders": results}
 
