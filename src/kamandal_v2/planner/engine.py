@@ -88,6 +88,7 @@ def run_plan(
         preflight,
         match_gate_mode=match_gate_mode,
         candidate_filter_mode=candidate_filter_mode,
+        config=config,
     )
     if candidate_postprocessor is not None:
         candidate_postprocessor(candidates, store, config, portfolio)

@@ -41,6 +41,40 @@ class Greeks:
 
 
 @dataclass(slots=True)
+class IdeaAnnotation:
+    trade_horizon_suggestion: dict[str, Any] = field(default_factory=dict)
+    profile_suggestions: list[str] = field(default_factory=list)
+    direction_sanity: str = ""
+    liquidity_preference: str = ""
+    review_flags: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any] | None) -> "IdeaAnnotation":
+        payload = payload or {}
+        return cls(
+            trade_horizon_suggestion=dict(payload.get("trade_horizon_suggestion") or {}),
+            profile_suggestions=_as_list(payload.get("profile_suggestions")),
+            direction_sanity=str(payload.get("direction_sanity") or ""),
+            liquidity_preference=str(payload.get("liquidity_preference") or ""),
+            review_flags=_as_list(payload.get("review_flags")),
+        )
+
+    def suggested_trade_horizon_days(self) -> int | None:
+        for key in ("days", "target_days", "trade_horizon_days"):
+            parsed = _optional_int(self.trade_horizon_suggestion.get(key))
+            if parsed is not None:
+                return parsed
+        low = _optional_int(self.trade_horizon_suggestion.get("min_days"))
+        high = _optional_int(self.trade_horizon_suggestion.get("max_days"))
+        if low is not None and high is not None:
+            return int(round((low + high) / 2.0))
+        return low if low is not None else high
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
 class Idea:
     idea_id: str
     source: str
@@ -58,6 +92,7 @@ class Idea:
     extraction_notes: str = ""
     operator_status: str = "approved"
     notes: str = ""
+    annotation: IdeaAnnotation = field(default_factory=IdeaAnnotation)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "Idea":
@@ -66,6 +101,10 @@ class Idea:
             tags = [item.strip() for item in tags.split(",") if item.strip()]
         stable_payload = json.dumps(payload, sort_keys=True, default=str)
         generated_id = "idea_" + hashlib.sha256(stable_payload.encode("utf-8")).hexdigest()[:12]
+        annotation = IdeaAnnotation.from_dict(payload.get("annotation") or payload.get("idea_annotation"))
+        trade_horizon_days = _optional_int(payload.get("trade_horizon_days"))
+        if trade_horizon_days is None:
+            trade_horizon_days = annotation.suggested_trade_horizon_days()
         return cls(
             idea_id=str(payload.get("idea_id") or generated_id),
             source=str(payload.get("source") or "manual"),
@@ -76,13 +115,14 @@ class Idea:
             thesis_tags=list(tags),
             horizon_days=int(payload.get("horizon_days") or 45),
             catalyst_horizon_days=_optional_int(payload.get("catalyst_horizon_days")),
-            trade_horizon_days=_optional_int(payload.get("trade_horizon_days")),
+            trade_horizon_days=trade_horizon_days,
             confidence=str(payload.get("confidence") or ""),
             extraction_confidence=str(payload.get("extraction_confidence") or payload.get("confidence") or ""),
             quote_evidence=str(payload.get("quote_evidence") or ""),
             extraction_notes=str(payload.get("extraction_notes") or ""),
             operator_status=str(payload.get("operator_status") or payload.get("status") or "approved").lower(),
             notes=str(payload.get("notes") or ""),
+            annotation=annotation,
         )
 
     def to_dict(self) -> dict[str, Any]:

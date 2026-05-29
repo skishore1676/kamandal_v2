@@ -165,10 +165,11 @@ except Exception:
 processed = int(payload.get("processed") or 0)
 if processed <= 0:
     sys.exit(0)
+results = [item for item in (payload.get("results") or []) if isinstance(item, dict)]
+if results and all(str(item.get("status") or "").lower() == "blocked" for item in results):
+    sys.exit(0)
 lines = [f"Kamandal live {lane}: processed={processed} submit={payload.get('submit')}"]
-for item in payload.get("results") or []:
-    if not isinstance(item, dict):
-        continue
+for item in results:
     status = item.get("status") or item.get("reason") or "unknown"
     order_id = str(item.get("order_id") or "")
     ticket_hash = str(item.get("ticket_hash") or "")

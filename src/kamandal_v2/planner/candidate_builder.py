@@ -52,6 +52,7 @@ def build_candidates(
     per_idea_cap: int = 5,
     match_gate_mode: str = "strict",
     candidate_filter_mode: str = "strict",
+    config: dict | None = None,
 ) -> list[Candidate]:
     universe_by_symbol = {entry.symbol: entry for entry in universe if entry.enabled}
     all_candidates: list[Candidate] = []
@@ -79,14 +80,21 @@ def build_candidates(
                     candidate.rejection_reason = result.reason
                     rejected_for_idea.append(candidate)
                     continue
-                filter_rejection = _filter_rejection(candidate, playbook)
-                if filter_rejection:
+                filter_rejections = _filter_rejections(candidate, playbook)
+                hard_filter_rejections = []
+                for filter_rejection in filter_rejections:
+                    if _low_oi_price_through_enabled(filter_rejection, config):
+                        candidate.reasons.append(f"filter_warning={filter_rejection}")
+                        candidate.reasons.append("low_oi_price_through=true")
+                        continue
                     if candidate_filter_mode == "warn":
                         candidate.reasons.append(f"filter_warning={filter_rejection}")
                     else:
-                        candidate.rejection_reason = filter_rejection
-                        rejected_for_idea.append(candidate)
-                        continue
+                        hard_filter_rejections.append(filter_rejection)
+                if hard_filter_rejections:
+                    candidate.rejection_reason = hard_filter_rejections[0]
+                    rejected_for_idea.append(candidate)
+                    continue
                 pf = preflight.preflight(candidate)
                 candidate.preflight = pf
                 if not pf.ok:
@@ -594,7 +602,14 @@ def _near_delta(
         and dte_min <= quote.dte <= dte_max
         and low <= abs(quote.delta) <= high
     ]
-    return sorted(filtered, key=lambda quote: (abs(abs(quote.delta) - target), abs(quote.dte - ((dte_min + dte_max) / 2.0)), quote.spread_pct))
+    return sorted(
+        filtered,
+        key=lambda quote: -_leg_rank_score(
+            quote,
+            target_delta=target,
+            target_dte=(dte_min + dte_max) / 2.0,
+        ),
+    )
 
 
 def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candidate:
@@ -605,6 +620,9 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
     liquidity_score = max(0.0, min(1.0, 1.0 - (sum(((leg.ask - leg.bid) / max(leg.mid, 0.01)) for leg in legs) / len(legs))))
     bpr = _estimate_bpr(playbook.structure, legs, net_credit)
     candidate_id = _stable_id(idea.idea_id, playbook.playbook_id, [(leg.role, leg.expiration, leg.strike, leg.side) for leg in legs])
+    min_oi = min((int(leg.open_interest or 0) for leg in legs), default=0)
+    avg_spread_pct = sum(((leg.ask - leg.bid) / max(leg.mid, 0.01)) for leg in legs) / max(len(legs), 1)
+    expiry_quality = ",".join(sorted({_expiry_quality(leg.expiration) for leg in legs}))
     return Candidate(
         candidate_id=candidate_id,
         idea_id=idea.idea_id,
@@ -617,8 +635,43 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
         greeks=greeks,
         liquidity_score=round(liquidity_score, 4),
         score=0.0,
-        reasons=[f"built_from={idea.idea_id}", f"playbook={playbook.playbook_id}"],
+        reasons=[
+            f"built_from={idea.idea_id}",
+            f"playbook={playbook.playbook_id}",
+            f"expiry_quality={expiry_quality}",
+            f"min_open_interest={min_oi}",
+            f"avg_bid_ask_pct={avg_spread_pct:.4f}",
+        ],
     )
+
+
+def _leg_rank_score(quote: OptionQuote, *, target_delta: float, target_dte: float) -> float:
+    delta_fit = max(0.0, 25.0 - abs(abs(quote.delta) - target_delta) * 100.0)
+    dte_fit = max(0.0, 20.0 - abs(quote.dte - target_dte) * 0.5)
+    oi = max(int(quote.open_interest or 0), 0)
+    if oi >= 1000:
+        oi_score = 20.0
+    elif oi >= 500:
+        oi_score = 16.0
+    elif oi >= 100:
+        oi_score = 10.0
+    elif oi > 0:
+        oi_score = 4.0
+    else:
+        oi_score = 0.0
+    spread_score = max(0.0, 20.0 - min(quote.spread_pct, 2.0) * 10.0)
+    expiry_score = 4.0 if _expiry_quality(quote.expiration) == "monthly" else 0.0
+    return delta_fit + dte_fit + oi_score + spread_score + expiry_score
+
+
+def _expiry_quality(expiration: str) -> str:
+    try:
+        import datetime as _dt
+
+        expiry = _dt.date.fromisoformat(expiration)
+    except ValueError:
+        return "unknown"
+    return "monthly" if expiry.weekday() == 4 and 15 <= expiry.day <= 21 else "weekly"
 
 
 def _estimate_bpr(structure: str, legs: list[OptionLeg], net_credit: float) -> float:
@@ -735,27 +788,44 @@ def _thesis_fit_score(idea: Idea, candidate: Candidate) -> float:
     return strategy_bonus
 
 
-def _filter_rejection(candidate: Candidate, playbook: Playbook) -> str:
+def _filter_rejections(candidate: Candidate, playbook: Playbook) -> list[str]:
+    rejections: list[str] = []
     if playbook.min_option_oi is not None:
         for leg in candidate.legs:
             if leg.open_interest < playbook.min_option_oi:
-                return f"open_interest_below_min:{leg.open_interest}<{playbook.min_option_oi}"
+                rejections.append(f"open_interest_below_min:{leg.open_interest}<{playbook.min_option_oi}")
+                break
     if playbook.max_bid_ask_pct is not None:
         for leg in candidate.legs:
             spread_pct = (leg.ask - leg.bid) / max(leg.mid, 0.01)
             if spread_pct > playbook.max_bid_ask_pct:
-                return f"bid_ask_pct_above_max:{spread_pct:.4f}>{playbook.max_bid_ask_pct}"
+                rejections.append(f"bid_ask_pct_above_max:{spread_pct:.4f}>{playbook.max_bid_ask_pct}")
+                break
     if playbook.min_credit_to_width_ratio is not None and candidate.net_credit > 0:
         width = _risk_width(candidate)
         if width > 0:
             ratio = candidate.net_credit / width
             if ratio < playbook.min_credit_to_width_ratio:
-                return f"credit_width_ratio_below_min:{ratio:.4f}<{playbook.min_credit_to_width_ratio}"
+                rejections.append(f"credit_width_ratio_below_min:{ratio:.4f}<{playbook.min_credit_to_width_ratio}")
     if candidate.structure == "jade_lizard":
         width = _risk_width(candidate)
         if width > 0 and candidate.net_credit < width:
-            return f"jade_lizard_credit_below_call_width:{candidate.net_credit:.4f}<{width:.4f}"
-    return ""
+            rejections.append(f"jade_lizard_credit_below_call_width:{candidate.net_credit:.4f}<{width:.4f}")
+    return rejections
+
+
+def _filter_rejection(candidate: Candidate, playbook: Playbook) -> str:
+    rejections = _filter_rejections(candidate, playbook)
+    return rejections[0] if rejections else ""
+
+
+def _low_oi_price_through_enabled(rejection: str, config: dict | None) -> bool:
+    if not rejection.startswith("open_interest_below_min:"):
+        return False
+    if str((((config or {}).get("runtime") or {}).get("mode") or "")).strip().lower() != "live":
+        return False
+    mode = str((((config or {}).get("live") or {}).get("liquidity_policy") or {}).get("low_oi_mode") or "").strip().lower()
+    return mode == "price_through"
 
 
 def _risk_width(candidate: Candidate) -> float:

@@ -43,12 +43,32 @@ live:
   max_bpr_per_underlying_pct: 55
   preflight_max_age_minutes: 10
   entry_pricing:
-    mode: improved_mid       # improved_mid | mid | disabled
+    mode: liquidity_adjusted_mid       # liquidity_adjusted_mid | improved_mid | mid | disabled
     improvement_pct_of_spread: 10
+    low_oi_improvement_pct_of_spread: 20
+    very_low_oi_improvement_pct_of_spread: 35
+    good_oi_threshold: 500
+    low_oi_threshold: 100
     min_improvement: 0.01
     max_improvement: 0.10
     apply_to_credit: true    # sell/credit entries ask for more credit than mid
     apply_to_debit: true     # buy/debit entries bid below mid
+  liquidity_policy:
+    low_oi_mode: price_through
+  reconciliation:
+    enabled: true
+    broker_flat_confirmations_required: 2
+    auto_retire_ghost_after_confirmations: true
+    block_management_on_open_issues: true
+  operator_review:
+    enabled: true
+    channel: telegram
+    target: "5425926875"
+    account: ""
+    expiry_minutes: 30
+    max_pending_requests: 10
+    use_inline_buttons: true
+    text_fallback: true
   exit_pricing:
     profit_target_trigger_pct: 95
     min_profit_to_trigger: 5
@@ -131,3 +151,7 @@ source_intelligence:
     latest_state_file: ~/.openclaw/workspace-main/state/x_bookmark_shadow/latest.json
     trial_root: ~/Documents/birdclaw
     limit: 50
+
+planner:
+  expiry:
+    monthly_single_name_bonus: true

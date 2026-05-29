@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from kamandal_v2.domain.models import Candidate, PortfolioState
 from kamandal_v2.live.approval import create_live_approval_request
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket
+from kamandal_v2.live.reconciliation import reconciliation_blockers_for_group
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.engine import PlanRunResult, run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
@@ -145,6 +146,8 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
             candidate.rejection_reason = "live_idea_already_open"
         elif candidate.idea_id in traded_ids:
             candidate.rejection_reason = "live_idea_already_traded_today"
+        elif reconciliation_blockers_for_group(store, {"underlying": candidate.underlying, "group_id": ""}, config=config):
+            candidate.rejection_reason = "live_reconciliation_blocker"
         elif candidate.estimated_bpr > max_bpr:
             candidate.rejection_reason = f"live_bpr_above_max:{candidate.estimated_bpr}>{max_bpr}"
         elif candidate.preflight is None or not candidate.preflight.ok:

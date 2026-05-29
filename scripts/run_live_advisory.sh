@@ -15,6 +15,9 @@ run_live_advisory() {
     log "No current-day active idea files in $ideas_dir; exiting without sheet/Public work."
     exit 0
   fi
+  log "Reconciling live positions before advisory planning."
+  "$KAMANDAL_BIN" sync-live-orders
+  "$KAMANDAL_BIN" reconcile-live-positions --write-sheet --send-review
   log "Running live advisory provider=public ideas=$ideas_dir write_sheet=true."
   "$KAMANDAL_BIN" live-advisory-plan \
     --ideas "$ideas_dir" \

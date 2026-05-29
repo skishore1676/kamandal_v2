@@ -26,9 +26,17 @@ from kamandal_v2.live.approval import (
 from kamandal_v2.live.advisory import run_live_advisory_plan
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill, sync_live_orders
 from kamandal_v2.live.management import run_live_management_plan
+from kamandal_v2.live.operator_review import (
+    OperatorReviewError,
+    apply_operator_review_decision,
+    operator_review_decision_from_message,
+    send_pending_operator_review_requests,
+)
 from kamandal_v2.live.orders import build_open_ticket
+from kamandal_v2.live.reconciliation import reconcile_live_positions
 from kamandal_v2.management.shadow import manage_shadow_positions, mark_shadow_portfolio, write_shadow_eod_report
 from kamandal_v2.market.public import PublicAdapter
+from kamandal_v2.market.fixture import FixtureMarketDataProvider
 from kamandal_v2.market.tastytrade import TastytradeAdapter
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.planner.config_loader import load_planner_config
@@ -86,6 +94,25 @@ def main() -> None:
     live_manage_parser = subparsers.add_parser("live-management-plan", help="Build strict live close advisory rows")
     live_manage_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     live_manage_parser.add_argument("--write-sheet", action="store_true")
+    reconcile_parser = subparsers.add_parser("reconcile-live-positions", help="Compare broker live positions against Kamandal live ledger")
+    reconcile_parser.add_argument("--write-sheet", action="store_true")
+    reconcile_parser.add_argument("--send-review", action="store_true")
+    reconcile_parser.add_argument("--dry-run", action="store_true")
+    subparsers.add_parser("send-operator-review-requests", help="Send unsent reusable operator review requests")
+    apply_review_parser = subparsers.add_parser("apply-operator-review-decision", help="Apply one deterministic operator review action")
+    apply_review_parser.add_argument("--request-id", required=True)
+    apply_review_parser.add_argument("--action", required=True)
+    apply_review_parser.add_argument("--note", default="")
+    apply_review_parser.add_argument("--source", default="manual")
+    apply_review_parser.add_argument("--decided-by", default="Suman")
+    message_review_parser = subparsers.add_parser("operator-review-decision-from-message", help="Parse Jarvis/Telegram text and apply a review action")
+    message_review_parser.add_argument("--message", required=True)
+    message_review_parser.add_argument("--source", default="telegram")
+    message_review_parser.add_argument("--decided-by", default="Suman")
+    compare_parser = subparsers.add_parser("compare-market-data", help="Compare chain/IV data between two configured providers")
+    compare_parser.add_argument("--symbols", nargs="+", required=True)
+    compare_parser.add_argument("--provider-a", choices=["public", "tastytrade", "fixture"], default="public")
+    compare_parser.add_argument("--provider-b", choices=["public", "tastytrade", "fixture"], default="tastytrade")
 
     import_parser = subparsers.add_parser("import-transcripts", help="Import local transcripts into digest and rough idea YAML")
     import_parser.add_argument("--source-dir", default="data/transcripts")
@@ -308,6 +335,25 @@ def main() -> None:
         return
     if args.command == "live-management-plan":
         print(json.dumps(run_live_management_plan(config, config_source=args.config_source, write_sheet=args.write_sheet), indent=2))
+        return
+    if args.command == "reconcile-live-positions":
+        print(json.dumps(reconcile_live_positions(config, write_sheet=args.write_sheet, send_review=args.send_review, dry_run=args.dry_run), indent=2))
+        return
+    if args.command == "send-operator-review-requests":
+        print(json.dumps(send_pending_operator_review_requests(config), indent=2))
+        return
+    if args.command == "apply-operator-review-decision":
+        print(json.dumps(apply_operator_review_decision(config, args.request_id, args.action, note=args.note, source=args.source, decided_by=args.decided_by), indent=2))
+        return
+    if args.command == "operator-review-decision-from-message":
+        try:
+            print(json.dumps(operator_review_decision_from_message(config, args.message, source=args.source, decided_by=args.decided_by), indent=2))
+        except OperatorReviewError as exc:
+            print(json.dumps({"status": "rejected", "reason": str(exc)}, indent=2))
+            raise SystemExit(1) from exc
+        return
+    if args.command == "compare-market-data":
+        print(json.dumps(_compare_market_data(config, args.symbols, args.provider_a, args.provider_b), indent=2))
         return
     if args.command == "import-transcripts":
         result = import_transcripts(
@@ -695,6 +741,87 @@ def _tastytrade_smoke(config: dict, symbol: str, *, include_market_metrics: bool
             "iv_abs": adapter.iv_abs(symbol),
         }
     return result
+
+
+def _compare_market_data(config: dict, symbols: list[str], provider_a: str, provider_b: str) -> dict:
+    adapters = {
+        provider_a: _market_compare_adapter(config, provider_a),
+        provider_b: _market_compare_adapter(config, provider_b),
+    }
+    rows = []
+    for symbol in [item.upper() for item in symbols]:
+        row = {"symbol": symbol, provider_a: _provider_market_summary(adapters[provider_a], symbol), provider_b: _provider_market_summary(adapters[provider_b], symbol)}
+        row["diff"] = _market_summary_diff(row[provider_a], row[provider_b])
+        rows.append(row)
+    return {"provider_a": provider_a, "provider_b": provider_b, "symbols": rows, "execution_broker_changed": False}
+
+
+def _market_compare_adapter(config: dict, provider: str) -> object:
+    if provider == "public":
+        return PublicAdapter(config)
+    if provider == "tastytrade":
+        return TastytradeAdapter(config)
+    if provider == "fixture":
+        return FixtureMarketDataProvider()
+    raise ValueError(f"unsupported market data provider: {provider}")
+
+
+def _provider_market_summary(adapter: object, symbol: str) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "available": bool(adapter.available()) if hasattr(adapter, "available") else True,
+        "iv_percentile": _safe_call(adapter, "iv_percentile", symbol),
+        "iv_rank": _safe_call(adapter, "iv_rank", symbol),
+        "iv_abs": _safe_call(adapter, "iv_abs", symbol),
+    }
+    try:
+        snapshot = adapter.chain_snapshot(symbol)
+        quotes = list(snapshot.quotes)
+        summary.update({
+            "chain_status": "ok",
+            "underlying_price": snapshot.underlying_price,
+            "quotes": len(quotes),
+            "min_open_interest": min((quote.open_interest for quote in quotes), default=None),
+            "median_open_interest": _median([quote.open_interest for quote in quotes]),
+            "median_spread_pct": _median([quote.spread_pct for quote in quotes]),
+            "source": snapshot.source,
+        })
+    except Exception as exc:  # noqa: BLE001
+        summary.update({"chain_status": "error", "chain_error": str(exc)})
+        if hasattr(adapter, "option_chain_inventory"):
+            try:
+                summary["option_chain_inventory"] = adapter.option_chain_inventory(symbol)
+            except Exception as inventory_exc:  # noqa: BLE001
+                summary["option_chain_inventory_error"] = str(inventory_exc)
+    return summary
+
+
+def _market_summary_diff(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    diff: dict[str, Any] = {}
+    for key in ("iv_percentile", "iv_rank", "iv_abs", "underlying_price", "median_open_interest", "median_spread_pct"):
+        if isinstance(left.get(key), (int, float)) and isinstance(right.get(key), (int, float)):
+            diff[f"{key}_delta"] = round(float(left[key]) - float(right[key]), 6)
+    if left.get("chain_status") != right.get("chain_status"):
+        diff["chain_status_mismatch"] = [left.get("chain_status"), right.get("chain_status")]
+    return diff
+
+
+def _safe_call(adapter: object, name: str, *args: Any) -> Any:
+    if not hasattr(adapter, name):
+        return None
+    try:
+        return getattr(adapter, name)(*args)
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+
+
+def _median(values: list[float | int]) -> float | None:
+    values = sorted(float(value) for value in values if value is not None)
+    if not values:
+        return None
+    midpoint = len(values) // 2
+    if len(values) % 2:
+        return round(values[midpoint], 6)
+    return round((values[midpoint - 1] + values[midpoint]) / 2.0, 6)
 
 
 def _candidate_from_smoke(payload: dict) -> Candidate:

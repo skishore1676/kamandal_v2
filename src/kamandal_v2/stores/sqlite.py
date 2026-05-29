@@ -176,6 +176,27 @@ class LocalStore:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS operator_review_requests (
+                    request_id TEXT PRIMARY KEY,
+                    request_type TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS live_reconciliation_issues (
+                    issue_id TEXT PRIMARY KEY,
+                    issue_type TEXT NOT NULL,
+                    group_id TEXT,
+                    underlying TEXT,
+                    status TEXT NOT NULL,
+                    observed_count INTEGER NOT NULL DEFAULT 1,
+                    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    resolved_at TEXT,
+                    payload TEXT NOT NULL
+                );
                 """
             )
             self._ensure_shadow_fill_columns(conn)
@@ -643,6 +664,32 @@ class LocalStore:
                 ),
             )
 
+    def close_live_position_group(self, group_id: str, *, status: str, reason: str, payload: dict[str, Any]) -> None:
+        close_payload = dict(payload)
+        close_payload["close_reason"] = reason
+        close_payload["closed_status"] = status
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE live_position_groups
+                SET status = ?,
+                    closed_at = CURRENT_TIMESTAMP,
+                    payload = ?
+                WHERE group_id = ? AND status = 'open'
+                """,
+                (status, json.dumps(close_payload, sort_keys=True), group_id),
+            )
+            conn.execute(
+                """
+                UPDATE live_positions
+                SET status = ?,
+                    closed_at = CURRENT_TIMESTAMP,
+                    payload = ?
+                WHERE group_id = ? AND status = 'open'
+                """,
+                (status, json.dumps(close_payload, sort_keys=True), group_id),
+            )
+
     def save_live_approval_request(self, request: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -709,6 +756,160 @@ class LocalStore:
                 WHERE request_id = ?
                 """,
                 (status, json.dumps(payload, sort_keys=True), request_id),
+            )
+
+    def save_operator_review_request(self, request: dict[str, Any]) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO operator_review_requests
+                (request_id, request_type, subject_id, status, expires_at, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                """,
+                (
+                    str(request["request_id"]),
+                    str(request["request_type"]),
+                    str(request.get("subject_id") or ""),
+                    str(request.get("status") or "pending"),
+                    str(request["expires_at"]),
+                    json.dumps(request, sort_keys=True),
+                ),
+            )
+
+    def operator_review_request(self, request_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT status, payload FROM operator_review_requests WHERE request_id = ?",
+                (request_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        payload["_ledger_status"] = row["status"]
+        return payload
+
+    def operator_review_requests_by_status(self, statuses: set[str]) -> list[dict[str, Any]]:
+        if not statuses:
+            return []
+        placeholders = ",".join("?" for _ in statuses)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT status, payload FROM operator_review_requests WHERE status IN ({placeholders})",
+                tuple(sorted(statuses)),
+            ).fetchall()
+        requests = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["_ledger_status"] = row["status"]
+            requests.append(payload)
+        return requests
+
+    def update_operator_review_request_status(
+        self,
+        request_id: str,
+        status: str,
+        payload_updates: dict[str, Any] | None = None,
+    ) -> None:
+        existing = self.operator_review_request(request_id)
+        payload = dict(existing or {})
+        payload.pop("_ledger_status", None)
+        if payload_updates:
+            payload.update(payload_updates)
+        payload["status"] = status
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE operator_review_requests
+                SET status = ?, updated_at = CURRENT_TIMESTAMP, payload = ?
+                WHERE request_id = ?
+                """,
+                (status, json.dumps(payload, sort_keys=True), request_id),
+            )
+
+    def save_live_reconciliation_issue(self, issue: dict[str, Any]) -> None:
+        existing = self.live_reconciliation_issue(str(issue["issue_id"]))
+        observed_count = int((existing or {}).get("observed_count") or 0) + 1 if existing else int(issue.get("observed_count") or 1)
+        issue = dict(issue)
+        issue["observed_count"] = observed_count
+        status = str(issue.get("status") or (existing or {}).get("status") or "open")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO live_reconciliation_issues
+                (issue_id, issue_type, group_id, underlying, status, observed_count, last_seen_at, resolved_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?)
+                """,
+                (
+                    str(issue["issue_id"]),
+                    str(issue["issue_type"]),
+                    str(issue.get("group_id") or ""),
+                    str(issue.get("underlying") or ""),
+                    status,
+                    observed_count,
+                    issue.get("resolved_at"),
+                    json.dumps(issue, sort_keys=True),
+                ),
+            )
+
+    def live_reconciliation_issue(self, issue_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT status, observed_count, last_seen_at, payload
+                FROM live_reconciliation_issues
+                WHERE issue_id = ?
+                """,
+                (issue_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        payload["status"] = row["status"]
+        payload["observed_count"] = int(row["observed_count"] or payload.get("observed_count") or 0)
+        payload["last_seen_at"] = row["last_seen_at"]
+        return payload
+
+    def open_live_reconciliation_issues(self, *, group_id: str = "", underlying: str = "") -> list[dict[str, Any]]:
+        query = "SELECT status, observed_count, last_seen_at, payload FROM live_reconciliation_issues WHERE status IN ('open', 'held')"
+        params: list[Any] = []
+        if group_id:
+            query += " AND group_id = ?"
+            params.append(group_id)
+        if underlying:
+            query += " AND underlying = ?"
+            params.append(underlying)
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        issues = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["status"] = row["status"]
+            payload["observed_count"] = int(row["observed_count"] or payload.get("observed_count") or 0)
+            payload["last_seen_at"] = row["last_seen_at"]
+            issues.append(payload)
+        return issues
+
+    def update_live_reconciliation_issue_status(
+        self,
+        issue_id: str,
+        status: str,
+        payload_updates: dict[str, Any] | None = None,
+    ) -> None:
+        existing = self.live_reconciliation_issue(issue_id)
+        payload = dict(existing or {})
+        if payload_updates:
+            payload.update(payload_updates)
+        payload["status"] = status
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE live_reconciliation_issues
+                SET status = ?,
+                    resolved_at = CASE WHEN ? IN ('resolved', 'dismissed', 'retired', 'adopted') THEN CURRENT_TIMESTAMP ELSE resolved_at END,
+                    payload = ?
+                WHERE issue_id = ?
+                """,
+                (status, status, json.dumps(payload, sort_keys=True), issue_id),
             )
 
     def event(self, event_type: str, payload: dict[str, Any]) -> None:

@@ -137,6 +137,30 @@ def test_public_order_payload_uses_entry_pricing_policy() -> None:
     assert credit_payload["limitPrice"] == "-1.02"
 
 
+def test_liquidity_adjusted_pricing_demands_more_improvement_for_low_oi() -> None:
+    candidate = _credit_spread_candidate()
+    for leg in candidate.legs:
+        leg.open_interest = 0
+    config = _config()
+    config["live"]["entry_pricing"] = {
+        "mode": "liquidity_adjusted_mid",
+        "improvement_pct_of_spread": 10,
+        "low_oi_improvement_pct_of_spread": 20,
+        "very_low_oi_improvement_pct_of_spread": 35,
+        "good_oi_threshold": 500,
+        "low_oi_threshold": 100,
+        "min_improvement": 0.01,
+        "max_improvement": 0.10,
+        "apply_to_credit": True,
+        "apply_to_debit": True,
+    }
+
+    assert candidate_entry_limit_price(candidate, config) == "-1.07"
+    metadata = entry_price_metadata(candidate, config)
+    assert metadata["min_open_interest"] == 0
+    assert metadata["improvement_pct_of_spread"] == 35
+
+
 def test_public_preflight_retries_rejected_penny_price_with_favorable_nickel(monkeypatch) -> None:
     adapter = PublicAdapter(_public_config())
     calls = []

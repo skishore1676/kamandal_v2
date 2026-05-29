@@ -45,15 +45,26 @@ def execute_live_approved(
             results.append(_failure(ticket, f"ticket_already_{ledger_status}"))
             continue
         if close and _same_day_close_blocked(config, store, ticket):
+            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_same_day_close")
             results.append(_failure(ticket, "same_day_live_exit_blocked"))
             continue
         if submit and not _ticket_fresh(config, ticket):
+            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_stale")
             results.append(_failure(ticket, "ticket_preflight_stale"))
             continue
         request_payload = dict(ticket.get("submit_payload") or {})
         if submit:
             fresh_preflight = adapter.preflight_ticket(ticket)
             if not fresh_preflight.ok:
+                store.record_live_order_attempt(
+                    ticket,
+                    action="preflight_close" if close else "preflight_open",
+                    submit=submit,
+                    ok=False,
+                    request_payload=dict((fresh_preflight.raw or {}).get("request") or ticket.get("submit_payload") or {}),
+                    response_payload=fresh_preflight.to_dict(),
+                )
+                store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_failed")
                 results.append(_failure(ticket, fresh_preflight.message or "fresh_preflight_failed"))
                 continue
             try:

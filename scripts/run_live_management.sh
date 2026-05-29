@@ -9,6 +9,9 @@ run_live_management() {
   require_trading_day
   require_market_window
   export KAMANDAL_MODE=live
+  log "Syncing and reconciling live positions before close management."
+  "$KAMANDAL_BIN" sync-live-orders
+  "$KAMANDAL_BIN" reconcile-live-positions --write-sheet --send-review
   log "Running live close advisory and evaluating approved close orders."
   "$KAMANDAL_BIN" live-management-plan --config-source sheet --write-sheet
   local submit_args=()

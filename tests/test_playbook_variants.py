@@ -101,6 +101,34 @@ def test_candidate_filter_warn_mode_logs_without_rejecting() -> None:
     )
 
 
+def test_live_low_oi_price_through_warns_without_rejecting() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_overextended",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 21,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+
+    candidates = build_candidates(
+        [idea],
+        universe,
+        [_playbook(min_option_oi=999_999, max_bid_ask_pct=10.0)],
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+        candidate_filter_mode="strict",
+        config={"runtime": {"mode": "live"}, "live": {"liquidity_policy": {"low_oi_mode": "price_through"}}},
+    )
+
+    assert any(candidate.eligible for candidate in candidates)
+    assert any(
+        "low_oi_price_through=true" in candidate.reasons
+        for candidate in candidates
+    )
+
+
 def test_permissive_match_mode_warns_instead_of_blocking_iv_and_horizon() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_overextended",

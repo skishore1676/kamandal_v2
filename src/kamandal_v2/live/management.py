@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from kamandal_v2.events.earnings import EarningsStore
 from kamandal_v2.live.orders import APPROVE_LIVE_CLOSE, build_close_ticket
 from kamandal_v2.live.position_management import live_exit_decision, live_exit_policy, mark_live_group
+from kamandal_v2.live.reconciliation import reconciliation_blockers_for_group
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
@@ -38,6 +39,17 @@ def run_live_management_plan(
     marks = []
     for index, group in enumerate(groups, start=1):
         underlying = str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or "")
+        reconciliation_blockers = reconciliation_blockers_for_group(store, group, config=config)
+        if reconciliation_blockers:
+            decision = {
+                "group_id": group.get("group_id"),
+                "action": "hold",
+                "reason": "live_reconciliation_blocker",
+                "reconciliation_blockers": reconciliation_blockers,
+            }
+            decisions.append(decision)
+            store.record_live_management_decision(str(group.get("group_id")), "hold", "live_reconciliation_blocker", decision)
+            continue
         playbook = playbook_by_id.get(str(group.get("playbook_id") or (group.get("candidate") or {}).get("playbook_id") or ""))
         mark = mark_live_group(
             group,

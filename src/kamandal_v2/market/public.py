@@ -60,8 +60,7 @@ class PublicAdapter:
 
     def account_state(self) -> PortfolioState:
         self._require_available()
-        account_id = self._account_id()
-        payload = self._get(f"/userapigateway/trading/{account_id}/portfolio/v2")
+        payload = self.portfolio_payload()
         buying_power_raw = _find_optional_number(payload, ("optionsBuyingPower", "buyingPower", "cashOnlyBuyingPower"))
         account_size_raw = _find_optional_number(payload, ("netLiquidationValue", "equityValue", "accountValue"))
         account_size = account_size_raw if account_size_raw is not None else _equity_total(payload)
@@ -79,6 +78,21 @@ class PublicAdapter:
             greeks=Greeks(),
             per_underlying_bpr={},
         )
+
+    def portfolio_payload(self) -> dict[str, Any]:
+        self._require_available()
+        return self._get(f"/userapigateway/trading/{self._account_id()}/portfolio/v2")
+
+    def broker_positions(self) -> list[dict[str, Any]]:
+        payload = self.portfolio_payload()
+        raw_positions = _find_list(payload, ("positions", "optionPositions", "equityPositions"))
+        positions = []
+        for index, raw in enumerate(raw_positions):
+            if not isinstance(raw, dict):
+                continue
+            normalized = _normalize_public_position(raw, index=index)
+            positions.append(normalized)
+        return positions
 
     def chain_snapshot(self, underlying: str) -> ChainSnapshot:
         self._require_available()
@@ -505,6 +519,62 @@ def _normalise_order_payload(payload: dict[str, Any], *, multileg: bool) -> dict
     if "quantity" in payload:
         payload["quantity"] = str(payload["quantity"])
     return payload
+
+
+def _normalize_public_position(raw: dict[str, Any], *, index: int) -> dict[str, Any]:
+    instrument = _find_first_dict(raw, ("instrument", "security", "option", "equity"))
+    symbol = str(
+        instrument.get("symbol")
+        or raw.get("symbol")
+        or raw.get("osiSymbol")
+        or raw.get("occSymbol")
+        or ""
+    ).upper()
+    position_type = str(instrument.get("type") or raw.get("type") or raw.get("instrumentType") or "").upper()
+    quantity = _find_number(raw, ("quantity", "qty", "filledQuantity", "longQuantity", "shortQuantity"), default=0.0)
+    if not quantity:
+        long_qty = _find_number(raw, ("longQuantity", "longQty"), default=0.0)
+        short_qty = _find_number(raw, ("shortQuantity", "shortQty"), default=0.0)
+        quantity = long_qty - short_qty
+    side = str(raw.get("side") or raw.get("positionSide") or "").lower()
+    if side in {"short", "sell"} and quantity > 0:
+        quantity *= -1
+    parsed: dict[str, Any] = {}
+    if symbol:
+        try:
+            parsed = parse_occ_symbol(symbol)
+            position_type = "OPTION"
+        except ValueError:
+            parsed = {"underlying": symbol}
+    return {
+        "broker": "public",
+        "raw_index": index,
+        "symbol": symbol,
+        "occ_symbol": symbol if position_type == "OPTION" or parsed.get("expiration") else "",
+        "underlying": str(parsed.get("underlying") or symbol).upper(),
+        "expiration": parsed.get("expiration"),
+        "option_type": parsed.get("option_type"),
+        "strike": parsed.get("strike"),
+        "quantity": quantity,
+        "asset_type": "option" if parsed.get("expiration") else "equity",
+        "average_price": _find_optional_number(raw, ("averagePrice", "average-price", "averageOpenPrice", "costBasisPrice")),
+        "raw": raw,
+    }
+
+
+def _find_first_dict(payload: Any, keys: tuple[str, ...]) -> dict[str, Any]:
+    stack: list[Any] = [payload]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key in keys:
+                value = item.get(key)
+                if isinstance(value, dict):
+                    return value
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return {}
 
 
 def _find_list(payload: dict[str, Any], keys: tuple[str, ...]) -> list[Any]:

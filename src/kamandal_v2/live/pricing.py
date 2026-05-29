@@ -13,6 +13,10 @@ from kamandal_v2.domain.models import Candidate
 class EntryPricingPolicy:
     mode: str = "improved_mid"
     improvement_pct_of_spread: float = 10.0
+    low_oi_improvement_pct_of_spread: float = 20.0
+    very_low_oi_improvement_pct_of_spread: float = 35.0
+    good_oi_threshold: int = 500
+    low_oi_threshold: int = 100
     min_improvement: float = 0.01
     max_improvement: float = 0.10
     apply_to_credit: bool = True
@@ -27,6 +31,10 @@ def entry_pricing_policy(config: dict[str, Any] | None) -> EntryPricingPolicy:
     return EntryPricingPolicy(
         mode=str(raw.get("mode") or "improved_mid").strip().lower(),
         improvement_pct_of_spread=_as_float(raw.get("improvement_pct_of_spread"), 10.0),
+        low_oi_improvement_pct_of_spread=_as_float(raw.get("low_oi_improvement_pct_of_spread"), 20.0),
+        very_low_oi_improvement_pct_of_spread=_as_float(raw.get("very_low_oi_improvement_pct_of_spread"), 35.0),
+        good_oi_threshold=int(_as_float(raw.get("good_oi_threshold"), 500.0)),
+        low_oi_threshold=int(_as_float(raw.get("low_oi_threshold"), 100.0)),
         min_improvement=_as_float(raw.get("min_improvement"), 0.01),
         max_improvement=_as_float(raw.get("max_improvement"), 0.10),
         apply_to_credit=_as_bool(raw.get("apply_to_credit"), True),
@@ -60,6 +68,8 @@ def entry_price_metadata(candidate: Candidate, config: dict[str, Any] | None) ->
         "improved_limit": round(improved_price, 2),
         "aggregate_bid_ask_spread": round(_aggregate_spread(candidate), 4),
         "improvement": round(abs(improved_price - base_price), 4),
+        "improvement_pct_of_spread": _selected_improvement_pct(candidate, policy),
+        "min_open_interest": _min_open_interest(candidate),
         "side": "credit" if candidate.net_credit > 0 else "debit",
     }
 
@@ -67,7 +77,7 @@ def entry_price_metadata(candidate: Candidate, config: dict[str, Any] | None) ->
 def _improved_price(candidate: Candidate, base_price: float, policy: EntryPricingPolicy) -> float:
     if policy.mode in {"", "mid", "none", "disabled"}:
         return _nearest_cent(base_price)
-    if policy.mode != "improved_mid":
+    if policy.mode not in {"improved_mid", "liquidity_adjusted_mid"}:
         return _nearest_cent(base_price)
     if candidate.net_credit > 0 and not policy.apply_to_credit:
         return _nearest_cent(base_price)
@@ -82,11 +92,32 @@ def _improved_price(candidate: Candidate, base_price: float, policy: EntryPricin
 
 def _improvement(candidate: Candidate, policy: EntryPricingPolicy) -> float:
     spread = _aggregate_spread(candidate)
-    improvement = spread * max(policy.improvement_pct_of_spread, 0.0) / 100.0
+    improvement = spread * max(_selected_improvement_pct(candidate, policy), 0.0) / 100.0
     improvement = max(improvement, max(policy.min_improvement, 0.0))
     if policy.max_improvement > 0:
         improvement = min(improvement, policy.max_improvement)
     return improvement
+
+
+def _selected_improvement_pct(candidate: Candidate, policy: EntryPricingPolicy) -> float:
+    if policy.mode != "liquidity_adjusted_mid":
+        return policy.improvement_pct_of_spread
+    min_oi = _min_open_interest(candidate)
+    pct = policy.improvement_pct_of_spread
+    if min_oi < policy.low_oi_threshold:
+        pct = max(pct, policy.very_low_oi_improvement_pct_of_spread)
+    elif min_oi < policy.good_oi_threshold:
+        pct = max(pct, policy.low_oi_improvement_pct_of_spread)
+    if policy.max_improvement > 0:
+        spread = _aggregate_spread(candidate)
+        if spread > 0:
+            pct = min(pct, (policy.max_improvement / spread) * 100.0)
+    return round(pct, 4)
+
+
+def _min_open_interest(candidate: Candidate) -> int:
+    values = [int(leg.open_interest or 0) for leg in candidate.legs]
+    return min(values) if values else 0
 
 
 def _aggregate_spread(candidate: Candidate) -> float:

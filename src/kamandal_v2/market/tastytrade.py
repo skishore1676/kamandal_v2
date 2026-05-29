@@ -91,11 +91,69 @@ class TastytradeAdapter:
             per_underlying_bpr={},
         )
 
+    def broker_positions(self) -> list[dict[str, Any]]:
+        self._require_available()
+        positions = _items(self._get(f"/accounts/{self._account_number()}/positions"))
+        normalized = []
+        for index, item in enumerate(positions):
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "")
+            parsed: dict[str, Any] = {}
+            try:
+                parsed = parse_tasty_option_symbol(symbol)
+            except ValueError:
+                parsed = {"underlying": symbol.strip().upper()}
+            normalized.append({
+                "broker": "tastytrade",
+                "raw_index": index,
+                "symbol": symbol,
+                "occ_symbol": _tasty_to_occ(symbol) if parsed.get("expiration") else "",
+                "underlying": parsed.get("underlying"),
+                "expiration": parsed.get("expiration"),
+                "option_type": parsed.get("option_type"),
+                "strike": parsed.get("strike"),
+                "quantity": _signed_tasty_quantity(item),
+                "asset_type": "option" if parsed.get("expiration") else "equity",
+                "average_price": _find_optional_number(item, ("average-open-price", "average-price")),
+                "raw": item,
+            })
+        return normalized
+
     def chain_snapshot(self, underlying: str) -> ChainSnapshot:
         raise RuntimeError(
             "tastytrade broker is configured, but Kamandal does not yet use DXLink for tastytrade quotes/Greeks. "
             "Keep market provider on fixture/public until the quote streamer is wired."
         )
+
+    def option_chain_inventory(self, underlying: str) -> dict[str, Any]:
+        self._require_available()
+        symbol = underlying.upper()
+        payload = self._get(f"/option-chains/{symbol}/nested")
+        items = _items(payload)
+        expirations = 0
+        strikes = 0
+        streamer_symbols = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for expiration in item.get("expirations") or []:
+                if not isinstance(expiration, dict):
+                    continue
+                expirations += 1
+                for strike in expiration.get("strikes") or []:
+                    if not isinstance(strike, dict):
+                        continue
+                    strikes += 1
+                    streamer_symbols += int(bool(strike.get("call-streamer-symbol"))) + int(bool(strike.get("put-streamer-symbol")))
+        return {
+            "symbol": symbol,
+            "underlying_count": len(items),
+            "expirations": expirations,
+            "strikes": strikes,
+            "streamer_symbols": streamer_symbols,
+            "raw_context": payload.get("context") if isinstance(payload, dict) else "",
+        }
 
     def iv_percentile(self, underlying: str) -> float | None:
         metric = self._market_metric(underlying)
@@ -306,6 +364,22 @@ def _price_from_net_credit(net_credit: float) -> tuple[str, str]:
 
 def _price_from_ticket_limit(limit_price: float) -> tuple[str, str]:
     return f"{abs(float(limit_price)):.2f}", "Credit" if float(limit_price) < 0 else "Debit"
+
+
+def _tasty_to_occ(symbol: str) -> str:
+    parsed = parse_tasty_option_symbol(symbol)
+    flag = "C" if parsed["option_type"] == "call" else "P"
+    expiry = str(parsed["expiration"]).replace("-", "")[2:]
+    strike = int(round(float(parsed["strike"]) * 1000))
+    return f"{parsed['underlying']}{expiry}{flag}{strike:08d}"
+
+
+def _signed_tasty_quantity(item: dict[str, Any]) -> float:
+    quantity = _as_float(item.get("quantity"), 0.0)
+    quantity_direction = str(item.get("quantity-direction") or "").lower()
+    if quantity_direction == "short" and quantity > 0:
+        return -quantity
+    return quantity
 
 
 def _preflight_result(payload: dict[str, Any], response: dict[str, Any], *, default_bpr: float) -> PreflightResult:
