@@ -6,9 +6,11 @@ import json
 import os
 from datetime import UTC, datetime
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
+from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
@@ -111,6 +113,10 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None)
         response = adapter.get_order(str(ticket["order_id"]))
         status = str(response.get("status") or "UNKNOWN").upper()
         store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
+        if status in {"NEW", "OPEN", "WORKING"} and _entry_reprice_due(ticket, response, config):
+            reprice_result = _reprice_live_entry_order(adapter, store, config, ticket, response)
+            results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **reprice_result})
+            continue
         if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "open":
             _save_live_position_from_ticket(store, ticket, status=status.lower(), order_status=response)
         if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "close":
@@ -119,6 +125,141 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None)
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), status.lower().replace("canceled", "cancelled"))
         results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status})
     return {"synced": len(results), "orders": results}
+
+
+def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
+    try:
+        _assert_submit_allowed(config, submit=True)
+        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        store.record_live_order_status(str(ticket["order_id"]), "REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
+        new_ticket = _repriced_open_ticket(ticket, config)
+        fresh_preflight = adapter.preflight_ticket(new_ticket)
+        if not fresh_preflight.ok:
+            store.record_live_order_attempt(
+                new_ticket,
+                action="reprice_preflight_open",
+                submit=True,
+                ok=False,
+                request_payload=dict((fresh_preflight.raw or {}).get("request") or new_ticket.get("submit_payload") or {}),
+                response_payload=fresh_preflight.to_dict(),
+            )
+            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "reprice_blocked_preflight_failed")
+            return {"reprice_status": "blocked_preflight_failed", "reprice_message": fresh_preflight.message}
+        new_ticket["preflight"] = fresh_preflight.to_dict()
+        new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
+        response = adapter.place_order_ticket(new_ticket)
+        ok = bool(response.get("orderId"))
+        store.save_live_order_intent(new_ticket, status="submitted" if ok else "submit_failed")
+        store.record_live_order_attempt(
+            new_ticket,
+            action="reprice_submit_open",
+            submit=True,
+            ok=ok,
+            request_payload=dict(new_ticket.get("submit_payload") or {}),
+            response_payload=response,
+        )
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "repriced" if ok else "reprice_submit_failed")
+        store.event("live_order_repriced", {
+            "from_ticket_hash": ticket.get("ticket_hash"),
+            "to_ticket_hash": new_ticket.get("ticket_hash"),
+            "from_order_id": ticket.get("order_id"),
+            "to_order_id": new_ticket.get("order_id"),
+            "from_limit_price": ticket.get("limit_price"),
+            "to_limit_price": new_ticket.get("limit_price"),
+            "broker_status": broker_status.get("status"),
+            "ok": ok,
+        })
+        return {
+            "reprice_status": "submitted" if ok else "submit_failed",
+            "reprice_ticket_hash": new_ticket.get("ticket_hash"),
+            "reprice_order_id": new_ticket.get("order_id"),
+            "reprice_limit_price": new_ticket.get("limit_price"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        store.event("live_order_reprice_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": str(exc)})
+        return {"reprice_status": "failed", "reprice_message": str(exc)}
+
+
+def _entry_reprice_due(ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
+    if str(ticket.get("intent_type") or "") != "open":
+        return False
+    policy = ((config.get("live") or {}).get("entry_reprice") or {})
+    if not _as_bool(policy.get("enabled"), False):
+        return False
+    max_reprices = int(policy.get("max_reprices") or 0)
+    if int(ticket.get("reprice_attempt") or 0) >= max_reprices:
+        return False
+    after_minutes = max(int(policy.get("after_minutes") or 5), 1)
+    created = _parse_utc(str(broker_status.get("createdAt") or ticket.get("created_at") or ""))
+    if created is None:
+        return False
+    age_seconds = (datetime.now(UTC) - created).total_seconds()
+    return age_seconds >= after_minutes * 60
+
+
+def _repriced_open_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    new_ticket = json.loads(json.dumps(ticket, sort_keys=True, default=str))
+    attempt = int(ticket.get("reprice_attempt") or 0) + 1
+    new_limit = _repriced_limit_price(ticket, config)
+    seed = json.dumps(
+        {
+            "parent_ticket_hash": ticket.get("ticket_hash"),
+            "attempt": attempt,
+            "limit_price": new_limit,
+        },
+        sort_keys=True,
+    )
+    new_order_id = str(uuid5(NAMESPACE_URL, "kamandal-live-reprice:" + seed))
+    new_ticket["order_id"] = new_order_id
+    new_ticket["limit_price"] = new_limit
+    new_ticket["parent_ticket_hash"] = ticket.get("ticket_hash")
+    new_ticket["reprice_attempt"] = attempt
+    new_ticket["created_at"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    submit_payload = dict(new_ticket.get("submit_payload") or {})
+    submit_payload["orderId"] = new_order_id
+    submit_payload["limitPrice"] = new_limit
+    new_ticket["submit_payload"] = submit_payload
+    new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
+    return new_ticket
+
+
+def _repriced_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str:
+    metadata = (((ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {})
+    current = abs(float(str(ticket.get("limit_price") or "0").replace("-", "")))
+    base = float(metadata.get("base_mid_limit") or current)
+    improved = float(metadata.get("improved_limit") or current)
+    raw_multiplier = (((config.get("live") or {}).get("entry_reprice") or {}).get("improvement_multiplier") or 0.5)
+    multiplier = float(raw_multiplier)
+    multiplier = max(0.0, min(multiplier, 1.0))
+    target = base + ((improved - base) * multiplier)
+    signed = str(ticket.get("limit_price") or "")
+    if signed.startswith("-"):
+        return f"-{_round_cent(target):.2f}"
+    return f"{_round_cent(target):.2f}"
+
+
+def _round_cent(value: float) -> float:
+    return round(float(value) + 1e-9, 2)
+
+
+def _parse_utc(raw: str) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None = None) -> dict[str, Any]:

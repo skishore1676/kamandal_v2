@@ -641,6 +641,7 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
             f"expiry_quality={expiry_quality}",
             f"min_open_interest={min_oi}",
             f"avg_bid_ask_pct={avg_spread_pct:.4f}",
+            *([f"mentioned_strategy={idea.mentioned_strategy}"] if idea.mentioned_strategy else []),
         ],
     )
 

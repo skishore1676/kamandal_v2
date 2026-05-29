@@ -29,6 +29,7 @@ live:
   auto_submit_exits: true
   match_gate_mode: strict
   candidate_filter_mode: strict
+  mentioned_strategy_policy: strict # strict | soft
   min_entry_legs: 2
   max_new_positions_per_plan: 1
   max_new_plans_per_day: 2
@@ -53,6 +54,11 @@ live:
     max_improvement: 0.10
     apply_to_credit: true    # sell/credit entries ask for more credit than mid
     apply_to_debit: true     # buy/debit entries bid below mid
+  entry_reprice:
+    enabled: true
+    after_minutes: 5
+    max_reprices: 1
+    improvement_multiplier: 0.5
   liquidity_policy:
     low_oi_mode: price_through
   reconciliation:

@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from kamandal_v2.config import load_control
 from kamandal_v2.cli import _live_submit_requested
@@ -154,6 +154,37 @@ def test_live_policy_blocks_single_leg_entries_when_min_entry_legs_is_two(tmp_pa
     )
 
     assert candidate.rejection_reason == "live_leg_count_below_min:1<2"
+
+
+def test_live_policy_blocks_unaligned_mentioned_strategy_by_default(tmp_path) -> None:
+    legs = [
+        OptionLeg("long_put", "buy", "put", 920, "2026-07-10", 1, 1.0, 0.95, 1.05, -0.25, 0.0, -0.01, 0.1, 100),
+        OptionLeg("short_put", "sell", "put", 925, "2026-07-10", 1, 2.0, 1.95, 2.05, -0.30, 0.0, -0.01, 0.1, 100),
+    ]
+    candidate = Candidate(
+        candidate_id="cand",
+        idea_id="idea",
+        underlying="COST",
+        playbook_id="put_spread_default",
+        structure="put_spread",
+        legs=legs,
+        net_credit=1.0,
+        estimated_bpr=400,
+        greeks=Greeks(theta=0.01),
+        liquidity_score=1.0,
+        score=1.0,
+        reasons=["mentioned_strategy=call_calendar"],
+        preflight=PreflightResult(ok=True, bpr=400, message="ok", raw={"response": {"buyingPowerRequirement": "400"}}),
+    )
+
+    _live_candidate_policy(
+        [candidate],
+        LocalStore(tmp_path / "kamandal.db"),
+        {"live": {"min_entry_legs": 2, "max_bpr_per_order": 2500}, "execution": {"max_contracts_per_order": 1}},
+        PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0),
+    )
+
+    assert candidate.rejection_reason == "live_mentioned_strategy_mismatch:call_calendar!=put_spread"
 
 
 def test_live_can_warn_on_quality_filters_without_permissive_matching(tmp_path, monkeypatch) -> None:
@@ -962,3 +993,69 @@ def test_sync_live_orders_marks_cancelled_intent_terminal(tmp_path, monkeypatch)
     assert synced["synced"] == 1
     assert synced["orders"][0]["status"] == "CANCELLED"
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "cancelled"
+
+
+def test_sync_live_orders_reprices_stale_new_entry_once(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "order_id": "order-old",
+        "plan_id": "plan",
+        "plan_rank": 1,
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "intent_type": "open",
+        "underlying": "COST",
+        "playbook_id": "put_spread_default",
+        "structure": "put_spread",
+        "quantity": 1,
+        "limit_price": "-2.25",
+        "time_in_force": "DAY",
+        "created_at": "2026-05-29T14:00:00Z",
+        "preflight": {"raw": {"entry_pricing": {"base_mid_limit": 2.15, "improved_limit": 2.25}}},
+        "legs": [
+            {"role": "long_put", "side": "buy", "option_type": "put", "strike": 920, "expiration": "2026-07-10", "quantity": 1},
+            {"role": "short_put", "side": "sell", "option_type": "put", "strike": 925, "expiration": "2026-07-10", "quantity": 1},
+        ],
+        "submit_payload": {"orderId": "order-old", "quantity": "1", "type": "LIMIT", "limitPrice": "-2.25", "legs": []},
+    }
+    from kamandal_v2.live.orders import ticket_hash
+
+    ticket["ticket_hash"] = ticket_hash(ticket)
+    store.save_live_order_intent(ticket, status="submitted")
+    calls = []
+
+    class RepriceBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, _order_id):
+            return {"status": "NEW", "createdAt": "2026-05-29T14:00:00Z"}
+
+        def cancel_order(self, order_id):
+            calls.append(("cancel", order_id))
+            return {"orderId": order_id, "status": "CANCEL_REQUESTED"}
+
+        def preflight_ticket(self, repriced_ticket):
+            calls.append(("preflight", repriced_ticket["limit_price"]))
+            return PreflightResult(ok=True, bpr=200, message="ok", raw={"request": repriced_ticket["submit_payload"], "response": {"buyingPowerRequirement": "200"}})
+
+        def place_order_ticket(self, repriced_ticket):
+            calls.append(("place", repriced_ticket["order_id"], repriced_ticket["limit_price"]))
+            return {"orderId": repriced_ticket["order_id"]}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", RepriceBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.datetime", type("FrozenDateTime", (datetime,), {"now": classmethod(lambda cls, tz=None: datetime(2026, 5, 29, 14, 6, tzinfo=UTC))}))
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    config = _live_control()
+    config["runtime"]["mode"] = "live"
+    config["runtime"]["trading_enabled"] = True
+    config["live"]["entry_reprice"] = {"enabled": True, "after_minutes": 5, "max_reprices": 1, "improvement_multiplier": 0.5}
+
+    synced = sync_live_orders(config, store=store)
+
+    assert synced["orders"][0]["reprice_status"] == "submitted"
+    assert ("preflight", "-2.20") in calls
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "repriced"
+    repriced = store.live_order_intent(synced["orders"][0]["reprice_ticket_hash"])
+    assert repriced["_ledger_status"] == "submitted"
+    assert repriced["limit_price"] == "-2.20"

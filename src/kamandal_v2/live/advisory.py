@@ -146,6 +146,8 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
             candidate.rejection_reason = "live_idea_already_open"
         elif candidate.idea_id in traded_ids:
             candidate.rejection_reason = "live_idea_already_traded_today"
+        elif mismatch := _mentioned_strategy_mismatch(candidate, live_cfg):
+            candidate.rejection_reason = mismatch
         elif reconciliation_blockers_for_group(store, {"underlying": candidate.underlying, "group_id": ""}, config=config):
             candidate.rejection_reason = "live_reconciliation_blocker"
         elif candidate.estimated_bpr > max_bpr:
@@ -177,6 +179,32 @@ def _structure_bpr_cap(structure: str, live_cfg: dict[str, Any]) -> float:
     if raw in (None, ""):
         return fallback
     return float(raw)
+
+
+def _mentioned_strategy_mismatch(candidate: Candidate, live_cfg: dict[str, Any]) -> str:
+    policy = str(live_cfg.get("mentioned_strategy_policy") or "strict").strip().lower()
+    if policy in {"", "soft", "ignore", "disabled"}:
+        return ""
+    mentioned = ""
+    for reason in candidate.reasons:
+        if str(reason).startswith("mentioned_strategy="):
+            mentioned = str(reason).split("=", 1)[1].strip().lower()
+            break
+    if not mentioned:
+        return ""
+    if _strategy_aliases(mentioned).intersection({candidate.playbook_id.lower(), candidate.structure.lower()}):
+        return ""
+    return f"live_mentioned_strategy_mismatch:{mentioned}!={candidate.structure}"
+
+
+def _strategy_aliases(value: str) -> set[str]:
+    normalized = value.strip().lower()
+    aliases = {normalized}
+    if normalized == "strangle":
+        aliases.add("short_strangle")
+    if normalized == "calendar":
+        aliases.update({"call_calendar", "put_calendar"})
+    return aliases
 
 
 def _preflight_bpr_incomplete(candidate: Candidate) -> bool:
