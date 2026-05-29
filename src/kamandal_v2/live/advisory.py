@@ -182,7 +182,7 @@ def _structure_bpr_cap(structure: str, live_cfg: dict[str, Any]) -> float:
 
 
 def _mentioned_strategy_mismatch(candidate: Candidate, live_cfg: dict[str, Any]) -> str:
-    policy = str(live_cfg.get("mentioned_strategy_policy") or "strict").strip().lower()
+    policy = str(live_cfg.get("mentioned_strategy_policy") or "soft").strip().lower()
     if policy in {"", "soft", "ignore", "disabled"}:
         return ""
     mentioned = ""

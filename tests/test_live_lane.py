@@ -156,7 +156,7 @@ def test_live_policy_blocks_single_leg_entries_when_min_entry_legs_is_two(tmp_pa
     assert candidate.rejection_reason == "live_leg_count_below_min:1<2"
 
 
-def test_live_policy_blocks_unaligned_mentioned_strategy_by_default(tmp_path) -> None:
+def test_live_policy_allows_unaligned_mentioned_strategy_by_default(tmp_path) -> None:
     legs = [
         OptionLeg("long_put", "buy", "put", 920, "2026-07-10", 1, 1.0, 0.95, 1.05, -0.25, 0.0, -0.01, 0.1, 100),
         OptionLeg("short_put", "sell", "put", 925, "2026-07-10", 1, 2.0, 1.95, 2.05, -0.30, 0.0, -0.01, 0.1, 100),
@@ -181,6 +181,37 @@ def test_live_policy_blocks_unaligned_mentioned_strategy_by_default(tmp_path) ->
         [candidate],
         LocalStore(tmp_path / "kamandal.db"),
         {"live": {"min_entry_legs": 2, "max_bpr_per_order": 2500}, "execution": {"max_contracts_per_order": 1}},
+        PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0),
+    )
+
+    assert candidate.rejection_reason == ""
+
+
+def test_live_policy_can_strictly_block_unaligned_mentioned_strategy(tmp_path) -> None:
+    legs = [
+        OptionLeg("long_put", "buy", "put", 920, "2026-07-10", 1, 1.0, 0.95, 1.05, -0.25, 0.0, -0.01, 0.1, 100),
+        OptionLeg("short_put", "sell", "put", 925, "2026-07-10", 1, 2.0, 1.95, 2.05, -0.30, 0.0, -0.01, 0.1, 100),
+    ]
+    candidate = Candidate(
+        candidate_id="cand",
+        idea_id="idea",
+        underlying="COST",
+        playbook_id="put_spread_default",
+        structure="put_spread",
+        legs=legs,
+        net_credit=1.0,
+        estimated_bpr=400,
+        greeks=Greeks(theta=0.01),
+        liquidity_score=1.0,
+        score=1.0,
+        reasons=["mentioned_strategy=call_calendar"],
+        preflight=PreflightResult(ok=True, bpr=400, message="ok", raw={"response": {"buyingPowerRequirement": "400"}}),
+    )
+
+    _live_candidate_policy(
+        [candidate],
+        LocalStore(tmp_path / "kamandal.db"),
+        {"live": {"mentioned_strategy_policy": "strict", "min_entry_legs": 2, "max_bpr_per_order": 2500}, "execution": {"max_contracts_per_order": 1}},
         PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0),
     )
 
