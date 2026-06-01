@@ -10,6 +10,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from kamandal_v2.domain.models import Candidate, OptionLeg, Plan
+from kamandal_v2.liquidity import candidate_liquidity_metrics
 from kamandal_v2.market.public import occ_symbol
 
 
@@ -122,11 +123,26 @@ def _build_ticket(
         "time_in_force": "DAY",
         "created_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "preflight": preflight,
+        "execution_quality": _execution_quality(candidate),
         "legs": [leg.to_dict() for leg in legs],
         "submit_payload": submit_payload,
     }
     ticket["ticket_hash"] = ticket_hash(ticket)
     return ticket
+
+
+def _execution_quality(candidate: Any) -> dict[str, Any]:
+    try:
+        metrics = candidate_liquidity_metrics(candidate)
+    except Exception:  # noqa: BLE001
+        metrics = {}
+    reasons = list(getattr(candidate, "reasons", []) or [])
+    return {
+        **metrics,
+        "wide_bid_ask_price_through": "wide_bid_ask_price_through=true" in reasons,
+        "low_oi_price_through": "low_oi_price_through=true" in reasons,
+        "filter_warnings": [reason[len("filter_warning="):] for reason in reasons if str(reason).startswith("filter_warning=")],
+    }
 
 
 def _submit_payload(order_id: str, underlying: str, legs: list[OptionLeg], limit_price: str, open_close_indicator: str) -> dict[str, Any]:

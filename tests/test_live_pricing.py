@@ -161,6 +161,37 @@ def test_liquidity_adjusted_pricing_demands_more_improvement_for_low_oi() -> Non
     assert metadata["improvement_pct_of_spread"] == 35
 
 
+def test_liquidity_adjusted_pricing_uses_nonlinear_width_improvement() -> None:
+    candidate = _credit_spread_candidate()
+    candidate.legs[0].bid = 1.00
+    candidate.legs[0].ask = 3.00
+    candidate.legs[1].bid = 0.50
+    candidate.legs[1].ask = 1.50
+    config = _config()
+    config["live"]["entry_pricing"] = {
+        "mode": "liquidity_adjusted_mid",
+        "improvement_pct_of_spread": 10,
+        "low_oi_improvement_pct_of_spread": 20,
+        "very_low_oi_improvement_pct_of_spread": 35,
+        "good_oi_threshold": 500,
+        "low_oi_threshold": 100,
+        "min_improvement": 0.01,
+        "max_improvement": 2.00,
+        "normal_bid_ask_pct": 0.30,
+        "width_improvement_max_pct_of_spread": 45,
+        "width_improvement_curve": 0.85,
+        "apply_to_credit": True,
+        "apply_to_debit": True,
+    }
+
+    metadata = entry_price_metadata(candidate, config)
+
+    assert metadata["execution_liquidity_tier"] == "extreme"
+    assert metadata["max_bid_ask_pct"] == 1.0
+    assert metadata["improvement_pct_of_spread"] > 35
+    assert candidate_entry_limit_price(candidate, config).startswith("-2.")
+
+
 def test_public_preflight_retries_rejected_penny_price_with_favorable_nickel(monkeypatch) -> None:
     adapter = PublicAdapter(_public_config())
     calls = []

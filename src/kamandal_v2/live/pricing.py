@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Any
 
 from kamandal_v2.domain.models import Candidate
+from kamandal_v2.liquidity import candidate_liquidity_metrics, nonlinear_width_improvement_pct
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,9 @@ class EntryPricingPolicy:
     low_oi_threshold: int = 100
     min_improvement: float = 0.01
     max_improvement: float = 0.10
+    normal_bid_ask_pct: float = 0.30
+    width_improvement_max_pct_of_spread: float = 45.0
+    width_improvement_curve: float = 0.85
     apply_to_credit: bool = True
     apply_to_debit: bool = True
 
@@ -37,6 +41,9 @@ def entry_pricing_policy(config: dict[str, Any] | None) -> EntryPricingPolicy:
         low_oi_threshold=int(_as_float(raw.get("low_oi_threshold"), 100.0)),
         min_improvement=_as_float(raw.get("min_improvement"), 0.01),
         max_improvement=_as_float(raw.get("max_improvement"), 0.10),
+        normal_bid_ask_pct=_as_float(raw.get("normal_bid_ask_pct"), 0.30),
+        width_improvement_max_pct_of_spread=_as_float(raw.get("width_improvement_max_pct_of_spread"), 45.0),
+        width_improvement_curve=_as_float(raw.get("width_improvement_curve"), 0.85),
         apply_to_credit=_as_bool(raw.get("apply_to_credit"), True),
         apply_to_debit=_as_bool(raw.get("apply_to_debit"), True),
     )
@@ -62,11 +69,15 @@ def entry_price_metadata(candidate: Candidate, config: dict[str, Any] | None) ->
     policy = entry_pricing_policy(config)
     base_price = abs(float(candidate.net_credit))
     improved_price = _improved_price(candidate, base_price, policy)
+    metrics = candidate_liquidity_metrics(candidate)
     return {
         "mode": policy.mode,
         "base_mid_limit": round(base_price, 2),
         "improved_limit": round(improved_price, 2),
         "aggregate_bid_ask_spread": round(_aggregate_spread(candidate), 4),
+        "max_bid_ask_pct": metrics["max_bid_ask_pct"],
+        "aggregate_spread_to_mid_pct": metrics["aggregate_spread_to_mid_pct"],
+        "execution_liquidity_tier": metrics["execution_liquidity_tier"],
         "improvement": round(abs(improved_price - base_price), 4),
         "improvement_pct_of_spread": _selected_improvement_pct(candidate, policy),
         "min_open_interest": _min_open_interest(candidate),
@@ -102,12 +113,23 @@ def _improvement(candidate: Candidate, policy: EntryPricingPolicy) -> float:
 def _selected_improvement_pct(candidate: Candidate, policy: EntryPricingPolicy) -> float:
     if policy.mode != "liquidity_adjusted_mid":
         return policy.improvement_pct_of_spread
+    metrics = candidate_liquidity_metrics(candidate)
     min_oi = _min_open_interest(candidate)
     pct = policy.improvement_pct_of_spread
     if min_oi < policy.low_oi_threshold:
         pct = max(pct, policy.very_low_oi_improvement_pct_of_spread)
     elif min_oi < policy.good_oi_threshold:
         pct = max(pct, policy.low_oi_improvement_pct_of_spread)
+    pct = max(
+        pct,
+        nonlinear_width_improvement_pct(
+            max_bid_ask_pct=float(metrics["max_bid_ask_pct"]),
+            base_pct=policy.improvement_pct_of_spread,
+            normal_bid_ask_pct=policy.normal_bid_ask_pct,
+            max_width_pct=policy.width_improvement_max_pct_of_spread,
+            curve=policy.width_improvement_curve,
+        ),
+    )
     if policy.max_improvement > 0:
         spread = _aggregate_spread(candidate)
         if spread > 0:

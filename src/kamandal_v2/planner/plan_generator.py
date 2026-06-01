@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from kamandal_v2.domain.models import Candidate, Greeks, Plan, PortfolioState
+from kamandal_v2.liquidity import candidate_liquidity_metrics
 
 
 def generate_plans(
@@ -191,15 +192,17 @@ def _concentration_penalty(plan: list[Candidate], portfolio: PortfolioState) -> 
 
 
 def _slippage_penalty(plan: list[Candidate]) -> float:
-    penalties = []
+    penalties: list[float] = []
     for candidate in plan:
-        spreads = [
-            (leg.ask - leg.bid) / max(leg.mid, 0.01)
-            for leg in candidate.legs
-        ]
-        penalties.append(sum(spreads) / max(len(spreads), 1))
-    avg_spread_pct = sum(penalties) / max(len(penalties), 1)
-    return min(avg_spread_pct * 20.0, 20.0)
+        metrics = candidate_liquidity_metrics(candidate)
+        max_leg = float(metrics["max_bid_ask_pct"])
+        aggregate = float(metrics["aggregate_spread_to_mid_pct"])
+        pressure = max(max_leg, aggregate)
+        # Slippage is convex: slightly wide markets are a nuisance, but very
+        # wide markets should quickly lose to cleaner alternatives.
+        penalties.append((pressure ** 1.35) * 18.0)
+    avg_penalty = sum(penalties) / max(len(penalties), 1)
+    return min(avg_penalty, 35.0)
 
 
 def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState, control: dict) -> Plan:

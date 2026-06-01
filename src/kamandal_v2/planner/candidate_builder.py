@@ -6,6 +6,7 @@ import hashlib
 from itertools import product
 
 from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, OptionQuote, Playbook, PreflightResult, UniverseEntry
+from kamandal_v2.liquidity import bad_quote_reason, candidate_liquidity_metrics
 from kamandal_v2.market.interfaces import MarketDataProvider, PreflightClient
 from kamandal_v2.planner.shape_validators import validate_structure
 
@@ -80,12 +81,16 @@ def build_candidates(
                     candidate.rejection_reason = result.reason
                     rejected_for_idea.append(candidate)
                     continue
-                filter_rejections = _filter_rejections(candidate, playbook)
+                filter_rejections = _filter_rejections(candidate, playbook, config)
                 hard_filter_rejections = []
                 for filter_rejection in filter_rejections:
                     if _low_oi_price_through_enabled(filter_rejection, config):
                         candidate.reasons.append(f"filter_warning={filter_rejection}")
                         candidate.reasons.append("low_oi_price_through=true")
+                        continue
+                    if _wide_bid_ask_price_through_enabled(filter_rejection, config):
+                        candidate.reasons.append(f"filter_warning={filter_rejection}")
+                        candidate.reasons.append("wide_bid_ask_price_through=true")
                         continue
                     if candidate_filter_mode == "warn":
                         candidate.reasons.append(f"filter_warning={filter_rejection}")
@@ -623,6 +628,7 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
     min_oi = min((int(leg.open_interest or 0) for leg in legs), default=0)
     avg_spread_pct = sum(((leg.ask - leg.bid) / max(leg.mid, 0.01)) for leg in legs) / max(len(legs), 1)
     expiry_quality = ",".join(sorted({_expiry_quality(leg.expiration) for leg in legs}))
+    liquidity_metrics = candidate_liquidity_metrics({"legs": legs, "net_credit": net_credit})
     return Candidate(
         candidate_id=candidate_id,
         idea_id=idea.idea_id,
@@ -641,6 +647,9 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
             f"expiry_quality={expiry_quality}",
             f"min_open_interest={min_oi}",
             f"avg_bid_ask_pct={avg_spread_pct:.4f}",
+            f"max_bid_ask_pct={liquidity_metrics['max_bid_ask_pct']:.4f}",
+            f"aggregate_spread_to_mid_pct={liquidity_metrics['aggregate_spread_to_mid_pct']:.4f}",
+            f"execution_liquidity_tier={liquidity_metrics['execution_liquidity_tier']}",
             *([f"mentioned_strategy={idea.mentioned_strategy}"] if idea.mentioned_strategy else []),
         ],
     )
@@ -789,8 +798,14 @@ def _thesis_fit_score(idea: Idea, candidate: Candidate) -> float:
     return strategy_bonus
 
 
-def _filter_rejections(candidate: Candidate, playbook: Playbook) -> list[str]:
+def _filter_rejections(candidate: Candidate, playbook: Playbook, config: dict | None = None) -> list[str]:
     rejections: list[str] = []
+    absurd_bid_ask_pct = _absurd_bid_ask_pct(config)
+    for leg in candidate.legs:
+        bad_quote = bad_quote_reason(leg, absurd_bid_ask_pct=absurd_bid_ask_pct)
+        if bad_quote:
+            rejections.append(bad_quote)
+            break
     if playbook.min_option_oi is not None:
         for leg in candidate.legs:
             if leg.open_interest < playbook.min_option_oi:
@@ -827,6 +842,24 @@ def _low_oi_price_through_enabled(rejection: str, config: dict | None) -> bool:
         return False
     mode = str((((config or {}).get("live") or {}).get("liquidity_policy") or {}).get("low_oi_mode") or "").strip().lower()
     return mode == "price_through"
+
+
+def _wide_bid_ask_price_through_enabled(rejection: str, config: dict | None) -> bool:
+    if not rejection.startswith("bid_ask_pct_above_max:"):
+        return False
+    if str((((config or {}).get("runtime") or {}).get("mode") or "")).strip().lower() != "live":
+        return False
+    policy = (((config or {}).get("live") or {}).get("liquidity_policy") or {})
+    mode = str(policy.get("wide_bid_ask_mode") or "").strip().lower()
+    return mode == "price_through"
+
+
+def _absurd_bid_ask_pct(config: dict | None) -> float:
+    policy = (((config or {}).get("live") or {}).get("liquidity_policy") or {})
+    try:
+        return float(policy.get("absurd_bid_ask_pct") or 3.0)
+    except (TypeError, ValueError):
+        return 3.0
 
 
 def _risk_width(candidate: Candidate) -> float:

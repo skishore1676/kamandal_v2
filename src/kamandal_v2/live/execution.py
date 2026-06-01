@@ -389,6 +389,7 @@ def _save_live_position_from_ticket(store: LocalStore, ticket: dict[str, Any], *
         "playbook_id": ticket.get("playbook_id"),
         "structure": ticket.get("structure"),
         "candidate": _candidate_from_ticket(ticket),
+        "execution_quality": ticket.get("execution_quality") or {},
         "entry_snapshot": _entry_snapshot_from_ticket(ticket, order_status),
         "order_status": order_status,
     }
@@ -406,6 +407,7 @@ def _candidate_from_ticket(ticket: dict[str, Any]) -> dict[str, Any]:
         "playbook_id": ticket.get("playbook_id"),
         "structure": ticket.get("structure"),
         "net_credit": _net_credit_from_ticket(ticket),
+        "execution_quality": ticket.get("execution_quality") or {},
         "legs": legs,
     }
 
@@ -431,6 +433,7 @@ def _entry_snapshot_from_ticket(ticket: dict[str, Any], order_status: dict[str, 
         "fill_quantity": order_status.get("filledQuantity"),
         "source_order_id": ticket.get("order_id"),
         "source_ticket_hash": ticket.get("ticket_hash"),
+        "execution_quality": ticket.get("execution_quality") or {},
     }
 
 

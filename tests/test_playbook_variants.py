@@ -49,6 +49,16 @@ class _LowIvRankFixture(FixtureMarketDataProvider):
         return 20.0
 
 
+class _AbsurdSpreadFixture(FixtureMarketDataProvider):
+    def chain_snapshot(self, underlying: str):
+        chain = super().chain_snapshot(underlying)
+        for quote in chain.quotes:
+            mid = quote.mid
+            quote.bid = 0.01
+            quote.ask = max(mid * 4.0, 1.0)
+        return chain
+
+
 def test_put_diagonal_variant_matches_bearish_overextended_thesis() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_overextended",
@@ -127,6 +137,63 @@ def test_live_low_oi_price_through_warns_without_rejecting() -> None:
         "low_oi_price_through=true" in candidate.reasons
         for candidate in candidates
     )
+
+
+def test_live_wide_bid_ask_price_through_warns_without_rejecting() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_overextended",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 21,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+
+    candidates = build_candidates(
+        [idea],
+        universe,
+        [_playbook(max_bid_ask_pct=0.01, min_option_oi=0)],
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+        candidate_filter_mode="strict",
+        config={"runtime": {"mode": "live"}, "live": {"liquidity_policy": {"wide_bid_ask_mode": "price_through"}}},
+    )
+
+    assert any(candidate.eligible for candidate in candidates)
+    assert any(
+        "wide_bid_ask_price_through=true" in candidate.reasons
+        for candidate in candidates
+    )
+
+
+def test_live_absurd_bid_ask_stays_hard_rejected() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_overextended",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 21,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+
+    candidates = build_candidates(
+        [idea],
+        universe,
+        [_playbook(max_bid_ask_pct=0.01, min_option_oi=0)],
+        _AbsurdSpreadFixture(),
+        FixturePreflightClient(),
+        candidate_filter_mode="strict",
+        config={
+            "runtime": {"mode": "live"},
+            "live": {"liquidity_policy": {"wide_bid_ask_mode": "price_through", "absurd_bid_ask_pct": 1.0}},
+        },
+    )
+
+    assert candidates
+    assert all(not candidate.eligible for candidate in candidates)
+    assert any(candidate.rejection_reason.startswith("bad_quote_absurd_bid_ask_pct:") for candidate in candidates)
 
 
 def test_permissive_match_mode_warns_instead_of_blocking_iv_and_horizon() -> None:

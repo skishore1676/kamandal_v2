@@ -52,6 +52,9 @@ live:
     low_oi_threshold: 100
     min_improvement: 0.01
     max_improvement: 0.10
+    normal_bid_ask_pct: 0.30
+    width_improvement_max_pct_of_spread: 45
+    width_improvement_curve: 0.85
     apply_to_credit: true    # sell/credit entries ask for more credit than mid
     apply_to_debit: true     # buy/debit entries bid below mid
   entry_reprice:
@@ -61,6 +64,8 @@ live:
     improvement_multiplier: 0.5
   liquidity_policy:
     low_oi_mode: price_through
+    wide_bid_ask_mode: price_through
+    absurd_bid_ask_pct: 3.0
   reconciliation:
     enabled: true
     broker_flat_confirmations_required: 2
