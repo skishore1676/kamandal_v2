@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
@@ -18,6 +18,11 @@ from kamandal_v2.stores.sqlite import LocalStore
 
 
 TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED"}
+COMPLETED_TICKET_STATUSES = {"filled", "manual_fill_recorded"}
+PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", "dry_run"}
+ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
+FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
+FAILED_TICKET_STATUSES = {"rejected", "expired", "failed", "cancelled", "canceled"}
 
 
 def execute_live_approved(
@@ -36,72 +41,85 @@ def execute_live_approved(
     adapter = broker_adapter(config)
     results = []
     for row in rows[:1]:
-        ticket = _ticket_from_row(row)
-        intent = store.live_order_intent(str(ticket.get("ticket_hash") or ""))
-        if not intent:
-            results.append(_failure(ticket, "ticket_not_found_in_live_ledger"))
+        tickets, selection_reason = _tickets_to_execute(config, store, row, submit=submit, close=close)
+        if not tickets:
+            results.append({"status": "blocked", "reason": selection_reason, "trade_bundle": row.get("trade_bundle")})
             continue
-        if intent.get("ticket_hash") != ticket.get("ticket_hash"):
-            results.append(_failure(ticket, "ticket_hash_mismatch"))
+        if submit and not close and not _daily_basket_cap_allows(config, store, row):
+            results.append({"status": "blocked", "reason": "max_live_baskets_per_day_reached", "trade_bundle": row.get("trade_bundle")})
             continue
-        ledger_status = str(intent.get("_ledger_status") or "")
-        allowed_statuses = {"dry_run", "pending_close_approval" if close else "pending_approval"}
-        if ledger_status and ledger_status not in allowed_statuses:
-            results.append(_failure(ticket, f"ticket_already_{ledger_status}"))
-            continue
-        if close and _same_day_close_blocked(config, store, ticket):
-            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_same_day_close")
-            results.append(_failure(ticket, "same_day_live_exit_blocked"))
-            continue
-        if submit and not _ticket_fresh(config, ticket):
-            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_stale")
-            results.append(_failure(ticket, "ticket_preflight_stale"))
-            continue
-        request_payload = dict(ticket.get("submit_payload") or {})
-        if submit:
-            fresh_preflight = adapter.preflight_ticket(ticket)
-            if not fresh_preflight.ok:
-                store.record_live_order_attempt(
-                    ticket,
-                    action="preflight_close" if close else "preflight_open",
-                    submit=submit,
-                    ok=False,
-                    request_payload=dict((fresh_preflight.raw or {}).get("request") or ticket.get("submit_payload") or {}),
-                    response_payload=fresh_preflight.to_dict(),
-                )
-                store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_failed")
-                results.append(_failure(ticket, fresh_preflight.message or "fresh_preflight_failed"))
-                continue
-            try:
-                response = adapter.place_order_ticket(ticket)
-                ok = bool(response.get("orderId"))
-                status = "submitted" if ok else "submit_failed"
-            except Exception as exc:  # noqa: BLE001
-                response = {"error": str(exc)}
-                ok = False
-                status = "submit_failed"
-        else:
-            response = {"dry_run": True, "orderId": ticket.get("order_id"), "request": request_payload}
-            ok = True
-            status = "dry_run"
-        store.record_live_order_attempt(
-            ticket,
-            action="submit_close" if close else "submit_open",
-            submit=submit,
-            ok=ok,
-            request_payload=request_payload,
-            response_payload=response,
-        )
-        store.update_live_order_intent_status(str(ticket["ticket_hash"]), status)
-        store.event("live_order_execution_evaluated", {
-            "ticket_hash": ticket.get("ticket_hash"),
-            "order_id": ticket.get("order_id"),
-            "submit": submit,
-            "close": close,
-            "status": status,
-        })
-        results.append({"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "status": status, "response": response})
+        for ticket in tickets:
+            results.append(_execute_ticket(config, adapter, store, ticket, submit=submit, close=close))
     return {"action": action, "submit": submit, "processed": len(results), "results": results}
+
+
+def _execute_ticket(
+    config: dict[str, Any],
+    adapter: Any,
+    store: LocalStore,
+    ticket: dict[str, Any],
+    *,
+    submit: bool,
+    close: bool,
+) -> dict[str, Any]:
+    intent = store.live_order_intent(str(ticket.get("ticket_hash") or ""))
+    if not intent:
+        return _failure(ticket, "ticket_not_found_in_live_ledger")
+    if intent.get("ticket_hash") != ticket.get("ticket_hash"):
+        return _failure(ticket, "ticket_hash_mismatch")
+    ledger_status = str(intent.get("_ledger_status") or "")
+    allowed_statuses = {"dry_run", "pending_close_approval" if close else "pending_approval"}
+    if ledger_status and ledger_status not in allowed_statuses:
+        return _failure(ticket, f"ticket_already_{ledger_status}")
+    if close and _same_day_close_blocked(config, store, ticket):
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_same_day_close")
+        return _failure(ticket, "same_day_live_exit_blocked")
+    if submit and not _ticket_fresh(config, ticket):
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_stale")
+        return _failure(ticket, "ticket_preflight_stale")
+    request_payload = dict(ticket.get("submit_payload") or {})
+    if submit:
+        fresh_preflight = adapter.preflight_ticket(ticket)
+        if not fresh_preflight.ok:
+            store.record_live_order_attempt(
+                ticket,
+                action="preflight_close" if close else "preflight_open",
+                submit=submit,
+                ok=False,
+                request_payload=dict((fresh_preflight.raw or {}).get("request") or ticket.get("submit_payload") or {}),
+                response_payload=fresh_preflight.to_dict(),
+            )
+            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_failed")
+            return _failure(ticket, fresh_preflight.message or "fresh_preflight_failed")
+        try:
+            response = adapter.place_order_ticket(ticket)
+            ok = bool(response.get("orderId"))
+            status = "submitted" if ok else "submit_failed"
+        except Exception as exc:  # noqa: BLE001
+            response = {"error": str(exc)}
+            ok = False
+            status = "submit_failed"
+    else:
+        response = {"dry_run": True, "orderId": ticket.get("order_id"), "request": request_payload}
+        ok = True
+        status = "dry_run"
+    store.record_live_order_attempt(
+        ticket,
+        action="submit_close" if close else "submit_open",
+        submit=submit,
+        ok=ok,
+        request_payload=request_payload,
+        response_payload=response,
+    )
+    store.update_live_order_intent_status(str(ticket["ticket_hash"]), status)
+    store.event("live_order_execution_evaluated", {
+        "ticket_hash": ticket.get("ticket_hash"),
+        "order_id": ticket.get("order_id"),
+        "submit": submit,
+        "close": close,
+        "status": status,
+    })
+    return {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "status": status, "response": response}
 
 
 def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None) -> dict[str, Any]:
@@ -273,19 +291,18 @@ def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None =
         action = str(row.get("operator_action") or "").strip().upper()
         if action not in {APPROVE_LIVE, APPROVE_LIVE_CLOSE}:
             continue
-        detail = _loads(row.get("plan_detail_json"))
-        ticket = detail.get("order_ticket_json") or {}
-        ticket_hash = str(ticket.get("ticket_hash") or "")
-        intent = store.live_order_intent(ticket_hash) if ticket_hash else None
-        status = str((intent or {}).get("_ledger_status") or "")
-        if status in {"pending_approval", "pending_close_approval", "dry_run"}:
+        tickets = _tickets_from_row(row, close=action == APPROVE_LIVE_CLOSE)
+        progress = [_ticket_progress(store, ticket) for ticket in tickets]
+        states = {item["state"] for item in progress}
+        statuses = ",".join(item["status"] for item in progress)
+        if not progress or "unknown" in states:
             continue
-        if not status:
+        if "failed" not in states and ("pending" in states or "active" in states):
             continue
         row["operator_action"] = ""
-        row["operator_notes"] = f"auto-cleared stale {action}; ledger_status={status}"
-        row["plan_status"] = status
-        cleared.append({"ticket_hash": ticket_hash, "status": status, "trade_bundle": row.get("trade_bundle")})
+        row["operator_notes"] = f"auto-cleared stale {action}; ledger_statuses={statuses}"
+        row["plan_status"] = "filled" if states == {"done"} else "terminal"
+        cleared.append({"statuses": statuses, "trade_bundle": row.get("trade_bundle")})
     if cleared:
         client.replace_tab(title, header=DAILY_PLAN_HEADER, rows=[[row.get(column, "") for column in DAILY_PLAN_HEADER] for row in rows])
     store.event("live_approval_cleanup_completed", {"cleared": cleared})
@@ -323,6 +340,106 @@ def _ticket_from_row(row: dict[str, Any]) -> dict[str, Any]:
     if not ticket:
         raise RuntimeError("approved daily_plan row missing order_ticket_json")
     return ticket
+
+
+def _tickets_from_row(row: dict[str, Any], *, close: bool) -> list[dict[str, Any]]:
+    if close:
+        return [_ticket_from_row(row)]
+    detail = _loads(row.get("plan_detail_json"))
+    tickets = detail.get("order_tickets_json")
+    if isinstance(tickets, list) and tickets:
+        return [ticket for ticket in tickets if isinstance(ticket, dict)]
+    return [_ticket_from_row(row)]
+
+
+def _tickets_to_execute(
+    config: dict[str, Any],
+    store: LocalStore,
+    row: dict[str, Any],
+    *,
+    submit: bool,
+    close: bool,
+) -> tuple[list[dict[str, Any]], str]:
+    tickets = _tickets_from_row(row, close=close)
+    if close:
+        return tickets[:1], "close_ticket"
+    if not submit:
+        limit = _ticket_limit(config, submit=submit, close=close)
+        return tickets[:limit], "dry_run"
+    selected: list[dict[str, Any]] = []
+    for ticket in tickets:
+        progress = _ticket_progress(store, ticket)
+        status = progress["status"]
+        if progress["state"] == "done":
+            continue
+        if progress["state"] == "failed":
+            return [], f"basket_ticket_failed:{status}"
+        if progress["state"] == "active":
+            return [], f"basket_ticket_active:{status}"
+        if progress["state"] == "pending":
+            selected.append(ticket)
+            break
+        return [], f"basket_ticket_unknown:{status}"
+    if not selected:
+        return [], "basket_complete_or_no_pending_tickets"
+    return selected[:_ticket_limit(config, submit=submit, close=close)], "next_pending_ticket"
+
+
+def _ticket_limit(config: dict[str, Any], *, submit: bool, close: bool) -> int:
+    if close:
+        return 1
+    live_cfg = config.get("live") or {}
+    if submit:
+        return max(int(live_cfg.get("max_live_entry_submits_per_run") or 1), 1)
+    return max(int(live_cfg.get("max_orders_per_plan") or live_cfg.get("max_new_positions_per_plan") or 1), 1)
+
+
+def _ticket_progress(store: LocalStore, ticket: dict[str, Any]) -> dict[str, str]:
+    ticket_hash = str(ticket.get("ticket_hash") or "")
+    intent = store.live_order_intent(ticket_hash)
+    status = str((intent or {}).get("_ledger_status") or "")
+    if not status:
+        return {"state": "unknown", "status": "missing_intent"}
+    if status in COMPLETED_TICKET_STATUSES:
+        return {"state": "done", "status": status}
+    if status == "repriced":
+        children = store.live_order_child_intents(ticket_hash)
+        child_states = [_ticket_progress(store, child) for child in children]
+        if any(child["state"] == "active" for child in child_states):
+            return {"state": "active", "status": "repriced_child_active"}
+        if any(child["state"] == "done" for child in child_states):
+            return {"state": "done", "status": "repriced_child_done"}
+        if any(child["state"] == "failed" for child in child_states):
+            return {"state": "failed", "status": "repriced_child_failed"}
+        return {"state": "active", "status": status}
+    if status in ACTIVE_TICKET_STATUSES:
+        return {"state": "active", "status": status}
+    if status in PENDING_TICKET_STATUSES:
+        return {"state": "pending", "status": status}
+    if status in FAILED_TICKET_STATUSES or any(status.startswith(prefix) for prefix in FAILED_TICKET_STATUS_PREFIXES):
+        return {"state": "failed", "status": status}
+    return {"state": "unknown", "status": status}
+
+
+def _daily_basket_cap_allows(config: dict[str, Any], store: LocalStore, row: dict[str, Any]) -> bool:
+    raw_cap = (config.get("live") or {}).get("max_live_baskets_per_day")
+    if raw_cap in (None, ""):
+        return True
+    cap = int(raw_cap)
+    if cap <= 0:
+        return False
+    current_plan_id = str(row.get("plan_id") or "")
+    opened_plan_ids = store.live_entry_plan_ids_since(_market_day_start(config))
+    if current_plan_id in opened_plan_ids:
+        return True
+    return len(opened_plan_ids) < cap
+
+
+def _market_day_start(config: dict[str, Any]) -> str:
+    market_tz = str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago")
+    today = datetime.now(ZoneInfo(market_tz)).date()
+    local_start = datetime.combine(today, time.min, tzinfo=ZoneInfo(market_tz))
+    return local_start.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _assert_submit_allowed(config: dict[str, Any], *, submit: bool) -> None:

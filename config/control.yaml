@@ -18,6 +18,13 @@ shadow:
   buying_power_override: 20000
   bpr_used_override: 0
   max_positions_override: 60
+  max_new_positions_per_plan: 4
+  max_new_plans_per_day: 5
+  basket:
+    target_new_bpr_pct: 10
+    hard_new_bpr_pct: 20
+    min_marginal_score: 2
+    max_new_positions_per_plan: 4
   idea_cooldown_days: 1
   match_gate_mode: permissive # strict | permissive
   candidate_filter_mode: warn   # strict | warn
@@ -31,8 +38,16 @@ live:
   candidate_filter_mode: strict
   mentioned_strategy_policy: soft # soft | strict
   min_entry_legs: 2
-  max_new_positions_per_plan: 1
-  max_new_plans_per_day: 2
+  max_new_positions_per_plan: 3
+  max_orders_per_plan: 3
+  max_live_entry_submits_per_run: 1
+  max_new_plans_per_day: 3
+  max_live_baskets_per_day: 3
+  basket:
+    target_new_bpr_pct: 15
+    hard_new_bpr_pct: 30
+    min_marginal_score: 2
+    max_new_positions_per_plan: 3
   max_bpr_per_order: 2500
   max_bpr_per_order_pct: 25
   max_bpr_per_order_by_structure:

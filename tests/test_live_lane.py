@@ -4,9 +4,9 @@ from datetime import UTC, date, datetime, timedelta
 
 from kamandal_v2.config import load_control
 from kamandal_v2.cli import _live_submit_requested
-from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PortfolioState, PreflightResult, UniverseEntry
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, Playbook, PortfolioState, PreflightResult, UniverseEntry
 from kamandal_v2.live.approval import approve_live_request, expire_live_approval_requests, send_pending_live_approval_requests
-from kamandal_v2.live.advisory import _live_candidate_policy, live_config, run_live_advisory_plan
+from kamandal_v2.live.advisory import _live_candidate_policy, live_config, render_live_plan_rows, run_live_advisory_plan
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill, sync_live_orders
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, _limit_price, build_close_ticket, build_open_ticket
@@ -87,6 +87,12 @@ def test_live_approval_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_LIVE_EXIT_APPROVAL_MODE", "auto_rules")
     monkeypatch.setenv("KAMANDAL_LIVE_AUTO_SUBMIT_ENTRIES", "true")
     monkeypatch.setenv("KAMANDAL_LIVE_AUTO_SUBMIT_EXITS", "false")
+    monkeypatch.setenv("KAMANDAL_LIVE_MAX_ORDERS_PER_PLAN", "3")
+    monkeypatch.setenv("KAMANDAL_LIVE_MAX_ENTRY_SUBMITS_PER_RUN", "1")
+    monkeypatch.setenv("KAMANDAL_LIVE_MAX_BASKETS_PER_DAY", "3")
+    monkeypatch.setenv("KAMANDAL_LIVE_BASKET_TARGET_NEW_BPR_PCT", "7")
+    monkeypatch.setenv("KAMANDAL_LIVE_BASKET_HARD_NEW_BPR_PCT", "9")
+    monkeypatch.setenv("KAMANDAL_LIVE_BASKET_MIN_MARGINAL_SCORE", "4")
     monkeypatch.setenv("KAMANDAL_TELEGRAM_APPROVAL_TARGET", "123")
     monkeypatch.setenv("KAMANDAL_TELEGRAM_APPROVAL_EXPIRY_MINUTES", "7")
 
@@ -96,6 +102,12 @@ def test_live_approval_env_overrides(monkeypatch) -> None:
     assert control["live"]["exit_approval_mode"] == "auto_rules"
     assert control["live"]["auto_submit_entries"] is True
     assert control["live"]["auto_submit_exits"] is False
+    assert control["live"]["max_orders_per_plan"] == 3
+    assert control["live"]["max_live_entry_submits_per_run"] == 1
+    assert control["live"]["max_live_baskets_per_day"] == 3
+    assert control["live"]["basket"]["target_new_bpr_pct"] == 7
+    assert control["live"]["basket"]["hard_new_bpr_pct"] == 9
+    assert control["live"]["basket"]["min_marginal_score"] == 4
     assert control["live"]["telegram_approval"]["target"] == "123"
     assert control["live"]["telegram_approval"]["expiry_minutes"] == 7
 
@@ -489,6 +501,61 @@ def test_live_advisory_auto_top_plan_sets_sheet_approval(tmp_path, monkeypatch) 
     assert row["operator_action"] == APPROVE_LIVE
 
 
+def test_live_advisory_row_carries_all_basket_tickets(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    before = PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0, greeks=Greeks())
+    after = PortfolioState(account_size=10_000, buying_power=9_200, bpr_used=800, positions_count=2, greeks=Greeks(delta=-0.2, theta=0.1))
+    plan = Plan(
+        plan_id="plan_basket",
+        plan_rank=1,
+        status="eligible",
+        candidates=[
+            _ticket_candidate("cand_msft", "idea_msft", "MSFT"),
+            _ticket_candidate("cand_nvda", "idea_nvda", "NVDA"),
+        ],
+        score=42.0,
+        total_bpr=800.0,
+        bpr_utilization_pct=8.0,
+        buying_power_after=9_200.0,
+        portfolio_before=before,
+        portfolio_after=after,
+    )
+    result = type("PlanRunResult", (), {"plans": [plan], "metrics": {}})()
+
+    rows = render_live_plan_rows(result, {"live": {"entry_approval_mode": "auto_top_plan"}}, store=store)
+
+    row = dict(zip(DAILY_PLAN_HEADER, rows[0], strict=False))
+    detail = json.loads(row["plan_detail_json"])
+    tickets = detail["order_tickets_json"]
+    assert row["operator_action"] == APPROVE_LIVE
+    assert detail["order_ticket_json"]["candidate_id"] == "cand_msft"
+    assert [ticket["candidate_id"] for ticket in tickets] == ["cand_msft", "cand_nvda"]
+    assert detail["basket_execution_json"]["mode"] == "staged"
+    assert store.live_order_intent(tickets[0]["ticket_hash"])["_ledger_status"] == "pending_approval"
+    assert store.live_order_intent(tickets[1]["ticket_hash"])["_ledger_status"] == "pending_approval"
+
+
+def _ticket_candidate(candidate_id: str, idea_id: str, underlying: str) -> Candidate:
+    legs = [
+        OptionLeg("long_put", "buy", "put", 95, "2026-07-17", 1, 0.8, 0.75, 0.85, -0.2, 0.0, -0.01, 0.1, 500),
+        OptionLeg("short_put", "sell", "put", 100, "2026-07-17", 1, 1.8, 1.75, 1.85, -0.3, 0.0, -0.02, 0.1, 500),
+    ]
+    return Candidate(
+        candidate_id=candidate_id,
+        idea_id=idea_id,
+        underlying=underlying,
+        playbook_id="put_spread_default",
+        structure="put_spread",
+        legs=legs,
+        net_credit=1.0,
+        estimated_bpr=400.0,
+        greeks=Greeks(delta=-0.1, theta=0.05),
+        liquidity_score=0.9,
+        score=10.0,
+        preflight=PreflightResult(ok=True, bpr=400.0, message="ok", raw={"response": {"buyingPowerRequirement": "400"}}),
+    )
+
+
 def test_live_advisory_telegram_mode_creates_pending_request_without_sheet_approval(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     control = _live_control()
@@ -667,6 +734,150 @@ def test_live_execute_approved_dry_run_uses_sheet_gate(tmp_path, monkeypatch) ->
         assert conn.execute("SELECT count(*) FROM live_order_attempts").fetchone()[0] == 1
 
 
+def test_live_execute_approved_dry_run_can_process_basket_tickets(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    before = PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0, greeks=Greeks())
+    after = PortfolioState(account_size=10_000, buying_power=9_200, bpr_used=800, positions_count=2, greeks=Greeks(delta=-0.2, theta=0.1))
+    plan = Plan(
+        plan_id="plan_basket",
+        plan_rank=1,
+        status="eligible",
+        candidates=[
+            _ticket_candidate("cand_msft", "idea_msft", "MSFT"),
+            _ticket_candidate("cand_nvda", "idea_nvda", "NVDA"),
+        ],
+        score=42.0,
+        total_bpr=800.0,
+        bpr_utilization_pct=8.0,
+        buying_power_after=9_200.0,
+        portfolio_before=before,
+        portfolio_after=after,
+    )
+    result = type("PlanRunResult", (), {"plans": [plan], "metrics": {}})()
+    rows = render_live_plan_rows(
+        result,
+        {"live": {"entry_approval_mode": "auto_top_plan", "max_orders_per_plan": 2}},
+        store=store,
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, rows[0], strict=False))
+    row["operator_action"] = APPROVE_LIVE
+
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [row]})
+    config = load_control()
+    config["live"]["max_orders_per_plan"] = 2
+
+    executed = execute_live_approved(config, submit=False, store=store)
+
+    assert executed["processed"] == 2
+    assert [item["status"] for item in executed["results"]] == ["dry_run", "dry_run"]
+    with sqlite3.connect(store.sqlite_path) as conn:
+        assert conn.execute("SELECT count(*) FROM live_order_attempts").fetchone()[0] == 2
+
+
+def test_live_submit_stages_next_basket_ticket_after_prior_fill(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    before = PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0, greeks=Greeks())
+    after = PortfolioState(account_size=10_000, buying_power=9_200, bpr_used=800, positions_count=2, greeks=Greeks(delta=-0.2, theta=0.1))
+    plan = Plan(
+        plan_id="plan_basket",
+        plan_rank=1,
+        status="eligible",
+        candidates=[
+            _ticket_candidate("cand_msft", "idea_msft", "MSFT"),
+            _ticket_candidate("cand_nvda", "idea_nvda", "NVDA"),
+        ],
+        score=42.0,
+        total_bpr=800.0,
+        bpr_utilization_pct=8.0,
+        buying_power_after=9_200.0,
+        portfolio_before=before,
+        portfolio_after=after,
+    )
+    rows = render_live_plan_rows(
+        type("PlanRunResult", (), {"plans": [plan], "metrics": {}})(),
+        {"live": {"entry_approval_mode": "auto_top_plan", "max_live_entry_submits_per_run": 1}},
+        store=store,
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, rows[0], strict=False))
+    row["operator_action"] = APPROVE_LIVE
+    tickets = json.loads(row["plan_detail_json"])["order_tickets_json"]
+    store.update_live_order_intent_status(tickets[0]["ticket_hash"], "filled")
+
+    class PassingBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def preflight_ticket(self, _ticket):
+            return PreflightResult(ok=True, bpr=400.0, message="ok")
+
+        def place_order_ticket(self, ticket):
+            return {"orderId": ticket["order_id"]}
+
+    live_control = _live_control()
+    live_control["runtime"]["mode"] = "live"
+    live_control["runtime"]["trading_enabled"] = True
+    live_control["live"]["max_live_entry_submits_per_run"] = 1
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", PassingBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [row]})
+
+    executed = execute_live_approved(live_control, submit=True, store=store)
+
+    assert executed["processed"] == 1
+    assert executed["results"][0]["ticket_hash"] == tickets[1]["ticket_hash"]
+    assert executed["results"][0]["status"] == "submitted"
+
+
+def test_cleanup_live_approvals_keeps_pending_basket_ticket(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    before = PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0, greeks=Greeks())
+    after = PortfolioState(account_size=10_000, buying_power=9_200, bpr_used=800, positions_count=2, greeks=Greeks(delta=-0.2, theta=0.1))
+    plan = Plan(
+        plan_id="plan_basket",
+        plan_rank=1,
+        status="eligible",
+        candidates=[
+            _ticket_candidate("cand_msft", "idea_msft", "MSFT"),
+            _ticket_candidate("cand_nvda", "idea_nvda", "NVDA"),
+        ],
+        score=42.0,
+        total_bpr=800.0,
+        bpr_utilization_pct=8.0,
+        buying_power_after=9_200.0,
+        portfolio_before=before,
+        portfolio_after=after,
+    )
+    rows = render_live_plan_rows(
+        type("PlanRunResult", (), {"plans": [plan], "metrics": {}})(),
+        {"live": {"entry_approval_mode": "auto_top_plan"}},
+        store=store,
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, rows[0], strict=False))
+    row["operator_action"] = APPROVE_LIVE
+    tickets = json.loads(row["plan_detail_json"])["order_tickets_json"]
+    store.update_live_order_intent_status(tickets[0]["ticket_hash"], "filled")
+    written = {}
+
+    class FakeSheetClient:
+        @classmethod
+        def from_config(cls, _config):
+            return cls()
+
+        def read_tab(self, _title):
+            return [row]
+
+        def replace_tab(self, _title, *, header, rows):
+            written["rows"] = [dict(zip(header, item, strict=False)) for item in rows]
+            return len(rows)
+
+    monkeypatch.setattr("kamandal_v2.live.execution.GoogleSheetClient", FakeSheetClient)
+
+    cleaned = cleanup_live_approvals(load_control(), store=store)
+
+    assert cleaned["cleared"] == 0
+    assert written == {}
+
+
 def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")
@@ -705,7 +916,7 @@ def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypa
     assert executed["results"][0]["status"] == "submit_failed"
     retried = execute_live_approved(live_control, submit=True, store=store)
     assert retried["processed"] == 1
-    assert retried["results"][0]["reason"] == "ticket_already_submit_failed"
+    assert retried["results"][0]["reason"] == "basket_ticket_failed:submit_failed"
     with sqlite3.connect(store.sqlite_path) as conn:
         assert conn.execute("SELECT count(*) FROM live_order_attempts WHERE ok = 0").fetchone()[0] == 1
 

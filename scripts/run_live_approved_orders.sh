@@ -11,6 +11,8 @@ run_live_approved_orders() {
   export KAMANDAL_MODE=live
   local submit_args=()
   submit_args+=(--submit-auto)
+  log "Syncing live order status before evaluating staged approvals."
+  "$KAMANDAL_BIN" sync-live-orders
   log "Evaluating sheet-approved live open orders submit=${KAMANDAL_LIVE_SUBMIT:-0}."
   local result_file
   result_file="$(mktemp)"

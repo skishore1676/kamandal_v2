@@ -508,6 +508,31 @@ class LocalStore:
             ).fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
+    def live_order_child_intents(self, parent_ticket_hash: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT status, payload FROM live_order_intents").fetchall()
+        children = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if str(payload.get("parent_ticket_hash") or "") != parent_ticket_hash:
+                continue
+            payload["_ledger_status"] = row["status"]
+            children.append(payload)
+        return children
+
+    def live_entry_plan_ids_since(self, created_since: str) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT plan_id FROM live_order_intents
+                WHERE intent_type = 'open'
+                  AND created_at >= ?
+                  AND status IN ('submitted', 'repriced', 'filled', 'manual_fill_recorded')
+                """,
+                (created_since,),
+            ).fetchall()
+        return {str(row["plan_id"]) for row in rows if row["plan_id"]}
+
     def update_live_order_intent_status(self, ticket_hash: str, status: str) -> None:
         with self._connect() as conn:
             conn.execute(

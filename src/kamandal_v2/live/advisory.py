@@ -94,9 +94,11 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
     for index, plan in enumerate(result.plans):
         if not plan.candidates:
             continue
+        tickets = [build_open_ticket(plan, candidate) for candidate in plan.candidates]
+        for ticket in tickets:
+            store.save_live_order_intent(ticket)
         candidate = plan.candidates[0]
-        ticket = build_open_ticket(plan, candidate)
-        store.save_live_order_intent(ticket)
+        ticket = tickets[0]
         row = dict(zip(DAILY_PLAN_HEADER, rows[index], strict=False))
         metrics = _loads(row.get("plan_metrics_json"))
         detail = _loads(row.get("plan_detail_json"))
@@ -105,6 +107,13 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
         detail["live_gate_status"] = "eligible"
         detail["live_blockers"] = []
         detail["order_ticket_json"] = ticket
+        detail["order_tickets_json"] = tickets
+        detail["basket_execution_json"] = {
+            "mode": "staged",
+            "ticket_count": len(tickets),
+            "submit_default": "one_ticket_per_run",
+            "requires_resync_between_fills": True,
+        }
         detail["public_preflight_json"] = candidate.preflight.to_dict() if candidate.preflight else None
         detail["real_account_json"] = account_json
         row["mode"] = "live_advisory"

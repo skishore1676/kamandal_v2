@@ -27,6 +27,13 @@ def _control() -> dict:
     }
 
 
+def _basket_control(**basket: float | int) -> dict:
+    control = _control()
+    control["runtime"]["mode"] = "shadow"
+    control["shadow"] = {"basket": basket}
+    return control
+
+
 def _candidate(
     candidate_id: str,
     *,
@@ -166,3 +173,132 @@ def test_plan_reasons_include_optimizer_components() -> None:
     assert "delta_fit:" in reasons
     assert "theta_capture:" in reasons
     assert "volatility_capture:" in reasons
+
+
+def test_staged_basket_controls_allow_multi_candidate_shadow_plan() -> None:
+    candidates = [
+        _candidate(
+            f"put_spread_{index}",
+            underlying=underlying,
+            structure="put_spread",
+            bpr=500,
+            delta=-0.08,
+            gamma=-0.004,
+            theta=0.05,
+            vega=-0.10,
+            net_credit=1.0,
+            iv_pct=70.0,
+            iv_rank=70.0,
+        )
+        for index, underlying in enumerate(["MSFT", "AAPL", "NVDA"], start=1)
+    ]
+
+    plans = generate_plans(
+        candidates,
+        _portfolio(),
+        _basket_control(
+            target_new_bpr_pct=15,
+            hard_new_bpr_pct=20,
+            min_marginal_score=0.01,
+            max_new_positions_per_plan=3,
+        ),
+    )
+
+    assert len(plans[0].candidates) == 3
+    reasons = " ".join(plans[0].reasons)
+    assert "new_bpr_target_fit:" in reasons
+    assert "basket_controls=" in reasons
+    assert "target_new_bpr_pct:15.00" in reasons
+    assert "max_new_positions_per_plan:3" in reasons
+    assert "marginal_score=" in reasons
+
+
+def test_hard_new_bpr_caps_staged_basket_size() -> None:
+    candidates = [
+        _candidate(
+            f"candidate_{index}",
+            underlying=underlying,
+            structure="put_spread",
+            bpr=600,
+            delta=-0.06,
+            gamma=-0.004,
+            theta=0.05,
+            vega=-0.10,
+            net_credit=1.0,
+            iv_pct=70.0,
+            iv_rank=70.0,
+        )
+        for index, underlying in enumerate(["MSFT", "AAPL", "NVDA"], start=1)
+    ]
+
+    plans = generate_plans(
+        candidates,
+        _portfolio(),
+        _basket_control(
+            target_new_bpr_pct=18,
+            hard_new_bpr_pct=12,
+            min_marginal_score=0.01,
+            max_new_positions_per_plan=4,
+        ),
+    )
+
+    assert len(plans[0].candidates) == 2
+    assert plans[0].total_bpr == 1200
+
+
+def test_min_marginal_score_stops_weak_basket_additions() -> None:
+    strong_first = _candidate(
+        "strong_first",
+        underlying="MSFT",
+        structure="put_spread",
+        bpr=500,
+        delta=-0.08,
+        gamma=-0.004,
+        theta=0.06,
+        vega=-0.10,
+        net_credit=1.0,
+        iv_pct=75.0,
+        iv_rank=75.0,
+    )
+    strong_second = _candidate(
+        "strong_second",
+        underlying="AAPL",
+        structure="put_spread",
+        bpr=500,
+        delta=-0.08,
+        gamma=-0.004,
+        theta=0.06,
+        vega=-0.10,
+        net_credit=1.0,
+        iv_pct=75.0,
+        iv_rank=75.0,
+    )
+    weak_drag = _candidate(
+        "weak_drag",
+        underlying="NVDA",
+        structure="long_call",
+        bpr=500,
+        delta=2.0,
+        gamma=0.06,
+        theta=-0.60,
+        vega=0.50,
+        net_credit=-5.0,
+        liquidity=0.20,
+        score=0.0,
+        iv_pct=95.0,
+        iv_rank=95.0,
+    )
+
+    plans = generate_plans(
+        [strong_first, strong_second, weak_drag],
+        _portfolio(),
+        _basket_control(
+            target_new_bpr_pct=15,
+            hard_new_bpr_pct=20,
+            min_marginal_score=5,
+            max_new_positions_per_plan=3,
+        ),
+    )
+
+    candidate_ids = {candidate.candidate_id for candidate in plans[0].candidates}
+    assert candidate_ids == {"strong_first", "strong_second"}

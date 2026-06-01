@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 
 from kamandal_v2.domain.models import Candidate, Greeks, Plan, PortfolioState
 from kamandal_v2.liquidity import candidate_liquidity_metrics
+
+
+@dataclass(frozen=True, slots=True)
+class _BasketPolicy:
+    target_new_bpr_pct: float | None = None
+    hard_new_bpr_pct: float | None = None
+    min_marginal_score: float | None = None
+    max_new_positions_per_plan: int | None = None
 
 
 def generate_plans(
@@ -18,10 +27,11 @@ def generate_plans(
     max_new_positions: int | None = None,
 ) -> list[Plan]:
     eligible = [candidate for candidate in candidates if candidate.eligible]
+    basket_policy = _basket_policy(control, max_new_positions=max_new_positions)
     max_positions = _max_positions(control)
     remaining_positions = max(max_positions - portfolio.positions_count, 0)
-    if max_new_positions is not None:
-        remaining_positions = min(remaining_positions, max_new_positions)
+    if basket_policy.max_new_positions_per_plan is not None:
+        remaining_positions = min(remaining_positions, basket_policy.max_new_positions_per_plan)
     if remaining_positions <= 0:
         return []
     max_bpr_pct = float(((control.get("portfolio") or {}).get("hard_max_bpr_utilization_pct") or 90))
@@ -39,8 +49,11 @@ def generate_plans(
                 if candidate.candidate_id in used_ids or candidate.underlying in used_underlyings or candidate.idea_id in used_ideas:
                     continue
                 next_plan = partial + [candidate]
-                violation = _constraint_violation(next_plan, portfolio, max_bpr_pct, max_underlying_pct)
+                violation = _constraint_violation(next_plan, portfolio, max_bpr_pct, max_underlying_pct, basket_policy.hard_new_bpr_pct)
                 if violation:
+                    continue
+                marginal_score = _score(next_plan, portfolio, control) - _score(partial, portfolio, control)
+                if basket_policy.min_marginal_score is not None and marginal_score < basket_policy.min_marginal_score:
                     continue
                 expanded.append(next_plan)
         if not expanded:
@@ -52,7 +65,7 @@ def generate_plans(
     unique: dict[str, list[Candidate]] = {}
     for plan in completed:
         key = "|".join(sorted(candidate.candidate_id for candidate in plan))
-        unique[key] = plan
+        unique.setdefault(key, plan)
     ranked_plans = sorted(unique.values(), key=lambda plan: _score(plan, portfolio, control), reverse=True)[:top_n]
     return [
         _materialize(plan, rank=index + 1, portfolio=portfolio, control=control)
@@ -70,8 +83,16 @@ def _max_positions(control: dict) -> int:
     return max_positions
 
 
-def _constraint_violation(plan: list[Candidate], portfolio: PortfolioState, max_bpr_pct: float, max_underlying_pct: float) -> str:
+def _constraint_violation(
+    plan: list[Candidate],
+    portfolio: PortfolioState,
+    max_bpr_pct: float,
+    max_underlying_pct: float,
+    hard_new_bpr_pct: float | None,
+) -> str:
     total_bpr = sum(candidate.estimated_bpr for candidate in plan)
+    if hard_new_bpr_pct is not None and (total_bpr / max(portfolio.account_size, 1.0)) * 100 > hard_new_bpr_pct:
+        return "new_bpr_cap"
     if ((portfolio.bpr_used + total_bpr) / max(portfolio.account_size, 1.0)) * 100 > max_bpr_pct:
         return "portfolio_bpr_cap"
     per_underlying: dict[str, float] = dict(portfolio.per_underlying_bpr)
@@ -100,7 +121,7 @@ def _score_components(plan: list[Candidate], portfolio: PortfolioState, control:
     gamma_penalty = _gamma_stress_penalty(greeks.gamma)
     concentration_penalty = _concentration_penalty(plan, portfolio)
     slippage_penalty = _slippage_penalty(plan)
-    return {
+    components = {
         "delta_fit": delta_fit,
         "theta_capture": theta_capture,
         "volatility_capture": volatility_capture,
@@ -111,6 +132,60 @@ def _score_components(plan: list[Candidate], portfolio: PortfolioState, control:
         "concentration_penalty": -concentration_penalty,
         "slippage_penalty": -slippage_penalty,
     }
+    target_score = _new_bpr_target_score(total_bpr, portfolio, control)
+    if target_score is not None:
+        components["new_bpr_target_fit"] = target_score
+    return components
+
+
+def _new_bpr_target_score(total_bpr: float, portfolio: PortfolioState, control: dict) -> float | None:
+    target_new_bpr_pct = _basket_policy(control).target_new_bpr_pct
+    if target_new_bpr_pct is None or target_new_bpr_pct <= 0:
+        return None
+    new_bpr_pct = (total_bpr / max(portfolio.account_size, 1.0)) * 100.0
+    if new_bpr_pct <= target_new_bpr_pct:
+        return min(10.0, 10.0 * new_bpr_pct / target_new_bpr_pct)
+    excess_pct = new_bpr_pct - target_new_bpr_pct
+    return max(0.0, 10.0 - 10.0 * excess_pct / max(target_new_bpr_pct, 1.0))
+
+
+def _basket_policy(control: dict, *, max_new_positions: int | None = None) -> _BasketPolicy:
+    mode = str((control.get("runtime") or {}).get("mode") or "shadow").lower()
+    planner_cfg = control.get("planner") or {}
+    basket_cfg = dict(planner_cfg.get("basket") or {})
+    mode_cfg = control.get(mode) or {}
+    basket_cfg.update(mode_cfg.get("basket") or {})
+
+    configured_limits = [
+        _optional_int(basket_cfg.get("max_new_positions_per_plan")),
+        max_new_positions,
+    ]
+    if mode == "live":
+        configured_limits.append(_optional_int((control.get("live") or {}).get("max_new_positions_per_plan")))
+    elif mode == "shadow":
+        configured_limits.append(_optional_int((control.get("shadow") or {}).get("max_new_positions_per_plan")))
+    limits = [limit for limit in configured_limits if limit is not None]
+
+    return _BasketPolicy(
+        target_new_bpr_pct=_optional_float(basket_cfg.get("target_new_bpr_pct", planner_cfg.get("target_new_bpr_pct"))),
+        hard_new_bpr_pct=_optional_float(basket_cfg.get("hard_new_bpr_pct", planner_cfg.get("hard_new_bpr_pct"))),
+        min_marginal_score=_optional_float(basket_cfg.get("min_marginal_score", planner_cfg.get("min_marginal_score"))),
+        max_new_positions_per_plan=min(limits) if limits else None,
+    )
+
+
+def _optional_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_int(value: object) -> int | None:
+    parsed = _optional_float(value)
+    return None if parsed is None else int(parsed)
 
 
 def _delta_fit_score(after_delta: float, portfolio: PortfolioState, control: dict) -> float:
@@ -231,7 +306,7 @@ def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState,
         buying_power_after=after.buying_power,
         portfolio_before=portfolio,
         portfolio_after=after,
-        reasons=_reasons(plan, greeks, total_bpr, _score_components(plan, portfolio, control)),
+        reasons=_reasons(plan, greeks, total_bpr, _score_components(plan, portfolio, control), _basket_policy(control), _marginal_scores(plan, portfolio, control)),
         blocked_by=[],
         operator_action=operator_action,
     )
@@ -251,7 +326,28 @@ def _after_underlying_bpr(portfolio: PortfolioState, plan: list[Candidate]) -> d
     return result
 
 
-def _reasons(plan: list[Candidate], greeks: Greeks, total_bpr: float, score_components: dict[str, float]) -> list[str]:
+def _marginal_scores(plan: list[Candidate], portfolio: PortfolioState, control: dict) -> list[float]:
+    scores: list[float] = []
+    partial: list[Candidate] = []
+    prior_score = _score(partial, portfolio, control)
+    for candidate in plan:
+        next_plan = partial + [candidate]
+        next_score = _score(next_plan, portfolio, control)
+        scores.append(round(next_score - prior_score, 4))
+        partial = next_plan
+        prior_score = next_score
+    return scores
+
+
+def _reasons(
+    plan: list[Candidate],
+    greeks: Greeks,
+    total_bpr: float,
+    score_components: dict[str, float],
+    basket_policy: _BasketPolicy,
+    marginal_scores: list[float],
+) -> list[str]:
+    last_marginal_score = marginal_scores[-1] if marginal_scores else 0.0
     return [
         f"{len(plan)} trades",
         f"bpr={total_bpr:.2f}",
@@ -259,5 +355,20 @@ def _reasons(plan: list[Candidate], greeks: Greeks, total_bpr: float, score_comp
         f"theta_change={greeks.theta:.2f}",
         f"vega_change={greeks.vega:.2f}",
         "score_components=" + ",".join(f"{key}:{value:.2f}" for key, value in score_components.items()),
+        "basket_controls="
+        + ",".join(
+            [
+                f"target_new_bpr_pct:{_reason_value(basket_policy.target_new_bpr_pct)}",
+                f"hard_new_bpr_pct:{_reason_value(basket_policy.hard_new_bpr_pct)}",
+                f"min_marginal_score:{_reason_value(basket_policy.min_marginal_score)}",
+                f"max_new_positions_per_plan:{basket_policy.max_new_positions_per_plan or 'none'}",
+            ]
+        ),
+        f"marginal_score={last_marginal_score:.4f}",
+        "marginal_scores=" + ",".join(f"{value:.4f}" for value in marginal_scores),
         f"underlyings={','.join(candidate.underlying for candidate in plan)}",
     ]
+
+
+def _reason_value(value: float | None) -> str:
+    return "none" if value is None else f"{value:.2f}"
