@@ -40,7 +40,7 @@ live:
   min_entry_legs: 2
   max_new_positions_per_plan: 3
   max_orders_per_plan: 3
-  max_live_entry_submits_per_run: 1
+  max_live_entry_submits_per_run: 3
   max_new_plans_per_day: 3
   max_live_baskets_per_day: 3
   basket:
@@ -66,7 +66,14 @@ live:
     good_oi_threshold: 500
     low_oi_threshold: 100
     min_improvement: 0.01
-    max_improvement: 0.10
+    max_improvement: 0.10 # legacy fallback when a liquidity tier is unknown
+    max_improvement_by_liquidity_tier:
+      tight: 0.05
+      normal: 0.10
+      wide: 0.15
+      very_wide: 0.25
+      extreme: 0.35
+    max_improvement_pct_of_premium: 40
     normal_bid_ask_pct: 0.30
     width_improvement_max_pct_of_spread: 45
     width_improvement_curve: 0.85

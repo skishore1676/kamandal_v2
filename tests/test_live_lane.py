@@ -530,7 +530,7 @@ def test_live_advisory_row_carries_all_basket_tickets(tmp_path) -> None:
     assert row["operator_action"] == APPROVE_LIVE
     assert detail["order_ticket_json"]["candidate_id"] == "cand_msft"
     assert [ticket["candidate_id"] for ticket in tickets] == ["cand_msft", "cand_nvda"]
-    assert detail["basket_execution_json"]["mode"] == "staged"
+    assert detail["basket_execution_json"]["mode"] == "concurrent"
     assert store.live_order_intent(tickets[0]["ticket_hash"])["_ledger_status"] == "pending_approval"
     assert store.live_order_intent(tickets[1]["ticket_hash"])["_ledger_status"] == "pending_approval"
 
@@ -826,6 +826,57 @@ def test_live_submit_stages_next_basket_ticket_after_prior_fill(tmp_path, monkey
     assert executed["processed"] == 1
     assert executed["results"][0]["ticket_hash"] == tickets[1]["ticket_hash"]
     assert executed["results"][0]["status"] == "submitted"
+
+
+def test_live_submit_can_submit_multiple_pending_basket_tickets_when_configured(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    before = PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0, greeks=Greeks())
+    after = PortfolioState(account_size=10_000, buying_power=9_200, bpr_used=800, positions_count=2, greeks=Greeks(delta=-0.2, theta=0.1))
+    plan = Plan(
+        plan_id="plan_basket",
+        plan_rank=1,
+        status="eligible",
+        candidates=[
+            _ticket_candidate("cand_msft", "idea_msft", "MSFT"),
+            _ticket_candidate("cand_nvda", "idea_nvda", "NVDA"),
+        ],
+        score=42.0,
+        total_bpr=800.0,
+        bpr_utilization_pct=8.0,
+        buying_power_after=9_200.0,
+        portfolio_before=before,
+        portfolio_after=after,
+    )
+    rows = render_live_plan_rows(
+        type("PlanRunResult", (), {"plans": [plan], "metrics": {}})(),
+        {"live": {"entry_approval_mode": "auto_top_plan", "max_live_entry_submits_per_run": 2}},
+        store=store,
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, rows[0], strict=False))
+    row["operator_action"] = APPROVE_LIVE
+
+    class PassingBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def preflight_ticket(self, _ticket):
+            return PreflightResult(ok=True, bpr=400.0, message="ok")
+
+        def place_order_ticket(self, ticket):
+            return {"orderId": ticket["order_id"]}
+
+    live_control = _live_control()
+    live_control["runtime"]["mode"] = "live"
+    live_control["runtime"]["trading_enabled"] = True
+    live_control["live"]["max_live_entry_submits_per_run"] = 2
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", PassingBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [row]})
+
+    executed = execute_live_approved(live_control, submit=True, store=store)
+
+    assert executed["processed"] == 2
+    assert [item["status"] for item in executed["results"]] == ["submitted", "submitted"]
 
 
 def test_cleanup_live_approvals_keeps_pending_basket_ticket(tmp_path, monkeypatch) -> None:

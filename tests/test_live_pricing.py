@@ -176,7 +176,15 @@ def test_liquidity_adjusted_pricing_uses_nonlinear_width_improvement() -> None:
         "good_oi_threshold": 500,
         "low_oi_threshold": 100,
         "min_improvement": 0.01,
-        "max_improvement": 2.00,
+        "max_improvement": 0.10,
+        "max_improvement_by_liquidity_tier": {
+            "tight": 0.05,
+            "normal": 0.10,
+            "wide": 0.15,
+            "very_wide": 0.25,
+            "extreme": 0.35,
+        },
+        "max_improvement_pct_of_premium": 40,
         "normal_bid_ask_pct": 0.30,
         "width_improvement_max_pct_of_spread": 45,
         "width_improvement_curve": 0.85,
@@ -188,8 +196,47 @@ def test_liquidity_adjusted_pricing_uses_nonlinear_width_improvement() -> None:
 
     assert metadata["execution_liquidity_tier"] == "extreme"
     assert metadata["max_bid_ask_pct"] == 1.0
-    assert metadata["improvement_pct_of_spread"] > 35
-    assert candidate_entry_limit_price(candidate, config).startswith("-2.")
+    assert metadata["raw_improvement_pct_of_spread"] > 35
+    assert metadata["max_improvement_cap"] == 0.35
+    assert candidate_entry_limit_price(candidate, config) == "-1.35"
+
+
+def test_liquidity_adjusted_pricing_uses_tier_cap_for_very_wide_basket() -> None:
+    candidate = _credit_spread_candidate()
+    candidate.legs[0].bid = 1.50
+    candidate.legs[0].ask = 2.40
+    candidate.legs[1].bid = 0.65
+    candidate.legs[1].ask = 1.05
+    config = _config()
+    config["live"]["entry_pricing"] = {
+        "mode": "liquidity_adjusted_mid",
+        "improvement_pct_of_spread": 10,
+        "low_oi_improvement_pct_of_spread": 20,
+        "very_low_oi_improvement_pct_of_spread": 35,
+        "good_oi_threshold": 500,
+        "low_oi_threshold": 100,
+        "min_improvement": 0.01,
+        "max_improvement": 0.10,
+        "max_improvement_by_liquidity_tier": {
+            "tight": 0.05,
+            "normal": 0.10,
+            "wide": 0.15,
+            "very_wide": 0.25,
+            "extreme": 0.35,
+        },
+        "max_improvement_pct_of_premium": 40,
+        "normal_bid_ask_pct": 0.30,
+        "width_improvement_max_pct_of_spread": 45,
+        "width_improvement_curve": 0.85,
+        "apply_to_credit": True,
+        "apply_to_debit": True,
+    }
+
+    metadata = entry_price_metadata(candidate, config)
+
+    assert metadata["execution_liquidity_tier"] == "very_wide"
+    assert metadata["max_improvement_cap"] == 0.25
+    assert candidate_entry_limit_price(candidate, config) == "-1.25"
 
 
 def test_public_preflight_retries_rejected_penny_price_with_favorable_nickel(monkeypatch) -> None:
@@ -217,6 +264,8 @@ def test_entry_pricing_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_ENTRY_PRICE_IMPROVEMENT_PCT_OF_SPREAD", "25")
     monkeypatch.setenv("KAMANDAL_ENTRY_PRICE_MIN_IMPROVEMENT", "0.02")
     monkeypatch.setenv("KAMANDAL_ENTRY_PRICE_MAX_IMPROVEMENT", "0.15")
+    monkeypatch.setenv("KAMANDAL_ENTRY_PRICE_VERY_WIDE_MAX_IMPROVEMENT", "0.33")
+    monkeypatch.setenv("KAMANDAL_ENTRY_PRICE_MAX_IMPROVEMENT_PCT_OF_PREMIUM", "45")
     monkeypatch.setenv("KAMANDAL_ENTRY_PRICE_APPLY_TO_CREDIT", "false")
     monkeypatch.setenv("KAMANDAL_ENTRY_PRICE_APPLY_TO_DEBIT", "true")
 
@@ -227,5 +276,7 @@ def test_entry_pricing_env_overrides(monkeypatch) -> None:
     assert pricing["improvement_pct_of_spread"] == 25
     assert pricing["min_improvement"] == 0.02
     assert pricing["max_improvement"] == 0.15
+    assert pricing["max_improvement_by_liquidity_tier"]["very_wide"] == 0.33
+    assert pricing["max_improvement_pct_of_premium"] == 45
     assert pricing["apply_to_credit"] is False
     assert pricing["apply_to_debit"] is True

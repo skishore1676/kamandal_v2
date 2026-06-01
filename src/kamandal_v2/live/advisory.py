@@ -109,10 +109,10 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
         detail["order_ticket_json"] = ticket
         detail["order_tickets_json"] = tickets
         detail["basket_execution_json"] = {
-            "mode": "staged",
+            "mode": "concurrent",
             "ticket_count": len(tickets),
-            "submit_default": "one_ticket_per_run",
-            "requires_resync_between_fills": True,
+            "submit_default": "all_pending_tickets_up_to_live_limit",
+            "requires_resync_between_fills": False,
         }
         detail["public_preflight_json"] = candidate.preflight.to_dict() if candidate.preflight else None
         detail["real_account_json"] = account_json

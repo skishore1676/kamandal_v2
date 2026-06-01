@@ -367,6 +367,7 @@ def _tickets_to_execute(
         limit = _ticket_limit(config, submit=submit, close=close)
         return tickets[:limit], "dry_run"
     selected: list[dict[str, Any]] = []
+    limit = _ticket_limit(config, submit=submit, close=close)
     for ticket in tickets:
         progress = _ticket_progress(store, ticket)
         status = progress["status"]
@@ -378,11 +379,13 @@ def _tickets_to_execute(
             return [], f"basket_ticket_active:{status}"
         if progress["state"] == "pending":
             selected.append(ticket)
-            break
+            if len(selected) >= limit:
+                break
+            continue
         return [], f"basket_ticket_unknown:{status}"
     if not selected:
         return [], "basket_complete_or_no_pending_tickets"
-    return selected[:_ticket_limit(config, submit=submit, close=close)], "next_pending_ticket"
+    return selected, "pending_basket_tickets"
 
 
 def _ticket_limit(config: dict[str, Any], *, submit: bool, close: bool) -> int:

@@ -9,6 +9,14 @@ from typing import Any
 from kamandal_v2.domain.models import Candidate
 from kamandal_v2.liquidity import candidate_liquidity_metrics, nonlinear_width_improvement_pct
 
+DEFAULT_MAX_IMPROVEMENT_BY_TIER = {
+    "tight": 0.05,
+    "normal": 0.10,
+    "wide": 0.15,
+    "very_wide": 0.25,
+    "extreme": 0.35,
+}
+
 
 @dataclass(frozen=True)
 class EntryPricingPolicy:
@@ -20,6 +28,8 @@ class EntryPricingPolicy:
     low_oi_threshold: int = 100
     min_improvement: float = 0.01
     max_improvement: float = 0.10
+    max_improvement_by_liquidity_tier: dict[str, float] | None = None
+    max_improvement_pct_of_premium: float = 40.0
     normal_bid_ask_pct: float = 0.30
     width_improvement_max_pct_of_spread: float = 45.0
     width_improvement_curve: float = 0.85
@@ -32,6 +42,7 @@ def entry_pricing_policy(config: dict[str, Any] | None) -> EntryPricingPolicy:
     raw = live_cfg.get("entry_pricing") or {}
     if not isinstance(raw, dict):
         raw = {}
+    tier_caps = _tier_caps(raw.get("max_improvement_by_liquidity_tier"), fallback=_as_float(raw.get("max_improvement"), 0.10))
     return EntryPricingPolicy(
         mode=str(raw.get("mode") or "improved_mid").strip().lower(),
         improvement_pct_of_spread=_as_float(raw.get("improvement_pct_of_spread"), 10.0),
@@ -41,6 +52,8 @@ def entry_pricing_policy(config: dict[str, Any] | None) -> EntryPricingPolicy:
         low_oi_threshold=int(_as_float(raw.get("low_oi_threshold"), 100.0)),
         min_improvement=_as_float(raw.get("min_improvement"), 0.01),
         max_improvement=_as_float(raw.get("max_improvement"), 0.10),
+        max_improvement_by_liquidity_tier=tier_caps,
+        max_improvement_pct_of_premium=_as_float(raw.get("max_improvement_pct_of_premium"), 40.0),
         normal_bid_ask_pct=_as_float(raw.get("normal_bid_ask_pct"), 0.30),
         width_improvement_max_pct_of_spread=_as_float(raw.get("width_improvement_max_pct_of_spread"), 45.0),
         width_improvement_curve=_as_float(raw.get("width_improvement_curve"), 0.85),
@@ -70,6 +83,7 @@ def entry_price_metadata(candidate: Candidate, config: dict[str, Any] | None) ->
     base_price = abs(float(candidate.net_credit))
     improved_price = _improved_price(candidate, base_price, policy)
     metrics = candidate_liquidity_metrics(candidate)
+    cap = _max_improvement_cap(candidate, policy, metrics)
     return {
         "mode": policy.mode,
         "base_mid_limit": round(base_price, 2),
@@ -79,7 +93,12 @@ def entry_price_metadata(candidate: Candidate, config: dict[str, Any] | None) ->
         "aggregate_spread_to_mid_pct": metrics["aggregate_spread_to_mid_pct"],
         "execution_liquidity_tier": metrics["execution_liquidity_tier"],
         "improvement": round(abs(improved_price - base_price), 4),
-        "improvement_pct_of_spread": _selected_improvement_pct(candidate, policy),
+        "improvement_pct_of_spread": _selected_improvement_pct(candidate, policy, metrics),
+        "raw_improvement_pct_of_spread": _raw_improvement_pct(candidate, policy, metrics),
+        "max_improvement_cap": round(cap["effective_cap"], 4),
+        "tier_max_improvement": round(cap["tier_cap"], 4),
+        "premium_max_improvement": round(cap["premium_cap"], 4),
+        "max_improvement_pct_of_premium": policy.max_improvement_pct_of_premium,
         "min_open_interest": _min_open_interest(candidate),
         "side": "credit" if candidate.net_credit > 0 else "debit",
     }
@@ -102,18 +121,30 @@ def _improved_price(candidate: Candidate, base_price: float, policy: EntryPricin
 
 
 def _improvement(candidate: Candidate, policy: EntryPricingPolicy) -> float:
+    metrics = candidate_liquidity_metrics(candidate)
     spread = _aggregate_spread(candidate)
-    improvement = spread * max(_selected_improvement_pct(candidate, policy), 0.0) / 100.0
+    improvement = spread * max(_selected_improvement_pct(candidate, policy, metrics), 0.0) / 100.0
     improvement = max(improvement, max(policy.min_improvement, 0.0))
-    if policy.max_improvement > 0:
-        improvement = min(improvement, policy.max_improvement)
+    cap = _max_improvement_cap(candidate, policy, metrics)["effective_cap"]
+    if cap > 0:
+        improvement = min(improvement, cap)
     return improvement
 
 
-def _selected_improvement_pct(candidate: Candidate, policy: EntryPricingPolicy) -> float:
+def _selected_improvement_pct(candidate: Candidate, policy: EntryPricingPolicy, metrics: dict[str, Any] | None = None) -> float:
+    pct = _raw_improvement_pct(candidate, policy, metrics)
+    cap = _max_improvement_cap(candidate, policy, metrics)["effective_cap"]
+    if cap > 0:
+        spread = _aggregate_spread(candidate)
+        if spread > 0:
+            pct = min(pct, (cap / spread) * 100.0)
+    return round(pct, 4)
+
+
+def _raw_improvement_pct(candidate: Candidate, policy: EntryPricingPolicy, metrics: dict[str, Any] | None = None) -> float:
     if policy.mode != "liquidity_adjusted_mid":
         return policy.improvement_pct_of_spread
-    metrics = candidate_liquidity_metrics(candidate)
+    metrics = metrics or candidate_liquidity_metrics(candidate)
     min_oi = _min_open_interest(candidate)
     pct = policy.improvement_pct_of_spread
     if min_oi < policy.low_oi_threshold:
@@ -123,18 +154,29 @@ def _selected_improvement_pct(candidate: Candidate, policy: EntryPricingPolicy) 
     pct = max(
         pct,
         nonlinear_width_improvement_pct(
-            max_bid_ask_pct=float(metrics["max_bid_ask_pct"]),
+            max_bid_ask_pct=max(float(metrics["max_bid_ask_pct"]), float(metrics["aggregate_spread_to_mid_pct"])),
             base_pct=policy.improvement_pct_of_spread,
             normal_bid_ask_pct=policy.normal_bid_ask_pct,
             max_width_pct=policy.width_improvement_max_pct_of_spread,
             curve=policy.width_improvement_curve,
         ),
     )
-    if policy.max_improvement > 0:
-        spread = _aggregate_spread(candidate)
-        if spread > 0:
-            pct = min(pct, (policy.max_improvement / spread) * 100.0)
     return round(pct, 4)
+
+
+def _max_improvement_cap(candidate: Candidate, policy: EntryPricingPolicy, metrics: dict[str, Any] | None = None) -> dict[str, float]:
+    metrics = metrics or candidate_liquidity_metrics(candidate)
+    tier = str(metrics.get("execution_liquidity_tier") or "")
+    tier_caps = policy.max_improvement_by_liquidity_tier or {}
+    tier_cap = float(tier_caps.get(tier, policy.max_improvement) or 0.0)
+    if tier_cap <= 0 < policy.max_improvement:
+        tier_cap = policy.max_improvement
+    premium = abs(float(candidate.net_credit or 0.0))
+    premium_pct = max(float(policy.max_improvement_pct_of_premium or 0.0), 0.0)
+    premium_cap = premium * premium_pct / 100.0 if premium > 0 and premium_pct > 0 else tier_cap
+    caps = [cap for cap in (tier_cap, premium_cap) if cap > 0]
+    effective_cap = min(caps) if caps else 0.0
+    return {"tier_cap": tier_cap, "premium_cap": premium_cap, "effective_cap": effective_cap}
 
 
 def _min_open_interest(candidate: Candidate) -> int:
@@ -178,6 +220,16 @@ def _as_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _tier_caps(raw: Any, *, fallback: float) -> dict[str, float]:
+    if not isinstance(raw, dict):
+        return {tier: fallback for tier in DEFAULT_MAX_IMPROVEMENT_BY_TIER}
+    caps = dict(DEFAULT_MAX_IMPROVEMENT_BY_TIER)
+    for tier in DEFAULT_MAX_IMPROVEMENT_BY_TIER:
+        if tier in raw:
+            caps[tier] = _as_float(raw.get(tier), caps[tier])
+    return caps
 
 
 def _as_bool(value: Any, default: bool) -> bool:
