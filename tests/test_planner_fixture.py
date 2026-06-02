@@ -11,9 +11,16 @@ from kamandal_v2.stores.sqlite import LocalStore
 SAMPLE_IDEAS = "tests/fixtures/sample_ideas.yaml"
 
 
+def _shadow_control() -> dict:
+    control = load_control()
+    control.setdefault("runtime", {})["mode"] = "shadow"
+    control.setdefault("execution", {})["approval_mode"] = "shadow_auto_top_plan"
+    return control
+
+
 def _run(tmp_path):
     return run_plan(
-        load_control(),
+        _shadow_control(),
         idea_paths=[SAMPLE_IDEAS],
         config_source="seed",
         provider="fixture",
@@ -38,7 +45,7 @@ def test_nvda_strangle_idea_is_rejected_until_enabled(tmp_path) -> None:
 
 
 def test_mixed_fixture_produces_ranked_plan_bundles_with_guardrails(tmp_path) -> None:
-    control = load_control()
+    control = _shadow_control()
     result = run_plan(
         control,
         idea_paths=[SAMPLE_IDEAS],
@@ -63,8 +70,7 @@ def test_mixed_fixture_produces_ranked_plan_bundles_with_guardrails(tmp_path) ->
 
 def test_total_position_cap_includes_open_shadow_positions(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
-    control = load_control()
-    control["runtime"]["mode"] = "shadow"
+    control = _shadow_control()
     control["portfolio"]["max_positions"] = 1
     control["shadow"] = {
         "account_size_override": 20_000,
@@ -101,8 +107,7 @@ def test_daily_plan_write_is_preserved_when_no_eligible_plans(tmp_path, monkeypa
     from kamandal_v2.planner import engine
 
     store = LocalStore(tmp_path / "kamandal.db")
-    control = load_control()
-    control["runtime"]["mode"] = "shadow"
+    control = _shadow_control()
     control["portfolio"]["max_positions"] = 0
     control["shadow"] = {
         "account_size_override": 20_000,
@@ -130,8 +135,7 @@ def test_daily_plan_write_is_preserved_when_no_eligible_plans(tmp_path, monkeypa
 
 def test_shadow_position_cap_override_allows_exploration(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
-    control = load_control()
-    control["runtime"]["mode"] = "shadow"
+    control = _shadow_control()
     control["portfolio"]["max_positions"] = 1
     control["shadow"] = {
         "account_size_override": 20_000,
@@ -164,7 +168,7 @@ def test_shadow_position_cap_override_allows_exploration(tmp_path) -> None:
 
 def test_shadow_cycle_creates_auto_approval_audit(tmp_path) -> None:
     result = run_shadow_cycle(
-        load_control(),
+        _shadow_control(),
         idea_paths=[SAMPLE_IDEAS],
         config_source="seed",
         provider="fixture",
@@ -178,8 +182,7 @@ def test_shadow_cycle_creates_auto_approval_audit(tmp_path) -> None:
 
 
 def test_shadow_uses_paper_account_override(tmp_path) -> None:
-    control = load_control()
-    control["runtime"]["mode"] = "shadow"
+    control = _shadow_control()
     control["shadow"] = {
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
@@ -203,8 +206,7 @@ def test_shadow_uses_paper_account_override(tmp_path) -> None:
 
 def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
-    control = load_control()
-    control["runtime"]["mode"] = "shadow"
+    control = _shadow_control()
     control["shadow"] = {
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
@@ -252,8 +254,7 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
 
 def test_shadow_cycle_blocks_same_day_reentry_after_close(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
-    control = load_control()
-    control["runtime"]["mode"] = "shadow"
+    control = _shadow_control()
     control["shadow"] = {
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
@@ -291,7 +292,7 @@ def test_shadow_cycle_blocks_same_day_reentry_after_close(tmp_path) -> None:
 
 def test_shadow_idea_cooldown_can_be_disabled(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
-    control = load_control()
+    control = _shadow_control()
     control["shadow"] = {
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
@@ -329,7 +330,7 @@ def test_shadow_idea_cooldown_can_be_disabled(tmp_path) -> None:
 
 def test_open_shadow_ideas_backfills_legacy_fills_from_candidates(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
-    control = load_control()
+    control = _shadow_control()
     first = run_shadow_cycle(
         control,
         idea_paths=[SAMPLE_IDEAS],
@@ -385,7 +386,7 @@ ideas:
     )
 
     result = run_plan(
-        load_control(),
+        _shadow_control(),
         idea_paths=[idea_file],
         config_source="seed",
         provider="fixture",
@@ -416,7 +417,7 @@ ideas:
     )
 
     result = run_plan(
-        load_control(),
+        _shadow_control(),
         idea_paths=[idea_file],
         config_source="seed",
         provider="fixture",
@@ -449,7 +450,7 @@ ideas:
     )
 
     result = run_plan(
-        load_control(),
+        _shadow_control(),
         idea_paths=[idea_file],
         config_source="seed",
         provider="fixture",
