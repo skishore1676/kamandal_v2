@@ -188,3 +188,7 @@ source_intelligence:
 planner:
   expiry:
     monthly_single_name_bonus: true
+    diagonal_calendar_dte_fallback:
+      enabled: true
+      max_near_gap_days: 7
+      max_far_gap_days: 14
