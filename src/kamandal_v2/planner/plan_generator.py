@@ -17,6 +17,12 @@ class _BasketPolicy:
     max_new_positions_per_plan: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _RankContext:
+    best_singleton_by_underlying: dict[str, float]
+    best_singleton_by_idea: dict[str, float]
+
+
 def generate_plans(
     candidates: list[Candidate],
     portfolio: PortfolioState,
@@ -66,9 +72,14 @@ def generate_plans(
     for plan in completed:
         key = "|".join(sorted(candidate.candidate_id for candidate in plan))
         unique.setdefault(key, plan)
-    ranked_plans = sorted(unique.values(), key=lambda plan: _score(plan, portfolio, control), reverse=True)[:top_n]
+    rank_context = _rank_context(list(unique.values()), portfolio, control)
+    ranked_plans = sorted(
+        unique.values(),
+        key=lambda plan: _rank_score(plan, portfolio, control, rank_context),
+        reverse=True,
+    )[:top_n]
     return [
-        _materialize(plan, rank=index + 1, portfolio=portfolio, control=control)
+        _materialize(plan, rank=index + 1, portfolio=portfolio, control=control, rank_context=rank_context)
         for index, plan in enumerate(ranked_plans)
     ]
 
@@ -106,6 +117,57 @@ def _constraint_violation(
 
 def _score(plan: list[Candidate], portfolio: PortfolioState, control: dict) -> float:
     return round(sum(_score_components(plan, portfolio, control).values()), 4)
+
+
+def _rank_context(plans: list[list[Candidate]], portfolio: PortfolioState, control: dict) -> _RankContext:
+    best_singleton_by_underlying: dict[str, float] = {}
+    best_singleton_by_idea: dict[str, float] = {}
+    for plan in plans:
+        if len(plan) != 1:
+            continue
+        candidate = plan[0]
+        score = _score(plan, portfolio, control)
+        best_singleton_by_underlying[candidate.underlying] = max(
+            best_singleton_by_underlying.get(candidate.underlying, float("-inf")),
+            score,
+        )
+        best_singleton_by_idea[candidate.idea_id] = max(
+            best_singleton_by_idea.get(candidate.idea_id, float("-inf")),
+            score,
+        )
+    return _RankContext(best_singleton_by_underlying, best_singleton_by_idea)
+
+
+def _rank_score(plan: list[Candidate], portfolio: PortfolioState, control: dict, rank_context: _RankContext) -> float:
+    return round(_score(plan, portfolio, control) + _rank_adjustment(plan, portfolio, control, rank_context), 4)
+
+
+def _rank_adjustment(plan: list[Candidate], portfolio: PortfolioState, control: dict, rank_context: _RankContext) -> float:
+    adjustment = _basket_rank_bonus(plan, portfolio, control)
+    if len(plan) == 1 and _is_singleton_variant(plan[0], _score(plan, portfolio, control), rank_context):
+        adjustment -= 4.0
+    return round(adjustment, 4)
+
+
+def _basket_rank_bonus(plan: list[Candidate], portfolio: PortfolioState, control: dict) -> float:
+    if len(plan) < 2:
+        return 0.0
+    policy = _basket_policy(control)
+    marginal_scores = _marginal_scores(plan, portfolio, control)
+    added_scores = marginal_scores[1:]
+    if not added_scores:
+        return 0.0
+    if policy.min_marginal_score is not None and min(added_scores) < policy.min_marginal_score:
+        return 0.0
+    marginal_floor = max(policy.min_marginal_score or 2.0, 2.0)
+    marginal_quality = max(0.0, min(1.0, min(added_scores) / max(marginal_floor * 2.0, 1.0)))
+    return round(min(8.0, 5.0 * (len(plan) - 1)) * marginal_quality, 4)
+
+
+def _is_singleton_variant(candidate: Candidate, score: float, rank_context: _RankContext) -> bool:
+    best_underlying = rank_context.best_singleton_by_underlying.get(candidate.underlying, score)
+    best_idea = rank_context.best_singleton_by_idea.get(candidate.idea_id, score)
+    return score < best_underlying or score < best_idea
 
 
 def _score_components(plan: list[Candidate], portfolio: PortfolioState, control: dict) -> dict[str, float]:
@@ -280,7 +342,7 @@ def _slippage_penalty(plan: list[Candidate]) -> float:
     return min(avg_penalty, 35.0)
 
 
-def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState, control: dict) -> Plan:
+def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState, control: dict, rank_context: _RankContext) -> Plan:
     total_bpr = round(sum(candidate.estimated_bpr for candidate in plan), 2)
     greeks = _plan_greeks(plan)
     after = PortfolioState(
@@ -306,7 +368,16 @@ def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState,
         buying_power_after=after.buying_power,
         portfolio_before=portfolio,
         portfolio_after=after,
-        reasons=_reasons(plan, greeks, total_bpr, _score_components(plan, portfolio, control), _basket_policy(control), _marginal_scores(plan, portfolio, control)),
+        reasons=_reasons(
+            plan,
+            greeks,
+            total_bpr,
+            _score_components(plan, portfolio, control),
+            _basket_policy(control),
+            _marginal_scores(plan, portfolio, control),
+            _rank_adjustment(plan, portfolio, control, rank_context),
+            _rank_score(plan, portfolio, control, rank_context),
+        ),
         blocked_by=[],
         operator_action=operator_action,
     )
@@ -346,6 +417,8 @@ def _reasons(
     score_components: dict[str, float],
     basket_policy: _BasketPolicy,
     marginal_scores: list[float],
+    rank_adjustment: float,
+    rank_score: float,
 ) -> list[str]:
     last_marginal_score = marginal_scores[-1] if marginal_scores else 0.0
     return [
@@ -366,6 +439,7 @@ def _reasons(
         ),
         f"marginal_score={last_marginal_score:.4f}",
         "marginal_scores=" + ",".join(f"{value:.4f}" for value in marginal_scores),
+        f"rank_objective=adjustment:{rank_adjustment:.4f},rank_score:{rank_score:.4f}",
         f"underlyings={','.join(candidate.underlying for candidate in plan)}",
     ]
 

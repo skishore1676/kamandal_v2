@@ -302,3 +302,146 @@ def test_min_marginal_score_stops_weak_basket_additions() -> None:
 
     candidate_ids = {candidate.candidate_id for candidate in plans[0].candidates}
     assert candidate_ids == {"strong_first", "strong_second"}
+
+
+def test_basket_rank_objective_prefers_good_marginal_basket_over_singleton_variants() -> None:
+    alpha_primary = _candidate(
+        "alpha_primary",
+        underlying="MSFT",
+        structure="put_spread",
+        bpr=1500,
+        delta=-0.10,
+        gamma=-0.004,
+        theta=0.12,
+        vega=-0.10,
+        net_credit=1.0,
+        score=90.0,
+        iv_pct=75.0,
+        iv_rank=75.0,
+    )
+    alpha_variant = _candidate(
+        "alpha_variant",
+        underlying="MSFT",
+        structure="put_spread",
+        bpr=1450,
+        delta=-0.10,
+        gamma=-0.004,
+        theta=0.118,
+        vega=-0.10,
+        net_credit=1.0,
+        score=89.0,
+        iv_pct=75.0,
+        iv_rank=75.0,
+    )
+    beta = _candidate(
+        "beta",
+        underlying="AAPL",
+        structure="put_spread",
+        bpr=350,
+        delta=-0.05,
+        gamma=-0.004,
+        theta=0.04,
+        vega=-0.10,
+        net_credit=1.0,
+        score=35.0,
+        iv_pct=75.0,
+        iv_rank=75.0,
+    )
+    gamma = _candidate(
+        "gamma",
+        underlying="NVDA",
+        structure="put_spread",
+        bpr=300,
+        delta=-0.04,
+        gamma=-0.004,
+        theta=0.04,
+        vega=-0.10,
+        net_credit=1.0,
+        score=35.0,
+        iv_pct=75.0,
+        iv_rank=75.0,
+    )
+
+    plans = generate_plans(
+        [alpha_primary, alpha_variant, beta, gamma],
+        _portfolio(),
+        _basket_control(
+            target_new_bpr_pct=15,
+            hard_new_bpr_pct=30,
+            min_marginal_score=2,
+            max_new_positions_per_plan=3,
+        ),
+    )
+
+    top_ids = {candidate.candidate_id for candidate in plans[0].candidates}
+    assert len(top_ids) >= 2
+    assert top_ids <= {"alpha_primary", "alpha_variant", "beta", "gamma"}
+    assert {"beta", "gamma"} & top_ids
+    assert not (
+        len(plans) > 1
+        and len(plans[0].candidates) == 1
+        and len(plans[1].candidates) == 1
+        and plans[0].candidates[0].underlying == plans[1].candidates[0].underlying
+    )
+    assert "rank_objective=" in " ".join(plans[0].reasons)
+
+
+def test_basket_rank_objective_does_not_include_weak_marginal_addon() -> None:
+    alpha_primary = _candidate(
+        "alpha_primary",
+        underlying="MSFT",
+        structure="put_spread",
+        bpr=1500,
+        delta=-0.10,
+        gamma=-0.004,
+        theta=0.12,
+        vega=-0.10,
+        net_credit=1.0,
+        score=90.0,
+        iv_pct=75.0,
+        iv_rank=75.0,
+    )
+    beta = _candidate(
+        "beta",
+        underlying="AAPL",
+        structure="put_spread",
+        bpr=350,
+        delta=-0.05,
+        gamma=-0.004,
+        theta=0.04,
+        vega=-0.10,
+        net_credit=1.0,
+        score=35.0,
+        iv_pct=75.0,
+        iv_rank=75.0,
+    )
+    weak_drag = _candidate(
+        "weak_drag",
+        underlying="NVDA",
+        structure="long_call",
+        bpr=300,
+        delta=2.0,
+        gamma=0.06,
+        theta=-0.60,
+        vega=0.50,
+        net_credit=-5.0,
+        liquidity=0.20,
+        score=0.0,
+        iv_pct=95.0,
+        iv_rank=95.0,
+    )
+
+    plans = generate_plans(
+        [alpha_primary, beta, weak_drag],
+        _portfolio(),
+        _basket_control(
+            target_new_bpr_pct=15,
+            hard_new_bpr_pct=30,
+            min_marginal_score=5,
+            max_new_positions_per_plan=3,
+        ),
+    )
+
+    top_ids = {candidate.candidate_id for candidate in plans[0].candidates}
+    assert top_ids == {"alpha_primary", "beta"}
+    assert "weak_drag" not in top_ids
