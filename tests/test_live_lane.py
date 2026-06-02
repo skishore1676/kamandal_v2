@@ -93,6 +93,7 @@ def test_live_approval_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_LIVE_BASKET_TARGET_NEW_BPR_PCT", "7")
     monkeypatch.setenv("KAMANDAL_LIVE_BASKET_HARD_NEW_BPR_PCT", "9")
     monkeypatch.setenv("KAMANDAL_LIVE_BASKET_MIN_MARGINAL_SCORE", "4")
+    monkeypatch.setenv("KAMANDAL_ENTRY_REPRICE_EXPIRE_AFTER_MINUTES", "45")
     monkeypatch.setenv("KAMANDAL_TELEGRAM_APPROVAL_TARGET", "123")
     monkeypatch.setenv("KAMANDAL_TELEGRAM_APPROVAL_EXPIRY_MINUTES", "7")
 
@@ -108,6 +109,7 @@ def test_live_approval_env_overrides(monkeypatch) -> None:
     assert control["live"]["basket"]["target_new_bpr_pct"] == 7
     assert control["live"]["basket"]["hard_new_bpr_pct"] == 9
     assert control["live"]["basket"]["min_marginal_score"] == 4
+    assert control["live"]["entry_reprice"]["expire_after_minutes"] == 45
     assert control["live"]["telegram_approval"]["target"] == "123"
     assert control["live"]["telegram_approval"]["expiry_minutes"] == 7
 
@@ -1412,3 +1414,87 @@ def test_sync_live_orders_reprices_stale_new_entry_once(tmp_path, monkeypatch) -
     repriced = store.live_order_intent(synced["orders"][0]["reprice_ticket_hash"])
     assert repriced["_ledger_status"] == "submitted"
     assert repriced["limit_price"] == "-2.20"
+
+
+def test_sync_live_orders_reprices_stale_entry_twice_then_expires(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "order_id": "order-old",
+        "plan_id": "plan",
+        "plan_rank": 1,
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "intent_type": "open",
+        "underlying": "COST",
+        "playbook_id": "put_spread_default",
+        "structure": "put_spread",
+        "quantity": 1,
+        "limit_price": "-2.25",
+        "time_in_force": "DAY",
+        "created_at": "2026-05-29T14:00:00Z",
+        "preflight": {"raw": {"entry_pricing": {"base_mid_limit": 2.15, "improved_limit": 2.25}}},
+        "legs": [
+            {"role": "long_put", "side": "buy", "option_type": "put", "strike": 920, "expiration": "2026-07-10", "quantity": 1},
+            {"role": "short_put", "side": "sell", "option_type": "put", "strike": 925, "expiration": "2026-07-10", "quantity": 1},
+        ],
+        "submit_payload": {"orderId": "order-old", "quantity": "1", "type": "LIMIT", "limitPrice": "-2.25", "legs": []},
+    }
+    from kamandal_v2.live.orders import ticket_hash
+
+    ticket["ticket_hash"] = ticket_hash(ticket)
+    store.save_live_order_intent(ticket, status="submitted")
+    calls = []
+    order_created_at = {"order-old": "2026-05-29T14:00:00Z"}
+    current_now = {"value": datetime(2026, 5, 29, 14, 6, tzinfo=UTC)}
+
+    class RepriceBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, order_id):
+            return {"status": "NEW", "createdAt": order_created_at[order_id]}
+
+        def cancel_order(self, order_id):
+            calls.append(("cancel", order_id))
+            return {"orderId": order_id, "status": "CANCEL_REQUESTED"}
+
+        def preflight_ticket(self, repriced_ticket):
+            calls.append(("preflight", repriced_ticket["limit_price"]))
+            return PreflightResult(ok=True, bpr=200, message="ok", raw={"request": repriced_ticket["submit_payload"], "response": {"buyingPowerRequirement": "200"}})
+
+        def place_order_ticket(self, repriced_ticket):
+            calls.append(("place", repriced_ticket["order_id"], repriced_ticket["limit_price"]))
+            order_created_at[repriced_ticket["order_id"]] = repriced_ticket["created_at"]
+            return {"orderId": repriced_ticket["order_id"]}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", RepriceBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.datetime", type("FrozenDateTime", (datetime,), {"now": classmethod(lambda cls, tz=None: current_now["value"])}))
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    config = _live_control()
+    config["runtime"]["mode"] = "live"
+    config["runtime"]["trading_enabled"] = True
+    config["live"]["entry_reprice"] = {
+        "enabled": True,
+        "after_minutes": 5,
+        "max_reprices": 2,
+        "improvement_multipliers": [0.5, 0.0],
+        "expire_after_minutes": 30,
+    }
+
+    first = sync_live_orders(config, store=store)
+    first_ticket = store.live_order_intent(first["orders"][0]["reprice_ticket_hash"])
+    assert first_ticket["limit_price"] == "-2.20"
+    assert first_ticket["preflight"]["raw"]["entry_pricing"] == {"base_mid_limit": 2.15, "improved_limit": 2.25}
+
+    current_now["value"] = datetime(2026, 5, 29, 14, 12, tzinfo=UTC)
+    second = sync_live_orders(config, store=store)
+    second_ticket = store.live_order_intent(second["orders"][0]["reprice_ticket_hash"])
+    assert second_ticket["limit_price"] == "-2.15"
+    assert second_ticket["reprice_attempt"] == 2
+
+    current_now["value"] = datetime(2026, 5, 29, 14, 31, tzinfo=UTC)
+    expired = sync_live_orders(config, store=store)
+    assert expired["orders"][0]["expire_status"] == "cancel_requested"
+    assert store.live_order_intent(second_ticket["ticket_hash"])["_ledger_status"] == "expired"
+    assert calls.count(("cancel", "order-old")) == 1
+    assert any(call[0] == "cancel" and call[1] == second_ticket["order_id"] for call in calls)

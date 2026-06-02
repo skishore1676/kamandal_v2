@@ -131,7 +131,11 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None)
         response = adapter.get_order(str(ticket["order_id"]))
         status = str(response.get("status") or "UNKNOWN").upper()
         store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
-        if status in {"NEW", "OPEN", "WORKING"} and _entry_reprice_due(ticket, response, config):
+        if status in {"NEW", "OPEN", "WORKING"} and _entry_expire_due(store, ticket, response, config):
+            expire_result = _expire_live_entry_order(adapter, store, config, ticket, response)
+            results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **expire_result})
+            continue
+        if status in {"NEW", "OPEN", "WORKING"} and _entry_reprice_due(store, ticket, response, config):
             reprice_result = _reprice_live_entry_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **reprice_result})
             continue
@@ -143,6 +147,32 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None)
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), status.lower().replace("canceled", "cancelled"))
         results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status})
     return {"synced": len(results), "orders": results}
+
+
+def _expire_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
+    try:
+        _assert_submit_allowed(config, submit=True)
+        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        store.record_live_order_status(str(ticket["order_id"]), "ENTRY_EXPIRE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
+        store.record_live_order_attempt(
+            ticket,
+            action="expire_open",
+            submit=True,
+            ok=True,
+            request_payload={"orderId": ticket.get("order_id"), "reason": "entry_reprice_expired"},
+            response_payload=cancel_response,
+        )
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "expired")
+        store.event("live_order_entry_expired", {
+            "ticket_hash": ticket.get("ticket_hash"),
+            "order_id": ticket.get("order_id"),
+            "broker_status": broker_status.get("status"),
+            "age_minutes": _entry_order_age_minutes(store, ticket, broker_status),
+        })
+        return {"expire_status": "cancel_requested"}
+    except Exception as exc:  # noqa: BLE001
+        store.event("live_order_entry_expire_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": str(exc)})
+        return {"expire_status": "failed", "expire_message": str(exc)}
 
 
 def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
@@ -163,7 +193,7 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
             )
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "reprice_blocked_preflight_failed")
             return {"reprice_status": "blocked_preflight_failed", "reprice_message": fresh_preflight.message}
-        new_ticket["preflight"] = fresh_preflight.to_dict()
+        new_ticket["preflight"] = _preflight_with_entry_pricing(fresh_preflight.to_dict(), new_ticket)
         new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
         response = adapter.place_order_ticket(new_ticket)
         ok = bool(response.get("orderId"))
@@ -185,6 +215,7 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
             "from_limit_price": ticket.get("limit_price"),
             "to_limit_price": new_ticket.get("limit_price"),
             "broker_status": broker_status.get("status"),
+            "attempt": new_ticket.get("reprice_attempt"),
             "ok": ok,
         })
         return {
@@ -198,7 +229,20 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
         return {"reprice_status": "failed", "reprice_message": str(exc)}
 
 
-def _entry_reprice_due(ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
+def _entry_expire_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
+    if str(ticket.get("intent_type") or "") != "open":
+        return False
+    policy = ((config.get("live") or {}).get("entry_reprice") or {})
+    if not _as_bool(policy.get("enabled"), False):
+        return False
+    expire_after = int(policy.get("expire_after_minutes") or 0)
+    if expire_after <= 0:
+        return False
+    age_minutes = _entry_order_age_minutes(store, ticket, broker_status)
+    return age_minutes is not None and age_minutes >= expire_after
+
+
+def _entry_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
     if str(ticket.get("intent_type") or "") != "open":
         return False
     policy = ((config.get("live") or {}).get("entry_reprice") or {})
@@ -208,11 +252,10 @@ def _entry_reprice_due(ticket: dict[str, Any], broker_status: dict[str, Any], co
     if int(ticket.get("reprice_attempt") or 0) >= max_reprices:
         return False
     after_minutes = max(int(policy.get("after_minutes") or 5), 1)
-    created = _parse_utc(str(broker_status.get("createdAt") or ticket.get("created_at") or ""))
-    if created is None:
+    age_minutes = _active_order_age_minutes(ticket, broker_status)
+    if age_minutes is None:
         return False
-    age_seconds = (datetime.now(UTC) - created).total_seconds()
-    return age_seconds >= after_minutes * 60
+    return age_minutes >= after_minutes
 
 
 def _repriced_open_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -232,6 +275,7 @@ def _repriced_open_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> dic
     new_ticket["limit_price"] = new_limit
     new_ticket["parent_ticket_hash"] = ticket.get("ticket_hash")
     new_ticket["reprice_attempt"] = attempt
+    new_ticket["entry_order_started_at"] = ticket.get("entry_order_started_at") or ticket.get("created_at")
     new_ticket["created_at"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
     submit_payload = dict(new_ticket.get("submit_payload") or {})
     submit_payload["orderId"] = new_order_id
@@ -246,14 +290,70 @@ def _repriced_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str
     current = abs(float(str(ticket.get("limit_price") or "0").replace("-", "")))
     base = float(metadata.get("base_mid_limit") or current)
     improved = float(metadata.get("improved_limit") or current)
-    raw_multiplier = (((config.get("live") or {}).get("entry_reprice") or {}).get("improvement_multiplier") or 0.5)
-    multiplier = float(raw_multiplier)
+    attempt = int(ticket.get("reprice_attempt") or 0) + 1
+    multiplier = _reprice_improvement_multiplier(config, attempt)
     multiplier = max(0.0, min(multiplier, 1.0))
     target = base + ((improved - base) * multiplier)
     signed = str(ticket.get("limit_price") or "")
     if signed.startswith("-"):
         return f"-{_round_cent(target):.2f}"
     return f"{_round_cent(target):.2f}"
+
+
+def _reprice_improvement_multiplier(config: dict[str, Any], attempt: int) -> float:
+    policy = ((config.get("live") or {}).get("entry_reprice") or {})
+    raw_sequence = policy.get("improvement_multipliers")
+    if isinstance(raw_sequence, list) and raw_sequence:
+        index = max(attempt - 1, 0)
+        raw = raw_sequence[index] if index < len(raw_sequence) else raw_sequence[-1]
+        return float(raw)
+    raw_multiplier = policy.get("improvement_multiplier")
+    if raw_multiplier in (None, ""):
+        raw_multiplier = 0.5
+    return float(raw_multiplier)
+
+
+def _preflight_with_entry_pricing(preflight: dict[str, Any], source_ticket: dict[str, Any]) -> dict[str, Any]:
+    raw = dict(preflight.get("raw") or {})
+    if "entry_pricing" not in raw:
+        prior_entry_pricing = (((source_ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {})
+        if prior_entry_pricing:
+            raw["entry_pricing"] = prior_entry_pricing
+            preflight = dict(preflight)
+            preflight["raw"] = raw
+    return preflight
+
+
+def _entry_order_age_minutes(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any]) -> float | None:
+    started = _entry_order_started_at(store, ticket) or _parse_utc(str(broker_status.get("createdAt") or ticket.get("created_at") or ""))
+    if started is None:
+        return None
+    return (datetime.now(UTC) - started).total_seconds() / 60.0
+
+
+def _active_order_age_minutes(ticket: dict[str, Any], broker_status: dict[str, Any]) -> float | None:
+    created = _parse_utc(str(broker_status.get("createdAt") or ticket.get("created_at") or ""))
+    if created is None:
+        return None
+    return (datetime.now(UTC) - created).total_seconds() / 60.0
+
+
+def _entry_order_started_at(store: LocalStore, ticket: dict[str, Any]) -> datetime | None:
+    explicit = _parse_utc(str(ticket.get("entry_order_started_at") or ""))
+    if explicit is not None:
+        return explicit
+    current = ticket
+    seen: set[str] = set()
+    while current:
+        parent_hash = str(current.get("parent_ticket_hash") or "")
+        if not parent_hash or parent_hash in seen:
+            break
+        seen.add(parent_hash)
+        parent = store.live_order_intent(parent_hash)
+        if not parent:
+            break
+        current = parent
+    return _parse_utc(str((current or ticket).get("created_at") or ""))
 
 
 def _round_cent(value: float) -> float:

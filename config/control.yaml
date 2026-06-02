@@ -82,8 +82,10 @@ live:
   entry_reprice:
     enabled: true
     after_minutes: 5
-    max_reprices: 1
+    max_reprices: 2
     improvement_multiplier: 0.5
+    improvement_multipliers: [0.5, 0.0]
+    expire_after_minutes: 30
   liquidity_policy:
     low_oi_mode: price_through
     wide_bid_ask_mode: price_through

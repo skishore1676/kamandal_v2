@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from contextlib import redirect_stderr
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
+from io import StringIO
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -133,7 +135,9 @@ class YFinanceEarningsProvider:
             raise RuntimeError("yfinance is required for earnings capture") from exc
 
         ticker = yf.Ticker(symbol.upper())
-        frame = ticker.get_earnings_dates(limit=12)
+        stderr = StringIO()
+        with redirect_stderr(stderr):
+            frame = ticker.get_earnings_dates(limit=12)
         next_date: str | None = None
         confirmed = False
         raw: dict[str, Any] = {}
@@ -152,6 +156,10 @@ class YFinanceEarningsProvider:
             if future:
                 next_date = future[0].isoformat()
                 confirmed = True
+        provider_stderr = stderr.getvalue().strip()
+        if provider_stderr:
+            raw = dict(raw)
+            raw["provider_messages"] = provider_stderr.splitlines()[-5:]
         return EarningsSnapshot(
             symbol=symbol.upper(),
             fetched_date=date.today().isoformat(),

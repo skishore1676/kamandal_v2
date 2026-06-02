@@ -140,6 +140,7 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "live.entry_reprice.after_minutes": _env_int("KAMANDAL_ENTRY_REPRICE_AFTER_MINUTES"),
         "live.entry_reprice.max_reprices": _env_int("KAMANDAL_ENTRY_REPRICE_MAX_REPRICES"),
         "live.entry_reprice.improvement_multiplier": _env_float("KAMANDAL_ENTRY_REPRICE_IMPROVEMENT_MULTIPLIER"),
+        "live.entry_reprice.expire_after_minutes": _env_int("KAMANDAL_ENTRY_REPRICE_EXPIRE_AFTER_MINUTES"),
         "live.liquidity_policy.low_oi_mode": os.environ.get("KAMANDAL_LIVE_LOW_OI_MODE"),
         "live.liquidity_policy.wide_bid_ask_mode": os.environ.get("KAMANDAL_LIVE_WIDE_BID_ASK_MODE"),
         "live.liquidity_policy.absurd_bid_ask_pct": _env_float("KAMANDAL_LIVE_ABSURD_BID_ASK_PCT"),

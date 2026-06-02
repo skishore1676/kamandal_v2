@@ -1,6 +1,8 @@
 from datetime import date, timedelta
 import json
 import math
+import sys
+from types import SimpleNamespace
 
 from kamandal_v2.events.earnings import (
     EarningsOverlayMarket,
@@ -70,6 +72,26 @@ def test_fixture_provider_can_record_missing_date() -> None:
 
     assert snapshot.next_earnings_date is None
     assert snapshot.confirmed is False
+
+
+def test_yfinance_provider_captures_noisy_stderr(monkeypatch, capsys) -> None:
+    from kamandal_v2.events.earnings import YFinanceEarningsProvider
+
+    class FakeTicker:
+        def __init__(self, _symbol: str) -> None:
+            pass
+
+        def get_earnings_dates(self, *, limit: int):
+            print("SPY: No earnings dates found, symbol may be delisted", file=sys.stderr)
+            return None
+
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(Ticker=FakeTicker))
+
+    snapshot = YFinanceEarningsProvider().next_earnings("SPY")
+
+    assert snapshot.next_earnings_date is None
+    assert snapshot.raw["provider_messages"] == ["SPY: No earnings dates found, symbol may be delisted"]
+    assert capsys.readouterr().err == ""
 
 
 def _snapshot(value: date, *, symbol: str = "TSLA") -> EarningsSnapshot:
