@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 from kamandal_v2.domain.models import Idea, Playbook, UniverseEntry
 from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflightClient
 from kamandal_v2.planner.candidate_builder import build_candidates, diagnose_idea_matches
@@ -59,6 +61,20 @@ class _AbsurdSpreadFixture(FixtureMarketDataProvider):
         return chain
 
 
+class _PublicLadderFixture(FixtureMarketDataProvider):
+    def chain_snapshot(self, underlying: str):
+        chain = super().chain_snapshot(underlying)
+        quotes = []
+        for quote in chain.quotes:
+            ladder_dtes = [24, 38] if quote.dte <= 35 else [45] if quote.dte <= 50 else [80]
+            for dte in ladder_dtes:
+                clone = quote.to_dict()
+                clone["expiration"] = (date.today() + timedelta(days=dte)).isoformat()
+                quotes.append(type(quote)(**clone))
+        chain.quotes = quotes
+        return chain
+
+
 def test_put_diagonal_variant_matches_bearish_overextended_thesis() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_overextended",
@@ -81,6 +97,80 @@ def test_put_diagonal_variant_matches_bearish_overextended_thesis() -> None:
     assert candidates
     assert candidates[0].structure == "put_diagonal"
     assert candidates[0].playbook_id == "put_diagonal_overextended"
+
+
+def test_put_diagonal_uses_bounded_near_dte_fallback_for_public_ladder() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_overextended",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 21,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+
+    candidates = build_candidates(
+        [idea],
+        universe,
+        [_playbook(long_dte_min=75, long_dte_max=85)],
+        _PublicLadderFixture(),
+        FixturePreflightClient(),
+    )
+
+    eligible = [candidate for candidate in candidates if candidate.eligible]
+    assert eligible
+    assert eligible[0].structure == "put_diagonal"
+    assert any(
+        reason.startswith("dte_fallback_warning=near:")
+        and ":dte=24:" in reason
+        and ":window=25-35" in reason
+        for reason in eligible[0].reasons
+    )
+
+
+def test_matched_playbook_zero_raw_candidates_gets_build_diagnostic() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_overextended",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 21,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    playbook = _playbook(long_dte_min=75, long_dte_max=85)
+    config = {"planner": {"expiry": {"diagonal_calendar_dte_fallback": {"enabled": False}}}}
+
+    candidates = build_candidates(
+        [idea],
+        universe,
+        [playbook],
+        _PublicLadderFixture(),
+        FixturePreflightClient(),
+        config=config,
+    )
+    diagnostics = diagnose_idea_matches(
+        [idea],
+        universe,
+        [playbook],
+        _PublicLadderFixture(),
+        config=config,
+    )
+
+    assert candidates == []
+    diagnostic = diagnostics[0]
+    assert diagnostic["status"] == "matched_playbooks"
+    zero = diagnostic["zero_candidate_diagnostics"][0]
+    assert zero["playbook_id"] == "put_diagonal_overextended"
+    assert zero["structure"] == "put_diagonal"
+    assert zero["reason"] == "no_near_expiration_in_window"
+    assert zero["near_dte_window"] == {"min": 25, "max": 35}
+    assert zero["far_dte_window"] == {"min": 75, "max": 85}
+    assert zero["delta_windows"]["near"] == {"min": 0.2, "max": 0.3}
+    assert zero["delta_windows"]["far"] == {"min": 0.35, "max": 0.5}
+    assert [item["dte"] for item in zero["available_expirations"]] == [24, 38, 45, 80]
+    assert "built no raw candidates" in diagnostic["summary"]
 
 
 def test_candidate_filter_warn_mode_logs_without_rejecting() -> None:

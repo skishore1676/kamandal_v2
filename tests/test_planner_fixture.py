@@ -2,7 +2,8 @@ import json
 import sqlite3
 
 from kamandal_v2.config import load_control
-from kamandal_v2.planner.engine import run_plan, run_shadow_cycle
+from kamandal_v2.domain.models import Idea
+from kamandal_v2.planner.engine import _rejection_summary, run_plan, run_shadow_cycle
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -178,6 +179,7 @@ def test_shadow_cycle_creates_auto_approval_audit(tmp_path) -> None:
 
 def test_shadow_uses_paper_account_override(tmp_path) -> None:
     control = load_control()
+    control["runtime"]["mode"] = "shadow"
     control["shadow"] = {
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
@@ -202,6 +204,7 @@ def test_shadow_uses_paper_account_override(tmp_path) -> None:
 def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     control = load_control()
+    control["runtime"]["mode"] = "shadow"
     control["shadow"] = {
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
@@ -250,6 +253,7 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
 def test_shadow_cycle_blocks_same_day_reentry_after_close(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     control = load_control()
+    control["runtime"]["mode"] = "shadow"
     control["shadow"] = {
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
@@ -455,4 +459,27 @@ ideas:
 
     assert result.rejection_summary == [
         "1 XYZ: no playbook match - No enabled universe entry for underlying."
+    ]
+
+
+def test_rejection_summary_includes_zero_raw_candidate_reason() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_diag",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 21,
+    })
+    diagnostics = [{
+        "idea_id": "tsla_diag",
+        "matched_playbooks": ["put_diagonal_overextended"],
+        "zero_candidate_diagnostics": [{
+            "playbook_id": "put_diagonal_overextended",
+            "reason": "no_near_expiration_in_window",
+        }],
+    }]
+
+    assert _rejection_summary([idea], [], diagnostics) == [
+        "1 TSLA: matched put_diagonal_overextended but built no option structures - put_diagonal_overextended:no_near_expiration_in_window"
     ]

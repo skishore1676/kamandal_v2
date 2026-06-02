@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from itertools import product
 
 from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, OptionQuote, Playbook, PreflightResult, UniverseEntry
@@ -28,6 +29,13 @@ SUPPORTED_STRUCTURES = {
 
 SHORT_CATALYST_MAX_DAYS = 14
 
+CALENDAR_DIAGONAL_STRUCTURES = {
+    "call_calendar",
+    "put_calendar",
+    "put_diagonal",
+    "call_diagonal",
+}
+
 PERMISSIVE_MATCH_GATE_PREFIXES = (
     "horizon_above_max:",
     "horizon_below_min:",
@@ -41,6 +49,29 @@ PERMISSIVE_MATCH_GATE_PREFIXES = (
     "playbook_iv_percentile_out_of_range:",
     "universe_iv_percentile_out_of_range:",
 )
+
+
+@dataclass(slots=True)
+class DteFallbackSettings:
+    enabled: bool = True
+    max_near_gap_days: int = 7
+    max_far_gap_days: int = 14
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "enabled": self.enabled,
+            "max_near_gap_days": self.max_near_gap_days,
+            "max_far_gap_days": self.max_far_gap_days,
+        }
+
+
+@dataclass(slots=True)
+class DeltaSelection:
+    quotes: list[OptionQuote]
+    dte_min: int
+    dte_max: int
+    fallback_role: str = ""
+    fallback_dtes: list[int] | None = None
 
 
 def build_candidates(
@@ -71,7 +102,7 @@ def build_candidates(
         for playbook in playbooks:
             if not _matches(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status, match_gate_mode=match_gate_mode):
                 continue
-            raw_candidates = _build_for_playbook(idea, playbook, chain.underlying_price, chain.quotes)
+            raw_candidates = _build_for_playbook(idea, playbook, chain.underlying_price, chain.quotes, config=config)
             for candidate in raw_candidates:
                 match_horizon, match_horizon_source = _match_horizon(idea, playbook)
                 candidate.reasons.append(f"match_horizon_days={match_horizon}")
@@ -131,6 +162,7 @@ def diagnose_idea_matches(
     market: MarketDataProvider,
     *,
     match_gate_mode: str = "strict",
+    config: dict | None = None,
 ) -> list[dict[str, object]]:
     universe_by_symbol = {entry.symbol: entry for entry in universe if entry.enabled}
     diagnostics: list[dict[str, object]] = []
@@ -154,6 +186,7 @@ def diagnose_idea_matches(
         playbook_rows: list[dict[str, object]] = []
         reason_counts: dict[str, int] = {}
         matched: list[str] = []
+        matched_playbooks: list[Playbook] = []
         for playbook in playbooks:
             raw_reasons = _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
             reasons = _apply_match_gate_mode(raw_reasons, match_gate_mode)
@@ -162,6 +195,7 @@ def diagnose_idea_matches(
                     reason_counts[reason] = reason_counts.get(reason, 0) + 1
             else:
                 matched.append(playbook.playbook_id)
+                matched_playbooks.append(playbook)
             playbook_rows.append({
                 "playbook_id": playbook.playbook_id,
                 "structure": playbook.structure,
@@ -170,6 +204,32 @@ def diagnose_idea_matches(
                 "reasons": reasons,
                 "ignored_reasons": [reason for reason in raw_reasons if reason not in reasons],
             })
+        zero_candidate_diagnostics: list[dict[str, object]] = []
+        if matched_playbooks:
+            try:
+                chain = market.chain_snapshot(idea.underlying)
+                for playbook in matched_playbooks:
+                    raw_candidates = _build_for_playbook(idea, playbook, chain.underlying_price, chain.quotes, config=config)
+                    raw_count = len(raw_candidates)
+                    build_diagnostic = _raw_candidate_build_diagnostic(playbook, chain.quotes, raw_count=raw_count, config=config)
+                    for row in playbook_rows:
+                        if row["playbook_id"] == playbook.playbook_id:
+                            row["raw_candidate_count"] = raw_count
+                            row["build_diagnostic"] = build_diagnostic
+                            break
+                    if raw_count == 0:
+                        zero_candidate_diagnostics.append({
+                            "playbook_id": playbook.playbook_id,
+                            "structure": playbook.structure,
+                            **build_diagnostic,
+                        })
+            except Exception as exc:  # noqa: BLE001
+                zero_candidate_diagnostics.append({
+                    "playbook_id": ",".join(matched),
+                    "structure": "",
+                    "reason": "chain_snapshot_failed",
+                    "message": str(exc),
+                })
         status = "matched_playbooks" if matched else "no_playbook_match"
         diagnostics.append({
             "idea_id": idea.idea_id,
@@ -182,8 +242,9 @@ def diagnose_idea_matches(
             "mentioned_strategy": idea.mentioned_strategy,
             "status": status,
             "matched_playbooks": matched,
-            "summary": _diagnostic_summary(matched, reason_counts),
+            "summary": _diagnostic_summary(matched, reason_counts, zero_candidate_diagnostics),
             "reason_counts": dict(sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))),
+            "zero_candidate_diagnostics": zero_candidate_diagnostics,
             "market_context": {
                 "iv_percentile": iv_pct,
                 "iv_rank": iv_rank,
@@ -292,8 +353,19 @@ def _apply_match_gate_mode(reasons: list[str], match_gate_mode: str) -> list[str
     ]
 
 
-def _diagnostic_summary(matched: list[str], reason_counts: dict[str, int]) -> str:
+def _diagnostic_summary(
+    matched: list[str],
+    reason_counts: dict[str, int],
+    zero_candidate_diagnostics: list[dict[str, object]] | None = None,
+) -> str:
     if matched:
+        zero_candidate_diagnostics = zero_candidate_diagnostics or []
+        if zero_candidate_diagnostics:
+            details = [
+                f"{item.get('playbook_id')} ({item.get('reason')})"
+                for item in zero_candidate_diagnostics[:3]
+            ]
+            return "Matched playbooks but built no raw candidates: " + ", ".join(details)
         return "Matched playbooks: " + ", ".join(matched[:5])
     if not reason_counts:
         return "No playbooks evaluated."
@@ -365,6 +437,8 @@ def _build_for_playbook(
     playbook: Playbook,
     underlying_price: float,
     quotes: list[OptionQuote],
+    *,
+    config: dict | None = None,
 ) -> list[Candidate]:
     if playbook.structure == "short_put":
         return _short_put_candidates(idea, playbook, quotes)
@@ -379,13 +453,13 @@ def _build_for_playbook(
     if playbook.structure == "iron_condor":
         return _iron_condor_candidates(idea, playbook, quotes)
     if playbook.structure == "call_calendar":
-        return _call_calendar_candidates(idea, playbook, quotes)
+        return _call_calendar_candidates(idea, playbook, quotes, config=config)
     if playbook.structure == "put_calendar":
-        return _put_calendar_candidates(idea, playbook, quotes)
+        return _put_calendar_candidates(idea, playbook, quotes, config=config)
     if playbook.structure == "put_diagonal":
-        return _put_diagonal_candidates(idea, playbook, quotes)
+        return _put_diagonal_candidates(idea, playbook, quotes, config=config)
     if playbook.structure == "call_diagonal":
-        return _call_diagonal_candidates(idea, playbook, quotes)
+        return _call_diagonal_candidates(idea, playbook, quotes, config=config)
     if playbook.structure == "short_strangle":
         return _short_strangle_candidates(idea, playbook, quotes)
     if playbook.structure == "jade_lizard":
@@ -512,81 +586,121 @@ def _jade_lizard_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQ
     return candidates[:6]
 
 
-def _call_calendar_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:
+def _call_calendar_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> list[Candidate]:
     candidates = []
-    near_calls = _near_delta(quotes, "call", playbook.long_delta_min, playbook.long_delta_max, playbook.dte_min, playbook.dte_max)
-    far_calls = _near_delta(quotes, "call", playbook.long_delta_min, playbook.long_delta_max, playbook.long_dte_min or playbook.dte_min + 20, playbook.long_dte_max or playbook.dte_max + 40)
-    for near in near_calls:
+    fallback = _dte_fallback_settings(config)
+    far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=40)
+    near_selection = _near_delta_selection(
+        quotes, "call", playbook.long_delta_min, playbook.long_delta_max, playbook.dte_min, playbook.dte_max,
+        fallback_settings=fallback, fallback_role="near",
+    )
+    far_selection = _near_delta_selection(
+        quotes, "call", playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
+        fallback_settings=fallback, fallback_role="far",
+    )
+    for near in near_selection.quotes:
         far_choices = [
-            quote for quote in far_calls
+            quote for quote in far_selection.quotes
             if quote.strike == near.strike and quote.expiration > near.expiration
         ]
         if not far_choices:
             continue
         far = sorted(far_choices, key=lambda quote: quote.dte)[0]
-        candidates.append(_candidate(idea, playbook, [
+        candidate = _candidate(idea, playbook, [
             OptionLeg.from_quote(near, role="short_near", side="sell"),
             OptionLeg.from_quote(far, role="long_far", side="buy"),
-        ]))
+        ])
+        _append_dte_fallback_warnings(candidate, [("near", near, near_selection), ("far", far, far_selection)])
+        candidates.append(candidate)
     return candidates[:4]
 
 
-def _put_calendar_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:
+def _put_calendar_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> list[Candidate]:
     candidates = []
-    near_puts = _near_delta(quotes, "put", playbook.long_delta_min, playbook.long_delta_max, playbook.dte_min, playbook.dte_max)
-    far_puts = _near_delta(quotes, "put", playbook.long_delta_min, playbook.long_delta_max, playbook.long_dte_min or playbook.dte_min + 20, playbook.long_dte_max or playbook.dte_max + 40)
-    for near in near_puts:
+    fallback = _dte_fallback_settings(config)
+    far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=40)
+    near_selection = _near_delta_selection(
+        quotes, "put", playbook.long_delta_min, playbook.long_delta_max, playbook.dte_min, playbook.dte_max,
+        fallback_settings=fallback, fallback_role="near",
+    )
+    far_selection = _near_delta_selection(
+        quotes, "put", playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
+        fallback_settings=fallback, fallback_role="far",
+    )
+    for near in near_selection.quotes:
         far_choices = [
-            quote for quote in far_puts
+            quote for quote in far_selection.quotes
             if quote.strike == near.strike and quote.expiration > near.expiration
         ]
         if not far_choices:
             continue
         far = sorted(far_choices, key=lambda quote: quote.dte)[0]
-        candidates.append(_candidate(idea, playbook, [
+        candidate = _candidate(idea, playbook, [
             OptionLeg.from_quote(near, role="short_near", side="sell"),
             OptionLeg.from_quote(far, role="long_far", side="buy"),
-        ]))
+        ])
+        _append_dte_fallback_warnings(candidate, [("near", near, near_selection), ("far", far, far_selection)])
+        candidates.append(candidate)
     return candidates[:4]
 
 
-def _put_diagonal_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:
+def _put_diagonal_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> list[Candidate]:
     candidates = []
-    shorts = _near_delta(quotes, "put", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
-    longs = _near_delta(quotes, "put", playbook.long_delta_min, playbook.long_delta_max, playbook.long_dte_min or playbook.dte_min + 20, playbook.long_dte_max or playbook.dte_max + 45)
+    fallback = _dte_fallback_settings(config)
+    far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=45)
+    short_selection = _near_delta_selection(
+        quotes, "put", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
+        fallback_settings=fallback, fallback_role="near",
+    )
+    long_selection = _near_delta_selection(
+        quotes, "put", playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
+        fallback_settings=fallback, fallback_role="far",
+    )
     width = playbook.spread_width or 5.0
-    for short in shorts[:4]:
+    for short in short_selection.quotes[:4]:
         long_choices = [
-            quote for quote in longs
+            quote for quote in long_selection.quotes
             if quote.expiration > short.expiration and quote.strike >= short.strike
         ]
         if not long_choices:
             continue
         long = sorted(long_choices, key=lambda quote: (abs((quote.strike - short.strike) - width), quote.dte))[0]
-        candidates.append(_candidate(idea, playbook, [
+        candidate = _candidate(idea, playbook, [
             OptionLeg.from_quote(short, role="short_near", side="sell"),
             OptionLeg.from_quote(long, role="long_far", side="buy"),
-        ]))
+        ])
+        _append_dte_fallback_warnings(candidate, [("near", short, short_selection), ("far", long, long_selection)])
+        candidates.append(candidate)
     return candidates[:4]
 
 
-def _call_diagonal_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:
+def _call_diagonal_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> list[Candidate]:
     candidates = []
-    shorts = _near_delta(quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
-    longs = _near_delta(quotes, "call", playbook.long_delta_min, playbook.long_delta_max, playbook.long_dte_min or playbook.dte_min + 20, playbook.long_dte_max or playbook.dte_max + 45)
+    fallback = _dte_fallback_settings(config)
+    far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=45)
+    short_selection = _near_delta_selection(
+        quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
+        fallback_settings=fallback, fallback_role="near",
+    )
+    long_selection = _near_delta_selection(
+        quotes, "call", playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
+        fallback_settings=fallback, fallback_role="far",
+    )
     width = playbook.spread_width or 5.0
-    for short in shorts[:4]:
+    for short in short_selection.quotes[:4]:
         long_choices = [
-            quote for quote in longs
+            quote for quote in long_selection.quotes
             if quote.expiration > short.expiration and quote.strike <= short.strike
         ]
         if not long_choices:
             continue
         long = sorted(long_choices, key=lambda quote: (abs((short.strike - quote.strike) - width), quote.dte))[0]
-        candidates.append(_candidate(idea, playbook, [
+        candidate = _candidate(idea, playbook, [
             OptionLeg.from_quote(short, role="short_near", side="sell"),
             OptionLeg.from_quote(long, role="long_far", side="buy"),
-        ]))
+        ])
+        _append_dte_fallback_warnings(candidate, [("near", short, short_selection), ("far", long, long_selection)])
+        candidates.append(candidate)
     return candidates[:4]
 
 
@@ -598,6 +712,20 @@ def _near_delta(
     dte_min: int,
     dte_max: int,
 ) -> list[OptionQuote]:
+    return _near_delta_selection(quotes, option_type, delta_min, delta_max, dte_min, dte_max).quotes
+
+
+def _near_delta_selection(
+    quotes: list[OptionQuote],
+    option_type: str,
+    delta_min: float | None,
+    delta_max: float | None,
+    dte_min: int,
+    dte_max: int,
+    *,
+    fallback_settings: DteFallbackSettings | None = None,
+    fallback_role: str = "",
+) -> DeltaSelection:
     low = delta_min if delta_min is not None else 0.10
     high = delta_max if delta_max is not None else 0.60
     target = (low + high) / 2.0
@@ -607,14 +735,275 @@ def _near_delta(
         and dte_min <= quote.dte <= dte_max
         and low <= abs(quote.delta) <= high
     ]
+    if filtered:
+        return DeltaSelection(
+            quotes=_rank_delta_quotes(filtered, target_delta=target, target_dte=(dte_min + dte_max) / 2.0),
+            dte_min=dte_min,
+            dte_max=dte_max,
+        )
+    fallback_settings = fallback_settings or DteFallbackSettings(enabled=False)
+    if not fallback_settings.enabled:
+        return DeltaSelection(quotes=[], dte_min=dte_min, dte_max=dte_max)
+    if _has_expiration_in_window(quotes, option_type, dte_min, dte_max):
+        return DeltaSelection(quotes=[], dte_min=dte_min, dte_max=dte_max)
+
+    max_gap = fallback_settings.max_far_gap_days if fallback_role == "far" else fallback_settings.max_near_gap_days
+    fallback_pool = [
+        quote for quote in quotes
+        if quote.option_type == option_type
+        and low <= abs(quote.delta) <= high
+        and 0 < _dte_window_gap(quote.dte, dte_min, dte_max) <= max_gap
+    ]
+    if not fallback_pool:
+        return DeltaSelection(quotes=[], dte_min=dte_min, dte_max=dte_max)
+    nearest_gap = min(_dte_window_gap(quote.dte, dte_min, dte_max) for quote in fallback_pool)
+    selected_dtes = sorted({quote.dte for quote in fallback_pool if _dte_window_gap(quote.dte, dte_min, dte_max) == nearest_gap})
+    selected = [quote for quote in fallback_pool if quote.dte in selected_dtes]
+    target_dte = min(selected_dtes, key=lambda dte: abs(dte - ((dte_min + dte_max) / 2.0)))
+    return DeltaSelection(
+        quotes=_rank_delta_quotes(selected, target_delta=target, target_dte=target_dte),
+        dte_min=dte_min,
+        dte_max=dte_max,
+        fallback_role=fallback_role,
+        fallback_dtes=selected_dtes,
+    )
+
+
+def _rank_delta_quotes(quotes: list[OptionQuote], *, target_delta: float, target_dte: float) -> list[OptionQuote]:
     return sorted(
-        filtered,
+        quotes,
         key=lambda quote: -_leg_rank_score(
             quote,
-            target_delta=target,
-            target_dte=(dte_min + dte_max) / 2.0,
+            target_delta=target_delta,
+            target_dte=target_dte,
         ),
     )
+
+
+def _has_expiration_in_window(quotes: list[OptionQuote], option_type: str, dte_min: int, dte_max: int) -> bool:
+    return any(quote.option_type == option_type and dte_min <= quote.dte <= dte_max for quote in quotes)
+
+
+def _dte_window_gap(dte: int, dte_min: int, dte_max: int) -> int:
+    if dte < dte_min:
+        return dte_min - dte
+    if dte > dte_max:
+        return dte - dte_max
+    return 0
+
+
+def _append_dte_fallback_warnings(candidate: Candidate, selections: list[tuple[str, OptionQuote, DeltaSelection]]) -> None:
+    seen: set[str] = set()
+    for role, quote, selection in selections:
+        if not selection.fallback_dtes or quote.dte not in selection.fallback_dtes:
+            continue
+        reason = f"dte_fallback_warning={role}:{quote.expiration}:dte={quote.dte}:window={selection.dte_min}-{selection.dte_max}"
+        if reason not in seen:
+            candidate.reasons.append(reason)
+            seen.add(reason)
+
+
+def _far_dte_window(playbook: Playbook, *, default_min_offset: int, default_max_offset: int) -> tuple[int, int]:
+    return (
+        playbook.long_dte_min or playbook.dte_min + default_min_offset,
+        playbook.long_dte_max or playbook.dte_max + default_max_offset,
+    )
+
+
+def _dte_fallback_settings(config: dict | None) -> DteFallbackSettings:
+    expiry_cfg = ((((config or {}).get("planner") or {}).get("expiry") or {}))
+    fallback_cfg = (
+        expiry_cfg.get("diagonal_calendar_dte_fallback")
+        or expiry_cfg.get("dte_fallback")
+        or ((config or {}).get("planner") or {}).get("dte_fallback")
+        or {}
+    )
+    if not isinstance(fallback_cfg, dict):
+        fallback_cfg = {}
+    enabled = _config_bool(fallback_cfg.get("enabled"), default=True)
+    return DteFallbackSettings(
+        enabled=enabled,
+        max_near_gap_days=_config_int(fallback_cfg.get("max_near_gap_days"), default=7),
+        max_far_gap_days=_config_int(fallback_cfg.get("max_far_gap_days"), default=14),
+    )
+
+
+def _raw_candidate_build_diagnostic(
+    playbook: Playbook,
+    quotes: list[OptionQuote],
+    *,
+    raw_count: int,
+    config: dict | None = None,
+) -> dict[str, object]:
+    near_delta = _near_delta_window(playbook)
+    far_delta = _far_delta_window(playbook)
+    near_window = {"min": playbook.dte_min, "max": playbook.dte_max}
+    far_min, far_max = _diagnostic_far_window(playbook)
+    far_window = {"min": far_min, "max": far_max} if far_min is not None and far_max is not None else None
+    reason = "" if raw_count else _zero_raw_candidate_reason(playbook, quotes, config=config)
+    return {
+        "raw_candidate_count": raw_count,
+        "reason": reason,
+        "available_expirations": _available_expiration_dtes(quotes),
+        "near_dte_window": near_window,
+        "far_dte_window": far_window,
+        "delta_windows": {
+            "near": near_delta,
+            "far": far_delta,
+        },
+        "dte_fallback": _dte_fallback_settings(config).to_dict(),
+    }
+
+
+def _zero_raw_candidate_reason(playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> str:
+    if not quotes:
+        return "no_option_quotes"
+    if playbook.structure == "call_calendar":
+        return _calendar_zero_reason(playbook, quotes, option_type="call", config=config)
+    if playbook.structure == "put_calendar":
+        return _calendar_zero_reason(playbook, quotes, option_type="put", config=config)
+    if playbook.structure == "put_diagonal":
+        return _diagonal_zero_reason(playbook, quotes, option_type="put", config=config)
+    if playbook.structure == "call_diagonal":
+        return _diagonal_zero_reason(playbook, quotes, option_type="call", config=config)
+    if playbook.structure == "short_strangle":
+        put_reason = _leg_zero_reason(
+            quotes, "put", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
+            label="near",
+        )
+        call_reason = _leg_zero_reason(
+            quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
+            label="near",
+        )
+        if put_reason:
+            return "no_put_" + put_reason.removeprefix("no_near_")
+        if call_reason:
+            return "no_call_" + call_reason.removeprefix("no_near_")
+        return "no_shared_expiration_match"
+    if playbook.structure in {"short_put", "put_spread", "iron_condor", "jade_lizard"}:
+        return _leg_zero_reason(quotes, "put", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max, label="near") or "no_put_leg_match"
+    if playbook.structure in {"long_put"}:
+        return _leg_zero_reason(quotes, "put", playbook.long_delta_min, playbook.long_delta_max, playbook.dte_min, playbook.dte_max, label="near") or "no_put_leg_match"
+    if playbook.structure in {"long_call"}:
+        return _leg_zero_reason(quotes, "call", playbook.long_delta_min, playbook.long_delta_max, playbook.dte_min, playbook.dte_max, label="near") or "no_call_leg_match"
+    if playbook.structure in {"call_spread"}:
+        return _leg_zero_reason(quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max, label="near") or "no_call_leg_match"
+    return "no_leg_combination_match"
+
+
+def _calendar_zero_reason(playbook: Playbook, quotes: list[OptionQuote], *, option_type: str, config: dict | None) -> str:
+    near_reason = _leg_zero_reason(
+        quotes, option_type, playbook.long_delta_min, playbook.long_delta_max, playbook.dte_min, playbook.dte_max,
+        label="near", config=config,
+    )
+    if near_reason:
+        return near_reason
+    far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=40)
+    far_reason = _leg_zero_reason(
+        quotes, option_type, playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
+        label="far", config=config,
+    )
+    if far_reason:
+        return far_reason
+    return "no_same_strike_calendar_pair"
+
+
+def _diagonal_zero_reason(playbook: Playbook, quotes: list[OptionQuote], *, option_type: str, config: dict | None) -> str:
+    near_reason = _leg_zero_reason(
+        quotes, option_type, playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
+        label="near", config=config,
+    )
+    if near_reason:
+        return near_reason
+    far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=45)
+    far_reason = _leg_zero_reason(
+        quotes, option_type, playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
+        label="far", config=config,
+    )
+    if far_reason:
+        return far_reason
+    return "no_diagonal_strike_pair"
+
+
+def _leg_zero_reason(
+    quotes: list[OptionQuote],
+    option_type: str,
+    delta_min: float | None,
+    delta_max: float | None,
+    dte_min: int,
+    dte_max: int,
+    *,
+    label: str,
+    config: dict | None = None,
+) -> str:
+    if not any(quote.option_type == option_type for quote in quotes):
+        return f"no_{label}_{option_type}_quotes"
+    if not _has_expiration_in_window(quotes, option_type, dte_min, dte_max):
+        selection = _near_delta_selection(
+            quotes, option_type, delta_min, delta_max, dte_min, dte_max,
+            fallback_settings=_dte_fallback_settings(config),
+            fallback_role=label,
+        )
+        if selection.quotes:
+            return ""
+        return f"no_{label}_expiration_in_window"
+    low = delta_min if delta_min is not None else 0.10
+    high = delta_max if delta_max is not None else 0.60
+    if not any(
+        quote.option_type == option_type
+        and dte_min <= quote.dte <= dte_max
+        and low <= abs(quote.delta) <= high
+        for quote in quotes
+    ):
+        return f"no_{label}_delta_match"
+    return ""
+
+
+def _available_expiration_dtes(quotes: list[OptionQuote]) -> list[dict[str, object]]:
+    seen: dict[str, int] = {}
+    for quote in quotes:
+        seen[quote.expiration] = quote.dte
+    return [
+        {"expiration": expiration, "dte": dte}
+        for expiration, dte in sorted(seen.items(), key=lambda item: (item[1], item[0]))
+    ]
+
+
+def _near_delta_window(playbook: Playbook) -> dict[str, float | None]:
+    if playbook.structure in {"call_calendar", "put_calendar", "long_call", "long_put"}:
+        return {"min": playbook.long_delta_min, "max": playbook.long_delta_max}
+    return {"min": playbook.short_delta_min, "max": playbook.short_delta_max}
+
+
+def _far_delta_window(playbook: Playbook) -> dict[str, float | None] | None:
+    if playbook.structure in CALENDAR_DIAGONAL_STRUCTURES:
+        if playbook.structure in {"call_calendar", "put_calendar"}:
+            return {"min": playbook.long_delta_min, "max": playbook.long_delta_max}
+        return {"min": playbook.long_delta_min, "max": playbook.long_delta_max}
+    return None
+
+
+def _diagnostic_far_window(playbook: Playbook) -> tuple[int | None, int | None]:
+    if playbook.structure in {"call_calendar", "put_calendar"}:
+        return _far_dte_window(playbook, default_min_offset=20, default_max_offset=40)
+    if playbook.structure in {"put_diagonal", "call_diagonal"}:
+        return _far_dte_window(playbook, default_min_offset=20, default_max_offset=45)
+    return None, None
+
+
+def _config_bool(value: object, *, default: bool) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _config_int(value: object, *, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candidate:

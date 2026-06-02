@@ -93,7 +93,7 @@ def run_plan(
     if candidate_postprocessor is not None:
         candidate_postprocessor(candidates, store, config, portfolio)
     _reject_open_shadow_candidates(candidates, store, config)
-    idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market, match_gate_mode=match_gate_mode)
+    idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market, match_gate_mode=match_gate_mode, config=config)
     plans = generate_plans(candidates, portfolio, config, top_n=plan_top_n, max_new_positions=plan_max_new_positions)
     rejection_summary = _rejection_summary(ideas, candidates, idea_diagnostics)
     metrics = _plan_metrics(
@@ -410,6 +410,7 @@ def _plan_metrics(
         "preflight_failures": len(preflight_failures),
         "ideas_with_playbook_match": sum(1 for item in idea_diagnostics if item.get("status") == "matched_playbooks"),
         "ideas_without_playbook_match": sum(1 for item in idea_diagnostics if item.get("status") == "no_playbook_match"),
+        "matched_playbooks_zero_raw_candidates": sum(len(item.get("zero_candidate_diagnostics") or []) for item in idea_diagnostics),
         "plans": len(plans),
         "match_gate_mode": match_gate_mode,
         "candidate_filter_mode": candidate_filter_mode,
@@ -443,6 +444,18 @@ def _rejection_summary(
             _count_summary(grouped, f"{idea.underlying}: no playbook match - {summary}")
             continue
         if not idea_candidates:
+            zero_diagnostics = diagnostic.get("zero_candidate_diagnostics") or []
+            if zero_diagnostics:
+                details = ", ".join(
+                    f"{item.get('playbook_id')}:{item.get('reason')}"
+                    for item in zero_diagnostics[:3]
+                    if isinstance(item, dict)
+                )
+                _count_summary(
+                    grouped,
+                    f"{idea.underlying}: matched {', '.join(str(item) for item in matched[:4])} but built no option structures - {details}",
+                )
+                continue
             _count_summary(
                 grouped,
                 f"{idea.underlying}: matched {', '.join(str(item) for item in matched[:4])} but built no option structures",
