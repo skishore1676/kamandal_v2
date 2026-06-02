@@ -180,6 +180,8 @@ def live_exit_decision(
 
 def normalize_profit_target_pct(raw: Any, default: float = 50.0) -> float:
     value = _as_float(raw, default)
+    if 0.0 < value < 1.0:
+        value *= 100.0
     return max(value, 0.0)
 
 
@@ -238,9 +240,7 @@ def _profit_target_reached(mark: dict[str, Any], policy: LiveExitPolicy) -> bool
 def _target_close_limit_net(mark: dict[str, Any]) -> float:
     target = float(mark.get("target_close_net") or 0.0)
     current = float(mark.get("close_mid_net") or 0.0)
-    if target > 0:
-        return max(target, current)
-    return min(target, current)
+    return max(target, current)
 
 
 def _entry_net_cashflow(group: dict[str, Any]) -> float:

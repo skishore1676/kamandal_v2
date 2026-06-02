@@ -1,5 +1,6 @@
 from kamandal_v2.domain.models import Playbook
 from kamandal_v2.events.earnings import EarningsStore
+from kamandal_v2.live.orders import build_close_ticket
 from kamandal_v2.live.position_management import live_exit_decision, mark_live_group, normalize_profit_target_pct
 
 
@@ -23,6 +24,8 @@ def _config() -> dict:
 
 
 def test_profit_target_pct_is_literal_percent_not_fraction() -> None:
+    assert normalize_profit_target_pct(0.25) == 25
+    assert normalize_profit_target_pct(0.5) == 50
     assert normalize_profit_target_pct(1) == 1
     assert normalize_profit_target_pct("50") == 50
 
@@ -115,7 +118,76 @@ def test_credit_position_profit_target_uses_entry_credit_and_close_debit() -> No
     assert mark["pnl_mid"] == 62.5
     assert decision["action"] == "close"
     assert decision["reason"] == "profit_target"
-    assert decision["recommended_close_net"] == -50.0
+    assert decision["recommended_close_net"] == -37.5
+
+
+def test_credit_profit_target_close_limit_prefers_current_cheaper_midpoint() -> None:
+    group = {
+        "group_id": "nvda_credit_group",
+        "underlying": "NVDA",
+        "playbook_id": "put_spread_test",
+        "structure": "put_spread",
+        "opened_at": "2026-05-01 14:00:00",
+        "candidate": {
+            "candidate_id": "nvda_credit_candidate",
+            "idea_id": "nvda_idea",
+            "underlying": "NVDA",
+            "playbook_id": "put_spread_test",
+            "structure": "put_spread",
+            "net_credit": 2.9054,
+            "legs": [
+                {
+                    "role": "short_put",
+                    "side": "sell",
+                    "option_type": "put",
+                    "expiration": "2026-07-17",
+                    "strike": 145.0,
+                    "quantity": 1,
+                    "mid": 1.40,
+                    "bid": 1.35,
+                    "ask": 1.45,
+                    "delta": -0.25,
+                    "gamma": 0.0,
+                    "theta": -0.01,
+                    "vega": 0.1,
+                    "open_interest": 1000,
+                },
+                {
+                    "role": "long_put",
+                    "side": "buy",
+                    "option_type": "put",
+                    "expiration": "2026-07-17",
+                    "strike": 140.0,
+                    "quantity": 1,
+                    "mid": 0.25,
+                    "bid": 0.25,
+                    "ask": 0.25,
+                    "delta": -0.15,
+                    "gamma": 0.0,
+                    "theta": -0.01,
+                    "vega": 0.1,
+                    "open_interest": 1000,
+                },
+            ],
+        },
+    }
+    quotes = {
+        ("2026-07-17", "put", 145.0): {"bid": 1.35, "ask": 1.45},
+        ("2026-07-17", "put", 140.0): {"bid": 0.25, "ask": 0.25},
+    }
+    playbook = _playbook("put_spread", profit_target_pct=50)
+
+    mark = mark_live_group(group, quotes, playbook, quote_fresh=True, config=_config())
+    decision = live_exit_decision(mark, playbook, EarningsStore(), _config())
+    ticket = build_close_ticket(group, close_net_credit=float(decision["recommended_close_net"]) / 100.0)
+
+    assert mark["close_mid_net"] == -115.0
+    assert mark["target_close_net"] == -145.27
+    assert decision["action"] == "close"
+    assert decision["reason"] == "profit_target"
+    assert decision["recommended_close_net"] == -115.0
+    assert ticket["submit_payload"]["limitPrice"] == "1.15"
+    assert ticket["submit_payload"]["limitPrice"] != "1.50"
 
 
 def test_live_exit_holds_when_quotes_are_not_fresh() -> None:
