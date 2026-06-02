@@ -61,6 +61,10 @@ ideas:
         encoding="utf-8",
     )
     control = load_control()
+    control.setdefault("runtime", {})["mode"] = "shadow"
+    control.setdefault("execution", {})["approval_mode"] = "shadow_auto_top_plan"
+    control.setdefault("shadow", {})["match_gate_mode"] = "permissive"
+    control.setdefault("shadow", {})["candidate_filter_mode"] = "warn"
     control["structural_breaks"] = {"enabled": True, "directory": str(feed_dir), "date": "2026-05-13"}
     monkeypatch.setenv("KAMANDAL_STRUCTURAL_BREAKS_DIR", str(feed_dir))
 
