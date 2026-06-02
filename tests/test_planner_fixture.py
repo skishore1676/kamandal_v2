@@ -76,6 +76,7 @@ def test_total_position_cap_includes_open_shadow_positions(tmp_path) -> None:
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "match_gate_mode": "permissive",
         "max_positions_override": "",
         "candidate_filter_mode": "warn",
     }
@@ -113,6 +114,7 @@ def test_daily_plan_write_is_preserved_when_no_eligible_plans(tmp_path, monkeypa
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "match_gate_mode": "permissive",
         "max_positions_override": "",
         "candidate_filter_mode": "warn",
     }
@@ -141,6 +143,7 @@ def test_shadow_position_cap_override_allows_exploration(tmp_path) -> None:
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "match_gate_mode": "permissive",
         "max_positions_override": 20,
         "candidate_filter_mode": "warn",
     }
@@ -187,6 +190,7 @@ def test_shadow_uses_paper_account_override(tmp_path) -> None:
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "match_gate_mode": "permissive",
         "candidate_filter_mode": "warn",
     }
 
@@ -211,6 +215,7 @@ def test_shadow_cycle_accumulates_open_fills_into_portfolio(tmp_path) -> None:
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "match_gate_mode": "permissive",
         "max_positions_override": 1,
         "idea_cooldown_days": 1,
         "candidate_filter_mode": "warn",
@@ -259,6 +264,7 @@ def test_shadow_cycle_blocks_same_day_reentry_after_close(tmp_path) -> None:
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "match_gate_mode": "permissive",
         "idea_cooldown_days": 1,
         "candidate_filter_mode": "warn",
     }
@@ -297,6 +303,7 @@ def test_shadow_idea_cooldown_can_be_disabled(tmp_path) -> None:
         "account_size_override": 20_000,
         "buying_power_override": 20_000,
         "bpr_used_override": 0,
+        "match_gate_mode": "permissive",
         "idea_cooldown_days": 0,
         "candidate_filter_mode": "warn",
     }
