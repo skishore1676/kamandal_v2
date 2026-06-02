@@ -42,7 +42,7 @@ ideas:
     return str(path)
 
 
-def _patch_live_config(monkeypatch) -> None:
+def _patch_live_config(monkeypatch, *, profit_target_pct: float = 50) -> None:
     universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_cap", allowed_playbooks=["call_spread"])]
     playbooks = [
         Playbook(
@@ -65,7 +65,7 @@ def _patch_live_config(monkeypatch) -> None:
             min_credit_to_width_ratio=0.05,
             max_bid_ask_pct=0.50,
             min_option_oi=0,
-            profit_target_pct=50,
+            profit_target_pct=profit_target_pct,
             exit_dte_min=21,
         )
     ]
@@ -1040,6 +1040,66 @@ def test_single_leg_close_ticket_uses_positive_public_limit_price() -> None:
     assert close_ticket["submit_payload"]["orderSide"] == "SELL"
     assert close_ticket["submit_payload"]["openCloseIndicator"] == "CLOSE"
     assert close_ticket["submit_payload"]["limitPrice"] == "18.75"
+
+
+def _store_filled_fixture_position_with_cheap_chain(tmp_path, monkeypatch, *, profit_target_pct: float) -> LocalStore:
+    _patch_live_config(monkeypatch, profit_target_pct=profit_target_pct)
+    store = LocalStore(tmp_path / f"kamandal_{str(profit_target_pct).replace('.', '_')}.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / f"audit_{str(profit_target_pct).replace('.', '_')}"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    ticket = json.loads(row["plan_detail_json"])["order_ticket_json"]
+    record_manual_live_fill(ticket["ticket_hash"], store=store)
+    candidate = result.plans[0].candidates[0]
+    expiration = candidate.legs[0].expiration
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO chain_snapshots VALUES (?, ?, ?)",
+            (
+                "cheap_chain",
+                candidate.underlying,
+                json.dumps({
+                    "captured_at": "2099-01-01T14:00:00Z",
+                    "underlying": candidate.underlying,
+                    "underlying_price": 100.0,
+                    "quotes": [
+                        {"expiration": expiration, "option_type": leg.option_type, "strike": leg.strike, "bid": 0.01, "ask": 0.02}
+                        for leg in candidate.legs
+                    ],
+                }),
+            ),
+        )
+    return store
+
+
+def test_live_management_normalizes_sheet_fraction_profit_targets(tmp_path, monkeypatch) -> None:
+    for raw_profit_target_pct, expected_profit_target_pct in ((0.5, 50.0), (0.25, 25.0)):
+        store = _store_filled_fixture_position_with_cheap_chain(
+            tmp_path,
+            monkeypatch,
+            profit_target_pct=raw_profit_target_pct,
+        )
+        control = load_control()
+        control["live"]["allow_same_day_exits"] = True
+        control["live"]["exit_approval_mode"] = "disabled"
+        control["live"]["exit_pricing"]["require_fresh_quotes"] = False
+
+        managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
+
+        assert managed["marks"][0]["profit_target_pct"] == expected_profit_target_pct
+        assert managed["marks"][0]["target_profit"] == round(
+            managed["marks"][0]["entry_value"] * expected_profit_target_pct / 100.0,
+            2,
+        )
+        assert managed["decisions"][0]["action"] == "close"
+        assert managed["decisions"][0]["reason"] == "profit_target"
 
 
 def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch) -> None:
