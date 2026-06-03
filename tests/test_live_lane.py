@@ -1318,6 +1318,53 @@ def test_cleanup_live_approvals_clears_terminal_ticket_status(tmp_path, monkeypa
     assert "auto-cleared stale APPROVE_LIVE" in written["rows"][0]["operator_notes"]
 
 
+def test_cleanup_live_approvals_clears_close_filled_ticket_status(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    open_row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    open_ticket = json.loads(open_row["plan_detail_json"])["order_ticket_json"]
+    record_manual_live_fill(open_ticket["ticket_hash"], store=store)
+    group = store.open_live_position_groups()[0]
+    close_ticket = build_close_ticket(group)
+    store.save_live_order_intent(close_ticket, status="pending_close_approval")
+    row = dict(zip(DAILY_PLAN_HEADER, ["" for _ in DAILY_PLAN_HEADER], strict=False))
+    row["operator_action"] = APPROVE_LIVE_CLOSE
+    row["mode"] = "live_close_advisory"
+    row["plan_detail_json"] = json.dumps({"lane": "live_close_advisory", "order_ticket_json": close_ticket})
+    store.update_live_order_intent_status(close_ticket["ticket_hash"], "close_filled")
+    written = {}
+
+    class FakeSheetClient:
+        @classmethod
+        def from_config(cls, _config):
+            return cls()
+
+        def read_tab(self, _title):
+            return [row]
+
+        def replace_tab(self, _title, *, header, rows):
+            written["rows"] = [dict(zip(header, item, strict=False)) for item in rows]
+            return len(rows)
+
+    monkeypatch.setattr("kamandal_v2.live.execution.GoogleSheetClient", FakeSheetClient)
+
+    cleaned = cleanup_live_approvals(load_control(), store=store)
+
+    assert cleaned["cleared"] == 1
+    assert written["rows"][0]["operator_action"] == ""
+    assert written["rows"][0]["plan_status"] == "filled"
+    assert "auto-cleared stale APPROVE_LIVE_CLOSE" in written["rows"][0]["operator_notes"]
+
+
 def test_sync_live_orders_marks_cancelled_intent_terminal(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")

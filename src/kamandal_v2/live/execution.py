@@ -18,7 +18,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 
 
 TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED"}
-COMPLETED_TICKET_STATUSES = {"filled", "manual_fill_recorded"}
+COMPLETED_TICKET_STATUSES = {"filled", "close_filled", "manual_fill_recorded"}
 PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", "dry_run"}
 ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
