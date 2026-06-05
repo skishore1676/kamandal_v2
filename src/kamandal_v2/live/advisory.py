@@ -42,6 +42,7 @@ def run_live_advisory_plan(
     config_source: str = "sheet",
     provider: str = "public",
     write_sheet: bool = False,
+    persist_order_intents: bool = True,
     store: LocalStore | None = None,
     audit: AuditWriter | None = None,
 ) -> PlanRunResult:
@@ -61,7 +62,7 @@ def run_live_advisory_plan(
         plan_top_n=int(live_cfg.get("max_new_plans_per_day") or live_cfg.get("top_n") or 1),
         plan_max_new_positions=int(live_cfg.get("max_new_positions_per_plan") or 1),
     )
-    rows = render_live_plan_rows(result, config, store=store)
+    rows = render_live_plan_rows(result, config, store=store, persist_order_intents=persist_order_intents)
     result.daily_plan_rows[:] = rows
     if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_advisory"})
@@ -80,7 +81,7 @@ def run_live_advisory_plan(
     return result
 
 
-def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, store: LocalStore) -> list[list[Any]]:
+def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, store: LocalStore, persist_order_intents: bool = True) -> list[list[Any]]:
     rows = render_daily_plan_rows(result.plans, mode="live_advisory")
     entry_mode = _entry_approval_mode(config)
     if entry_mode == "disabled":
@@ -95,8 +96,9 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
         if not plan.candidates:
             continue
         tickets = [build_open_ticket(plan, candidate) for candidate in plan.candidates]
-        for ticket in tickets:
-            store.save_live_order_intent(ticket)
+        if persist_order_intents:
+            for ticket in tickets:
+                store.save_live_order_intent(ticket)
         candidate = plan.candidates[0]
         ticket = tickets[0]
         row = dict(zip(DAILY_PLAN_HEADER, rows[index], strict=False))
@@ -120,7 +122,7 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
         row["operator_action"] = APPROVE_LIVE if entry_mode == "auto_top_plan" and index == 0 else ""
         row["plan_metrics_json"] = json.dumps(metrics, sort_keys=True)
         row["plan_detail_json"] = json.dumps(detail, sort_keys=True)
-        if entry_mode == "telegram_approval" and index == 0:
+        if persist_order_intents and entry_mode == "telegram_approval" and index == 0:
             request = create_live_approval_request(config, row=row, plan=plan, candidate=candidate, ticket=ticket, store=store)
             detail["live_approval_request_id"] = request["request_id"]
             detail["live_gate_status"] = "telegram_pending"
@@ -143,6 +145,7 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
     min_entry_legs = int(live_cfg.get("min_entry_legs") or 1)
     traded_ids = store.live_idea_ids_opened_since(_market_day_start())
     open_ids = store.open_live_idea_ids()
+    open_contracts = _open_live_contract_keys(store)
     for candidate in candidates:
         if not candidate.eligible:
             continue
@@ -155,6 +158,8 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
             candidate.rejection_reason = "live_idea_already_open"
         elif candidate.idea_id in traded_ids:
             candidate.rejection_reason = "live_idea_already_traded_today"
+        elif overlap := _live_contract_overlap(candidate, open_contracts):
+            candidate.rejection_reason = f"live_contract_already_open:{overlap}"
         elif mismatch := _mentioned_strategy_mismatch(candidate, live_cfg):
             candidate.rejection_reason = mismatch
         elif reconciliation_blockers_for_group(store, {"underlying": candidate.underlying, "group_id": ""}, config=config):
@@ -165,6 +170,39 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
             candidate.rejection_reason = "live_preflight_required"
         elif _preflight_bpr_incomplete(candidate):
             candidate.rejection_reason = "live_preflight_bpr_incomplete"
+
+
+def _open_live_contract_keys(store: LocalStore) -> set[str]:
+    keys: set[str] = set()
+    for group in store.open_live_position_groups():
+        candidate = group.get("candidate") or {}
+        underlying = str(group.get("underlying") or candidate.get("underlying") or "").upper()
+        for leg in candidate.get("legs") or []:
+            key = _contract_key(underlying, leg)
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _live_contract_overlap(candidate: Candidate, open_contracts: set[str]) -> str:
+    for leg in candidate.legs:
+        key = _contract_key(candidate.underlying, leg)
+        if key and key in open_contracts:
+            return key
+    return ""
+
+
+def _contract_key(underlying: str, leg: Any) -> str:
+    getter = leg.get if isinstance(leg, dict) else lambda name, default=None: getattr(leg, name, default)
+    expiration = str(getter("expiration", "") or "")
+    option_type = str(getter("option_type", "") or "").lower()
+    try:
+        strike = float(getter("strike", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if not underlying or not expiration or option_type not in {"call", "put"} or strike <= 0:
+        return ""
+    return f"{underlying.upper()}|{expiration}|{option_type}|{strike:g}"
 
 
 def _candidate_bpr_cap(candidate: Candidate, portfolio: PortfolioState, live_cfg: dict[str, Any]) -> float:

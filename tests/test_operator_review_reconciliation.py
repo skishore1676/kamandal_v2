@@ -1,5 +1,6 @@
 import json
 
+from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.live.operator_review import (
     apply_operator_review_decision,
     create_operator_review_request,
@@ -53,6 +54,57 @@ def _group() -> dict:
                     "delta": 0.15,
                     "gamma": 0.0,
                     "theta": 0.0,
+                    "vega": 0.0,
+                    "open_interest": 500,
+                },
+            ],
+        },
+    }
+
+
+def _put_group(group_id: str, *, long_strike: int, short_strike: int, net_credit: float = 2.5) -> dict:
+    return {
+        "group_id": group_id,
+        "underlying": "MRVL",
+        "playbook_id": "put_spread_high_ivr",
+        "structure": "put_spread",
+        "candidate": {
+            "candidate_id": group_id,
+            "idea_id": group_id,
+            "underlying": "MRVL",
+            "playbook_id": "put_spread_high_ivr",
+            "structure": "put_spread",
+            "net_credit": net_credit,
+            "legs": [
+                {
+                    "role": "long_put",
+                    "side": "buy",
+                    "option_type": "put",
+                    "strike": long_strike,
+                    "expiration": "2026-07-17",
+                    "quantity": 1,
+                    "mid": 11.0,
+                    "bid": 10.9,
+                    "ask": 11.1,
+                    "delta": -0.16,
+                    "gamma": 0.0,
+                    "theta": -0.3,
+                    "vega": 0.0,
+                    "open_interest": 500,
+                },
+                {
+                    "role": "short_put",
+                    "side": "sell",
+                    "option_type": "put",
+                    "strike": short_strike,
+                    "expiration": "2026-07-17",
+                    "quantity": 1,
+                    "mid": 13.5,
+                    "bid": 13.4,
+                    "ask": 13.6,
+                    "delta": -0.2,
+                    "gamma": 0.0,
+                    "theta": -0.34,
                     "vega": 0.0,
                     "open_interest": 500,
                 },
@@ -137,6 +189,65 @@ def test_reconcile_auto_retires_ghost_after_two_flat_confirmations(tmp_path, mon
     second = reconcile_live_positions(_config(), store=store)
     assert second["issues"][0]["observed_count"] == 2
     assert not store.open_live_position_groups()
+
+
+def test_reconcile_aggregates_duplicate_local_occ_legs(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    first = _put_group("live_group_mrvl_1", long_strike=240, short_strike=250)
+    second = _put_group("live_group_mrvl_2", long_strike=240, short_strike=250)
+    for group in (first, second):
+        store.save_live_position_group(group["group_id"], group, status="open")
+        store.save_live_position(group["group_id"], group["group_id"], group, status="open")
+    stale_issue = {
+        "issue_id": "recon_stale_mrvl_qty",
+        "issue_type": "quantity_mismatch",
+        "subject_id": "MRVL260717P00250000",
+        "group_id": "live_group_mrvl_1",
+        "underlying": "MRVL",
+        "status": "open",
+    }
+    store.save_live_reconciliation_issue(stale_issue)
+
+    class Broker:
+        def broker_positions(self):
+            return [
+                {
+                    "asset_type": "option",
+                    "occ_symbol": "MRVL260717P00240000",
+                    "underlying": "MRVL",
+                    "quantity": 2.0,
+                },
+                {
+                    "asset_type": "option",
+                    "occ_symbol": "MRVL260717P00250000",
+                    "underlying": "MRVL",
+                    "quantity": -2.0,
+                },
+            ]
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store)
+
+    assert result["issues"] == []
+    assert store.live_reconciliation_issue("recon_stale_mrvl_qty")["status"] == "resolved"
+    assert store.open_live_reconciliation_issues(underlying="MRVL") == []
+
+
+def test_live_portfolio_state_exposes_group_count_and_underlying_bpr(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    first = _put_group("live_group_mrvl_1", long_strike=240, short_strike=250, net_credit=2.5)
+    second = _put_group("live_group_mrvl_2", long_strike=240, short_strike=250, net_credit=2.75)
+    for group in (first, second):
+        store.save_live_position_group(group["group_id"], group, status="open")
+        store.save_live_position(group["group_id"], group["group_id"], group, status="open")
+    base = PortfolioState(account_size=10_000, buying_power=5_000, bpr_used=5_000, positions_count=4)
+
+    portfolio = store.live_portfolio_state(base)
+
+    assert portfolio.positions_count == 2
+    assert portfolio.bpr_used == 5_000
+    assert portfolio.per_underlying_bpr == {"MRVL": 1475.0}
 
 
 def test_reconciliation_review_retire_local_closes_group(tmp_path) -> None:

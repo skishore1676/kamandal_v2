@@ -35,7 +35,7 @@ def reconcile_live_positions(
     broker_positions = [position for position in adapter.broker_positions() if str(position.get("asset_type")) == "option"]
     local_groups = store.open_live_position_groups()
     local_index = _local_leg_index(local_groups)
-    broker_index = {str(position.get("occ_symbol") or ""): position for position in broker_positions if position.get("occ_symbol")}
+    broker_index = _broker_position_index(broker_positions)
 
     issues = []
     for group in local_groups:
@@ -54,7 +54,8 @@ def reconcile_live_positions(
             issues.append(stored)
             if send_review:
                 _request_review(config, store, stored, dry_run=dry_run)
-            continue
+    for position in broker_index.values():
+        symbol = str(position.get("occ_symbol") or "")
         if symbol not in local_index:
             issue = _issue(
                 "orphan_broker_position",
@@ -68,9 +69,9 @@ def reconcile_live_positions(
                 _request_review(config, store, stored, dry_run=dry_run)
             continue
         local_leg = local_index[symbol]
-        broker_qty = abs(float(position.get("quantity") or 0.0))
-        local_qty = abs(float(local_leg.get("quantity") or 1))
-        if broker_qty and local_qty and abs(broker_qty - local_qty) > 0.001:
+        broker_qty = float(position.get("quantity") or 0.0)
+        local_qty = float(local_leg.get("quantity") or 0.0)
+        if abs(broker_qty - local_qty) > 0.001:
             issue = _issue(
                 "quantity_mismatch",
                 subject_id=symbol,
@@ -84,6 +85,7 @@ def reconcile_live_positions(
             if send_review:
                 _request_review(config, store, stored, dry_run=dry_run)
 
+    _resolve_unobserved_issues(store, {str(issue.get("issue_id") or "") for issue in issues}, dry_run=dry_run)
     rows = [_daily_plan_row(index, issue) for index, issue in enumerate(issues, start=1)]
     if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_reconciliation"})
@@ -211,7 +213,21 @@ def _local_leg_index(groups: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     index: dict[str, dict[str, Any]] = {}
     for group in groups:
         for leg in _group_leg_symbols(group):
-            index[str(leg["occ_symbol"])] = leg
+            symbol = str(leg["occ_symbol"])
+            current = index.setdefault(
+                symbol,
+                {
+                    **leg,
+                    "quantity": 0.0,
+                    "group_ids": [],
+                    "local_legs": [],
+                },
+            )
+            current["quantity"] = float(current.get("quantity") or 0.0) + float(leg.get("quantity") or 0.0)
+            current["group_ids"].append(leg.get("group_id"))
+            current["local_legs"].append(leg)
+            if not current.get("group_id"):
+                current["group_id"] = leg.get("group_id")
     return index
 
 
@@ -224,8 +240,38 @@ def _group_leg_symbols(group: dict[str, Any]) -> list[dict[str, Any]]:
             symbol = occ_symbol(underlying, _leg_proxy(leg))
         except Exception:
             continue
-        result.append({**leg, "group_id": group.get("group_id"), "underlying": underlying, "occ_symbol": symbol})
+        sign = 1 if str(leg.get("side") or "").lower() == "buy" else -1
+        quantity = sign * abs(float(leg.get("quantity") or 1.0))
+        result.append({**leg, "quantity": quantity, "group_id": group.get("group_id"), "underlying": underlying, "occ_symbol": symbol})
     return result
+
+
+def _broker_position_index(positions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    for position in positions:
+        symbol = str(position.get("occ_symbol") or "")
+        if not symbol:
+            continue
+        current = index.setdefault(symbol, {**position, "quantity": 0.0, "raw_positions": []})
+        current["quantity"] = float(current.get("quantity") or 0.0) + float(position.get("quantity") or 0.0)
+        current["raw_positions"].append(position)
+    return index
+
+
+def _resolve_unobserved_issues(store: LocalStore, observed_issue_ids: set[str], *, dry_run: bool) -> None:
+    if dry_run:
+        return
+    for issue in store.open_live_reconciliation_issues():
+        if str(issue.get("status") or "") != "open":
+            continue
+        issue_id = str(issue.get("issue_id") or "")
+        if not issue_id or issue_id in observed_issue_ids:
+            continue
+        store.update_live_reconciliation_issue_status(
+            issue_id,
+            "resolved",
+            {"resolution": "not_observed_on_latest_reconciliation", "resolved_at": _now()},
+        )
 
 
 def _request_review(config: dict[str, Any], store: LocalStore, issue: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:

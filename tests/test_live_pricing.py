@@ -259,6 +259,33 @@ def test_public_preflight_retries_rejected_penny_price_with_favorable_nickel(mon
     assert result.raw["request"]["limitPrice"] == "18.70"
 
 
+def test_public_preflight_sanitizes_and_structures_invalid_order_failure(monkeypatch) -> None:
+    adapter = PublicAdapter(_public_config())
+
+    def fake_post(_endpoint, _payload):  # noqa: ANN001
+        raise RuntimeError(
+            "Public API POST /userapigateway/trading/5OS69079/preflight/multi-leg failed status=400: "
+            "{\"code\":117,\"message\":\"Before placing this order, you must first cancel an invalid order in your portfolio. "
+            "Please cancel the order to close GOOGL $350 Put Jul 17, '26 and then try again.\"}"
+        )
+
+    monkeypatch.setattr(adapter, "_post", fake_post)
+
+    result = adapter.preflight(_credit_spread_candidate())
+
+    assert result.ok is False
+    assert "5OS69079" not in result.message
+    assert "/trading/<account>/" in result.message
+    assert result.raw["public_invalid_order"] == {
+        "action_required": "cancel_invalid_close_order",
+        "underlying": "GOOGL",
+        "strike": 350.0,
+        "option_type": "put",
+        "expiration_label": "Jul 17, '26",
+        "requires_explicit_broker_cancel_approval": True,
+    }
+
+
 def test_entry_pricing_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_ENTRY_PRICING_MODE", "mid")
     monkeypatch.setenv("KAMANDAL_ENTRY_PRICE_IMPROVEMENT_PCT_OF_SPREAD", "25")

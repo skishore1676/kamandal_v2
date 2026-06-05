@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
-from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, Plan, PortfolioState, utc_now
+from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, Plan, PortfolioState, PreflightResult, utc_now
 from kamandal_v2.events.earnings import EarningsOverlayMarket, EarningsStore
 from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflightClient
 from kamandal_v2.market.interfaces import MarketDataProvider
@@ -75,6 +75,8 @@ def run_plan(
     portfolio_raw = market.account_state()
     portfolio = _shadow_portfolio_override(portfolio_raw, config)
     portfolio = _shadow_portfolio_with_open_fills(portfolio, store, config)
+    portfolio = _live_portfolio_with_open_groups(portfolio, store, config)
+    preflight = _live_overlap_preflight_guard(preflight, store, config)
     match_gate_mode = _match_gate_mode(config)
     candidate_filter_mode = _candidate_filter_mode(config)
 
@@ -304,6 +306,68 @@ def _preflight_client(market: Any) -> Any:
     raise RuntimeError("public provider did not expose a preflight client")
 
 
+class _LiveOverlapPreflightGuard:
+    def __init__(self, inner: Any, open_contracts: set[str]) -> None:
+        self.inner = inner
+        self.open_contracts = open_contracts
+
+    def preflight(self, candidate: Candidate) -> PreflightResult:
+        overlap = _candidate_contract_overlap(candidate, self.open_contracts)
+        if overlap:
+            return PreflightResult(
+                ok=False,
+                bpr=candidate.estimated_bpr,
+                message=f"live_contract_already_open:{overlap}",
+                raw={"source": "live_overlap_preflight_guard", "live_contract_already_open": overlap},
+            )
+        return self.inner.preflight(candidate)
+
+    def preflight_ticket(self, ticket: dict[str, Any]) -> Any:
+        return self.inner.preflight_ticket(ticket)
+
+
+def _live_overlap_preflight_guard(preflight: Any, store: LocalStore, config: dict[str, Any]) -> Any:
+    if str((config.get("runtime") or {}).get("mode") or "").lower() != "live":
+        return preflight
+    open_contracts = _open_live_contract_keys(store)
+    if not open_contracts:
+        return preflight
+    return _LiveOverlapPreflightGuard(preflight, open_contracts)
+
+
+def _open_live_contract_keys(store: LocalStore) -> set[str]:
+    keys: set[str] = set()
+    for group in store.open_live_position_groups():
+        candidate = group.get("candidate") or {}
+        underlying = str(group.get("underlying") or candidate.get("underlying") or "").upper()
+        for leg in candidate.get("legs") or []:
+            key = _contract_key(underlying, leg)
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _candidate_contract_overlap(candidate: Candidate, open_contracts: set[str]) -> str:
+    for leg in candidate.legs:
+        key = _contract_key(candidate.underlying, leg)
+        if key and key in open_contracts:
+            return key
+    return ""
+
+
+def _contract_key(underlying: str, leg: Any) -> str:
+    getter = leg.get if isinstance(leg, dict) else lambda name, default=None: getattr(leg, name, default)
+    expiration = str(getter("expiration", "") or "")
+    option_type = str(getter("option_type", "") or "").lower()
+    try:
+        strike = float(getter("strike", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if not underlying or not expiration or option_type not in {"call", "put"} or strike <= 0:
+        return ""
+    return f"{underlying.upper()}|{expiration}|{option_type}|{strike:g}"
+
+
 def _shadow_portfolio_override(portfolio: PortfolioState, config: dict[str, Any]) -> PortfolioState:
     mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
     if mode != "shadow":
@@ -332,6 +396,13 @@ def _shadow_portfolio_with_open_fills(portfolio: PortfolioState, store: LocalSto
     if mode != "shadow":
         return portfolio
     return store.shadow_portfolio_state(portfolio)
+
+
+def _live_portfolio_with_open_groups(portfolio: PortfolioState, store: LocalStore, config: dict[str, Any]) -> PortfolioState:
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+    if mode != "live":
+        return portfolio
+    return store.live_portfolio_state(portfolio)
 
 
 def _reject_open_shadow_candidates(candidates: list[Candidate], store: LocalStore, config: dict[str, Any]) -> None:

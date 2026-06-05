@@ -174,8 +174,14 @@ class PublicAdapter:
                         },
                     )
                 except Exception as retry_exc:  # noqa: BLE001
-                    return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"Public preflight failed: {retry_exc}", raw={"source": "public", "first_error": str(exc)})
-            return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"Public preflight failed: {exc}", raw={"source": "public"})
+                    message = f"Public preflight failed: {_safe_public_error(retry_exc)}"
+                    raw = {"source": "public", "first_error": _safe_public_error(exc)}
+                    raw.update(_public_invalid_order_raw(message))
+                    return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=message, raw=raw)
+            message = f"Public preflight failed: {_safe_public_error(exc)}"
+            raw = {"source": "public"}
+            raw.update(_public_invalid_order_raw(message))
+            return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=message, raw=raw)
 
     def preflight_ticket(self, ticket: dict[str, Any]) -> PreflightResult:
         self._require_available()
@@ -194,7 +200,10 @@ class PublicAdapter:
                 return PreflightResult(ok=False, bpr=0.0, message="Public preflight missing buyingPowerRequirement", raw={"request": payload, "response": response})
             return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="Public ticket preflight ok", raw={"request": payload, "response": response})
         except Exception as exc:  # noqa: BLE001
-            return PreflightResult(ok=False, bpr=0.0, message=f"Public ticket preflight failed: {exc}", raw={"source": "public"})
+            message = f"Public ticket preflight failed: {_safe_public_error(exc)}"
+            raw = {"source": "public"}
+            raw.update(_public_invalid_order_raw(message))
+            return PreflightResult(ok=False, bpr=0.0, message=message, raw=raw)
 
     def place_order_ticket(self, ticket: dict[str, Any]) -> dict[str, Any]:
         self._require_available()
@@ -521,8 +530,37 @@ def _normalise_order_payload(payload: dict[str, Any], *, multileg: bool) -> dict
     return payload
 
 
+def _safe_public_error(exc: Exception) -> str:
+    return re.sub(r"/trading/[^/]+/", "/trading/<account>/", str(exc))
+
+
+def _public_invalid_order_raw(message: str) -> dict[str, Any]:
+    details = _public_invalid_order_details(message)
+    return {"public_invalid_order": details} if details else {}
+
+
+def _public_invalid_order_details(message: str) -> dict[str, Any]:
+    match = re.search(
+        r"cancel an invalid order.*?cancel the order to close\s+([A-Z.]+)\s+\$([0-9.]+)\s+(Call|Put)\s+([A-Z][a-z]{2}\s+\d{1,2},\s+'\d{2})",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return {}
+    underlying, strike, option_type, expiration_label = match.groups()
+    return {
+        "action_required": "cancel_invalid_close_order",
+        "underlying": underlying.upper(),
+        "strike": float(strike),
+        "option_type": option_type.lower(),
+        "expiration_label": expiration_label,
+        "requires_explicit_broker_cancel_approval": True,
+    }
+
+
 def _normalize_public_position(raw: dict[str, Any], *, index: int) -> dict[str, Any]:
     instrument = _find_first_dict(raw, ("instrument", "security", "option", "equity"))
+    cost_basis = raw.get("costBasis") if isinstance(raw.get("costBasis"), dict) else {}
     symbol = str(
         instrument.get("symbol")
         or raw.get("symbol")
@@ -557,9 +595,23 @@ def _normalize_public_position(raw: dict[str, Any], *, index: int) -> dict[str, 
         "strike": parsed.get("strike"),
         "quantity": quantity,
         "asset_type": "option" if parsed.get("expiration") else "equity",
-        "average_price": _find_optional_number(raw, ("averagePrice", "average-price", "averageOpenPrice", "costBasisPrice")),
+        "average_price": _find_optional_number(
+            raw,
+            ("averagePrice", "average-price", "averageOpenPrice", "costBasisPrice"),
+        ) or _find_optional_number(cost_basis, ("unitCost", "unit-cost", "averagePrice")),
+        "cost_basis": _find_optional_number(cost_basis, ("totalCost", "total-cost", "costBasis")),
+        "current_value": _find_optional_number(raw, ("currentValue", "marketValue", "value")),
+        "strategy_ids": _as_string_list(raw.get("strategyIds") or raw.get("strategy_ids")),
         "raw": raw,
     }
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    if value in (None, ""):
+        return []
+    return [str(value)]
 
 
 def _find_first_dict(payload: Any, keys: tuple[str, ...]) -> dict[str, Any]:

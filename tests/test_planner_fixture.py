@@ -2,8 +2,8 @@ import json
 import sqlite3
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Idea
-from kamandal_v2.planner.engine import _rejection_summary, run_plan, run_shadow_cycle
+from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, PreflightResult
+from kamandal_v2.planner.engine import _live_overlap_preflight_guard, _rejection_summary, run_plan, run_shadow_cycle
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -16,6 +16,27 @@ def _shadow_control() -> dict:
     control.setdefault("runtime", {})["mode"] = "shadow"
     control.setdefault("execution", {})["approval_mode"] = "shadow_auto_top_plan"
     return control
+
+
+def _live_group(group_id: str, underlying: str = "TSLA") -> dict:
+    return {
+        "group_id": group_id,
+        "underlying": underlying,
+        "playbook_id": "put_spread_default",
+        "structure": "put_spread",
+        "candidate": {
+            "candidate_id": group_id,
+            "idea_id": group_id,
+            "underlying": underlying,
+            "playbook_id": "put_spread_default",
+            "structure": "put_spread",
+            "net_credit": 1.0,
+            "legs": [
+                {"role": "long_put", "side": "buy", "option_type": "put", "strike": 90, "expiration": "2026-07-17", "quantity": 1},
+                {"role": "short_put", "side": "sell", "option_type": "put", "strike": 95, "expiration": "2026-07-17", "quantity": 1},
+            ],
+        },
+    }
 
 
 def _run(tmp_path):
@@ -102,6 +123,68 @@ def test_total_position_cap_includes_open_shadow_positions(tmp_path) -> None:
     assert first.plans
     assert second.plans == []
     assert second.metrics["candidates_eligible"] > 0
+
+
+def test_live_plan_context_includes_open_live_groups(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    group = _live_group("live_group_tsla")
+    store.save_live_position_group(group["group_id"], group, status="open")
+    store.save_live_position(group["group_id"], group["group_id"], group, status="open")
+    control = load_control()
+    control.setdefault("runtime", {})["mode"] = "live"
+    control["portfolio"]["max_positions"] = 15
+    control["live"]["candidate_filter_mode"] = "warn"
+
+    result = run_plan(
+        control,
+        idea_paths=[SAMPLE_IDEAS],
+        config_source="seed",
+        provider="fixture",
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+
+    assert result.plans
+    assert result.plans[0].portfolio_before.positions_count == 1
+    assert result.plans[0].portfolio_before.per_underlying_bpr["TSLA"] == 400.0
+
+
+def test_live_overlap_preflight_guard_rejects_open_contract_without_broker_call(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    group = _live_group("live_group_googl", "GOOGL")
+    store.save_live_position_group(group["group_id"], group, status="open")
+    called = {"preflight": False}
+
+    class BrokerPreflight:
+        def preflight(self, _candidate):
+            called["preflight"] = True
+            return PreflightResult(ok=True, bpr=100.0, message="broker ok")
+
+    candidate = Candidate(
+        candidate_id="cand",
+        idea_id="idea",
+        underlying="GOOGL",
+        playbook_id="put_spread_default",
+        structure="put_spread",
+        legs=[
+            OptionLeg("long_put", "buy", "put", 90, "2026-07-17", 1, 1.0, 0.95, 1.05, -0.2, 0.0, -0.01, 0.1, 500),
+            OptionLeg("short_put", "sell", "put", 95, "2026-07-17", 1, 2.0, 1.95, 2.05, -0.3, 0.0, -0.02, 0.1, 500),
+        ],
+        net_credit=1.0,
+        estimated_bpr=400.0,
+        greeks=Greeks(),
+        liquidity_score=1.0,
+        score=0.0,
+    )
+    config = load_control()
+    config["runtime"]["mode"] = "live"
+
+    guarded = _live_overlap_preflight_guard(BrokerPreflight(), store, config)
+    result = guarded.preflight(candidate)
+
+    assert result.ok is False
+    assert result.message == "live_contract_already_open:GOOGL|2026-07-17|put|90"
+    assert called["preflight"] is False
 
 
 def test_daily_plan_write_is_preserved_when_no_eligible_plans(tmp_path, monkeypatch) -> None:

@@ -432,6 +432,28 @@ class LocalStore:
             per_underlying_bpr=per_underlying_bpr,
         )
 
+    def live_portfolio_state(self, base: PortfolioState) -> PortfolioState:
+        groups = self.open_live_position_groups()
+        if not groups:
+            return base
+        per_underlying_bpr: dict[str, float] = {}
+        greeks = Greeks()
+        for group in groups:
+            candidate = group.get("candidate") or {}
+            underlying = str(group.get("underlying") or candidate.get("underlying") or "")
+            bpr = _live_group_bpr(group)
+            if underlying:
+                per_underlying_bpr[underlying] = round(per_underlying_bpr.get(underlying, 0.0) + bpr, 2)
+            greeks = greeks + _candidate_greeks(candidate)
+        return PortfolioState(
+            account_size=base.account_size,
+            buying_power=base.buying_power,
+            bpr_used=base.bpr_used,
+            positions_count=len(groups),
+            greeks=greeks if any((greeks.delta, greeks.gamma, greeks.theta, greeks.vega)) else base.greeks,
+            per_underlying_bpr=per_underlying_bpr,
+        )
+
     def save_shadow_mark(self, mark_id: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -503,10 +525,15 @@ class LocalStore:
         placeholders = ",".join("?" for _ in statuses)
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT payload FROM live_order_intents WHERE status IN ({placeholders})",
+                f"SELECT status, payload FROM live_order_intents WHERE status IN ({placeholders})",
                 tuple(sorted(statuses)),
             ).fetchall()
-        return [json.loads(row["payload"]) for row in rows]
+        tickets = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["_ledger_status"] = row["status"]
+            tickets.append(payload)
+        return tickets
 
     def live_order_child_intents(self, parent_ticket_hash: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -943,3 +970,53 @@ class LocalStore:
                 "INSERT INTO events (event_type, payload) VALUES (?, ?)",
                 (event_type, json.dumps(payload, sort_keys=True)),
             )
+
+
+def _candidate_greeks(candidate: dict[str, Any]) -> Greeks:
+    raw = candidate.get("greeks") or {}
+    if isinstance(raw, dict):
+        return Greeks(
+            delta=float(raw.get("delta") or 0.0),
+            gamma=float(raw.get("gamma") or 0.0),
+            theta=float(raw.get("theta") or 0.0),
+            vega=float(raw.get("vega") or 0.0),
+        )
+    greeks = Greeks()
+    for leg in candidate.get("legs") or []:
+        sign = -1.0 if str(leg.get("side") or "").lower() == "sell" else 1.0
+        qty = float(leg.get("quantity") or 1.0)
+        greeks = greeks + Greeks(
+            delta=sign * qty * float(leg.get("delta") or 0.0),
+            gamma=sign * qty * float(leg.get("gamma") or 0.0),
+            theta=sign * qty * float(leg.get("theta") or 0.0),
+            vega=sign * qty * float(leg.get("vega") or 0.0),
+        )
+    return greeks
+
+
+def _live_group_bpr(group: dict[str, Any]) -> float:
+    candidate = group.get("candidate") or {}
+    for raw in (candidate.get("estimated_bpr"), group.get("estimated_bpr")):
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return round(value, 2)
+    structure = str(group.get("structure") or candidate.get("structure") or "")
+    legs = list(candidate.get("legs") or [])
+    net_credit = _float(candidate.get("net_credit"), _float(group.get("net_credit"), 0.0))
+    if structure in {"put_spread", "call_spread"} and len(legs) == 2:
+        strikes = [_float(leg.get("strike"), 0.0) for leg in legs]
+        width = abs(strikes[0] - strikes[1])
+        return round(max(width * 100.0 - max(net_credit, 0.0) * 100.0, 1.0), 2)
+    if structure in {"long_call", "long_put", "call_calendar", "put_calendar", "put_diagonal", "call_diagonal"}:
+        return round(max(abs(net_credit) * 100.0, 1.0), 2)
+    return round(max(abs(net_credit) * 100.0, 0.0), 2)
+
+
+def _float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

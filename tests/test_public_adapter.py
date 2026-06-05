@@ -120,3 +120,40 @@ def test_public_account_state_reads_nested_buying_power_and_equity_total(tmp_pat
     assert account.account_size == 10507.30
     assert account.buying_power == 0.0
     assert account.positions_count == 1
+
+
+def test_public_broker_positions_preserve_cost_basis_and_strategy_ids(tmp_path) -> None:
+    adapter = PublicAdapter(
+        {
+            "broker": {
+                "public": {
+                    "secret_token": "secret",
+                    "account_id": "acct",
+                    "session_file": str(tmp_path / "session.json"),
+                    "account_cache_file": str(tmp_path / "account.json"),
+                }
+            }
+        }
+    )
+    adapter._session = _FakeSession(
+        {
+            "positions": [
+                {
+                    "instrument": {"symbol": "MRVL260717P00250000", "type": "OPTION"},
+                    "quantity": "2",
+                    "side": "short",
+                    "currentValue": "-2500.00",
+                    "costBasis": {"unitCost": "12.50", "totalCost": "-2500.00"},
+                    "strategyIds": ["strategy-1"],
+                }
+            ]
+        }
+    )
+
+    positions = adapter.broker_positions()
+
+    assert positions[0]["quantity"] == -2.0
+    assert positions[0]["average_price"] == 12.5
+    assert positions[0]["cost_basis"] == -2500.0
+    assert positions[0]["current_value"] == -2500.0
+    assert positions[0]["strategy_ids"] == ["strategy-1"]

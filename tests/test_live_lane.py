@@ -303,6 +303,7 @@ def test_live_advisory_uses_sheet_playbooks_not_legacy_structure_allowlist(tmp_p
     _patch_live_config(monkeypatch)
     control = load_control()
     control["live"]["allowed_structures"] = ["long_call", "long_put"]
+    store = LocalStore(tmp_path / "kamandal.db")
 
     result = run_live_advisory_plan(
         control,
@@ -310,13 +311,15 @@ def test_live_advisory_uses_sheet_playbooks_not_legacy_structure_allowlist(tmp_p
         config_source="seed",
         provider="fixture",
         write_sheet=False,
-        store=LocalStore(tmp_path / "kamandal.db"),
+        persist_order_intents=False,
+        store=store,
         audit=AuditWriter(tmp_path / "audit"),
     )
 
     assert result.plans
     assert result.plans[0].candidates[0].structure == "call_spread"
     assert "live_structure_not_allowed" not in result.rejection_summary
+    assert store.live_order_intents_by_status({"pending_approval"}) == []
 
 
 def test_live_advisory_prefers_tastytrade_iv_metrics(tmp_path, monkeypatch) -> None:
@@ -1395,6 +1398,189 @@ def test_sync_live_orders_marks_cancelled_intent_terminal(tmp_path, monkeypatch)
     assert synced["synced"] == 1
     assert synced["orders"][0]["status"] == "CANCELLED"
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "cancelled"
+
+
+def test_sync_live_orders_polls_cancel_pending_repriced_intent(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "order_id": "order-old",
+        "plan_id": "plan",
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "intent_type": "open",
+        "underlying": "GOOGL",
+        "playbook_id": "put_spread_default",
+        "structure": "put_spread",
+        "quantity": 1,
+        "limit_price": "-3.65",
+        "time_in_force": "DAY",
+        "created_at": "2026-06-05T14:00:00Z",
+        "legs": [],
+        "submit_payload": {"orderId": "order-old", "quantity": "1", "type": "LIMIT", "limitPrice": "-3.65", "legs": []},
+    }
+    from kamandal_v2.live.orders import ticket_hash
+
+    ticket["ticket_hash"] = ticket_hash(ticket)
+    store.save_live_order_intent(ticket, status="repriced")
+
+    class CancelledBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, _order_id):
+            return {"status": "CANCELLED"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", CancelledBrokerAdapter)
+
+    synced = sync_live_orders(_live_control(), store=store)
+
+    assert synced["synced"] == 1
+    assert synced["orders"][0]["ledger_status"] == "repriced"
+    assert synced["orders"][0]["status"] == "CANCELLED"
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "cancelled"
+
+
+def test_sync_live_orders_flags_cancel_pending_working_order(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "order_id": "order-old",
+        "plan_id": "plan",
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "intent_type": "open",
+        "underlying": "MRVL",
+        "playbook_id": "put_spread_default",
+        "structure": "put_spread",
+        "quantity": 1,
+        "limit_price": "-2.12",
+        "time_in_force": "DAY",
+        "created_at": "2026-06-05T14:00:00Z",
+        "legs": [],
+        "submit_payload": {"orderId": "order-old", "quantity": "1", "type": "LIMIT", "limitPrice": "-2.12", "legs": []},
+    }
+    from kamandal_v2.live.orders import ticket_hash
+
+    ticket["ticket_hash"] = ticket_hash(ticket)
+    store.save_live_order_intent(ticket, status="expired")
+
+    class WorkingBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, _order_id):
+            return {"status": "NEW"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", WorkingBrokerAdapter)
+
+    synced = sync_live_orders(_live_control(), store=store)
+
+    assert synced["orders"][0]["ledger_status"] == "expired"
+    assert synced["orders"][0]["cancel_pending"] is True
+    assert synced["orders"][0]["needs_broker_cancel_review"] is True
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "expired"
+
+
+def test_sync_live_orders_read_only_skips_entry_management(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "order_id": "order-old",
+        "plan_id": "plan",
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "intent_type": "open",
+        "underlying": "COST",
+        "playbook_id": "put_spread_default",
+        "structure": "put_spread",
+        "quantity": 1,
+        "limit_price": "-2.25",
+        "time_in_force": "DAY",
+        "created_at": "2026-05-29T14:00:00Z",
+        "preflight": {"raw": {"entry_pricing": {"base_mid_limit": 2.15, "improved_limit": 2.25}}},
+        "legs": [],
+        "submit_payload": {"orderId": "order-old", "quantity": "1", "type": "LIMIT", "limitPrice": "-2.25", "legs": []},
+    }
+    from kamandal_v2.live.orders import ticket_hash
+
+    ticket["ticket_hash"] = ticket_hash(ticket)
+    store.save_live_order_intent(ticket, status="submitted")
+    calls = []
+
+    class WorkingBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, _order_id):
+            return {"status": "NEW", "createdAt": "2026-05-29T14:00:00Z"}
+
+        def cancel_order(self, order_id):
+            calls.append(("cancel", order_id))
+            return {"orderId": order_id}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", WorkingBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.datetime", type("FrozenDateTime", (datetime,), {"now": classmethod(lambda cls, tz=None: datetime(2026, 5, 29, 14, 31, tzinfo=UTC))}))
+    config = _live_control()
+    config["live"]["entry_reprice"] = {"enabled": True, "after_minutes": 5, "max_reprices": 1, "expire_after_minutes": 30}
+
+    synced = sync_live_orders(config, store=store, manage_entries=False)
+
+    assert synced["manage_entries"] is False
+    assert synced["orders"][0]["entry_management_skipped"] is True
+    assert calls == []
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "submitted"
+
+
+def test_sync_live_orders_continues_after_order_fetch_failure(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    from kamandal_v2.live.orders import ticket_hash
+
+    missing = {
+        "order_id": "missing-order",
+        "plan_id": "plan",
+        "candidate_id": "cand-missing",
+        "idea_id": "idea",
+        "intent_type": "open",
+        "underlying": "AAPL",
+        "playbook_id": "put_spread_default",
+        "structure": "put_spread",
+        "quantity": 1,
+        "limit_price": "-1.38",
+        "time_in_force": "DAY",
+        "created_at": "2026-05-12T14:24:47Z",
+        "legs": [],
+        "submit_payload": {"orderId": "missing-order", "legs": []},
+    }
+    active = {
+        **missing,
+        "order_id": "active-order",
+        "candidate_id": "cand-active",
+        "underlying": "GOOGL",
+        "created_at": "2026-06-05T14:24:47Z",
+        "submit_payload": {"orderId": "active-order", "legs": []},
+    }
+    missing["ticket_hash"] = ticket_hash(missing)
+    active["ticket_hash"] = ticket_hash(active)
+    store.save_live_order_intent(missing, status="expired")
+    store.save_live_order_intent(active, status="submitted")
+
+    class PartiallyMissingBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, order_id):
+            if order_id == "missing-order":
+                raise RuntimeError("Public API GET /userapigateway/trading/5OS69079/order/missing-order failed status=404: ")
+            return {"status": "CANCELLED"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", PartiallyMissingBrokerAdapter)
+
+    synced = sync_live_orders(_live_control(), store=store, manage_entries=False)
+
+    assert synced["synced"] == 2
+    errors = [order for order in synced["orders"] if order["status"] == "BROKER_STATUS_FETCH_FAILED"]
+    assert len(errors) == 1
+    assert "/trading/<account>/" in errors[0]["error"]
+    assert "5OS69079" not in errors[0]["error"]
+    assert synced["orders"][0]["status"] == "CANCELLED"
 
 
 def test_sync_live_orders_reprices_stale_new_entry_once(tmp_path, monkeypatch) -> None:

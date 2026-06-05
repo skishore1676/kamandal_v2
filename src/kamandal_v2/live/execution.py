@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime, time
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -21,6 +22,7 @@ TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRE
 COMPLETED_TICKET_STATUSES = {"filled", "close_filled", "manual_fill_recorded"}
 PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", "dry_run"}
 ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
+CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired"}
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
 FAILED_TICKET_STATUSES = {"rejected", "expired", "failed", "cancelled", "canceled"}
 
@@ -122,20 +124,40 @@ def _execute_ticket(
     return {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "status": status, "response": response}
 
 
-def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None) -> dict[str, Any]:
+def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None, manage_entries: bool = True) -> dict[str, Any]:
     store = store or LocalStore()
     adapter = broker_adapter(config)
-    tickets = store.live_order_intents_by_status({"submitted"})
+    tickets = sorted(
+        store.live_order_intents_by_status({"submitted", *CANCEL_PENDING_TICKET_STATUSES}),
+        key=lambda item: (0 if str(item.get("_ledger_status") or "") == "submitted" else 1, str(item.get("created_at") or "")),
+    )
     results = []
     for ticket in tickets:
-        response = adapter.get_order(str(ticket["order_id"]))
+        ledger_status = str(ticket.get("_ledger_status") or "submitted")
+        try:
+            response = adapter.get_order(str(ticket["order_id"]))
+        except Exception as exc:  # noqa: BLE001
+            error = _safe_broker_error(exc)
+            response = {"error": error}
+            status = "BROKER_STATUS_FETCH_FAILED"
+            store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
+            results.append({
+                "ticket_hash": ticket["ticket_hash"],
+                "order_id": ticket["order_id"],
+                "status": status,
+                "ledger_status": ledger_status,
+                "needs_broker_status_review": True,
+                "error": error,
+            })
+            continue
         status = str(response.get("status") or "UNKNOWN").upper()
+        should_manage_entry = manage_entries and ledger_status == "submitted"
         store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
-        if status in {"NEW", "OPEN", "WORKING"} and _entry_expire_due(store, ticket, response, config):
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_entry and _entry_expire_due(store, ticket, response, config):
             expire_result = _expire_live_entry_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **expire_result})
             continue
-        if status in {"NEW", "OPEN", "WORKING"} and _entry_reprice_due(store, ticket, response, config):
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_entry and _entry_reprice_due(store, ticket, response, config):
             reprice_result = _reprice_live_entry_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **reprice_result})
             continue
@@ -145,8 +167,18 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None)
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "close_filled")
         if status in TERMINAL_UNFILLED_ORDER_STATUSES:
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), status.lower().replace("canceled", "cancelled"))
-        results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status})
-    return {"synced": len(results), "orders": results}
+        result = {"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, "ledger_status": ledger_status}
+        if ledger_status in CANCEL_PENDING_TICKET_STATUSES and status in {"NEW", "OPEN", "WORKING"}:
+            result["cancel_pending"] = True
+            result["needs_broker_cancel_review"] = True
+        if not manage_entries and ledger_status == "submitted" and status in {"NEW", "OPEN", "WORKING"}:
+            result["entry_management_skipped"] = True
+        results.append(result)
+    return {"synced": len(results), "manage_entries": manage_entries, "orders": results}
+
+
+def _safe_broker_error(exc: Exception) -> str:
+    return re.sub(r"/trading/[^/]+/", "/trading/<account>/", str(exc))
 
 
 def _expire_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:

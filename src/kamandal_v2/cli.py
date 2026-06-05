@@ -75,7 +75,8 @@ def main() -> None:
     live_close_execute_parser = subparsers.add_parser("execute-live-approved-closes", help="Execute sheet-approved live close orders")
     live_close_execute_parser.add_argument("--submit", action="store_true", help="Submit real close orders; default is dry-run")
     live_close_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_exits are enabled")
-    subparsers.add_parser("sync-live-orders", help="Poll active broker order status for submitted live orders")
+    sync_live_parser = subparsers.add_parser("sync-live-orders", help="Poll broker order status for submitted and cancel-pending live orders")
+    sync_live_parser.add_argument("--read-only", action="store_true", help="Poll and record broker statuses without entry reprice/expiry actions")
     subparsers.add_parser("cleanup-live-approvals", help="Clear stale live approval cells after submit/fill/failure")
     approve_request_parser = subparsers.add_parser("approve-live-request", help="Approve a pending Telegram live request and update daily_plan")
     approve_request_parser.add_argument("--request-id", required=True)
@@ -300,6 +301,7 @@ def main() -> None:
             config_source=args.config_source,
             provider=args.provider,
             write_sheet=args.write_sheet,
+            persist_order_intents=args.write_sheet,
         )
         print(_plan_result_json(result))
         return
@@ -310,7 +312,7 @@ def main() -> None:
         print(json.dumps(execute_live_approved(config, submit=_live_submit_requested(config, args, close=True), close=True), indent=2))
         return
     if args.command == "sync-live-orders":
-        print(json.dumps(sync_live_orders(config), indent=2))
+        print(json.dumps(sync_live_orders(config, manage_entries=not args.read_only), indent=2))
         return
     if args.command == "cleanup-live-approvals":
         print(json.dumps(cleanup_live_approvals(config), indent=2))
