@@ -4,7 +4,7 @@ from kamandal_v2.live.orders import build_close_ticket
 from kamandal_v2.live.position_management import live_exit_decision, mark_live_group, normalize_profit_target_pct
 
 
-def _playbook(structure: str, *, profit_target_pct: float = 50.0) -> Playbook:
+def _playbook(structure: str, *, profit_target_pct: float = 50.0, max_loss_multiple: float | None = 2.0) -> Playbook:
     return Playbook(
         playbook_id=f"{structure}_test",
         enabled=True,
@@ -14,6 +14,7 @@ def _playbook(structure: str, *, profit_target_pct: float = 50.0) -> Playbook:
         leg_count=1,
         profiles=["large_stocks"],
         profit_target_pct=profit_target_pct,
+        max_loss_multiple=max_loss_multiple,
         exit_dte_min=21,
         half_time_exit=False,
     )
@@ -212,3 +213,138 @@ def test_live_exit_holds_when_quotes_are_not_fresh() -> None:
 
     assert decision["action"] == "hold"
     assert decision["reason"] == "fresh_quotes_missing"
+
+
+def test_credit_spread_mid_loss_triggers_review_not_close_without_confirmation() -> None:
+    group = {
+        "group_id": "group_credit_loss",
+        "underlying": "TSLA",
+        "playbook_id": "put_spread_test",
+        "structure": "put_spread",
+        "opened_at": "2026-05-01 14:00:00",
+        "candidate": {
+            "net_credit": 1.0,
+            "legs": [
+                {"side": "sell", "option_type": "put", "expiration": "2026-07-17", "strike": 100.0, "quantity": 1},
+                {"side": "buy", "option_type": "put", "expiration": "2026-07-17", "strike": 95.0, "quantity": 1},
+            ],
+        },
+    }
+    quotes = {
+        ("2026-07-17", "put", 100.0): {"bid": 4.0, "ask": 4.2, "delta": -0.55},
+        ("2026-07-17", "put", 95.0): {"bid": 2.0, "ask": 2.2, "delta": -0.35},
+    }
+    playbook = _playbook("put_spread", max_loss_multiple=2.0)
+
+    mark = mark_live_group(group, quotes, playbook, quote_fresh=True, config=_config(), underlying_price=102.0)
+    mark["loss_watch_observations"] = {"count": 2, "window_minutes": 120}
+    decision = live_exit_decision(mark, playbook, EarningsStore(), _config())
+
+    assert mark["entry_kind"] == "credit"
+    assert mark["close_mid_net"] == -200.0
+    assert mark["pnl_mid"] == -100.0
+    assert mark["close_debit_multiple_of_entry"] == 2.0
+    assert mark["max_loss_watch"] is True
+    assert mark["short_strike_state"]["breached"] is False
+    assert decision["action"] == "review"
+    assert decision["reason"] == "loss_watch"
+    assert decision["urgency"] == "high"
+
+
+def test_loss_watch_debounces_until_repeated_observation() -> None:
+    group = {
+        "group_id": "group_credit_loss",
+        "underlying": "TSLA",
+        "playbook_id": "put_spread_test",
+        "structure": "put_spread",
+        "opened_at": "2026-05-01 14:00:00",
+        "candidate": {
+            "net_credit": 1.0,
+            "legs": [
+                {"side": "sell", "option_type": "put", "expiration": "2026-07-17", "strike": 100.0, "quantity": 1},
+                {"side": "buy", "option_type": "put", "expiration": "2026-07-17", "strike": 95.0, "quantity": 1},
+            ],
+        },
+    }
+    quotes = {
+        ("2026-07-17", "put", 100.0): {"bid": 4.0, "ask": 4.2, "delta": -0.55},
+        ("2026-07-17", "put", 95.0): {"bid": 2.0, "ask": 2.2, "delta": -0.35},
+    }
+    playbook = _playbook("put_spread", max_loss_multiple=2.0)
+
+    mark = mark_live_group(group, quotes, playbook, quote_fresh=True, config=_config(), underlying_price=102.0)
+    mark["loss_watch_observations"] = {"count": 1, "window_minutes": 120}
+    decision = live_exit_decision(mark, playbook, EarningsStore(), _config())
+
+    assert mark["max_loss_watch"] is True
+    assert decision["action"] == "hold"
+    assert decision["reason"] == "loss_watch_debouncing"
+    assert decision["urgency"] == "normal"
+
+
+def test_credit_spread_max_loss_can_close_when_structurally_confirmed_by_config() -> None:
+    group = {
+        "group_id": "group_credit_loss",
+        "underlying": "TSLA",
+        "playbook_id": "put_spread_test",
+        "structure": "put_spread",
+        "opened_at": "2026-05-01 14:00:00",
+        "candidate": {
+            "net_credit": 1.0,
+            "legs": [
+                {"side": "sell", "option_type": "put", "expiration": "2026-07-17", "strike": 100.0, "quantity": 1},
+                {"side": "buy", "option_type": "put", "expiration": "2026-07-17", "strike": 95.0, "quantity": 1},
+            ],
+        },
+    }
+    quotes = {
+        ("2026-07-17", "put", 100.0): {"bid": 4.0, "ask": 4.2, "delta": -0.55},
+        ("2026-07-17", "put", 95.0): {"bid": 2.0, "ask": 2.2, "delta": -0.35},
+    }
+    config = _config()
+    config["live"]["exit_pricing"]["max_loss_action"] = "close_when_confirmed"
+    playbook = _playbook("put_spread", max_loss_multiple=2.0)
+
+    mark = mark_live_group(group, quotes, playbook, quote_fresh=True, config=config, underlying_price=98.0)
+    mark["loss_watch_observations"] = {"count": 2, "window_minutes": 120}
+    decision = live_exit_decision(mark, playbook, EarningsStore(), config)
+
+    assert mark["max_loss_watch"] is True
+    assert mark["short_strike_state"]["breached"] is True
+    assert decision["action"] == "close"
+    assert decision["reason"] == "max_loss"
+    assert decision["urgency"] == "critical"
+    assert decision["recommended_close_net"] == -200.0
+
+
+def test_loss_watch_does_not_close_when_quotes_are_too_wide() -> None:
+    group = {
+        "group_id": "group_credit_loss",
+        "underlying": "TSLA",
+        "playbook_id": "put_spread_test",
+        "structure": "put_spread",
+        "opened_at": "2026-05-01 14:00:00",
+        "candidate": {
+            "net_credit": 1.0,
+            "legs": [
+                {"side": "sell", "option_type": "put", "expiration": "2026-07-17", "strike": 100.0, "quantity": 1},
+                {"side": "buy", "option_type": "put", "expiration": "2026-07-17", "strike": 95.0, "quantity": 1},
+            ],
+        },
+    }
+    quotes = {
+        ("2026-07-17", "put", 100.0): {"bid": 3.0, "ask": 5.0, "delta": -0.55},
+        ("2026-07-17", "put", 95.0): {"bid": 0.5, "ask": 3.5, "delta": -0.35},
+    }
+    config = _config()
+    config["live"]["exit_pricing"]["max_loss_action"] = "close_when_confirmed"
+    playbook = _playbook("put_spread", max_loss_multiple=2.0)
+
+    mark = mark_live_group(group, quotes, playbook, quote_fresh=True, config=config, underlying_price=98.0)
+    mark["loss_watch_observations"] = {"count": 2, "window_minutes": 120}
+    decision = live_exit_decision(mark, playbook, EarningsStore(), config)
+
+    assert mark["max_loss_watch"] is True
+    assert mark["max_leg_bid_ask_pct"] > config["live"]["exit_pricing"].get("loss_watch_max_leg_bid_ask_pct", 1.0)
+    assert decision["action"] == "review"
+    assert decision["reason"] == "loss_watch_quote_block"

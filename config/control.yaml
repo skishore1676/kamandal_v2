@@ -108,6 +108,12 @@ live:
     profit_target_trigger_pct: 95
     min_profit_to_trigger: 5
     require_fresh_quotes: true
+    max_loss_action: close_when_confirmed # review | close_when_confirmed | close
+    max_loss_requires_confirmation: true
+    short_strike_buffer_pct: 0
+    loss_watch_max_leg_bid_ask_pct: 1.0
+    loss_watch_confirmations_required: 2
+    loss_watch_window_minutes: 120
   telegram_approval:
     enabled: true
     target: "5425926875"

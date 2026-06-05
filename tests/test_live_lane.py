@@ -1156,6 +1156,93 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
     assert row["operator_action"] == APPROVE_LIVE_CLOSE
 
 
+def test_live_management_surfaces_loss_watch_without_close_ticket(tmp_path, monkeypatch) -> None:
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_cap", allowed_playbooks=["put_spread"])]
+    playbooks = [
+        Playbook(
+            playbook_id="put_spread",
+            enabled=True,
+            strategy_family="put_spread",
+            structure="put_spread",
+            variant="default",
+            leg_count=2,
+            profiles=["large_cap"],
+            max_loss_multiple=2.0,
+            profit_target_pct=50,
+            exit_dte_min=21,
+            half_time_exit=False,
+        )
+    ]
+    monkeypatch.setattr("kamandal_v2.live.management.load_planner_config", lambda _config, source="sheet": (universe, playbooks))
+    store = LocalStore(tmp_path / "kamandal.db")
+    group = {
+        "group_id": "loss_watch_group",
+        "plan_id": "plan_loss_watch",
+        "candidate_id": "candidate_loss_watch",
+        "idea_id": "idea_loss_watch",
+        "underlying": "TSLA",
+        "playbook_id": "put_spread",
+        "structure": "put_spread",
+        "candidate": {
+            "candidate_id": "candidate_loss_watch",
+            "idea_id": "idea_loss_watch",
+            "underlying": "TSLA",
+            "playbook_id": "put_spread",
+            "structure": "put_spread",
+            "net_credit": 1.0,
+            "estimated_bpr": 400.0,
+            "legs": [
+                {"side": "sell", "option_type": "put", "expiration": "2026-07-17", "strike": 100.0, "quantity": 1},
+                {"side": "buy", "option_type": "put", "expiration": "2026-07-17", "strike": 95.0, "quantity": 1},
+            ],
+        },
+    }
+    store.save_live_position_group("loss_watch_group", group)
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO chain_snapshots VALUES (?, ?, ?)",
+            (
+                "loss_watch_chain",
+                "TSLA",
+                json.dumps({
+                    "captured_at": "2099-01-01T14:00:00Z",
+                    "underlying": "TSLA",
+                    "underlying_price": 102.0,
+                    "quotes": [
+                        {"expiration": "2026-07-17", "option_type": "put", "strike": 100.0, "bid": 4.0, "ask": 4.2, "delta": -0.55},
+                        {"expiration": "2026-07-17", "option_type": "put", "strike": 95.0, "bid": 2.0, "ask": 2.2, "delta": -0.35},
+                    ],
+                }),
+            ),
+        )
+    control = load_control()
+    control["live"]["exit_approval_mode"] = "auto_rules"
+    control["live"]["exit_pricing"]["require_fresh_quotes"] = False
+
+    first = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
+
+    assert first["close_recommendations"] == 0
+    assert first["review_recommendations"] == 0
+    assert first["decisions"][0]["action"] == "hold"
+    assert first["decisions"][0]["reason"] == "loss_watch_debouncing"
+    assert first["marks"][0]["max_loss_watch"] is True
+    assert first["marks"][0]["loss_watch_observations"]["count"] == 1
+    assert first["daily_plan_rows"] == []
+
+    managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
+
+    assert managed["close_recommendations"] == 0
+    assert managed["review_recommendations"] == 1
+    assert managed["decisions"][0]["action"] == "review"
+    assert managed["decisions"][0]["reason"] == "loss_watch"
+    assert managed["marks"][0]["loss_watch_observations"]["count"] == 2
+    row = dict(zip(DAILY_PLAN_HEADER, managed["daily_plan_rows"][0], strict=False))
+    detail = json.loads(row["plan_detail_json"])
+    assert row["plan_status"] == "review"
+    assert row["operator_action"] == ""
+    assert "order_ticket_json" not in detail
+
+
 def test_live_management_blocks_same_day_close_by_default(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")

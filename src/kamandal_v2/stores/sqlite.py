@@ -716,6 +716,31 @@ class LocalStore:
                 ),
             )
 
+    def live_loss_watch_observations(self, group_id: str, *, window_minutes: int) -> dict[str, Any]:
+        modifier = f"-{max(int(window_minutes), 1)} minutes"
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT created_at, payload
+                FROM live_position_marks
+                WHERE group_id = ?
+                  AND created_at >= datetime('now', ?)
+                ORDER BY created_at ASC, id ASC
+                """,
+                (group_id, modifier),
+            ).fetchall()
+        observed = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if bool(payload.get("max_loss_watch")):
+                observed.append({"created_at": row["created_at"], "payload": payload})
+        return {
+            "count": len(observed),
+            "window_minutes": max(int(window_minutes), 1),
+            "first_seen_at": observed[0]["created_at"] if observed else "",
+            "latest_seen_at": observed[-1]["created_at"] if observed else "",
+        }
+
     def close_live_position_group(self, group_id: str, *, status: str, reason: str, payload: dict[str, Any]) -> None:
         close_payload = dict(payload)
         close_payload["close_reason"] = reason

@@ -104,6 +104,14 @@ Notes:
   `call_calendar`.
 - `variant`: context-specific flavor, such as `standard`, `high_iv`, or
   `earnings`.
+- `max_loss_multiple`: for credit spreads, the close-debit multiple of entry
+  credit that starts loss-watch review. A value of `2` means a $1.00 credit
+  spread enters loss-watch when the mid close debit reaches about $2.00.
+  Runtime config can require repeated loss-watch observations before a review
+  or close recommendation is surfaced.
+  Live behavior can be flipped without changing the sheet by setting
+  `KAMANDAL_EXIT_MAX_LOSS_ACTION`, `KAMANDAL_EXIT_LOSS_WATCH_CONFIRMATIONS_REQUIRED`,
+  or `KAMANDAL_EXIT_LOSS_WATCH_WINDOW_MINUTES` in the runtime environment.
 - `iv_percentile_min/max`: optional distribution percentile gate.
 - `iv_rank_min/max`: optional min/max-rank gate against the local lookback.
 - `iv_abs_min/max`: optional absolute ATM IV gate, useful for avoiding

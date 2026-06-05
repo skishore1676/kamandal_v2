@@ -37,6 +37,8 @@ def run_live_management_plan(
     rows: list[list[Any]] = []
     decisions = []
     marks = []
+    review_recommendations = 0
+    close_recommendations = 0
     for index, group in enumerate(groups, start=1):
         underlying = str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or "")
         reconciliation_blockers = reconciliation_blockers_for_group(store, group, config=config)
@@ -51,15 +53,23 @@ def run_live_management_plan(
             store.record_live_management_decision(str(group.get("group_id")), "hold", "live_reconciliation_blocker", decision)
             continue
         playbook = playbook_by_id.get(str(group.get("playbook_id") or (group.get("candidate") or {}).get("playbook_id") or ""))
+        chain = _latest_chain(store, underlying)
         mark = mark_live_group(
             group,
-            _latest_chain(store, underlying),
+            chain["quotes"],
             playbook,
             quote_fresh=underlying in fresh_underlyings,
             config=config,
+            underlying_price=chain["underlying_price"],
         )
         marks.append(mark)
         store.record_live_position_mark(str(group.get("group_id")), mark)
+        policy = live_exit_policy(config)
+        mark["loss_watch_observations"] = store.live_loss_watch_observations(
+            str(group.get("group_id")),
+            window_minutes=policy.loss_watch_window_minutes,
+        )
+        mark["loss_watch_confirmations_required"] = policy.loss_watch_confirmations_required
         decision = live_exit_decision(mark, playbook, earnings, config)
         decision["group_id"] = group.get("group_id")
         if decision["action"] == "close" and _same_day_exit_blocked(config, group):
@@ -72,6 +82,10 @@ def run_live_management_plan(
             }
         decisions.append(decision)
         store.record_live_management_decision(str(group.get("group_id")), str(decision["action"]), str(decision["reason"]), decision)
+        if decision["action"] == "review":
+            review_recommendations += 1
+            rows.append(_review_plan_row(index, group, decision))
+            continue
         if decision["action"] != "close":
             continue
         if exit_mode == "disabled":
@@ -79,9 +93,17 @@ def run_live_management_plan(
         ticket = build_close_ticket(group, close_net_credit=float(decision.get("recommended_close_net") or 0.0) / 100.0)
         store.save_live_order_intent(ticket, status="pending_close_approval")
         rows.append(_close_plan_row(index, group, decision, ticket, approval_mode=exit_mode))
+        close_recommendations += 1
     if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_close_advisory"})
-    return {"groups": len(groups), "close_recommendations": len(rows), "marks": marks, "decisions": decisions, "daily_plan_rows": rows}
+    return {
+        "groups": len(groups),
+        "close_recommendations": close_recommendations,
+        "review_recommendations": review_recommendations,
+        "marks": marks,
+        "decisions": decisions,
+        "daily_plan_rows": rows,
+    }
 
 
 def _exit_approval_mode(config: dict[str, Any]) -> str:
@@ -147,9 +169,9 @@ def _refresh_live_group_quotes(config: dict[str, Any], store: LocalStore, groups
     return refreshed
 
 
-def _latest_chain(store: LocalStore, underlying: str) -> dict[tuple[str, str, float], dict[str, Any]]:
+def _latest_chain(store: LocalStore, underlying: str) -> dict[str, Any]:
     if not underlying:
-        return {}
+        return {"underlying_price": None, "quotes": {}}
     conn = sqlite3.connect(store.sqlite_path)
     conn.row_factory = sqlite3.Row
     try:
@@ -157,14 +179,49 @@ def _latest_chain(store: LocalStore, underlying: str) -> dict[tuple[str, str, fl
     finally:
         conn.close()
     if not rows:
-        return {}
+        return {"underlying_price": None, "quotes": {}}
     payloads = [json.loads(row["payload"]) for row in rows]
     payloads.sort(key=lambda item: str(item.get("captured_at") or ""))
     latest = payloads[-1]
     return {
-        (str(quote.get("expiration")), str(quote.get("option_type")), float(quote.get("strike") or 0.0)): quote
-        for quote in latest.get("quotes") or []
+        "underlying_price": _optional_float(latest.get("underlying_price")),
+        "quotes": {
+            (str(quote.get("expiration")), str(quote.get("option_type")), float(quote.get("strike") or 0.0)): quote
+            for quote in latest.get("quotes") or []
+        },
     }
+
+
+def _review_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any]) -> list[Any]:
+    detail = {
+        "lane": "live_close_advisory",
+        "live_gate_status": "review",
+        "live_blockers": [],
+        "group": group,
+        "decision": decision,
+    }
+    row = {
+        "plan_date": date.today().isoformat(),
+        "plan_rank": index,
+        "plan_id": f"review_{group.get('group_id')}",
+        "plan_status": "review",
+        "plan_trade_count": 0,
+        "plan_score": 0,
+        "plan_summary": f"Review {group.get('underlying')} {group.get('structure')} reason={decision.get('reason')}",
+        "trade_bundle": f"{group.get('underlying')} review {group.get('structure')}",
+        "trade_bundle_json": "[]",
+        "plan_total_bpr": 0,
+        "plan_bpr_utilization_pct": 0,
+        "buying_power_after": "",
+        "mode": "live_close_advisory",
+        "plan_reasons": str(decision.get("reason") or ""),
+        "blocked_by": "operator_review",
+        "plan_metrics_json": json.dumps({"decision": decision}, sort_keys=True),
+        "plan_detail_json": json.dumps(detail, sort_keys=True),
+        "operator_action": "",
+        "operator_notes": f"Review only; no close ticket created. urgency={decision.get('urgency')}",
+    }
+    return [row.get(column, "") for column in DAILY_PLAN_HEADER]
 
 
 def _close_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any], ticket: dict[str, Any], *, approval_mode: str) -> list[Any]:
@@ -198,3 +255,10 @@ def _close_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any],
         "operator_notes": "",
     }
     return [row.get(column, "") for column in DAILY_PLAN_HEADER]
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
