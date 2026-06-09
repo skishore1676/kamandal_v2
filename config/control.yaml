@@ -9,6 +9,21 @@ portfolio:
   max_bpr_per_underlying_pct: 55
   max_positions: 15
   delta_bias: slightly_negative
+  delta_guard:
+    enabled: true
+    mode: relaxed
+    apply_modes: [live]
+    allow_improvement_when_outside: true
+    modes:
+      relaxed:
+        min_delta: -2.5
+        max_delta: 0.5
+      balanced:
+        min_delta: -2.0
+        max_delta: 0.0
+      strict:
+        min_delta: -1.5
+        max_delta: -0.25
   gamma_policy: record_and_research
   theta_policy: positive_theta_preferred
   vega_policy: record_only
@@ -52,6 +67,14 @@ live:
   max_bpr_per_order_pct: 25
   max_bpr_per_order_by_structure:
     default: 500
+    put_spread: 500
+    call_spread: 500
+    iron_condor: 500
+    jade_lizard: 500
+    call_calendar: 1200
+    put_calendar: 1200
+    call_diagonal: 1500
+    put_diagonal: 1500
     long_call: 2500
     long_put: 2500
     short_strangle: 2500

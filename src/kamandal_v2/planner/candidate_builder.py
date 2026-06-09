@@ -1039,6 +1039,7 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
             f"max_bid_ask_pct={liquidity_metrics['max_bid_ask_pct']:.4f}",
             f"aggregate_spread_to_mid_pct={liquidity_metrics['aggregate_spread_to_mid_pct']:.4f}",
             f"execution_liquidity_tier={liquidity_metrics['execution_liquidity_tier']}",
+            *([f"live_max_bpr_per_order={playbook.live_max_bpr_per_order}"] if playbook.live_max_bpr_per_order is not None else []),
             *([f"mentioned_strategy={idea.mentioned_strategy}"] if idea.mentioned_strategy else []),
         ],
     )

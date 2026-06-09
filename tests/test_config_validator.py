@@ -102,3 +102,23 @@ def test_validate_config_warns_on_overlapping_enabled_variants() -> None:
 
     assert result.ok
     assert any("overlapping_enabled_variants:put_spread" in warning for warning in result.warnings)
+
+
+def test_validate_config_warns_when_enabled_playbook_missing_live_bpr_cap() -> None:
+    result = validate_config(
+        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [_playbook("put_spread_default", live_max_bpr_per_order=None)],
+    )
+
+    assert result.ok
+    assert "enabled_playbook_missing_live_bpr_cap:put_spread_default" in result.warnings
+
+
+def test_validate_config_accepts_enabled_playbook_live_bpr_cap() -> None:
+    result = validate_config(
+        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [_playbook("put_spread_default", live_max_bpr_per_order=500)],
+    )
+
+    assert result.ok
+    assert "enabled_playbook_missing_live_bpr_cap:put_spread_default" not in result.warnings

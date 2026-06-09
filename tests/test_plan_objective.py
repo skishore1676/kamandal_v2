@@ -34,6 +34,18 @@ def _basket_control(**basket: float | int) -> dict:
     return control
 
 
+def _delta_guard_control() -> dict:
+    control = _control()
+    control["portfolio"]["delta_guard"] = {
+        "enabled": True,
+        "apply_modes": ["live"],
+        "min_delta": -2.0,
+        "max_delta": 0.0,
+        "allow_improvement_when_outside": True,
+    }
+    return control
+
+
 def _candidate(
     candidate_id: str,
     *,
@@ -116,6 +128,122 @@ def test_plan_objective_prefers_theta_and_vol_capture_over_bpr_spend() -> None:
     plans = generate_plans([long_call, put_spread], _portfolio(), _control(), max_new_positions=1)
 
     assert plans[0].candidates[0].candidate_id == "put_spread"
+
+
+def test_live_delta_guard_blocks_positive_delta_when_book_is_already_positive() -> None:
+    portfolio = PortfolioState(
+        account_size=10_000,
+        buying_power=10_000,
+        bpr_used=0,
+        positions_count=0,
+        greeks=Greeks(delta=0.08),
+    )
+    positive_put_spread = _candidate(
+        "positive_put_spread",
+        underlying="MSFT",
+        structure="put_spread",
+        bpr=500,
+        delta=0.03,
+        gamma=-0.005,
+        theta=0.05,
+        vega=-0.10,
+        net_credit=1.0,
+        score=70.0,
+        iv_pct=70.0,
+        iv_rank=70.0,
+    )
+
+    plans = generate_plans([positive_put_spread], portfolio, _delta_guard_control(), max_new_positions=1)
+
+    assert plans == []
+
+
+def test_live_delta_guard_mode_can_start_relaxed() -> None:
+    control = _control()
+    control["portfolio"]["delta_guard"] = {
+        "enabled": True,
+        "mode": "relaxed",
+        "apply_modes": ["live"],
+        "allow_improvement_when_outside": True,
+        "modes": {
+            "relaxed": {"min_delta": -2.5, "max_delta": 0.5},
+            "balanced": {"min_delta": -2.0, "max_delta": 0.0},
+        },
+    }
+    portfolio = PortfolioState(
+        account_size=10_000,
+        buying_power=10_000,
+        bpr_used=0,
+        positions_count=0,
+        greeks=Greeks(delta=0.08),
+    )
+    positive_put_spread = _candidate(
+        "positive_put_spread",
+        underlying="MSFT",
+        structure="put_spread",
+        bpr=500,
+        delta=0.03,
+        gamma=-0.005,
+        theta=0.05,
+        vega=-0.10,
+        net_credit=1.0,
+        score=70.0,
+        iv_pct=70.0,
+        iv_rank=70.0,
+    )
+
+    plans = generate_plans([positive_put_spread], portfolio, control, max_new_positions=1)
+
+    assert plans
+    assert plans[0].portfolio_after.greeks.delta == 0.11
+
+
+def test_live_delta_guard_allows_delta_improvement_when_book_is_outside_band() -> None:
+    portfolio = PortfolioState(
+        account_size=10_000,
+        buying_power=10_000,
+        bpr_used=0,
+        positions_count=0,
+        greeks=Greeks(delta=0.08),
+    )
+    positive_put_spread = _candidate(
+        "positive_put_spread",
+        underlying="MSFT",
+        structure="put_spread",
+        bpr=500,
+        delta=0.03,
+        gamma=-0.005,
+        theta=0.05,
+        vega=-0.10,
+        net_credit=1.0,
+        score=90.0,
+        iv_pct=70.0,
+        iv_rank=70.0,
+    )
+    bearish_call_spread = _candidate(
+        "bearish_call_spread",
+        underlying="GOOGL",
+        structure="call_spread",
+        bpr=500,
+        delta=-0.05,
+        gamma=-0.005,
+        theta=0.04,
+        vega=-0.08,
+        net_credit=1.0,
+        score=45.0,
+        iv_pct=70.0,
+        iv_rank=70.0,
+    )
+
+    plans = generate_plans(
+        [positive_put_spread, bearish_call_spread],
+        portfolio,
+        _delta_guard_control(),
+        max_new_positions=1,
+    )
+
+    assert plans
+    assert plans[0].candidates[0].candidate_id == "bearish_call_spread"
 
 
 def test_plan_objective_uses_theta_efficiency_not_raw_bpr_fit() -> None:

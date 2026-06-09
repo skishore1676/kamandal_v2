@@ -17,3 +17,21 @@ def test_exit_loss_watch_env_overrides(monkeypatch) -> None:
     assert exit_pricing["loss_watch_max_leg_bid_ask_pct"] == 0.75
     assert exit_pricing["loss_watch_confirmations_required"] == 3
     assert exit_pricing["loss_watch_window_minutes"] == 45
+
+
+def test_portfolio_delta_guard_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("KAMANDAL_PORTFOLIO_DELTA_GUARD_ENABLED", "false")
+    monkeypatch.setenv("KAMANDAL_PORTFOLIO_DELTA_GUARD_MODE", "strict")
+    monkeypatch.setenv("KAMANDAL_PORTFOLIO_DELTA_GUARD_APPLY_MODES", "live,shadow")
+    monkeypatch.setenv("KAMANDAL_PORTFOLIO_DELTA_GUARD_MIN_DELTA", "-1.25")
+    monkeypatch.setenv("KAMANDAL_PORTFOLIO_DELTA_GUARD_MAX_DELTA", "0.25")
+    monkeypatch.setenv("KAMANDAL_PORTFOLIO_DELTA_GUARD_ALLOW_IMPROVEMENT", "false")
+
+    guard = load_control()["portfolio"]["delta_guard"]
+
+    assert guard["enabled"] is False
+    assert guard["mode"] == "strict"
+    assert guard["apply_modes"] == "live,shadow"
+    assert guard["min_delta"] == -1.25
+    assert guard["max_delta"] == 0.25
+    assert guard["allow_improvement_when_outside"] is False

@@ -416,6 +416,38 @@ def test_live_bpr_cap_treats_short_strangle_as_strangle() -> None:
     assert _candidate_bpr_cap(candidate, portfolio, live_cfg) == 2500
 
 
+def test_live_bpr_cap_allows_explicit_diagonal_structure_cap() -> None:
+    from kamandal_v2.live.advisory import _candidate_bpr_cap
+
+    candidate = type("Candidate", (), {"structure": "call_diagonal"})()
+    portfolio = type("Portfolio", (), {"account_size": 10_000})()
+    live_cfg = {
+        "max_bpr_per_order": 2500,
+        "max_bpr_per_order_pct": 25,
+        "max_bpr_per_order_by_structure": {"default": 500, "call_diagonal": 2500},
+    }
+
+    assert _candidate_bpr_cap(candidate, portfolio, live_cfg) == 2500
+
+
+def test_live_bpr_cap_prefers_sheet_playbook_cap_from_candidate_reason() -> None:
+    from kamandal_v2.live.advisory import _candidate_bpr_cap
+
+    candidate = type(
+        "Candidate",
+        (),
+        {"structure": "call_diagonal", "reasons": ["live_max_bpr_per_order=1500"]},
+    )()
+    portfolio = type("Portfolio", (), {"account_size": 10_000})()
+    live_cfg = {
+        "max_bpr_per_order": 2500,
+        "max_bpr_per_order_pct": 25,
+        "max_bpr_per_order_by_structure": {"default": 500, "call_diagonal": 2500},
+    }
+
+    assert _candidate_bpr_cap(candidate, portfolio, live_cfg) == 1500
+
+
 def test_live_ticket_limit_prices_use_public_nickel_ticks() -> None:
     assert _limit_price(-12.425) == "12.45"
     assert _limit_price(1.127) == "-1.10"
@@ -1280,6 +1312,7 @@ def test_live_management_blocks_same_day_close_by_default(tmp_path, monkeypatch)
 
     control = load_control()
     control["live"]["exit_pricing"]["require_fresh_quotes"] = False
+    control["live"]["allow_same_day_exits_after"] = ""
     managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
 
     assert managed["close_recommendations"] == 0
@@ -1314,6 +1347,7 @@ def test_execute_live_close_blocks_same_day_approved_ticket(tmp_path, monkeypatc
     live_control = _live_control()
     live_control["runtime"]["mode"] = "live"
     live_control["runtime"]["trading_enabled"] = True
+    live_control["live"]["allow_same_day_exits_after"] = ""
     monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
     executed = execute_live_approved(live_control, submit=True, close=True, store=store)
 

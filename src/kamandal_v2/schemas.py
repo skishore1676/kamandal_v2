@@ -59,6 +59,7 @@ PLAYBOOKS_HEADER = [
     "sizing_method",
     "sizing_value",
     "max_contracts",
+    "live_max_bpr_per_order",
     "score_weight_credit",
     "score_weight_pop",
     "score_weight_liquidity",

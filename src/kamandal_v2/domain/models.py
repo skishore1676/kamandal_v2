@@ -206,6 +206,7 @@ class Playbook:
     sizing_method: str = ""
     sizing_value: float | None = None
     max_contracts: int | None = None
+    live_max_bpr_per_order: float | None = None
     score_weight_credit: float | None = None
     score_weight_pop: float | None = None
     score_weight_liquidity: float | None = None
@@ -259,6 +260,7 @@ class Playbook:
             sizing_method=str(row.get("sizing_method") or ""),
             sizing_value=_optional_float(row.get("sizing_value")),
             max_contracts=_optional_int(row.get("max_contracts")),
+            live_max_bpr_per_order=_optional_float(row.get("live_max_bpr_per_order")),
             score_weight_credit=_optional_float(row.get("score_weight_credit")),
             score_weight_pop=_optional_float(row.get("score_weight_pop")),
             score_weight_liquidity=_optional_float(row.get("score_weight_liquidity")),

@@ -39,6 +39,7 @@ def validate_config(universe: list[UniverseEntry], playbooks: list[Playbook]) ->
     _validate_thesis_tags(enabled_playbooks, errors)
     _validate_universe_allowlists(universe, playbooks, warnings)
     _validate_variant_overlap(enabled_playbooks, warnings)
+    _validate_live_bpr_caps(enabled_playbooks, warnings)
 
     return ConfigValidationResult(errors=errors, warnings=warnings)
 
@@ -127,6 +128,14 @@ def _validate_variant_overlap(playbooks: list[Playbook], warnings: list[str]) ->
                 "overlapping_enabled_variants:"
                 f"{left.structure}:{left.playbook_id}<->{right.playbook_id}"
             )
+
+
+def _validate_live_bpr_caps(playbooks: list[Playbook], warnings: list[str]) -> None:
+    for playbook in playbooks:
+        if playbook.live_max_bpr_per_order is None:
+            warnings.append(f"enabled_playbook_missing_live_bpr_cap:{playbook.playbook_id}")
+        elif playbook.live_max_bpr_per_order <= 0:
+            warnings.append(f"enabled_playbook_nonpositive_live_bpr_cap:{playbook.playbook_id}:{playbook.live_max_bpr_per_order}")
 
 
 def _lists_overlap(left: list[str], right: list[str]) -> bool:

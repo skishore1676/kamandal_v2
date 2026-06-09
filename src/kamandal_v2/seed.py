@@ -77,6 +77,19 @@ DEFAULT_IV_RANGES = {
     "long_put": (0, 60),
 }
 
+DEFAULT_LIVE_MAX_BPR_BY_STRUCTURE = {
+    "short_put": 2500,
+    "put_spread": 500,
+    "call_spread": 500,
+    "iron_condor": 500,
+    "jade_lizard": 500,
+    "call_calendar": 1200,
+    "put_calendar": 1200,
+    "call_diagonal": 1500,
+    "put_diagonal": 1500,
+    "short_strangle": 2500,
+}
+
 FALLBACK_TEMPLATES = [
     {
         "id": "short_put_conservative",
@@ -295,6 +308,7 @@ def _playbook_rows() -> list[list[Any]]:
                 "",
                 "",
                 "",
+                DEFAULT_LIVE_MAX_BPR_BY_STRUCTURE.get(structure, ""),
                 "",
                 "",
                 "",
@@ -415,6 +429,7 @@ def _narrative_row(
         "fixed_contracts",
         1,
         1,
+        DEFAULT_LIVE_MAX_BPR_BY_STRUCTURE.get(structure, ""),
         "",
         "",
         "",

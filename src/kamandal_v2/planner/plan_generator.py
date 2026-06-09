@@ -55,7 +55,14 @@ def generate_plans(
                 if candidate.candidate_id in used_ids or candidate.underlying in used_underlyings or candidate.idea_id in used_ideas:
                     continue
                 next_plan = partial + [candidate]
-                violation = _constraint_violation(next_plan, portfolio, max_bpr_pct, max_underlying_pct, basket_policy.hard_new_bpr_pct)
+                violation = _constraint_violation(
+                    next_plan,
+                    portfolio,
+                    max_bpr_pct,
+                    max_underlying_pct,
+                    basket_policy.hard_new_bpr_pct,
+                    control,
+                )
                 if violation:
                     continue
                 marginal_score = _score(next_plan, portfolio, control) - _score(partial, portfolio, control)
@@ -100,6 +107,7 @@ def _constraint_violation(
     max_bpr_pct: float,
     max_underlying_pct: float,
     hard_new_bpr_pct: float | None,
+    control: dict,
 ) -> str:
     total_bpr = sum(candidate.estimated_bpr for candidate in plan)
     if hard_new_bpr_pct is not None and (total_bpr / max(portfolio.account_size, 1.0)) * 100 > hard_new_bpr_pct:
@@ -112,6 +120,8 @@ def _constraint_violation(
     for value in per_underlying.values():
         if (value / max(portfolio.account_size, 1.0)) * 100 > max_underlying_pct:
             return "underlying_bpr_cap"
+    if violation := _delta_guard_violation(plan, portfolio, control):
+        return violation
     return ""
 
 
@@ -267,6 +277,68 @@ def _delta_fit_score(after_delta: float, portfolio: PortfolioState, control: dic
     raw_band = portfolio_cfg.get("delta_band")
     band = float(raw_band) if raw_band not in (None, "") else max(5.0, 2.5 * account_units)
     return max(0.0, 25.0 * (1.0 - abs(after_delta - target_delta) / max(band, 1.0)))
+
+
+def _delta_guard_violation(plan: list[Candidate], portfolio: PortfolioState, control: dict) -> str:
+    guard = _delta_guard_settings(control)
+    if not isinstance(guard, dict) or not _as_bool(guard.get("enabled"), default=False):
+        return ""
+    mode = str((control.get("runtime") or {}).get("mode") or "shadow").lower()
+    if mode not in _guard_modes(guard.get("apply_modes", "live")):
+        return ""
+
+    before_delta = float(portfolio.greeks.delta or 0.0)
+    after_delta = before_delta + _plan_greeks(plan).delta
+    min_delta = _optional_float(guard.get("min_delta", guard.get("min")))
+    max_delta = _optional_float(guard.get("max_delta", guard.get("max")))
+    allow_improvement = _as_bool(guard.get("allow_improvement_when_outside"), default=True)
+    epsilon = 1e-9
+
+    if max_delta is not None and after_delta > max_delta + epsilon:
+        if allow_improvement and before_delta > max_delta + epsilon and after_delta <= before_delta + epsilon:
+            return ""
+        return "portfolio_delta_above_max"
+    if min_delta is not None and after_delta < min_delta - epsilon:
+        if allow_improvement and before_delta < min_delta - epsilon and after_delta >= before_delta - epsilon:
+            return ""
+        return "portfolio_delta_below_min"
+    return ""
+
+
+def _delta_guard_settings(control: dict) -> dict[str, object]:
+    guard = dict(((control.get("portfolio") or {}).get("delta_guard") or {}))
+    mode = str(guard.get("mode") or "").strip().lower()
+    modes = guard.get("modes") or {}
+    if mode and isinstance(modes, dict):
+        mode_values = modes.get(mode) or {}
+        if isinstance(mode_values, dict):
+            merged = dict(mode_values)
+            for key, value in guard.items():
+                if key == "modes" or value in (None, ""):
+                    continue
+                merged[key] = value
+            guard = merged
+    return guard
+
+
+def _guard_modes(raw: object) -> set[str]:
+    if raw in (None, ""):
+        return {"live"}
+    if isinstance(raw, str):
+        values = raw.replace(";", ",").split(",")
+    elif isinstance(raw, (list, tuple, set)):
+        values = list(raw)
+    else:
+        values = [raw]
+    return {str(value).strip().lower() for value in values if str(value).strip()}
+
+
+def _as_bool(value: object, *, default: bool) -> bool:
+    if value in (None, ""):
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _theta_capture_score(theta: float, total_bpr: float) -> float:

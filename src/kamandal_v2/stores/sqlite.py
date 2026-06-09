@@ -998,8 +998,8 @@ class LocalStore:
 
 
 def _candidate_greeks(candidate: dict[str, Any]) -> Greeks:
-    raw = candidate.get("greeks") or {}
-    if isinstance(raw, dict):
+    raw = candidate.get("greeks")
+    if isinstance(raw, dict) and any(raw.get(key) not in (None, "") for key in ("delta", "gamma", "theta", "vega")):
         return Greeks(
             delta=float(raw.get("delta") or 0.0),
             gamma=float(raw.get("gamma") or 0.0),

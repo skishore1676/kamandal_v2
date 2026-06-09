@@ -248,6 +248,8 @@ def test_live_portfolio_state_exposes_group_count_and_underlying_bpr(tmp_path) -
     assert portfolio.positions_count == 2
     assert portfolio.bpr_used == 5_000
     assert portfolio.per_underlying_bpr == {"MRVL": 1475.0}
+    assert round(portfolio.greeks.delta, 4) == 0.08
+    assert round(portfolio.greeks.theta, 4) == 0.08
 
 
 def test_reconciliation_review_retire_local_closes_group(tmp_path) -> None:

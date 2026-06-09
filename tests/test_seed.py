@@ -48,6 +48,7 @@ def test_seed_tables_include_core_rows() -> None:
 def test_core_playbooks_are_enabled() -> None:
     tables = build_seed_tables(load_control())
     by_id = {row[0]: row for row in tables["playbooks"]}
+    headers = seed_headers()["playbooks"]
 
     assert by_id["short_put"][1] == "TRUE"
     assert by_id["put_spread"][1] == "TRUE"
@@ -55,3 +56,15 @@ def test_core_playbooks_are_enabled() -> None:
     assert by_id["iron_condor"][1] == "TRUE"
     assert by_id["call_calendar"][1] == "TRUE"
     assert by_id["call_calendar"][3] == "call_calendar"
+    cap_index = headers.index("live_max_bpr_per_order")
+    assert by_id["put_spread"][cap_index] == 500
+    assert by_id["call_spread"][cap_index] == 500
+    assert by_id["iron_condor"][cap_index] == 500
+    assert by_id["call_calendar"][cap_index] == 1200
+
+
+def test_seed_playbook_rows_match_header_length() -> None:
+    tables = build_seed_tables(load_control())
+    header_len = len(seed_headers()["playbooks"])
+
+    assert all(len(row) == header_len for row in tables["playbooks"])

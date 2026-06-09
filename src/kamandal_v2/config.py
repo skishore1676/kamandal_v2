@@ -79,6 +79,14 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "portfolio.hard_max_bpr_utilization_pct": _env_float("KAMANDAL_HARD_MAX_BPR_UTILIZATION_PCT"),
         "portfolio.max_bpr_per_underlying_pct": _env_float("KAMANDAL_MAX_BPR_PER_UNDERLYING_PCT"),
         "portfolio.max_positions": _env_int("KAMANDAL_MAX_POSITIONS"),
+        "portfolio.delta_guard.enabled": _env_bool("KAMANDAL_PORTFOLIO_DELTA_GUARD_ENABLED"),
+        "portfolio.delta_guard.mode": os.environ.get("KAMANDAL_PORTFOLIO_DELTA_GUARD_MODE"),
+        "portfolio.delta_guard.apply_modes": os.environ.get("KAMANDAL_PORTFOLIO_DELTA_GUARD_APPLY_MODES"),
+        "portfolio.delta_guard.min_delta": _env_float("KAMANDAL_PORTFOLIO_DELTA_GUARD_MIN_DELTA"),
+        "portfolio.delta_guard.max_delta": _env_float("KAMANDAL_PORTFOLIO_DELTA_GUARD_MAX_DELTA"),
+        "portfolio.delta_guard.allow_improvement_when_outside": _env_bool(
+            "KAMANDAL_PORTFOLIO_DELTA_GUARD_ALLOW_IMPROVEMENT"
+        ),
         "shadow.account_size_override": _env_float("KAMANDAL_SHADOW_ACCOUNT_SIZE"),
         "shadow.buying_power_override": _env_float("KAMANDAL_SHADOW_BUYING_POWER"),
         "shadow.bpr_used_override": _env_float("KAMANDAL_SHADOW_BPR_USED"),

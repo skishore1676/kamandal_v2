@@ -206,12 +206,27 @@ def _contract_key(underlying: str, leg: Any) -> str:
 
 
 def _candidate_bpr_cap(candidate: Candidate, portfolio: PortfolioState, live_cfg: dict[str, Any]) -> float:
-    absolute = _structure_bpr_cap(candidate.structure, live_cfg)
+    absolute = _candidate_live_bpr_cap(candidate)
+    if absolute is None:
+        absolute = _structure_bpr_cap(candidate.structure, live_cfg)
     pct_raw = live_cfg.get("max_bpr_per_order_pct")
     if pct_raw in (None, ""):
         return absolute
     pct_cap = max(float(portfolio.account_size or 0.0), 1.0) * (float(pct_raw) / 100.0)
     return round(min(absolute, pct_cap), 2)
+
+
+def _candidate_live_bpr_cap(candidate: Candidate) -> float | None:
+    for reason in getattr(candidate, "reasons", []):
+        if not reason.startswith("live_max_bpr_per_order="):
+            continue
+        raw = reason.split("=", 1)[1]
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if value > 0 else None
+    return None
 
 
 def _structure_bpr_cap(structure: str, live_cfg: dict[str, Any]) -> float:
