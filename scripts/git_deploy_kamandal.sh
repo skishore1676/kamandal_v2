@@ -7,13 +7,12 @@ set -Eeuo pipefail
 ###############################################################################
 
 # Where the project should live on the old Mac.
-REPO_DIR="$/Users/sunny/Documents/kamandal_v2"
+REPO_DIR="/Users/sunny/Documents/kamandal_v2"
 
 # Your Git remote.
 # Example SSH URL:
 # REPO_URL="git@github.com:yourname/yourrepo.git"
-#https://github.com/skishore1676/kamandal_v2
-REPO_URL="git@github.com:skishore1676/kamandal_v2.git"
+REPO_URL="https://github.com/skishore1676/kamandal_v2.git"
 
 # Branch that represents production.
 BRANCH="main"
