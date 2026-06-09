@@ -494,7 +494,19 @@ def _tickets_to_execute(
 ) -> tuple[list[dict[str, Any]], str]:
     tickets = _tickets_from_row(row, close=close)
     if close:
-        return tickets[:1], "close_ticket"
+        if not tickets:
+            return [], "close_ticket_missing"
+        progress = _ticket_progress(store, tickets[0])
+        status = progress["status"]
+        if progress["state"] == "done":
+            return [], f"close_ticket_done:{status}"
+        if progress["state"] == "active":
+            return [], f"close_ticket_active:{status}"
+        if progress["state"] == "failed":
+            return [], f"close_ticket_failed:{status}"
+        if progress["state"] == "pending":
+            return tickets[:1], "close_ticket_pending"
+        return [], f"close_ticket_unknown:{status}"
     if not submit:
         limit = _ticket_limit(config, submit=submit, close=close)
         return tickets[:limit], "dry_run"

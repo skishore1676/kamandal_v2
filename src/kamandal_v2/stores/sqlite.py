@@ -547,6 +547,29 @@ class LocalStore:
             children.append(payload)
         return children
 
+    def live_close_order_intents_for_group(self, group_id: str, *, statuses: set[str] | None = None) -> list[dict[str, Any]]:
+        if not group_id:
+            return []
+        query = "SELECT status, created_at, updated_at, payload FROM live_order_intents WHERE intent_type = 'close'"
+        params: list[Any] = []
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(sorted(statuses))
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        tickets = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if str(payload.get("group_id") or "") != group_id:
+                continue
+            payload["_ledger_status"] = row["status"]
+            payload["_ledger_created_at"] = row["created_at"]
+            payload["_ledger_updated_at"] = row["updated_at"]
+            tickets.append(payload)
+        tickets.sort(key=lambda item: (str(item.get("_ledger_updated_at") or ""), str(item.get("created_at") or "")), reverse=True)
+        return tickets
+
     def live_entry_plan_ids_since(self, created_since: str) -> set[str]:
         with self._connect() as conn:
             rows = conn.execute(
