@@ -1188,6 +1188,64 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
     assert row["operator_action"] == APPROVE_LIVE_CLOSE
 
 
+def test_live_management_suppresses_duplicate_close_when_group_has_working_close(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    ticket = json.loads(row["plan_detail_json"])["order_ticket_json"]
+    record_manual_live_fill(ticket["ticket_hash"], store=store)
+    group = store.open_live_position_groups()[0]
+    working_close = build_close_ticket(group, close_net_credit=-1.15)
+    store.save_live_order_intent(working_close, status="submitted")
+    newer_pending_close = build_close_ticket(group, close_net_credit=-1.25)
+    store.save_live_order_intent(newer_pending_close, status="pending_close_approval")
+    candidate = result.plans[0].candidates[0]
+    expiration = candidate.legs[0].expiration
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO chain_snapshots VALUES (?, ?, ?)",
+            (
+                "cheap_chain",
+                candidate.underlying,
+                json.dumps({
+                    "captured_at": "2099-01-01T14:00:00Z",
+                    "underlying": candidate.underlying,
+                    "underlying_price": 100.0,
+                    "quotes": [
+                        {"expiration": expiration, "option_type": leg.option_type, "strike": leg.strike, "bid": 0.01, "ask": 0.02}
+                        for leg in candidate.legs
+                    ],
+                }),
+            ),
+        )
+
+    control = load_control()
+    control["live"]["allow_same_day_exits"] = True
+    control["live"]["exit_approval_mode"] = "auto_rules"
+    control["live"]["exit_pricing"]["require_fresh_quotes"] = False
+    managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
+
+    assert managed["close_recommendations"] == 0
+    assert managed["working_close_orders"] == 1
+    assert managed["daily_plan_rows"] == []
+    assert managed["decisions"][0]["action"] == "hold"
+    assert managed["decisions"][0]["reason"] == "working_close_order"
+    assert managed["decisions"][0]["blocked_reason"] == "profit_target"
+    assert managed["decisions"][0]["working_close_order"]["ticket_hash"] == working_close["ticket_hash"]
+    assert managed["decisions"][0]["working_close_order"]["ledger_status"] == "submitted"
+    with sqlite3.connect(store.sqlite_path) as conn:
+        assert conn.execute("SELECT count(*) FROM live_order_intents WHERE intent_type = 'close'").fetchone()[0] == 2
+
+
 def test_live_management_surfaces_loss_watch_without_close_ticket(tmp_path, monkeypatch) -> None:
     universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_cap", allowed_playbooks=["put_spread"])]
     playbooks = [
@@ -1395,11 +1453,60 @@ def test_execute_live_close_allows_same_day_after_configured_date(tmp_path, monk
     live_control["runtime"]["mode"] = "live"
     live_control["runtime"]["trading_enabled"] = True
     live_control["live"]["allow_same_day_exits_after"] = "2000-01-01"
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
 
     executed = execute_live_approved(live_control, submit=True, close=True, store=store)
 
     assert executed["processed"] == 1
     assert executed["results"][0]["status"] == "submitted"
+
+
+def test_execute_live_close_blocks_already_active_close_ticket(tmp_path, monkeypatch) -> None:
+    _patch_live_config(monkeypatch)
+    store = LocalStore(tmp_path / "kamandal.db")
+    result = run_live_advisory_plan(
+        _live_control(),
+        idea_paths=[_ideas_file(tmp_path)],
+        config_source="seed",
+        provider="fixture",
+        write_sheet=False,
+        store=store,
+        audit=AuditWriter(tmp_path / "audit"),
+    )
+    row = dict(zip(DAILY_PLAN_HEADER, result.daily_plan_rows[0], strict=False))
+    open_ticket = json.loads(row["plan_detail_json"])["order_ticket_json"]
+    record_manual_live_fill(open_ticket["ticket_hash"], store=store)
+    group = store.open_live_position_groups()[0]
+    close_ticket = build_close_ticket(group)
+    store.save_live_order_intent(close_ticket, status="submitted")
+    close_row = dict(zip(DAILY_PLAN_HEADER, ["" for _ in DAILY_PLAN_HEADER], strict=False))
+    close_row["operator_action"] = APPROVE_LIVE_CLOSE
+    close_row["mode"] = "live_close_advisory"
+    close_row["plan_detail_json"] = json.dumps({"lane": "live_close_advisory", "order_ticket_json": close_ticket})
+
+    class UnexpectedBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def preflight_ticket(self, _ticket):
+            raise AssertionError("active close tickets should not be preflighted again")
+
+        def place_order_ticket(self, _ticket):
+            raise AssertionError("active close tickets should not be submitted again")
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", UnexpectedBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [close_row]})
+    live_control = _live_control()
+    live_control["runtime"]["mode"] = "live"
+    live_control["runtime"]["trading_enabled"] = True
+    live_control["live"]["allow_same_day_exits_after"] = "2000-01-01"
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+
+    executed = execute_live_approved(live_control, submit=True, close=True, store=store)
+
+    assert executed["processed"] == 1
+    assert executed["results"][0]["status"] == "blocked"
+    assert executed["results"][0]["reason"] == "close_ticket_active:submitted"
 
 
 def test_cleanup_live_approvals_clears_terminal_ticket_status(tmp_path, monkeypatch) -> None:

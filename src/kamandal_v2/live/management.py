@@ -20,6 +20,9 @@ from kamandal_v2.sheets import write_daily_plan
 from kamandal_v2.stores.sqlite import LocalStore
 
 
+NONTERMINAL_CLOSE_STATUSES = {"pending_close_approval", "dry_run", "submitted", "repriced"}
+
+
 def run_live_management_plan(
     config: dict[str, Any],
     *,
@@ -39,6 +42,7 @@ def run_live_management_plan(
     marks = []
     review_recommendations = 0
     close_recommendations = 0
+    working_close_orders = 0
     for index, group in enumerate(groups, start=1):
         underlying = str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or "")
         reconciliation_blockers = reconciliation_blockers_for_group(store, group, config=config)
@@ -80,6 +84,18 @@ def run_live_management_plan(
                 "blocked_reason": str(decision.get("reason") or ""),
                 "reason": "same_day_live_exit_blocked",
             }
+        if decision["action"] == "close":
+            working_close = _working_close_order(store, group)
+            if working_close:
+                working_close_orders += 1
+                decision = {
+                    **decision,
+                    "action": "hold",
+                    "blocked_action": "close",
+                    "blocked_reason": str(decision.get("reason") or ""),
+                    "reason": "working_close_order",
+                    "working_close_order": _working_close_summary(working_close),
+                }
         decisions.append(decision)
         store.record_live_management_decision(str(group.get("group_id")), str(decision["action"]), str(decision["reason"]), decision)
         if decision["action"] == "review":
@@ -100,9 +116,38 @@ def run_live_management_plan(
         "groups": len(groups),
         "close_recommendations": close_recommendations,
         "review_recommendations": review_recommendations,
+        "working_close_orders": working_close_orders,
         "marks": marks,
         "decisions": decisions,
         "daily_plan_rows": rows,
+    }
+
+
+def _working_close_order(store: LocalStore, group: dict[str, Any]) -> dict[str, Any] | None:
+    group_id = str(group.get("group_id") or "")
+    tickets = store.live_close_order_intents_for_group(group_id, statuses=NONTERMINAL_CLOSE_STATUSES)
+    return min(tickets, key=_working_close_status_rank) if tickets else None
+
+
+def _working_close_status_rank(ticket: dict[str, Any]) -> int:
+    status = str(ticket.get("_ledger_status") or "")
+    if status in {"submitted", "repriced"}:
+        return 0
+    if status == "pending_close_approval":
+        return 1
+    return 2
+
+
+def _working_close_summary(ticket: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ticket_hash": ticket.get("ticket_hash"),
+        "order_id": ticket.get("order_id"),
+        "ledger_status": ticket.get("_ledger_status"),
+        "created_at": ticket.get("created_at"),
+        "updated_at": ticket.get("_ledger_updated_at"),
+        "limit_price": ticket.get("limit_price"),
+        "underlying": ticket.get("underlying"),
+        "structure": ticket.get("structure"),
     }
 
 
