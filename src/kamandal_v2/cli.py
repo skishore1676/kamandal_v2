@@ -24,6 +24,8 @@ from kamandal_v2.live.approval import (
     send_pending_live_approval_requests,
 )
 from kamandal_v2.live.advisory import run_live_advisory_plan
+from kamandal_v2.live.book import format_live_book, live_book_sheet_rows, run_live_book
+from kamandal_v2.live.health import format_live_health, run_live_health
 from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill, sync_live_orders
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.operator_review import (
@@ -33,6 +35,7 @@ from kamandal_v2.live.operator_review import (
     send_pending_operator_review_requests,
 )
 from kamandal_v2.live.orders import build_open_ticket
+from kamandal_v2.live.order_reconciliation import reconcile_live_orders
 from kamandal_v2.live.reconciliation import reconcile_live_positions
 from kamandal_v2.management.shadow import manage_shadow_positions, mark_shadow_portfolio, write_shadow_eod_report
 from kamandal_v2.market.public import PublicAdapter
@@ -44,8 +47,9 @@ from kamandal_v2.planner.config_validator import validate_config
 from kamandal_v2.planner.engine import run_plan, run_shadow_cycle
 from kamandal_v2.reports.go_live_audit import build_go_live_audit_report
 from kamandal_v2.seed import build_seed_tables, seed_headers
-from kamandal_v2.schemas import DAILY_PLAN_HEADER
-from kamandal_v2.sheets import bootstrap_sheet, pull_sheet_tables, write_daily_plan
+from kamandal_v2.schemas import DAILY_PLAN_HEADER, LIVE_BOOK_HEADER
+from kamandal_v2.sheets import bootstrap_sheet, pull_sheet_tables, write_daily_plan, write_live_book
+from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.volatility.iv import capture_iv_snapshots
 from kamandal_v2.volatility.iv_store import IvStore
 
@@ -75,6 +79,17 @@ def main() -> None:
     live_close_execute_parser = subparsers.add_parser("execute-live-approved-closes", help="Execute sheet-approved live close orders")
     live_close_execute_parser.add_argument("--submit", action="store_true", help="Submit real close orders; default is dry-run")
     live_close_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_exits are enabled")
+    live_health_parser = subparsers.add_parser("live-health", help="Print concise live book health")
+    live_health_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    live_health_parser.add_argument(
+        "--stale-close-order-minutes",
+        type=int,
+        default=None,
+        help="Override close-order stale threshold when reporting; unset uses config/default",
+    )
+    live_book_parser = subparsers.add_parser("live-book", help="Print per-position live book cockpit")
+    live_book_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    live_book_parser.add_argument("--write-sheet", action="store_true", help="Write current live book rows to the live_book sheet tab")
     sync_live_parser = subparsers.add_parser("sync-live-orders", help="Poll broker order status for submitted and cancel-pending live orders")
     sync_live_parser.add_argument("--read-only", action="store_true", help="Poll and record broker statuses without entry reprice/expiry actions")
     subparsers.add_parser("cleanup-live-approvals", help="Clear stale live approval cells after submit/fill/failure")
@@ -99,6 +114,14 @@ def main() -> None:
     reconcile_parser.add_argument("--write-sheet", action="store_true")
     reconcile_parser.add_argument("--send-review", action="store_true")
     reconcile_parser.add_argument("--dry-run", action="store_true")
+    reconcile_orders_parser = subparsers.add_parser("reconcile-live-orders", help="Reconcile broker/local live order lifecycle state")
+    reconcile_orders_parser.add_argument("--write-sheet", action="store_true")
+    reconcile_orders_parser.add_argument("--dry-run", action="store_true")
+    reconcile_orders_parser.add_argument(
+        "--expire-stale-close-approvals",
+        action="store_true",
+        help="Apply stale local close-approval expiry; default reports only unless config enables it",
+    )
     subparsers.add_parser("send-operator-review-requests", help="Send unsent reusable operator review requests")
     apply_review_parser = subparsers.add_parser("apply-operator-review-decision", help="Apply one deterministic operator review action")
     apply_review_parser.add_argument("--request-id", required=True)
@@ -311,6 +334,30 @@ def main() -> None:
     if args.command == "execute-live-approved-closes":
         print(json.dumps(execute_live_approved(config, submit=_live_submit_requested(config, args, close=True), close=True), indent=2))
         return
+    if args.command == "live-health":
+        report = run_live_health(
+            LocalStore(),
+            config,
+            stale_close_order_minutes=args.stale_close_order_minutes,
+        )
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print(format_live_health(report))
+        return
+    if args.command == "live-book":
+        report = run_live_book(LocalStore(), config)
+        if args.write_sheet:
+            report["sheet_rows_written"] = write_live_book(
+                config,
+                LIVE_BOOK_HEADER,
+                live_book_sheet_rows(report, LIVE_BOOK_HEADER),
+            )
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print(format_live_book(report))
+        return
     if args.command == "sync-live-orders":
         print(json.dumps(sync_live_orders(config, manage_entries=not args.read_only), indent=2))
         return
@@ -340,6 +387,19 @@ def main() -> None:
         return
     if args.command == "reconcile-live-positions":
         print(json.dumps(reconcile_live_positions(config, write_sheet=args.write_sheet, send_review=args.send_review, dry_run=args.dry_run), indent=2))
+        return
+    if args.command == "reconcile-live-orders":
+        print(
+            json.dumps(
+                reconcile_live_orders(
+                    config,
+                    write_sheet=args.write_sheet,
+                    dry_run=args.dry_run,
+                    expire_stale_close_approvals=True if args.expire_stale_close_approvals else None,
+                ),
+                indent=2,
+            )
+        )
         return
     if args.command == "send-operator-review-requests":
         print(json.dumps(send_pending_operator_review_requests(config), indent=2))

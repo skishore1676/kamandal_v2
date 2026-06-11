@@ -142,6 +142,17 @@ def write_daily_plan(
     )
 
 
+def write_live_book(config: dict[str, Any], header: list[str], rows: list[list[Any]]) -> int:
+    client = GoogleSheetClient.from_config(config)
+    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    title = str(tab_names.get("live_book") or "live_book")
+    return client.replace_tab(
+        title,
+        header=header,
+        rows=rows,
+    )
+
+
 def _cell(value: Any) -> Any:
     if value is None:
         return ""

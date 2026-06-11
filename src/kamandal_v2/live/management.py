@@ -10,13 +10,14 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.events.earnings import EarningsStore
+from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
 from kamandal_v2.live.orders import APPROVE_LIVE_CLOSE, build_close_ticket
 from kamandal_v2.live.position_management import live_exit_decision, live_exit_policy, mark_live_group
 from kamandal_v2.live.reconciliation import reconciliation_blockers_for_group
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.planner.config_loader import load_planner_config
-from kamandal_v2.schemas import DAILY_PLAN_HEADER
-from kamandal_v2.sheets import write_daily_plan
+from kamandal_v2.schemas import DAILY_PLAN_HEADER, LIVE_BOOK_HEADER
+from kamandal_v2.sheets import write_daily_plan, write_live_book
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -110,13 +111,18 @@ def run_live_management_plan(
         store.save_live_order_intent(ticket, status="pending_close_approval")
         rows.append(_close_plan_row(index, group, decision, ticket, approval_mode=exit_mode))
         close_recommendations += 1
+    live_book_rows_written = 0
     if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_close_advisory"})
+    if write_sheet:
+        live_book_report = run_live_book(store, config)
+        live_book_rows_written = write_live_book(config, LIVE_BOOK_HEADER, live_book_sheet_rows(live_book_report, LIVE_BOOK_HEADER))
     return {
         "groups": len(groups),
         "close_recommendations": close_recommendations,
         "review_recommendations": review_recommendations,
         "working_close_orders": working_close_orders,
+        "live_book_rows_written": live_book_rows_written,
         "marks": marks,
         "decisions": decisions,
         "daily_plan_rows": rows,

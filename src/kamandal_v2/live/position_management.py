@@ -19,6 +19,8 @@ class LiveExitPolicy:
     require_fresh_quotes: bool = True
     max_loss_action: str = "review"
     max_loss_requires_confirmation: bool = True
+    default_max_loss_multiple_credit: float | None = None
+    default_max_loss_multiple_debit: float | None = None
     short_strike_buffer_pct: float = 0.0
     loss_watch_max_leg_bid_ask_pct: float = 1.0
     loss_watch_confirmations_required: int = 2
@@ -36,6 +38,8 @@ def live_exit_policy(config: dict[str, Any] | None) -> LiveExitPolicy:
         require_fresh_quotes=_as_bool(raw.get("require_fresh_quotes"), True),
         max_loss_action=_max_loss_action(raw.get("max_loss_action")),
         max_loss_requires_confirmation=_as_bool(raw.get("max_loss_requires_confirmation"), True),
+        default_max_loss_multiple_credit=_optional_positive_float(raw.get("default_max_loss_multiple_credit")),
+        default_max_loss_multiple_debit=_optional_positive_float(raw.get("default_max_loss_multiple_debit")),
         short_strike_buffer_pct=max(_as_float(raw.get("short_strike_buffer_pct"), 0.0), 0.0),
         loss_watch_max_leg_bid_ask_pct=max(_as_float(raw.get("loss_watch_max_leg_bid_ask_pct"), 1.0), 0.0),
         loss_watch_confirmations_required=max(_as_int(raw.get("loss_watch_confirmations_required"), 2), 1),
@@ -99,6 +103,7 @@ def mark_live_group(
             "close_natural_net": round(leg_natural_net, 2),
         })
 
+    policy = live_exit_policy(config)
     pnl_mid = entry_net + close_mid_net
     pnl_natural = entry_net + close_natural_net
     profit_target_pct = normalize_profit_target_pct(playbook.profit_target_pct if playbook else 50.0)
@@ -108,7 +113,11 @@ def mark_live_group(
     loss = max(-pnl_mid, 0.0)
     natural_loss = max(-pnl_natural, 0.0)
     max_loss_multiple = playbook.max_loss_multiple if playbook else None
-    short_strike_state = _short_strike_state(legs, underlying_price, live_exit_policy(config).short_strike_buffer_pct)
+    if max_loss_multiple is None:
+        max_loss_multiple = (
+            policy.default_max_loss_multiple_credit if entry_kind == "credit" else policy.default_max_loss_multiple_debit
+        )
+    short_strike_state = _short_strike_state(legs, underlying_price, policy.short_strike_buffer_pct)
     return {
         "group_id": group.get("group_id"),
         "underlying": group.get("underlying") or candidate.get("underlying"),
@@ -140,7 +149,7 @@ def mark_live_group(
         "target_close_net": round(target_close_net, 2),
         "target_close_value": round(abs(target_close_net), 2),
         "target_progress_pct": round(progress, 2),
-        "trigger_progress_pct": live_exit_policy(config).profit_target_trigger_pct,
+        "trigger_progress_pct": policy.profit_target_trigger_pct,
         "quote_fresh": bool(quote_fresh),
         "missing_quotes": missing_quotes,
         "legs": legs,
@@ -420,6 +429,14 @@ def _as_bool(value: Any, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _optional_positive_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _max_loss_action(value: Any) -> str:

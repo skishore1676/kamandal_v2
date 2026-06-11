@@ -1,147 +1,65 @@
 # Kamandal V2
 
-Local-first multileg options portfolio planning and management cockpit.
+Local-first multileg options portfolio planning and management cockpit. Kamandal V2 is an automated "shadow" trading and intelligence extraction system that fuses LLM-driven idea generation with strict deterministic execution.
 
-The current scaffold implements the first execution-grade planning loop:
+## Architecture & Workflow
 
-- env/local runtime control
-- Google Sheet configuration cockpit for `universe`, `playbooks`, and `daily_plan`
-- seed generation from old `kamandal`
-- local idea ingestion from YAML/JSON
-- deterministic fixture market data and preflight
-- multileg candidate builders and shape validators
-- beam-search portfolio plan generation
-- local SQLite/audit artifacts
-- shadow auto-approval of the top eligible plan
-- local transcript import into digest and rough idea YAML
-- local IV snapshot history and IV percentile overlay for market-provider planning
+Kamandal operates through a strictly bounded pipeline designed to keep the AI creative on idea extraction but mathematically rigorous on options execution.
 
-## Sheet
+1. **Intelligence Gathering**
+   - Source content (YouTube video captions via `yt-dlp` and X/Twitter bookmarks/timelines) are fetched and ingested locally.
+   - Raw texts are stored in `data/transcripts/` or staged in `data/digest/`.
 
-Control sheet:
+2. **LLM Extraction**
+   - The Codex LLM reads the raw text and extracts abstract trading ideas (e.g., "Bullish SPY, 7 days, mean-revert thesis"). 
+   - The LLM **never** picks options legs or sees the option chain or your strategy templates. 
+   - Extracted ideas are output as structured YAML files into the `data/ideas/` directory.
 
-https://docs.google.com/spreadsheets/d/16Vjgrj80VDeTIGg0y60w4LHenZg7R-tGGvOyLNFdFsE/edit
+3. **Deterministic Planning**
+   - A Python-based deterministic planner maps the LLM's generic ideas against your predefined **Playbooks** (strategy templates defined by you in your configuration).
+   - It captures current Implied Volatility (IV) and live option chains to mathematically construct executable option candidates (e.g., Call Debit Spreads, Iron Condors).
 
-Tabs:
+4. **Portfolio Optimization**
+   - Candidates are evaluated and grouped into "Plans". A beam-search portfolio optimizer selects the best combination of trades that maximize the overall score while strictly respecting your Buying Power Reduction (BPR) limits and max position caps.
+   - The top plan is written out to `daily_plan` and auto-approved for shadow execution. 
 
-- `universe`
-- `playbooks`
-- `daily_plan`
+5. **Reporting & Review**
+   - **End-of-Day (EOD):** A deterministic script marks the shadow portfolio to market and calculates P&L.
+   - **Weekly Review:** Every Friday, the LLM analyzes all *rejected* candidates from the week (e.g., rejected by the planner due to low IV or poor liquidity) and outputs suggestions to help you tune your Playbooks.
 
-## Runtime
+## Configuration & Control
 
-Create and use the project-local venv:
+- **Playbooks & Universe:** Strategy parameters and tracked tickers are securely managed remotely in a Google Sheet (`universe`, `playbooks`, `daily_plan`).
+- **Runtime Rules:** Controlled locally via `config/control.yaml` and environment variables.
+  - Live broker submission defaults to Tastytrade but is strictly gated (`trading_enabled: false`, `mode: shadow` by default).
+  - Configures BPR caps, max positions, and shadow auto-approval modes.
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e '.[dev]'
+## Local Data Architecture
 
-.venv/bin/kamandal seed-preview
-.venv/bin/kamandal bootstrap-sheet
-.venv/bin/kamandal plan --ideas data/ideas/sample.yaml --config-source seed --provider fixture
-.venv/bin/kamandal run-shadow-cycle --ideas data/ideas/sample.yaml --config-source seed --provider fixture
-.venv/bin/kamandal import-transcripts --source-dir data/transcripts
-.venv/bin/python -m pytest tests -q
-```
+The `data/` folder stores all persistent state:
+- `audit/`: Local artifacts/audit logs for shadow plans.
+- `ideas/`: Extracted YAML thesis objects from the LLM.
+- `kamandal_v2.db`: The main active SQLite database storing positions and history.
+- `logs/`: Cron execution logs for debugging.
+- `reports/`: End-of-day shadow portfolio summaries.
+- `reviews/`: Weekly LLM reviews of rejected candidates.
+- `sheet_cache/`: Offline cache of your Google Sheet rules to prevent API rate limits.
 
-## Control
+## Scheduled Cadence (Cron)
 
-Runtime control lives in `config/control.yaml` and env overrides, not the sheet.
+The system is designed as a series of short scheduled jobs rather than a long-running daemon:
+- **X Extraction:** Weekdays morning (8:55 AM).
+- **YouTube Extraction:** Intraday sweeps (9:15, 11:45, 14:30).
+- **Market Shadow Loop:** Every 15 minutes during market hours. Reloads sheets, builds candidates, optimizes plans.
+- **EOD Report:** After market close.
+- **Weekly Reviewer:** Fridays at 10:00 AM.
 
-Current defaults:
+*To install the cron schedule on oldmac: run `scripts/cron_install_oldmac.sh`*
 
-- `mode: shadow`
-- `trading_enabled: false`
-- `halt: false`
-- live broker defaults to tastytrade; planning market data remains selected per command
-- portfolio BPR cap: `90%`
-- per-underlying BPR cap: `25%`
-- max positions: `5`
-- approval mode: `shadow_auto_top_plan`
-- missing IV policy: neutral provisional `50` for bootstrap/shadow testing
-- playbooks can optionally gate on `iv_percentile`, `iv_rank`, and absolute `iv_abs`
+## Key CLI Commands
 
-## CLI Surface
-
-- `kamandal pull-sheet`
-- `kamandal validate-config`
-- `kamandal plan --ideas data/ideas/*.yaml`
-- `kamandal write-daily-plan`
-- `kamandal run-shadow-cycle`
-- `kamandal run-intelligence-cycle`
-- `kamandal extract-ideas-llm`
-- `kamandal run-llm-cycle`
-- `kamandal import-x-digest`
-- `kamandal import-x-bookmarks`
-- `kamandal review-rejections`
-- `kamandal tastytrade-smoke --symbol TSLA`
-- `kamandal public-smoke --symbol TSLA`
-- `kamandal capture-iv --config-source sheet --provider public`
-- `kamandal iv-status --symbols TSLA NVDA`
-- `kamandal import-transcripts`
-- `kamandal scrape-youtube-smoke --video-id VIDEO_ID`
-- `kamandal fetch-youtube-transcript --video-id VIDEO_ID`
-- `kamandal list-youtube-channel-videos --channel-id CHANNEL_ID --limit 1`
-
-Broker integration is intentionally conservative at this stage: the fixture adapter is the deterministic test path, Public can still provide option-chain/IV planning data, and tastytrade is the default account/preflight/order broker once local OAuth env vars are set (`TASTYTRADE_CLIENT_SECRET`, `TASTYTRADE_REFRESH_TOKEN`, and optionally `TASTYTRADE_CLIENT_ID` / `TASTYTRADE_API_VERSION`). Live order submission remains gated.
-
-## Monday Shadow Runbook
-
-Dry smoke, no sheet write:
-
-```bash
-.venv/bin/kamandal public-smoke --symbol TSLA
-.venv/bin/kamandal tastytrade-smoke --symbol TSLA
-.venv/bin/kamandal capture-iv --config-source sheet --provider public
-.venv/bin/kamandal iv-status --symbols TSLA NVDA SPY
-.venv/bin/kamandal run-intelligence-cycle \
-  --source-dir data/transcripts/archive/youtube/2026-04-25 \
-  --config-source sheet \
-  --provider public \
-  --no-write-sheet
-```
-
-Operator shadow cycle, writes `daily_plan` and local shadow artifacts only:
-
-```bash
-.venv/bin/kamandal run-intelligence-cycle \
-  --source-dir data/transcripts/archive/youtube/2026-04-25 \
-  --config-source sheet \
-  --provider public
-```
-
-The command imports transcripts as thesis objects, filters extracted symbols to the configured universe, builds provider-backed candidates, ranks plan-level bundles, writes `daily_plan`, and records the auto-approved top shadow plan locally. It does not submit live orders; live execution rechecks the active broker before submit.
-
-Transcript extraction emits semantic idea fields such as `direction`, controlled `thesis_tags`, `horizon_days`, `mentioned_strategy`, `extraction_confidence`, and `quote_evidence`. It does not choose executable legs; playbook matching remains deterministic.
-
-The LLM loop keeps the same boundary: Codex CLI extracts thesis objects, optional IV capture updates local volatility history, the deterministic planner builds candidates/plans, and `review-rejections` writes local suggestions only. It never mutates playbooks or submits orders.
-
-## Scheduled Shadow Cadence
-
-The oldmac server uses cron, matching Bhiksha's scheduling style while keeping
-Kamandal V2 as short scheduled jobs rather than a long-running daemon:
-
-- `scripts/run_x_bookmark_extraction.sh`: trading days at 8:55 Central. Imports Birdclaw's canonical X digest SQLite store first, preserving bookmark/timeline source lanes, author, post id, and seen count before Codex LLM extraction. Set `KAMANDAL_X_EXTRACTION_IMPORT_ONLY=1` for a source-doc smoke run without LLM extraction. The legacy bookmark JSON import remains a fallback if the canonical store is unavailable.
-- `scripts/run_youtube_extraction.sh`: trading days at 9:15, 11:45, and 14:30 Central. Fetches configured YouTube captions and runs Codex LLM extraction into `data/ideas/active`.
-- `scripts/run_market_shadow.sh`: every 15 minutes during market hours except the 8:45 IV-capture slot. It validates and reloads `universe`/`playbooks` from Google Sheets on every run, then writes plan rows to `daily_plan`.
-- `scripts/run_iv_capture.sh`: trading days at 8:45 Central. Captures one fresh morning IV observation per enabled universe symbol from Public option chains for that day's planning loop.
-- `scripts/run_weekly_reviewer.sh`: Fridays at 10:00 Central, reviewing the latest local plan audit only.
-
-Install or refresh the cron schedule on oldmac:
-
-```bash
-scripts/cron_install_oldmac.sh
-```
-
-The installer writes a marked `KAMANDAL_V2` block in the user's crontab and
-removes the older Kamandal V2 LaunchAgents so macOS does not show them as Login
-Items. Existing non-Kamandal cron entries are preserved.
-
-Shadow approval behavior is controlled by `execution.approval_mode` in `config/control.yaml`, or by the env override `KAMANDAL_APPROVAL_MODE`. Current shadow automation uses `shadow_auto_top_plan`. Live entry/exit approval is controlled separately under `live.entry_approval_mode` and `live.exit_approval_mode`, with env overrides `KAMANDAL_LIVE_ENTRY_APPROVAL_MODE` and `KAMANDAL_LIVE_EXIT_APPROVAL_MODE`. Live broker submission still requires `KAMANDAL_MODE=live`, `KAMANDAL_TRADING_ENABLED=true`, no halt, `KAMANDAL_LIVE_SUBMIT=1`, the lane-specific `live.auto_submit_entries` / `live.auto_submit_exits` switch, and valid active-broker preflight.
-
-YouTube can be configured either with explicit video IDs (`KAMANDAL_YOUTUBE_VIDEO_IDS` or `data/youtube_queue.txt`) or with channel IDs (`KAMANDAL_YOUTUBE_CHANNEL_IDS` or `config/youtube_channels.txt`). Channel discovery scans recent same-day videos, scores titles toward market/trade idea content, penalizes educational/tutorial titles, and selects the best `KAMANDAL_YOUTUBE_CHANNEL_LIMIT` videos per channel from `KAMANDAL_YOUTUBE_CHANNEL_SCAN_LIMIT` feed entries. For the current shadow experiment, oldmac is focused on the tastylive/tastytrade channel only so we can learn which show titles produce useful daily ideas.
-
-Transcript fetching defaults to `yt-dlp` in subtitle-only mode: no audio/video download and no `ffmpeg` required. The old `youtube-transcript-api` path remains available with `--provider api`. Slow-fetch controls live in env as `KAMANDAL_YTDLP_SLEEP_REQUESTS`, `KAMANDAL_YTDLP_SLEEP_SUBTITLES`, and `KAMANDAL_YTDLP_ARCHIVE_FILE`. If needed, oldmac can use browser cookies with `KAMANDAL_YTDLP_COOKIES_FROM_BROWSER=safari` or another supported browser.
-
-X source intelligence is read-only from Kamandal's perspective. Birdclaw owns the runtime at `~/Documents/birdclaw`, including X fetch, canonical post history, and SQLite dedup under `x_digest_posts`, `x_digest_post_sources`, and `x_digest_runs`; OpenClaw keeps the stable sanitized state under `~/.openclaw/workspace-main/state/x_daily_digest/`. Kamandal reads that sanitized digest surface with `kamandal import-x-digest`. Bookmark-sourced posts are treated as higher operator-intent provenance than timeline posts, but source metadata is kept outside `thesis_tags`.
+- `.venv/bin/kamandal run-intelligence-cycle` - Import transcripts, build plans, and optimize portfolio.
+- `.venv/bin/kamandal run-shadow-cycle` - Run the deterministic shadow planner locally.
+- `.venv/bin/kamandal shadow-eod-report` - Generate the daily shadow portfolio mark-to-market report.
+- `.venv/bin/kamandal review-rejections` - Trigger the LLM weekly reviewer.
+- `.venv/bin/kamandal public-smoke --symbol TSLA` - Dry run option chains against a provider.

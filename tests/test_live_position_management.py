@@ -348,3 +348,65 @@ def test_loss_watch_does_not_close_when_quotes_are_too_wide() -> None:
     assert mark["max_leg_bid_ask_pct"] > config["live"]["exit_pricing"].get("loss_watch_max_leg_bid_ask_pct", 1.0)
     assert decision["action"] == "review"
     assert decision["reason"] == "loss_watch_quote_block"
+
+
+def _credit_loss_fixture() -> tuple[dict, dict]:
+    group = {
+        "group_id": "group_credit_loss",
+        "underlying": "TSLA",
+        "playbook_id": "put_spread_test",
+        "structure": "put_spread",
+        "opened_at": "2026-05-01 14:00:00",
+        "candidate": {
+            "net_credit": 1.0,
+            "legs": [
+                {"side": "sell", "option_type": "put", "expiration": "2026-07-17", "strike": 100.0, "quantity": 1},
+                {"side": "buy", "option_type": "put", "expiration": "2026-07-17", "strike": 95.0, "quantity": 1},
+            ],
+        },
+    }
+    quotes = {
+        ("2026-07-17", "put", 100.0): {"bid": 4.0, "ask": 4.2, "delta": -0.55},
+        ("2026-07-17", "put", 95.0): {"bid": 2.0, "ask": 2.2, "delta": -0.35},
+    }
+    return group, quotes
+
+
+def test_default_max_loss_multiple_backstops_missing_playbook_value() -> None:
+    group, quotes = _credit_loss_fixture()
+    config = _config()
+    config["live"]["exit_pricing"]["default_max_loss_multiple_credit"] = 2.0
+    playbook = _playbook("put_spread", max_loss_multiple=None)
+
+    mark = mark_live_group(group, quotes, playbook, quote_fresh=True, config=config, underlying_price=102.0)
+
+    assert mark["max_loss_multiple"] == 2.0
+    assert mark["max_loss_watch"] is True
+
+
+def test_no_default_max_loss_multiple_preserves_disabled_watch() -> None:
+    group, quotes = _credit_loss_fixture()
+    playbook = _playbook("put_spread", max_loss_multiple=None)
+
+    mark = mark_live_group(group, quotes, playbook, quote_fresh=True, config=_config(), underlying_price=102.0)
+
+    assert mark["max_loss_multiple"] is None
+    assert mark["max_loss_watch"] is False
+
+
+def test_max_loss_action_close_exits_without_confirmation_dance() -> None:
+    group, quotes = _credit_loss_fixture()
+    config = _config()
+    config["live"]["exit_pricing"]["max_loss_action"] = "close"
+    config["live"]["exit_pricing"]["loss_watch_confirmations_required"] = 1
+    playbook = _playbook("put_spread", max_loss_multiple=2.0)
+
+    mark = mark_live_group(group, quotes, playbook, quote_fresh=True, config=config, underlying_price=102.0)
+    mark["loss_watch_observations"] = {"count": 1, "window_minutes": 120}
+    decision = live_exit_decision(mark, playbook, EarningsStore(), config)
+
+    assert mark["max_loss_watch"] is True
+    assert mark["short_strike_state"]["breached"] is False
+    assert decision["action"] == "close"
+    assert decision["reason"] == "max_loss"
+    assert decision["urgency"] == "critical"

@@ -535,6 +535,53 @@ class LocalStore:
             tickets.append(payload)
         return tickets
 
+    def live_order_intents_by_type(self, intent_type: str, statuses: set[str] | None = None) -> list[dict[str, Any]]:
+        query = "SELECT status, created_at, updated_at, payload FROM live_order_intents WHERE intent_type = ?"
+        params: list[Any] = [intent_type]
+        if statuses:
+            placeholders = ",".join("?" for _ in statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(sorted(statuses))
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        tickets = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["_ledger_status"] = row["status"]
+            payload["_ledger_created_at"] = row["created_at"]
+            payload["_ledger_updated_at"] = row["updated_at"]
+            tickets.append(payload)
+        return tickets
+
+    def live_order_attempts_for_ticket_hashes(self, ticket_hashes: set[str]) -> list[dict[str, Any]]:
+        hashes = {ticket_hash for ticket_hash in ticket_hashes if ticket_hash}
+        if not hashes:
+            return []
+        placeholders = ",".join("?" for _ in hashes)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT created_at, ticket_hash, order_id, action, submit, ok, request_payload, response_payload
+                FROM live_order_attempts
+                WHERE ticket_hash IN ({placeholders})
+                ORDER BY created_at DESC, id DESC
+                """,
+                tuple(sorted(hashes)),
+            ).fetchall()
+        attempts = []
+        for row in rows:
+            attempts.append({
+                "created_at": row["created_at"],
+                "ticket_hash": row["ticket_hash"],
+                "order_id": row["order_id"],
+                "action": row["action"],
+                "submit": bool(row["submit"]),
+                "ok": bool(row["ok"]),
+                "request_payload": json.loads(row["request_payload"]),
+                "response_payload": json.loads(row["response_payload"]),
+            })
+        return attempts
+
     def live_order_child_intents(self, parent_ticket_hash: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT status, payload FROM live_order_intents").fetchall()
@@ -588,6 +635,28 @@ class LocalStore:
             conn.execute(
                 "UPDATE live_order_intents SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE ticket_hash = ?",
                 (status, ticket_hash),
+            )
+
+    def update_live_order_intent_status_with_payload(
+        self,
+        ticket_hash: str,
+        status: str,
+        payload_updates: dict[str, Any] | None = None,
+    ) -> None:
+        existing = self.live_order_intent(ticket_hash)
+        if not existing:
+            return
+        payload = {key: value for key, value in existing.items() if not key.startswith("_ledger_")}
+        if payload_updates:
+            payload.update(payload_updates)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE live_order_intents
+                SET status = ?, updated_at = CURRENT_TIMESTAMP, payload = ?
+                WHERE ticket_hash = ?
+                """,
+                (status, json.dumps(payload, sort_keys=True), ticket_hash),
             )
 
     def record_live_order_attempt(
@@ -680,6 +749,36 @@ class LocalStore:
             ).fetchall()
         return {str(row["idea_id"]) for row in rows}
 
+    def latest_live_position_mark(self, group_id: str) -> dict[str, Any] | None:
+        if not group_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM live_position_marks WHERE group_id = ? ORDER BY id DESC LIMIT 1",
+                (group_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return json.loads(row["payload"])
+
+    def live_position_mark_stats(self, group_id: str) -> dict[str, Any]:
+        if not group_id:
+            return {"mfe": None, "mae": None, "marks": 0}
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT max(pnl) AS mfe, min(pnl) AS mae, count(*) AS marks
+                FROM live_position_marks
+                WHERE group_id = ?
+                """,
+                (group_id,),
+            ).fetchone()
+        return {
+            "mfe": row["mfe"] if row and row["mfe"] is not None else None,
+            "mae": row["mae"] if row and row["mae"] is not None else None,
+            "marks": int(row["marks"] or 0) if row else 0,
+        }
+
     def open_live_position_groups(self) -> list[dict[str, Any]]:
         with self._connect() as conn:
             group_rows = conn.execute("SELECT group_id, opened_at, payload FROM live_position_groups WHERE status = 'open'").fetchall()
@@ -718,6 +817,28 @@ class LocalStore:
                 """,
                 (group_id, action, reason, json.dumps(payload, sort_keys=True)),
             )
+
+    def latest_live_management_decision(self, group_id: str) -> dict[str, Any] | None:
+        if not group_id:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT created_at, action, reason, payload
+                FROM live_management_decisions
+                WHERE group_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (group_id,),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        payload["_created_at"] = row["created_at"]
+        payload["_action"] = row["action"]
+        payload["_reason"] = row["reason"]
+        return payload
 
     def record_live_position_mark(self, group_id: str, payload: dict[str, Any]) -> None:
         with self._connect() as conn:

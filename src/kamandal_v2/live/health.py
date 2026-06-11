@@ -1,0 +1,375 @@
+"""Live health readback and severity reporting."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+
+from kamandal_v2.stores.sqlite import LocalStore
+
+
+DEFAULT_STALE_CLOSE_ORDER_MINUTES = 120
+WORKING_CLOSE_STATUSES = {"pending_close_approval", "dry_run", "submitted", "repriced"}
+CLOSED_CLOSE_STATUSES = {"filled", "manual_fill_recorded", "close_filled"}
+NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES = {"expired_stale_close_approval"}
+FAILED_CLOSE_STATUSES = {
+    "rejected",
+    "failed",
+    "expired",
+    "canceled",
+    "cancelled",
+    "BROKER_STATUS_FETCH_FAILED",
+}
+FAILED_CLOSE_PREFIXES = ("blocked_", "reprice_")
+PREFLIGHT_FAIL_CLOSE_STATUSES = {
+    "blocked_preflight_failed",
+    "blocked_preflight_stale",
+    "blocked_same_day_close",
+    "submit_failed",
+    "reprice_submit_failed",
+}
+REASON_ORDER = [
+    "reconciliation_blocker",
+    "failed_close_order",
+    "failed_preflight_close",
+    "loss_watch",
+    "close_order_stale",
+    "position_target_reached",
+    "working_close_order",
+]
+
+
+def run_live_health(
+    store: LocalStore,
+    config: dict[str, Any] | None = None,
+    *,
+    stale_close_order_minutes: int | None = None,
+) -> dict[str, Any]:
+    config = config or {}
+    configured_stale = _int_value(
+        config.get("live", {}).get("health", {}).get("stale_close_order_minutes"),
+        default=DEFAULT_STALE_CLOSE_ORDER_MINUTES,
+    )
+    stale_minutes = int(stale_close_order_minutes if stale_close_order_minutes is not None else configured_stale)
+
+    open_groups = store.open_live_position_groups()
+    open_group_ids = {str(group.get("group_id") or "") for group in open_groups}
+    reconciliation_blockers = store.open_live_reconciliation_issues()
+
+    events: list[dict[str, Any]] = []
+    group_marks: list[dict[str, Any]] = []
+    for group in open_groups:
+        group_id = str(group.get("group_id") or "")
+        if not group_id:
+            continue
+        mark = store.latest_live_position_mark(group_id)
+        if not mark:
+            continue
+        group_mark = _mark_overview(group_id, mark)
+        group_marks.append(group_mark)
+        _collect_mark_events(group_mark, events)
+
+    close_orders = [
+        order
+        for order in store.live_order_intents_by_type("close")
+        if str(order.get("group_id") or "") in open_group_ids
+    ]
+    close_findings = []
+    for order in close_orders:
+        finding = _close_order_finding(order)
+        finding["group_id"] = finding["group_id"] or str(order.get("group_id") or "")
+        if finding["reason"] in {"working_close_order", "close_order_stale"}:
+            finding["age_minutes"] = _order_age_minutes(order, now=_utc_now())
+            if (finding["age_minutes"] or 0.0) > stale_minutes:
+                finding["reason"] = "close_order_stale"
+        close_findings.append(finding)
+
+    for issue in reconciliation_blockers:
+        events.append(
+            {
+                "severity": "red",
+                "reason": "reconciliation_blocker",
+                "detail": issue.get("issue_type") or "open_reconciliation_blocker",
+                "group_id": str(issue.get("group_id") or ""),
+                "issue_id": str(issue.get("issue_id") or ""),
+                "status": str(issue.get("status") or "open"),
+                "observed_count": int(issue.get("observed_count") or 1),
+            },
+        )
+
+    for finding in close_findings:
+        if finding["reason"] == "close_order_stale":
+            events.append(
+                {
+                    "severity": "yellow",
+                    "reason": "close_order_stale",
+                    "detail": _close_order_detail(finding, stale_minutes),
+                    "group_id": finding.get("group_id"),
+                    "ticket_hash": finding.get("ticket_hash"),
+                    "age_minutes": finding.get("age_minutes"),
+                },
+            )
+            continue
+        if finding["reason"] == "working_close_order":
+            events.append(
+                {
+                    "severity": "yellow",
+                    "reason": "working_close_order",
+                    "detail": _close_order_detail(finding, stale_minutes),
+                    "group_id": finding.get("group_id"),
+                    "ticket_hash": finding.get("ticket_hash"),
+                    "age_minutes": finding.get("age_minutes"),
+                },
+            )
+            continue
+        if finding["reason"] == "failed_preflight_close":
+            events.append(
+                {
+                    "severity": "red",
+                    "reason": "failed_preflight_close",
+                    "detail": finding.get("order_status") or "",
+                    "group_id": finding.get("group_id"),
+                    "ticket_hash": finding.get("ticket_hash"),
+                },
+            )
+            continue
+        if finding["reason"] == "failed_close_order":
+            events.append(
+                {
+                    "severity": "red",
+                    "reason": "failed_close_order",
+                    "detail": finding.get("order_status") or "",
+                    "group_id": finding.get("group_id"),
+                    "ticket_hash": finding.get("ticket_hash"),
+                },
+            )
+
+    status = _coerce_status(events)
+    return {
+        "checked_at": _utc_now().isoformat(),
+        "overall": status,
+        "counts": {
+            "open_groups": len(open_groups),
+            "reconciliation_blockers": len(reconciliation_blockers),
+            "working_close_orders": len([order for order in close_findings if order["reason"] in {"working_close_order", "close_order_stale"}]),
+            "stale_close_orders": len([order for order in close_findings if order["reason"] == "close_order_stale"]),
+            "failed_close_orders": len([order for order in close_findings if order["is_failed_close"]]),
+            "target_reached_groups": len([mark for mark in group_marks if bool(mark.get("target_reached"))]),
+            "loss_watch_groups": len([mark for mark in group_marks if bool(mark.get("loss_watch"))]),
+        },
+        "reasons": _ordered_reason_codes(events),
+        "events": events,
+        "close_orders": close_findings,
+        "group_marks": group_marks,
+    }
+
+
+def entry_health_gate(store: LocalStore, config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Decide whether new live entries are allowed given current book health."""
+    config = config or {}
+    block_on_red = _bool_value(
+        (config.get("live") or {}).get("health", {}).get("block_entries_on_red"),
+        default=True,
+    )
+    report = run_live_health(store, config)
+    blocked = block_on_red and report["overall"] == "RED"
+    return {
+        "blocked": blocked,
+        "block_entries_on_red": block_on_red,
+        "overall": report["overall"],
+        "reasons": report["reasons"],
+        "counts": report["counts"],
+    }
+
+
+def format_live_health(report: dict[str, Any]) -> str:
+    counts = report["counts"]
+    lines = [
+        "LIVE HEALTH "
+        f"[{report['overall']}] "
+        f"groups={counts['open_groups']} "
+        f"working_close={counts['working_close_orders']} "
+        f"recon_blockers={counts['reconciliation_blockers']} "
+        f"stale_close={counts['stale_close_orders']} "
+        f"failed_close={counts['failed_close_orders']}"
+    ]
+    if not report["events"]:
+        lines.append("- no open lifecycle blockers")
+        return "\n".join(lines)
+    for event in sorted(report["events"], key=_event_sort_key):
+        detail = str(event.get("detail") or "")
+        group_id = f" group={event.get('group_id')}" if event.get("group_id") else ""
+        lines.append(f"- {event['reason']}{group_id}: {detail}")
+    return "\n".join(lines)
+
+
+def _collect_mark_events(group_mark: dict[str, Any], events: list[dict[str, Any]]) -> None:
+    if bool(group_mark.get("target_reached")):
+        events.append(
+            {
+                "severity": "yellow",
+                "reason": "position_target_reached",
+                "detail": _format_mark_summary(group_mark),
+                "group_id": group_mark.get("group_id"),
+            },
+        )
+    if bool(group_mark.get("loss_watch")):
+        events.append(
+            {
+                "severity": "red",
+                "reason": "loss_watch",
+                "detail": _format_mark_summary(group_mark),
+                "group_id": group_mark.get("group_id"),
+            },
+        )
+
+
+def _mark_overview(group_id: str, mark: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "group_id": group_id,
+        "underlying": str(mark.get("underlying") or ""),
+        "target_progress_pct": float(mark.get("target_progress_pct") or 0.0),
+        "trigger_progress_pct": float(mark.get("trigger_progress_pct") or 0.0),
+        "target_reached": bool(mark.get("target_reached") or _target_reached(mark)),
+        "loss_watch": bool(mark.get("loss_watch") or bool(mark.get("max_loss_watch"))),
+        "loss_watch_observations": mark.get("loss_watch_observations") or {},
+        "updated_at": str(mark.get("marked_at") or mark.get("updated_at") or mark.get("created_at") or ""),
+    }
+
+
+def _close_order_finding(order: dict[str, Any]) -> dict[str, Any]:
+    status = str(order.get("_ledger_status") or "")
+    ticket_hash = str(order.get("ticket_hash") or "")
+    group_id = str(order.get("group_id") or "")
+    is_failed_close = False
+    reason = "working_close_order"
+    if status in CLOSED_CLOSE_STATUSES:
+        reason = "close_completed"
+    elif status in NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES:
+        reason = "close_expired"
+    elif status in WORKING_CLOSE_STATUSES:
+        reason = "working_close_order"
+    elif status in PREFLIGHT_FAIL_CLOSE_STATUSES:
+        reason = "failed_preflight_close"
+        is_failed_close = True
+    elif status in FAILED_CLOSE_STATUSES or _status_has_failed_prefix(status):
+        reason = "failed_close_order"
+        is_failed_close = True
+    elif status:
+        reason = "failed_close_order"
+        is_failed_close = True
+    elif status == "":
+        reason = "failed_close_order"
+        is_failed_close = True
+    return {
+        "ticket_hash": ticket_hash,
+        "group_id": group_id,
+        "order_status": status,
+        "reason": reason,
+        "is_failed_close": is_failed_close,
+    }
+
+
+def _close_order_detail(finding: dict[str, Any], stale_minutes: int) -> str:
+    status = str(finding.get("order_status") or "")
+    group_id = str(finding.get("group_id") or "unknown_group")
+    age = finding.get("age_minutes")
+    if finding["reason"] == "close_order_stale":
+        return (
+            f"status={status} group={group_id} age={age:.1f}m "
+            f"older than {stale_minutes}m"
+        )
+    if isinstance(age, (int, float)):
+        return f"status={status} group={group_id} age={age:.1f}m"
+    return f"status={status} group={group_id}"
+
+
+def _ordered_reason_codes(events: list[dict[str, Any]]) -> list[str]:
+    known: list[str] = []
+    seen: set[str] = set()
+    for reason in REASON_ORDER:
+        if any(event.get("reason") == reason for event in events) and reason not in seen:
+            seen.add(reason)
+            known.append(reason)
+    for event in events:
+        reason = str(event.get("reason") or "")
+        if reason and reason not in seen:
+            seen.add(reason)
+            known.append(reason)
+    return known
+
+
+def _coerce_status(events: list[dict[str, Any]]) -> str:
+    if any(str(event.get("severity")) == "red" for event in events):
+        return "RED"
+    if any(str(event.get("severity")) == "yellow" for event in events):
+        return "YELLOW"
+    return "GREEN"
+
+
+def _event_sort_key(event: dict[str, Any]) -> tuple[int, str]:
+    severity_rank = {"red": 0, "yellow": 1}.get(str(event.get("severity")), 2)
+    return (severity_rank, str(event.get("reason") or ""))
+
+
+def _order_age_minutes(order: dict[str, Any], *, now: datetime) -> float | None:
+    raw = str(order.get("_ledger_updated_at") or order.get("_ledger_created_at") or "")
+    parsed = _parse_timestamp(raw)
+    if not parsed:
+        return None
+    return max(0.0, (now - parsed).total_seconds() / 60.0)
+
+
+def _status_has_failed_prefix(status: str) -> bool:
+    return any(status.startswith(prefix) for prefix in FAILED_CLOSE_PREFIXES)
+
+
+def _target_reached(mark: dict[str, Any]) -> bool:
+    progress = float(mark.get("target_progress_pct") or 0.0)
+    trigger = float(mark.get("trigger_progress_pct") or 0.0)
+    return trigger > 0.0 and progress >= trigger
+
+
+def _format_mark_summary(group_mark: dict[str, Any]) -> str:
+    target = float(group_mark.get("target_progress_pct") or 0.0)
+    trigger = float(group_mark.get("trigger_progress_pct") or 0.0)
+    loss_watch_count = int((group_mark.get("loss_watch_observations") or {}).get("count", 0) or 0)
+    return (
+        f"group={group_mark.get('group_id')} "
+        f"target={target:.1f}/{trigger:.1f}% "
+        f"loss_watch={loss_watch_count}"
+    )
+
+
+def _bool_value(raw: Any, *, default: bool) -> bool:
+    if raw in (None, ""):
+        return default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int_value(raw: Any, *, default: int | None = None) -> int | None:
+    if raw in (None, ""):
+        return default
+    try:
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _parse_timestamp(raw: str) -> datetime | None:
+    if not raw:
+        return None
+    normalized = str(raw).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

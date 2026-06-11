@@ -1308,6 +1308,10 @@ def test_live_management_surfaces_loss_watch_without_close_ticket(tmp_path, monk
     control = load_control()
     control["live"]["exit_approval_mode"] = "auto_rules"
     control["live"]["exit_pricing"]["require_fresh_quotes"] = False
+    # Pin the legacy debounce/review policy; deployed config now hard-closes on max loss.
+    control["live"]["exit_pricing"]["max_loss_action"] = "close_when_confirmed"
+    control["live"]["exit_pricing"]["max_loss_requires_confirmation"] = True
+    control["live"]["exit_pricing"]["loss_watch_confirmations_required"] = 2
 
     first = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
 
@@ -1959,3 +1963,50 @@ def test_sync_live_orders_reprices_stale_entry_twice_then_expires(tmp_path, monk
     assert store.live_order_intent(second_ticket["ticket_hash"])["_ledger_status"] == "expired"
     assert calls.count(("cancel", "order-old")) == 1
     assert any(call[0] == "cancel" and call[1] == second_ticket["order_id"] for call in calls)
+
+
+def test_live_submit_blocks_entries_when_health_red(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    store.save_live_position_group(
+        "group_red",
+        {
+            "group_id": "group_red",
+            "underlying": "AAPL",
+            "playbook_id": "call_spread",
+            "structure": "call_spread",
+            "candidate": {"underlying": "AAPL", "legs": []},
+        },
+    )
+    store.save_live_reconciliation_issue(
+        {
+            "issue_id": "rec-entry-gate",
+            "issue_type": "broker_qty_mismatch",
+            "group_id": "group_red",
+            "underlying": "AAPL",
+            "status": "open",
+        },
+    )
+    open_row = dict(zip(DAILY_PLAN_HEADER, ["" for _ in DAILY_PLAN_HEADER], strict=False))
+    open_row["operator_action"] = APPROVE_LIVE
+    open_row["mode"] = "live_advisory"
+    open_row["trade_bundle"] = "bundle-health-gate"
+    open_row["plan_detail_json"] = json.dumps(
+        {
+            "lane": "live_advisory",
+            "order_ticket_json": {"ticket_hash": "open-gate-ticket", "order_id": "open-gate-order", "intent_type": "open"},
+        }
+    )
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [open_row]})
+
+    live_control = _live_control()
+    live_control["runtime"]["mode"] = "live"
+    live_control["runtime"]["trading_enabled"] = True
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    executed = execute_live_approved(live_control, submit=True, store=store)
+
+    assert executed["processed"] == 1
+    assert executed["results"][0]["status"] == "blocked"
+    assert executed["results"][0]["reason"].startswith("blocked_live_health_red:")
+    assert "reconciliation_blocker" in executed["results"][0]["reason"]
+    assert executed["health_gate"]["blocked"] is True
+    assert executed["results"][0]["trade_bundle"] == "bundle-health-gate"

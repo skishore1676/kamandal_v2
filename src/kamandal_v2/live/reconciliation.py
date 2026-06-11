@@ -7,11 +7,13 @@ import json
 from datetime import UTC, date, datetime
 from typing import Any
 
+from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
 from kamandal_v2.live.operator_review import create_operator_review_request
+from kamandal_v2.live.order_reconciliation import reconcile_live_orders
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.market.public import occ_symbol
-from kamandal_v2.schemas import DAILY_PLAN_HEADER
-from kamandal_v2.sheets import write_daily_plan
+from kamandal_v2.schemas import DAILY_PLAN_HEADER, LIVE_BOOK_HEADER
+from kamandal_v2.sheets import write_daily_plan, write_live_book
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -86,15 +88,22 @@ def reconcile_live_positions(
                 _request_review(config, store, stored, dry_run=dry_run)
 
     _resolve_unobserved_issues(store, {str(issue.get("issue_id") or "") for issue in issues}, dry_run=dry_run)
+    order_reconciliation = reconcile_live_orders(config, dry_run=dry_run, store=store, adapter=adapter)
     rows = [_daily_plan_row(index, issue) for index, issue in enumerate(issues, start=1)]
+    live_book_rows_written = 0
     if write_sheet and rows:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_reconciliation"})
+    if write_sheet:
+        live_book_report = run_live_book(store, config)
+        live_book_rows_written = write_live_book(config, LIVE_BOOK_HEADER, live_book_sheet_rows(live_book_report, LIVE_BOOK_HEADER))
     return {
         "status": "ok",
         "broker_option_positions": len(broker_positions),
         "local_open_groups": len(local_groups),
         "issues": issues,
+        "order_reconciliation": order_reconciliation,
         "daily_plan_rows": rows,
+        "live_book_rows_written": live_book_rows_written,
     }
 
 

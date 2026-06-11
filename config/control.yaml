@@ -118,6 +118,9 @@ live:
     broker_flat_confirmations_required: 2
     auto_retire_ghost_after_confirmations: true
     block_management_on_open_issues: true
+    order_reconciliation_enabled: true
+    expire_stale_close_approvals: true
+    stale_close_approval_minutes: 120
   operator_review:
     enabled: true
     channel: telegram
@@ -131,12 +134,17 @@ live:
     profit_target_trigger_pct: 95
     min_profit_to_trigger: 5
     require_fresh_quotes: true
-    max_loss_action: close_when_confirmed # review | close_when_confirmed | close
-    max_loss_requires_confirmation: true
+    max_loss_action: close # review | close_when_confirmed | close
+    max_loss_requires_confirmation: false
+    default_max_loss_multiple_credit: 2.0 # backstop when a playbook has no max_loss_multiple
+    default_max_loss_multiple_debit: 1.0
     short_strike_buffer_pct: 0
     loss_watch_max_leg_bid_ask_pct: 1.0
     loss_watch_confirmations_required: 2
     loss_watch_window_minutes: 120
+  health:
+    stale_close_order_minutes: 120
+    block_entries_on_red: true
   telegram_approval:
     enabled: true
     target: "5425926875"

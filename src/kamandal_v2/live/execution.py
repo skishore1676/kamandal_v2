@@ -10,6 +10,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
+from kamandal_v2.live.health import entry_health_gate
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.market.broker import broker_adapter
@@ -40,6 +41,13 @@ def execute_live_approved(
     if not rows:
         return {"action": action, "submit": submit, "processed": 0, "results": []}
     _assert_submit_allowed(config, submit=submit)
+    if submit and not close:
+        gate = entry_health_gate(store, config)
+        if gate["blocked"]:
+            reason = "blocked_live_health_red:" + ",".join(gate["reasons"])
+            store.event("live_entries_blocked_by_health", {"overall": gate["overall"], "reasons": gate["reasons"], "counts": gate["counts"]})
+            results = [{"status": "blocked", "reason": reason, "trade_bundle": row.get("trade_bundle")} for row in rows[:1]]
+            return {"action": action, "submit": submit, "processed": len(results), "results": results, "health_gate": gate}
     adapter = broker_adapter(config)
     results = []
     for row in rows[:1]:
