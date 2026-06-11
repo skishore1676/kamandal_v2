@@ -11,7 +11,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 DEFAULT_STALE_CLOSE_ORDER_MINUTES = 120
 WORKING_CLOSE_STATUSES = {"pending_close_approval", "dry_run", "submitted", "repriced"}
 CLOSED_CLOSE_STATUSES = {"filled", "manual_fill_recorded", "close_filled"}
-NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES = {"expired_stale_close_approval"}
+NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES = {"expired_stale_close_approval", "retired_stale_close_failure"}
 FAILED_CLOSE_STATUSES = {
     "rejected",
     "failed",

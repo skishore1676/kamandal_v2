@@ -63,3 +63,33 @@ The system is designed as a series of short scheduled jobs rather than a long-ru
 - `.venv/bin/kamandal shadow-eod-report` - Generate the daily shadow portfolio mark-to-market report.
 - `.venv/bin/kamandal review-rejections` - Trigger the LLM weekly reviewer.
 - `.venv/bin/kamandal public-smoke --symbol TSLA` - Dry run option chains against a provider.
+- `.venv/bin/kamandal live-health` - Print the live book health status (GREEN/YELLOW/RED) with reasons.
+- `.venv/bin/kamandal live-book --write-sheet` - Refresh the per-position cockpit rows in the `live_book` sheet tab.
+
+## Live Health: Operator Playbook
+
+The `_HEALTH_` row at the top of the `live_book` sheet tab (and `kamandal live-health`) summarizes
+whether the system can safely manage the book. New live entries are blocked while RED.
+The system self-heals everything it can; a status only persists when it genuinely needs you.
+
+**GREEN** — no action. Entries flow.
+
+**YELLOW** — informational; check in once a day:
+- `working_close_order` — a close is in flight at the broker. No action.
+- `position_target_reached` — profit target hit; a close should appear within a cycle. If it
+  persists more than ~2 cycles, see the position row for what blocked it.
+- `close_order_stale` — a close has been working longer than `stale_close_order_minutes`.
+  Check the order in the Public app; consider cancelling/repricing it manually.
+- `stale_failed_close_order` — a close failed but the exit condition has since lapsed. The next
+  order-reconciliation cycle retires it automatically; if it persists, reconciliation isn't running.
+
+**RED** — act today; entries stay blocked until resolved:
+- `failed_preflight_close` / `failed_close_order` — the system wants out of a position and the
+  broker keeps refusing (see `broker_error_code` on the position row, e.g. 157 = quantity
+  mismatch / pending order conflict). Action: close the position manually in the Public app,
+  or cancel the conflicting working order so the next cycle's close can pass preflight.
+- `reconciliation_blocker` — local book and broker disagree about what you own. Action: compare
+  the position row against the Public app; the reconciler auto-retires confirmed ghosts after
+  `broker_flat_confirmations_required` cycles, so usually wait one cycle, intervene only if it sticks.
+- `loss_watch` — a position crossed its max-loss multiple; an auto-close fires after the
+  confirmation mark. No action needed unless its close then fails (which turns into the case above).

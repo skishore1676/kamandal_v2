@@ -8,6 +8,7 @@ from typing import Any
 
 from kamandal_v2.live.execution import TERMINAL_UNFILLED_ORDER_STATUSES
 from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
+from kamandal_v2.live.health import run_live_health
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.schemas import LIVE_BOOK_HEADER
 from kamandal_v2.sheets import write_live_book
@@ -61,22 +62,73 @@ def reconcile_live_orders(
                 broker = broker_adapter(config)
             results.append(_reconcile_broker_close_order(store, broker, ticket, dry_run=dry_run))
 
+    results.extend(_retire_stale_close_failures(store, config, dry_run=dry_run))
+
     live_book_rows_written = 0
     if write_sheet:
         live_book_report = run_live_book(store, config)
         live_book_rows_written = write_live_book(config, LIVE_BOOK_HEADER, live_book_sheet_rows(live_book_report, LIVE_BOOK_HEADER))
     expired = [result for result in results if result.get("reconciled_status") == "expired_stale_close_approval"]
     stale = [result for result in results if result.get("reconciled_status") in {"stale_close_approval", "expired_stale_close_approval"}]
+    retired = [result for result in results if result.get("reconciled_status") == "retired_stale_close_failure"]
     return {
         "status": "ok",
         "checked": len(results),
         "stale_close_approvals": len(stale),
         "expired_stale_close_approvals": len(expired),
+        "retired_stale_close_failures": len(retired),
         "results": results,
         "live_book_rows_written": live_book_rows_written,
         "dry_run": dry_run,
         "expire_stale_close_approvals": expire_stale,
     }
+
+
+def _retire_stale_close_failures(store: LocalStore, config: dict[str, Any], *, dry_run: bool) -> list[dict[str, Any]]:
+    """Retire failed close tickets whose exit decision has since lapsed to hold/no_exit.
+
+    These tickets never reached the broker, so there is no broker state to
+    reconcile — without retirement they hold the health gate down forever.
+    """
+    if not _retire_stale_close_failures_enabled(config):
+        return []
+    health = run_live_health(store, config)
+    results = []
+    for finding in health.get("close_orders") or []:
+        if str(finding.get("reason") or "") != "stale_failed_close_order":
+            continue
+        ticket_hash = str(finding.get("ticket_hash") or "")
+        if not ticket_hash:
+            continue
+        result = {
+            "ticket_hash": ticket_hash,
+            "group_id": str(finding.get("group_id") or ""),
+            "ledger_status": str(finding.get("order_status") or ""),
+            "source": "stale_close_failure",
+            "reason": "exit_decision_lapsed_to_no_exit",
+            "reconciled_status": "retired_stale_close_failure",
+        }
+        if not dry_run:
+            store.update_live_order_intent_status_with_payload(
+                ticket_hash,
+                "retired_stale_close_failure",
+                {
+                    "order_reconciliation": {
+                        "status": "retired_stale_close_failure",
+                        "prior_status": result["ledger_status"],
+                        "reason": result["reason"],
+                        "reconciled_at": _now(),
+                    }
+                },
+            )
+            store.event("live_order_reconciled", {"ticket_hash": ticket_hash, **result})
+        results.append(result)
+    return results
+
+
+def _retire_stale_close_failures_enabled(config: dict[str, Any]) -> bool:
+    recon = ((config.get("live") or {}).get("reconciliation") or {})
+    return _as_bool(recon.get("retire_stale_close_failures"), True)
 
 
 def _reconcile_local_close_approval(

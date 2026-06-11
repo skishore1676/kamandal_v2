@@ -148,3 +148,63 @@ def test_live_health_ignores_expired_stale_close_approval_as_actionable_failure(
     assert report["counts"]["working_close_orders"] == 0
     assert report["counts"]["failed_close_orders"] == 0
     assert report["events"] == []
+
+
+
+def test_retires_failed_close_when_exit_decision_lapsed(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _open_group(store, "group_lapsed")
+    store.save_live_order_intent(_close_ticket("ticket-lapsed", group_id="group_lapsed"), status="blocked_preflight_failed")
+    store.record_live_management_decision(
+        "group_lapsed",
+        "hold",
+        "no_exit",
+        {"group_id": "group_lapsed", "action": "hold", "reason": "no_exit"},
+    )
+
+    result = reconcile_live_orders(_config(), store=store, adapter=object())
+
+    assert result["retired_stale_close_failures"] == 1
+    retired = [item for item in result["results"] if item["reconciled_status"] == "retired_stale_close_failure"]
+    assert retired[0]["ticket_hash"] == "ticket-lapsed"
+    intent = store.live_order_intent("ticket-lapsed")
+    assert intent["_ledger_status"] == "retired_stale_close_failure"
+    health = run_live_health(store, _config())
+    assert health["overall"] == "GREEN"
+    assert health["counts"]["failed_close_orders"] == 0
+    assert health["counts"]["stale_failed_close_orders"] == 0
+
+
+def test_keeps_failed_close_when_exit_still_wanted(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _open_group(store, "group_wanted")
+    store.record_live_management_decision(
+        "group_wanted",
+        "close",
+        "max_loss",
+        {"group_id": "group_wanted", "action": "close", "reason": "max_loss"},
+    )
+    store.save_live_order_intent(_close_ticket("ticket-wanted", group_id="group_wanted"), status="blocked_preflight_failed")
+
+    result = reconcile_live_orders(_config(), store=store, adapter=object())
+
+    assert result["retired_stale_close_failures"] == 0
+    assert store.live_order_intent("ticket-wanted")["_ledger_status"] == "blocked_preflight_failed"
+    assert run_live_health(store, _config())["overall"] == "RED"
+
+
+def test_retire_stale_close_failures_respects_dry_run(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _open_group(store, "group_dry")
+    store.save_live_order_intent(_close_ticket("ticket-dry", group_id="group_dry"), status="blocked_preflight_failed")
+    store.record_live_management_decision(
+        "group_dry",
+        "hold",
+        "no_exit",
+        {"group_id": "group_dry", "action": "hold", "reason": "no_exit"},
+    )
+
+    result = reconcile_live_orders(_config(), store=store, adapter=object(), dry_run=True)
+
+    assert result["retired_stale_close_failures"] == 1
+    assert store.live_order_intent("ticket-dry")["_ledger_status"] == "blocked_preflight_failed"
