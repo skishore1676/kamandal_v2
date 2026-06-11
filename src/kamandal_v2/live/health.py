@@ -34,6 +34,7 @@ REASON_ORDER = [
     "failed_preflight_close",
     "loss_watch",
     "close_order_stale",
+    "stale_failed_close_order",
     "position_target_reached",
     "working_close_order",
 ]
@@ -74,6 +75,7 @@ def run_live_health(
         for order in store.live_order_intents_by_type("close")
         if str(order.get("group_id") or "") in open_group_ids
     ]
+    latest_close_ticket_by_group = _latest_close_ticket_by_group(close_orders)
     close_findings = []
     for order in close_orders:
         finding = _close_order_finding(order)
@@ -82,6 +84,8 @@ def run_live_health(
             finding["age_minutes"] = _order_age_minutes(order, now=_utc_now())
             if (finding["age_minutes"] or 0.0) > stale_minutes:
                 finding["reason"] = "close_order_stale"
+        if finding["is_failed_close"]:
+            _demote_stale_failed_close(store, finding, order, latest_close_ticket_by_group)
         close_findings.append(finding)
 
     for issue in reconciliation_blockers:
@@ -143,6 +147,17 @@ def run_live_health(
                     "ticket_hash": finding.get("ticket_hash"),
                 },
             )
+            continue
+        if finding["reason"] == "stale_failed_close_order":
+            events.append(
+                {
+                    "severity": "yellow",
+                    "reason": "stale_failed_close_order",
+                    "detail": finding.get("order_status") or "",
+                    "group_id": finding.get("group_id"),
+                    "ticket_hash": finding.get("ticket_hash"),
+                },
+            )
 
     status = _coerce_status(events)
     return {
@@ -154,6 +169,7 @@ def run_live_health(
             "working_close_orders": len([order for order in close_findings if order["reason"] in {"working_close_order", "close_order_stale"}]),
             "stale_close_orders": len([order for order in close_findings if order["reason"] == "close_order_stale"]),
             "failed_close_orders": len([order for order in close_findings if order["is_failed_close"]]),
+            "stale_failed_close_orders": len([order for order in close_findings if order["reason"] == "stale_failed_close_order"]),
             "target_reached_groups": len([mark for mark in group_marks if bool(mark.get("target_reached"))]),
             "loss_watch_groups": len([mark for mark in group_marks if bool(mark.get("loss_watch"))]),
         },
@@ -235,6 +251,54 @@ def _mark_overview(group_id: str, mark: dict[str, Any]) -> dict[str, Any]:
         "loss_watch_observations": mark.get("loss_watch_observations") or {},
         "updated_at": str(mark.get("marked_at") or mark.get("updated_at") or mark.get("created_at") or ""),
     }
+
+
+def _latest_close_ticket_by_group(close_orders: list[dict[str, Any]]) -> dict[str, str]:
+    latest: dict[str, tuple[str, str]] = {}
+    for order in close_orders:
+        group_id = str(order.get("group_id") or "")
+        if not group_id:
+            continue
+        stamp = _order_timestamp(order)
+        if group_id not in latest or stamp >= latest[group_id][0]:
+            latest[group_id] = (stamp, str(order.get("ticket_hash") or ""))
+    return {group_id: ticket_hash for group_id, (_, ticket_hash) in latest.items()}
+
+
+def _demote_stale_failed_close(
+    store: LocalStore,
+    finding: dict[str, Any],
+    order: dict[str, Any],
+    latest_close_ticket_by_group: dict[str, str],
+) -> None:
+    """A failed close only blocks the book while the system still wants that exit.
+
+    Superseded tickets (a newer close intent exists for the group) carry no signal.
+    A failed latest ticket is demoted to yellow once a newer management decision
+    says hold/no_exit — the exit condition that produced it has passed.
+    """
+    group_id = str(finding.get("group_id") or "")
+    latest_ticket = latest_close_ticket_by_group.get(group_id)
+    if latest_ticket and latest_ticket != str(finding.get("ticket_hash") or ""):
+        finding["reason"] = "superseded_close_order"
+        finding["is_failed_close"] = False
+        return
+    decision = store.latest_live_management_decision(group_id) or {}
+    decision_is_no_exit = (
+        str(decision.get("_action") or "") == "hold" and str(decision.get("_reason") or "") == "no_exit"
+    )
+    decision_stamp = _normalize_stamp(str(decision.get("_created_at") or ""))
+    if decision_is_no_exit and decision_stamp >= _order_timestamp(order):
+        finding["reason"] = "stale_failed_close_order"
+        finding["is_failed_close"] = False
+
+
+def _order_timestamp(order: dict[str, Any]) -> str:
+    return _normalize_stamp(str(order.get("_ledger_updated_at") or order.get("_ledger_created_at") or ""))
+
+
+def _normalize_stamp(raw: str) -> str:
+    return raw.replace("T", " ").replace("Z", "").strip()
 
 
 def _close_order_finding(order: dict[str, Any]) -> dict[str, Any]:

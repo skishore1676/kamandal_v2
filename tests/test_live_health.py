@@ -192,3 +192,82 @@ def test_entry_health_gate_allows_green_book(tmp_path: Path) -> None:
 
     assert gate["overall"] == "GREEN"
     assert gate["blocked"] is False
+
+
+def _failed_close_intent(store: LocalStore, group_id: str, ticket_hash: str) -> None:
+    store.save_live_order_intent(
+        {
+            "ticket_hash": ticket_hash,
+            "order_id": f"order-{ticket_hash}",
+            "plan_id": "plan-stale",
+            "candidate_id": "cand-stale",
+            "idea_id": "idea-stale",
+            "group_id": group_id,
+            "intent_type": "close",
+            "underlying": "AAPL",
+        },
+        status="blocked_preflight_failed",
+    )
+
+
+def test_failed_close_demoted_to_yellow_when_newer_decision_is_no_exit(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_stale", target_progress=20.0, trigger_progress=100.0)
+    _failed_close_intent(store, "group_stale", "stale-close-ticket")
+    store.record_live_management_decision(
+        "group_stale",
+        "hold",
+        "no_exit",
+        {"group_id": "group_stale", "action": "hold", "reason": "no_exit"},
+    )
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "YELLOW"
+    assert report["counts"]["failed_close_orders"] == 0
+    assert report["counts"]["stale_failed_close_orders"] == 1
+    assert any(event["reason"] == "stale_failed_close_order" for event in report["events"])
+    assert entry_health_gate(store, {})["blocked"] is False
+
+
+def test_failed_close_stays_red_without_newer_no_exit_decision(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_hot", target_progress=20.0, trigger_progress=100.0)
+    store.record_live_management_decision(
+        "group_hot",
+        "close",
+        "max_loss",
+        {"group_id": "group_hot", "action": "close", "reason": "max_loss"},
+    )
+    _failed_close_intent(store, "group_hot", "hot-close-ticket")
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "RED"
+    assert report["counts"]["failed_close_orders"] == 1
+    assert entry_health_gate(store, {})["blocked"] is True
+
+
+def test_superseded_failed_close_ignored_when_newer_close_ticket_exists(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_retry", target_progress=20.0, trigger_progress=100.0)
+    _failed_close_intent(store, "group_retry", "old-failed-ticket")
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "new-pending-ticket",
+            "order_id": "order-new-pending",
+            "plan_id": "plan-retry",
+            "candidate_id": "cand-retry",
+            "idea_id": "idea-retry",
+            "group_id": "group_retry",
+            "intent_type": "close",
+            "underlying": "AAPL",
+        },
+        status="pending_close_approval",
+    )
+
+    report = run_live_health(store)
+
+    assert report["counts"]["failed_close_orders"] == 0
+    assert not any(event["reason"] in {"failed_preflight_close", "failed_close_order"} for event in report["events"])
+    assert any(order["reason"] == "superseded_close_order" for order in report["close_orders"])
