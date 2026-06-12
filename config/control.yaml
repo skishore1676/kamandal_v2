@@ -180,6 +180,7 @@ google_sheets:
     universe: universe
     playbooks: playbooks
     daily_plan: daily_plan
+    my_ideas: my_ideas
 
 broker:
   active: public

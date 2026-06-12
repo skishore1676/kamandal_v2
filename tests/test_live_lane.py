@@ -700,7 +700,7 @@ def test_send_pending_live_approval_requests_sends_unsent_pending_request(tmp_pa
         "underlying": "TSLA",
         "structure": "call_spread",
         "status": "pending",
-        "expires_at": (date.today() + timedelta(days=1)).isoformat() + "T00:00:00Z",
+        "expires_at": (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "message": "Kamandal live approval\n\nKAM-SEND",
     }
     sent = []

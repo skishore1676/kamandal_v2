@@ -103,6 +103,19 @@ DAILY_PLAN_HEADER = [
     "operator_notes",
 ]
 
+MY_IDEAS_HEADER = [
+    "date",
+    "ticker",
+    "type_of_trade",
+    "direction",
+    "horizon_days",
+    "notes",
+    "conviction",
+    "status",
+    "idea_id",
+    "imported_at",
+]
+
 LIVE_BOOK_HEADER = [
     "updated_at_cst",
     "symbol",

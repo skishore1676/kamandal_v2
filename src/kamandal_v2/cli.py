@@ -49,6 +49,7 @@ from kamandal_v2.reports.go_live_audit import build_go_live_audit_report
 from kamandal_v2.seed import build_seed_tables, seed_headers
 from kamandal_v2.schemas import DAILY_PLAN_HEADER, LIVE_BOOK_HEADER
 from kamandal_v2.sheets import bootstrap_sheet, pull_sheet_tables, write_daily_plan, write_live_book
+from kamandal_v2.sources.my_ideas import import_my_ideas
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.volatility.iv import capture_iv_snapshots
 from kamandal_v2.volatility.iv_store import IvStore
@@ -90,6 +91,10 @@ def main() -> None:
     live_book_parser = subparsers.add_parser("live-book", help="Print per-position live book cockpit")
     live_book_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     live_book_parser.add_argument("--write-sheet", action="store_true", help="Write current live book rows to the live_book sheet tab")
+    my_ideas_parser = subparsers.add_parser("import-my-ideas", help="Import operator ideas from the my_ideas sheet tab into the active ideas dir")
+    my_ideas_parser.add_argument("--ideas-dir", default="data/ideas/active")
+    my_ideas_parser.add_argument("--no-write-sheet", action="store_true", help="Skip writing import statuses back to the sheet")
+    my_ideas_parser.add_argument("--bootstrap", action="store_true", help="Create the my_ideas tab with header and example row when empty")
     sync_live_parser = subparsers.add_parser("sync-live-orders", help="Poll broker order status for submitted and cancel-pending live orders")
     sync_live_parser.add_argument("--read-only", action="store_true", help="Poll and record broker statuses without entry reprice/expiry actions")
     subparsers.add_parser("cleanup-live-approvals", help="Clear stale live approval cells after submit/fill/failure")
@@ -344,6 +349,14 @@ def main() -> None:
             print(json.dumps(report, indent=2))
         else:
             print(format_live_health(report))
+        return
+    if args.command == "import-my-ideas":
+        print(json.dumps(import_my_ideas(
+            config,
+            ideas_dir=args.ideas_dir,
+            write_sheet=not args.no_write_sheet,
+            bootstrap=args.bootstrap,
+        ), indent=2))
         return
     if args.command == "live-book":
         report = run_live_book(LocalStore(), config)
