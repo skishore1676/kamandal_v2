@@ -49,7 +49,7 @@ $BEGIN_MARKER
 15 9 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 45 11 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
 30 14 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_youtube_extraction.sh" >> "$REPO_ROOT/data/logs/cron_youtube.log" 2>&1
-5 7 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_my_ideas_import.sh" >> "$REPO_ROOT/data/logs/cron_my_ideas.log" 2>&1
+5 8 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_my_ideas_import.sh" >> "$REPO_ROOT/data/logs/cron_my_ideas.log" 2>&1
 20 9 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_my_ideas_import.sh" >> "$REPO_ROOT/data/logs/cron_my_ideas.log" 2>&1
 25 9 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_live_advisory.sh" >> "$REPO_ROOT/data/logs/cron_live_advisory.log" 2>&1
 55 11 * * 1-5 /usr/bin/caffeinate -i /bin/bash "$REPO_ROOT/scripts/run_live_advisory.sh" >> "$REPO_ROOT/data/logs/cron_live_advisory.log" 2>&1
