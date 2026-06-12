@@ -107,7 +107,11 @@ def run_live_management_plan(
             continue
         if exit_mode == "disabled":
             continue
-        ticket = build_close_ticket(group, close_net_credit=float(decision.get("recommended_close_net") or 0.0) / 100.0)
+        ticket = build_close_ticket(
+            group,
+            close_net_credit=float(decision.get("recommended_close_net") or 0.0) / 100.0,
+            seed_salt=_close_seed_salt(store, group, config),
+        )
         store.save_live_order_intent(ticket, status="pending_close_approval")
         rows.append(_close_plan_row(index, group, decision, ticket, approval_mode=exit_mode))
         close_recommendations += 1
@@ -127,6 +131,38 @@ def run_live_management_plan(
         "decisions": decisions,
         "daily_plan_rows": rows,
     }
+
+
+DEAD_CLOSE_STATUSES = {
+    "cancelled",
+    "canceled",
+    "expired",
+    "rejected",
+    "failed",
+    "expired_stale_close_approval",
+    "retired_stale_close_failure",
+    "BROKER_STATUS_FETCH_FAILED",
+}
+DEAD_CLOSE_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
+
+
+def _close_seed_salt(store: LocalStore, group: dict[str, Any], config: dict[str, Any]) -> str:
+    """Give each close attempt a distinct broker identity per day and per prior failure.
+
+    The order id seed is otherwise deterministic, so a same-priced close rebuilt
+    after a failed attempt would reuse the dead order's id at the broker and
+    silently inherit its terminal state instead of reaching the market.
+    """
+    group_id = str(group.get("group_id") or "")
+    dead = 0
+    for ticket in store.live_order_intents_by_type("close"):
+        if str(ticket.get("group_id") or "") != group_id:
+            continue
+        status = str(ticket.get("_ledger_status") or "")
+        if status in DEAD_CLOSE_STATUSES or any(status.startswith(prefix) for prefix in DEAD_CLOSE_STATUS_PREFIXES):
+            dead += 1
+    market_tz = ZoneInfo(str((config.get("runtime") or {}).get("market_timezone") or "America/Chicago"))
+    return f"{datetime.now(market_tz).date().isoformat()}:retry{dead}"
 
 
 def _working_close_order(store: LocalStore, group: dict[str, Any]) -> dict[str, Any] | None:

@@ -2010,3 +2010,33 @@ def test_live_submit_blocks_entries_when_health_red(tmp_path, monkeypatch) -> No
     assert "reconciliation_blocker" in executed["results"][0]["reason"]
     assert executed["health_gate"]["blocked"] is True
     assert executed["results"][0]["trade_bundle"] == "bundle-health-gate"
+
+
+def test_close_ticket_seed_salt_changes_order_identity() -> None:
+    group = {
+        "group_id": "group_salt",
+        "plan_id": "plan_salt",
+        "candidate_id": "cand_salt",
+        "idea_id": "idea_salt",
+        "underlying": "MRVL",
+        "playbook_id": "put_spread",
+        "structure": "put_spread",
+        "candidate": {
+            "net_credit": 1.2,
+            "legs": [
+                {"side": "sell", "option_type": "put", "expiration": "2026-07-17", "strike": 200.0, "quantity": 1},
+                {"side": "buy", "option_type": "put", "expiration": "2026-07-17", "strike": 195.0, "quantity": 1},
+            ],
+        },
+    }
+    plain = build_close_ticket(group, close_net_credit=-0.62)
+    plain_again = build_close_ticket(group, close_net_credit=-0.62)
+    salted = build_close_ticket(group, close_net_credit=-0.62, seed_salt="2026-06-12:retry1")
+    salted_again = build_close_ticket(group, close_net_credit=-0.62, seed_salt="2026-06-12:retry1")
+    next_retry = build_close_ticket(group, close_net_credit=-0.62, seed_salt="2026-06-12:retry2")
+
+    assert plain["order_id"] == plain_again["order_id"]
+    assert salted["order_id"] == salted_again["order_id"]
+    assert salted["ticket_hash"] == salted_again["ticket_hash"]
+    assert salted["order_id"] != plain["order_id"]
+    assert next_retry["order_id"] != salted["order_id"]

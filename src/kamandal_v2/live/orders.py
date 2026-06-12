@@ -31,7 +31,13 @@ def build_open_ticket(plan: Plan, candidate: Candidate) -> dict[str, Any]:
     )
 
 
-def build_close_ticket(group: dict[str, Any], *, limit_price: float | None = None, close_net_credit: float | None = None) -> dict[str, Any]:
+def build_close_ticket(
+    group: dict[str, Any],
+    *,
+    limit_price: float | None = None,
+    close_net_credit: float | None = None,
+    seed_salt: str = "",
+) -> dict[str, Any]:
     candidate_payload = group.get("candidate") or {}
     legs = [
         _closing_leg(leg)
@@ -62,6 +68,7 @@ def build_close_ticket(group: dict[str, Any], *, limit_price: float | None = Non
         legs=legs,
         limit_price=close_limit,
         preflight=None,
+        seed_salt=seed_salt,
     )
     ticket["group_id"] = str(group.get("group_id") or "")
     return ticket
@@ -95,17 +102,20 @@ def _build_ticket(
     legs: list[OptionLeg],
     limit_price: str,
     preflight: dict[str, Any] | None,
+    seed_salt: str = "",
 ) -> dict[str, Any]:
-    seed = json.dumps(
-        {
-            "intent_type": intent_type,
-            "plan_id": plan.plan_id,
-            "candidate_id": candidate.candidate_id,
-            "legs": [_leg_ticket_payload(candidate.underlying, leg, open_close_indicator) for leg in legs],
-            "limit_price": limit_price,
-        },
-        sort_keys=True,
-    )
+    seed_payload = {
+        "intent_type": intent_type,
+        "plan_id": plan.plan_id,
+        "candidate_id": candidate.candidate_id,
+        "legs": [_leg_ticket_payload(candidate.underlying, leg, open_close_indicator) for leg in legs],
+        "limit_price": limit_price,
+    }
+    if seed_salt:
+        # Distinguish retries: without a salt, a same-priced close rebuilt on a
+        # later day reuses the dead order's broker identity and never fills.
+        seed_payload["seed_salt"] = seed_salt
+    seed = json.dumps(seed_payload, sort_keys=True)
     order_id = str(uuid5(NAMESPACE_URL, "kamandal-live-order:" + seed))
     submit_payload = _submit_payload(order_id, candidate.underlying, legs, limit_price, open_close_indicator)
     ticket = {
