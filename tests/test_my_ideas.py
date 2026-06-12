@@ -140,3 +140,16 @@ def test_bootstrap_creates_tab_with_example_row(tmp_path: Path) -> None:
     rows = client.replaced["my_ideas"]
     assert len(rows) == 1
     assert rows[0][MY_IDEAS_HEADER.index("status")] == "example"
+
+
+def test_blank_date_gets_stamped_on_import_writeback(tmp_path: Path) -> None:
+    client = FakeClient(
+        rows=[_row(date="")],
+        universe_rows=[{"symbol": "AMZN", "enabled": "TRUE"}],
+    )
+
+    import_my_ideas({}, ideas_dir=tmp_path, client=client, today=TODAY)
+
+    written = client.replaced["my_ideas"]
+    assert written[0][MY_IDEAS_HEADER.index("date")] == "2026-06-12"
+    assert written[0][MY_IDEAS_HEADER.index("status")] == "imported"

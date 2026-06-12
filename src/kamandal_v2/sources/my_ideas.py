@@ -86,6 +86,8 @@ def import_my_ideas(
             out["status"] = status["status"]
             out["idea_id"] = status.get("idea_id", "")
             out["imported_at"] = status.get("imported_at", "")
+            if status.get("idea_id") and not str(out.get("date") or "").strip():
+                out["date"] = today.isoformat()
             merged.append([out.get(column, "") for column in MY_IDEAS_HEADER])
         rows_written = client.replace_tab(title, header=MY_IDEAS_HEADER, rows=merged)
 
