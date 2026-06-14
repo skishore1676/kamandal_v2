@@ -171,6 +171,57 @@ class PrimaryIvOverlayMarket:
         return value
 
 
+@dataclass(slots=True)
+class MetricSpec:
+    metric: str
+    dte_min: int
+    dte_max: int
+    sample_size: int
+
+
+def _metric_specs(config: dict[str, Any]) -> list[MetricSpec]:
+    """Resolve the list of IV metrics to capture per run.
+
+    Prefers ``volatility.metrics`` (a list of {metric, dte_min, dte_max, sample_size}).
+    Falls back to the legacy single-metric keys so existing config keeps working.
+    """
+    volatility_config = config.get("volatility") or {}
+    default_metric = str(volatility_config.get("metric") or "atm_30_45_mean_iv")
+    default_dte_min = int(volatility_config.get("dte_min") or 30)
+    default_dte_max = int(volatility_config.get("dte_max") or 45)
+    default_sample_size = int(volatility_config.get("sample_size") or 12)
+
+    raw_metrics = volatility_config.get("metrics")
+    specs: list[MetricSpec] = []
+    seen: set[str] = set()
+    if isinstance(raw_metrics, list):
+        for entry in raw_metrics:
+            if not isinstance(entry, dict):
+                continue
+            metric = str(entry.get("metric") or default_metric)
+            if metric in seen:
+                continue
+            seen.add(metric)
+            specs.append(
+                MetricSpec(
+                    metric=metric,
+                    dte_min=int(entry.get("dte_min", default_dte_min)),
+                    dte_max=int(entry.get("dte_max", default_dte_max)),
+                    sample_size=int(entry.get("sample_size", default_sample_size)),
+                )
+            )
+    if not specs:
+        specs.append(
+            MetricSpec(
+                metric=default_metric,
+                dte_min=default_dte_min,
+                dte_max=default_dte_max,
+                sample_size=default_sample_size,
+            )
+        )
+    return specs
+
+
 def capture_iv_snapshots(
     config: dict[str, Any],
     *,
@@ -183,28 +234,29 @@ def capture_iv_snapshots(
     symbols = symbols or _universe_symbols(config, source=config_source)
     market = _market_provider(config, provider=provider)
     local_store = LocalStore()
-    volatility_config = config.get("volatility") or {}
-    metric = str(volatility_config.get("metric") or "atm_30_45_mean_iv")
-    dte_min = int(volatility_config.get("dte_min") or 30)
-    dte_max = int(volatility_config.get("dte_max") or 45)
-    sample_size = int(volatility_config.get("sample_size") or 12)
+    specs = _metric_specs(config)
     snapshots: list[IvSnapshot] = []
     failures: dict[str, str] = {}
     for symbol in symbols:
         try:
             chain = market.chain_snapshot(symbol)
             local_store.save_chain_snapshot(chain)
-            snapshot = snapshot_from_chain(
-                chain,
-                metric=metric,
-                dte_min=dte_min,
-                dte_max=dte_max,
-                sample_size=sample_size,
-            )
-            store.save(snapshot)
-            snapshots.append(snapshot)
         except Exception as exc:  # noqa: BLE001
             failures[symbol] = str(exc)
+            continue
+        for spec in specs:
+            try:
+                snapshot = snapshot_from_chain(
+                    chain,
+                    metric=spec.metric,
+                    dte_min=spec.dte_min,
+                    dte_max=spec.dte_max,
+                    sample_size=spec.sample_size,
+                )
+                store.save(snapshot)
+                snapshots.append(snapshot)
+            except Exception as exc:  # noqa: BLE001
+                failures[f"{symbol}:{spec.metric}"] = str(exc)
     return IvCaptureResult(snapshots=snapshots, failures=failures)
 
 

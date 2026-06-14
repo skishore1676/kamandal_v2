@@ -164,6 +164,18 @@ volatility:
   dte_min: 30
   dte_max: 45
   sample_size: 12
+  # capture-iv writes one row per metric below, per symbol, per run.
+  # Each entry is computed the same way (near-ATM weighted mean IV) over its DTE window.
+  # The legacy keys above remain the default/primary 30-45 metric for overlay reads.
+  metrics:
+    - metric: atm_30_45_mean_iv
+      dte_min: 30
+      dte_max: 45
+      sample_size: 12
+    - metric: atm_2_10_mean_iv   # short-dated (nearest weeklies) for the 2-7 DTE backtester
+      dte_min: 2
+      dte_max: 10
+      sample_size: 8
 
 execution:
   approval_mode: shadow_auto_top_plan
