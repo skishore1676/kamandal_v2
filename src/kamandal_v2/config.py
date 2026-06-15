@@ -158,6 +158,7 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "live.reconciliation.block_management_on_open_issues": _env_bool("KAMANDAL_LIVE_RECONCILIATION_BLOCK_MANAGEMENT"),
         "live.reconciliation.order_reconciliation_enabled": _env_bool("KAMANDAL_LIVE_ORDER_RECONCILIATION_ENABLED"),
         "live.reconciliation.stale_close_approval_minutes": _env_int("KAMANDAL_LIVE_STALE_CLOSE_APPROVAL_MINUTES"),
+        "live.reconciliation.stale_entry_approval_minutes": _env_int("KAMANDAL_LIVE_STALE_ENTRY_APPROVAL_MINUTES"),
         "live.reconciliation.expire_stale_close_approvals": _env_bool("KAMANDAL_LIVE_EXPIRE_STALE_CLOSE_APPROVALS"),
         "live.reconciliation.retire_stale_close_failures": _env_bool("KAMANDAL_LIVE_RETIRE_STALE_CLOSE_FAILURES"),
         "live.operator_review.enabled": _env_bool("KAMANDAL_OPERATOR_REVIEW_ENABLED"),

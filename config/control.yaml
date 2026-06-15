@@ -121,6 +121,7 @@ live:
     order_reconciliation_enabled: true
     expire_stale_close_approvals: true
     stale_close_approval_minutes: 120
+    stale_entry_approval_minutes: 120
     retire_stale_close_failures: true
   operator_review:
     enabled: true

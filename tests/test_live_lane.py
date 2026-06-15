@@ -966,6 +966,70 @@ def test_cleanup_live_approvals_keeps_pending_basket_ticket(tmp_path, monkeypatc
     assert written == {}
 
 
+def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    from kamandal_v2.live.orders import ticket_hash
+
+    def make_ticket(order_id: str, underlying: str) -> dict:
+        ticket = {
+            "order_id": order_id,
+            "plan_id": f"plan_{underlying.lower()}",
+            "candidate_id": f"cand_{underlying.lower()}",
+            "idea_id": f"idea_{underlying.lower()}",
+            "intent_type": "open",
+            "underlying": underlying,
+            "playbook_id": "call_spread_default",
+            "structure": "call_spread",
+            "quantity": 1,
+            "limit_price": "-1.25",
+            "time_in_force": "DAY",
+            "created_at": "2026-06-15T10:00:00Z",
+            "legs": [],
+            "submit_payload": {"orderId": order_id, "legs": []},
+        }
+        ticket["ticket_hash"] = ticket_hash(ticket)
+        return ticket
+
+    keep_ticket = make_ticket("keep-order", "SPY")
+    retire_ticket = make_ticket("retire-order", "JPM")
+    store.save_live_order_intent(keep_ticket, status="pending_approval")
+    store.save_live_order_intent(retire_ticket, status="pending_approval")
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "UPDATE live_order_intents SET created_at = ?, updated_at = ?",
+            ("2000-01-01 00:00:00", "2000-01-01 00:00:00"),
+        )
+    row = dict(zip(DAILY_PLAN_HEADER, ["" for _ in DAILY_PLAN_HEADER], strict=False))
+    row["mode"] = "live_advisory"
+    row["plan_detail_json"] = json.dumps({"lane": "live_advisory", "order_ticket_json": keep_ticket})
+    written = {}
+
+    class FakeSheetClient:
+        @classmethod
+        def from_config(cls, _config):
+            return cls()
+
+        def read_tab(self, _title):
+            return [row]
+
+        def replace_tab(self, _title, *, header, rows):
+            written["rows"] = rows
+            return len(rows)
+
+    monkeypatch.setattr("kamandal_v2.live.execution.GoogleSheetClient", FakeSheetClient)
+
+    cleaned = cleanup_live_approvals(load_control(), store=store)
+
+    assert cleaned["cleared"] == 0
+    assert cleaned["retired_stale_entry_approvals"] == 1
+    assert cleaned["retired_rows"][0]["ticket_hash"] == retire_ticket["ticket_hash"]
+    assert store.live_order_intent(keep_ticket["ticket_hash"])["_ledger_status"] == "pending_approval"
+    retired = store.live_order_intent(retire_ticket["ticket_hash"])
+    assert retired["_ledger_status"] == "retired_stale_entry_approval"
+    assert retired["order_reconciliation"]["reason"] == "stale_entry_approval_not_in_current_daily_plan"
+    assert written == {}
+
+
 def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")
@@ -1808,10 +1872,12 @@ def test_sync_live_orders_continues_after_order_fetch_failure(tmp_path, monkeypa
     synced = sync_live_orders(_live_control(), store=store, manage_entries=False)
 
     assert synced["synced"] == 2
-    errors = [order for order in synced["orders"] if order["status"] == "BROKER_STATUS_FETCH_FAILED"]
-    assert len(errors) == 1
-    assert "/trading/<account>/" in errors[0]["error"]
-    assert "5OS69079" not in errors[0]["error"]
+    missing_result = [order for order in synced["orders"] if order["order_id"] == "missing-order"][0]
+    assert missing_result["status"] == "BROKER_ORDER_NOT_FOUND"
+    assert missing_result["reconciled_status"] == "expired_broker_status_missing"
+    assert "/trading/<account>/" in missing_result["error"]
+    assert "5OS69079" not in missing_result["error"]
+    assert store.live_order_intent(missing["ticket_hash"])["_ledger_status"] == "expired_broker_status_missing"
     assert synced["orders"][0]["status"] == "CANCELLED"
 
 

@@ -24,8 +24,11 @@ COMPLETED_TICKET_STATUSES = {"filled", "close_filled", "manual_fill_recorded"}
 PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", "dry_run"}
 ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
 CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired"}
+EXPIRED_BROKER_MISSING_STATUS = "expired_broker_status_missing"
+RETIRED_STALE_ENTRY_APPROVAL_STATUS = "retired_stale_entry_approval"
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
 FAILED_TICKET_STATUSES = {"rejected", "expired", "failed", "cancelled", "canceled"}
+DEFAULT_STALE_ENTRY_APPROVAL_MINUTES = 120
 
 
 def execute_live_approved(
@@ -146,6 +149,32 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
             response = adapter.get_order(str(ticket["order_id"]))
         except Exception as exc:  # noqa: BLE001
             error = _safe_broker_error(exc)
+            if ledger_status == "expired" and _broker_error_is_404(error):
+                status = "BROKER_ORDER_NOT_FOUND"
+                response = {"error": error, "reconciled_status": EXPIRED_BROKER_MISSING_STATUS}
+                store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
+                store.update_live_order_intent_status_with_payload(
+                    str(ticket["ticket_hash"]),
+                    EXPIRED_BROKER_MISSING_STATUS,
+                    {
+                        "order_reconciliation": {
+                            "status": EXPIRED_BROKER_MISSING_STATUS,
+                            "prior_status": ledger_status,
+                            "reason": "expired_order_missing_at_broker",
+                            "error": error,
+                            "reconciled_at": _now_utc(),
+                        }
+                    },
+                )
+                results.append({
+                    "ticket_hash": ticket["ticket_hash"],
+                    "order_id": ticket["order_id"],
+                    "status": status,
+                    "ledger_status": ledger_status,
+                    "reconciled_status": EXPIRED_BROKER_MISSING_STATUS,
+                    "error": error,
+                })
+                continue
             response = {"error": error}
             status = "BROKER_STATUS_FETCH_FAILED"
             store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
@@ -187,6 +216,10 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
 
 def _safe_broker_error(exc: Exception) -> str:
     return re.sub(r"/trading/[^/]+/", "/trading/<account>/", str(exc))
+
+
+def _broker_error_is_404(error: str) -> bool:
+    return "status=404" in error or "status = 404" in error
 
 
 def _expire_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
@@ -412,6 +445,18 @@ def _parse_utc(raw: str) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _ticket_age_minutes(ticket: dict[str, Any], *, now: datetime) -> float | None:
+    raw = str(ticket.get("_ledger_updated_at") or ticket.get("_ledger_created_at") or ticket.get("updated_at") or ticket.get("created_at") or "")
+    parsed = _parse_utc(raw)
+    if parsed is None:
+        return None
+    return max(0.0, (now - parsed).total_seconds() / 60.0)
+
+
+def _now_utc() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
 def _as_bool(value: Any, default: bool) -> bool:
     if value in (None, ""):
         return default
@@ -445,8 +490,69 @@ def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None =
         cleared.append({"statuses": statuses, "trade_bundle": row.get("trade_bundle")})
     if cleared:
         client.replace_tab(title, header=DAILY_PLAN_HEADER, rows=[[row.get(column, "") for column in DAILY_PLAN_HEADER] for row in rows])
-    store.event("live_approval_cleanup_completed", {"cleared": cleared})
-    return {"cleared": len(cleared), "rows": cleared}
+    retired = _retire_stale_entry_approvals(config, store, rows)
+    store.event("live_approval_cleanup_completed", {"cleared": cleared, "retired_stale_entry_approvals": retired})
+    return {"cleared": len(cleared), "rows": cleared, "retired_stale_entry_approvals": len(retired), "retired_rows": retired}
+
+
+def _retire_stale_entry_approvals(config: dict[str, Any], store: LocalStore, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    active_hashes = _live_advisory_ticket_hashes(rows)
+    now = datetime.now(UTC)
+    stale_minutes = _stale_entry_approval_minutes(config)
+    retired = []
+    for ticket in store.live_order_intents_by_type("open", statuses={"pending_approval"}):
+        ticket_hash = str(ticket.get("ticket_hash") or "")
+        if ticket_hash in active_hashes:
+            continue
+        age_minutes = _ticket_age_minutes(ticket, now=now)
+        if age_minutes is None or age_minutes <= stale_minutes:
+            continue
+        store.update_live_order_intent_status_with_payload(
+            ticket_hash,
+            RETIRED_STALE_ENTRY_APPROVAL_STATUS,
+            {
+                "order_reconciliation": {
+                    "status": RETIRED_STALE_ENTRY_APPROVAL_STATUS,
+                    "prior_status": "pending_approval",
+                    "reason": "stale_entry_approval_not_in_current_daily_plan",
+                    "age_minutes": round(age_minutes, 2),
+                    "stale_after_minutes": stale_minutes,
+                    "reconciled_at": _now_utc(),
+                }
+            },
+        )
+        item = {
+            "ticket_hash": ticket_hash,
+            "order_id": ticket.get("order_id"),
+            "underlying": ticket.get("underlying"),
+            "structure": ticket.get("structure"),
+            "age_minutes": round(age_minutes, 2),
+            "status": RETIRED_STALE_ENTRY_APPROVAL_STATUS,
+        }
+        retired.append(item)
+    return retired
+
+
+def _live_advisory_ticket_hashes(rows: list[dict[str, Any]]) -> set[str]:
+    hashes: set[str] = set()
+    for row in rows:
+        detail = _loads(row.get("plan_detail_json"))
+        if str(detail.get("lane") or row.get("mode") or "") != "live_advisory":
+            continue
+        ticket = detail.get("order_ticket_json")
+        if isinstance(ticket, dict) and ticket.get("ticket_hash"):
+            hashes.add(str(ticket["ticket_hash"]))
+        tickets = detail.get("order_tickets_json")
+        if isinstance(tickets, list):
+            for item in tickets:
+                if isinstance(item, dict) and item.get("ticket_hash"):
+                    hashes.add(str(item["ticket_hash"]))
+    return hashes
+
+
+def _stale_entry_approval_minutes(config: dict[str, Any]) -> int:
+    recon = ((config.get("live") or {}).get("reconciliation") or {})
+    return int(recon.get("stale_entry_approval_minutes") or DEFAULT_STALE_ENTRY_APPROVAL_MINUTES)
 
 
 def record_manual_live_fill(ticket_hash: str, *, store: LocalStore | None = None) -> dict[str, Any]:
