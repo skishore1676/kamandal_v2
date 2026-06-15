@@ -992,16 +992,22 @@ def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_p
 
     keep_ticket = make_ticket("keep-order", "SPY")
     retire_ticket = make_ticket("retire-order", "JPM")
+    old_sheet_ticket = make_ticket("old-sheet-order", "MSFT")
     store.save_live_order_intent(keep_ticket, status="pending_approval")
     store.save_live_order_intent(retire_ticket, status="pending_approval")
+    store.save_live_order_intent(old_sheet_ticket, status="pending_approval")
     with sqlite3.connect(store.sqlite_path) as conn:
         conn.execute(
             "UPDATE live_order_intents SET created_at = ?, updated_at = ?",
             ("2000-01-01 00:00:00", "2000-01-01 00:00:00"),
         )
     row = dict(zip(DAILY_PLAN_HEADER, ["" for _ in DAILY_PLAN_HEADER], strict=False))
+    row["plan_date"] = date.today().isoformat()
     row["mode"] = "live_advisory"
     row["plan_detail_json"] = json.dumps({"lane": "live_advisory", "order_ticket_json": keep_ticket})
+    old_row = dict(row)
+    old_row["plan_date"] = "2000-01-01"
+    old_row["plan_detail_json"] = json.dumps({"lane": "live_advisory", "order_ticket_json": old_sheet_ticket})
     written = {}
 
     class FakeSheetClient:
@@ -1010,7 +1016,7 @@ def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_p
             return cls()
 
         def read_tab(self, _title):
-            return [row]
+            return [row, old_row]
 
         def replace_tab(self, _title, *, header, rows):
             written["rows"] = rows
@@ -1021,12 +1027,14 @@ def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_p
     cleaned = cleanup_live_approvals(load_control(), store=store)
 
     assert cleaned["cleared"] == 0
-    assert cleaned["retired_stale_entry_approvals"] == 1
-    assert cleaned["retired_rows"][0]["ticket_hash"] == retire_ticket["ticket_hash"]
+    assert cleaned["retired_stale_entry_approvals"] == 2
+    retired_hashes = {item["ticket_hash"] for item in cleaned["retired_rows"]}
+    assert retired_hashes == {retire_ticket["ticket_hash"], old_sheet_ticket["ticket_hash"]}
     assert store.live_order_intent(keep_ticket["ticket_hash"])["_ledger_status"] == "pending_approval"
     retired = store.live_order_intent(retire_ticket["ticket_hash"])
     assert retired["_ledger_status"] == "retired_stale_entry_approval"
     assert retired["order_reconciliation"]["reason"] == "stale_entry_approval_not_in_current_daily_plan"
+    assert store.live_order_intent(old_sheet_ticket["ticket_hash"])["_ledger_status"] == "retired_stale_entry_approval"
     assert written == {}
 
 

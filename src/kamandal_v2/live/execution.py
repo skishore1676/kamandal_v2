@@ -496,7 +496,7 @@ def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None =
 
 
 def _retire_stale_entry_approvals(config: dict[str, Any], store: LocalStore, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    active_hashes = _live_advisory_ticket_hashes(rows)
+    active_hashes = _live_advisory_ticket_hashes(rows, config)
     now = datetime.now(UTC)
     stale_minutes = _stale_entry_approval_minutes(config)
     retired = []
@@ -533,11 +533,14 @@ def _retire_stale_entry_approvals(config: dict[str, Any], store: LocalStore, row
     return retired
 
 
-def _live_advisory_ticket_hashes(rows: list[dict[str, Any]]) -> set[str]:
+def _live_advisory_ticket_hashes(rows: list[dict[str, Any]], config: dict[str, Any]) -> set[str]:
     hashes: set[str] = set()
+    today = _market_today(config)
     for row in rows:
         detail = _loads(row.get("plan_detail_json"))
         if str(detail.get("lane") or row.get("mode") or "") != "live_advisory":
+            continue
+        if str(row.get("plan_date") or "") != today:
             continue
         ticket = detail.get("order_ticket_json")
         if isinstance(ticket, dict) and ticket.get("ticket_hash"):
@@ -553,6 +556,11 @@ def _live_advisory_ticket_hashes(rows: list[dict[str, Any]]) -> set[str]:
 def _stale_entry_approval_minutes(config: dict[str, Any]) -> int:
     recon = ((config.get("live") or {}).get("reconciliation") or {})
     return int(recon.get("stale_entry_approval_minutes") or DEFAULT_STALE_ENTRY_APPROVAL_MINUTES)
+
+
+def _market_today(config: dict[str, Any]) -> str:
+    market_tz = str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago")
+    return datetime.now(ZoneInfo(market_tz)).date().isoformat()
 
 
 def record_manual_live_fill(ticket_hash: str, *, store: LocalStore | None = None) -> dict[str, Any]:
