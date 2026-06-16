@@ -259,6 +259,21 @@ def test_public_preflight_retries_rejected_penny_price_with_favorable_nickel(mon
     assert result.raw["request"]["limitPrice"] == "18.70"
 
 
+def test_public_preflight_does_not_shrink_credit_spread_risk(monkeypatch) -> None:
+    adapter = PublicAdapter(_public_config())
+
+    def fake_post(_endpoint, _payload):  # noqa: ANN001
+        return {"buyingPowerRequirement": "-102.00", "orderValue": "-102.00"}
+
+    monkeypatch.setattr(adapter, "_post", fake_post)
+
+    result = adapter.preflight(_credit_spread_candidate())
+
+    assert result.ok is True
+    assert result.bpr == 400.0
+    assert result.raw["public_bpr_raw"] == -102.0
+
+
 def test_public_preflight_sanitizes_and_structures_invalid_order_failure(monkeypatch) -> None:
     adapter = PublicAdapter(_public_config())
 

@@ -137,7 +137,11 @@ def build_candidates(
                     candidate.rejection_reason = pf.message or "preflight_failed"
                     rejected_for_idea.append(candidate)
                     continue
-                candidate.estimated_bpr = pf.bpr
+                preflight_bpr = float(pf.bpr or 0.0)
+                estimated_bpr = float(candidate.estimated_bpr or 0.0)
+                candidate.estimated_bpr = round(max(estimated_bpr, preflight_bpr), 2)
+                if candidate.estimated_bpr > preflight_bpr:
+                    candidate.reasons.append(f"preflight_bpr_floored:{preflight_bpr}->{candidate.estimated_bpr}")
                 thesis_fit = _thesis_fit_score(idea, candidate)
                 candidate.score = _candidate_score(candidate, thesis_fit=thesis_fit)
                 candidate.reasons.append(f"thesis_fit={thesis_fit}")

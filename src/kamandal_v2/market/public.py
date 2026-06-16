@@ -39,6 +39,12 @@ def parse_occ_symbol(symbol: str) -> dict[str, Any]:
     }
 
 
+def _candidate_risk_bpr(candidate: Candidate, public_bpr: float) -> float:
+    """Use Public preflight as a ceiling signal, not as a credit-spread shrinker."""
+
+    return round(max(abs(float(public_bpr or 0.0)), float(candidate.estimated_bpr or 0.0)), 2)
+
+
 class PublicAdapter:
     def __init__(self, config: dict[str, Any], *, expiration_dates: Sequence[str] | None = None) -> None:
         self._config = config
@@ -145,12 +151,18 @@ class PublicAdapter:
                 f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
                 payload,
             )
-            bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
+            raw_bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
+            bpr = _candidate_risk_bpr(candidate, raw_bpr)
             return PreflightResult(
                 ok=True,
-                bpr=round(abs(bpr), 2),
+                bpr=bpr,
                 message="Public preflight ok",
-                raw={"request": payload, "response": response, "entry_pricing": entry_price_metadata(candidate, self._config)},
+                raw={
+                    "request": payload,
+                    "response": response,
+                    "entry_pricing": entry_price_metadata(candidate, self._config),
+                    "public_bpr_raw": raw_bpr,
+                },
             )
         except Exception as exc:  # noqa: BLE001
             if _is_nickel_increment_rejection(exc):
@@ -161,16 +173,18 @@ class PublicAdapter:
                         f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
                         retry_payload,
                     )
-                    bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
+                    raw_bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
+                    bpr = _candidate_risk_bpr(candidate, raw_bpr)
                     return PreflightResult(
                         ok=True,
-                        bpr=round(abs(bpr), 2),
+                        bpr=bpr,
                         message="Public preflight ok after nickel tick retry",
                         raw={
                             "request": retry_payload,
                             "response": response,
                             "retry_reason": str(exc),
                             "entry_pricing": entry_price_metadata(candidate, self._config),
+                            "public_bpr_raw": raw_bpr,
                         },
                     )
                 except Exception as retry_exc:  # noqa: BLE001

@@ -279,6 +279,17 @@ class LocalStore:
                 (snapshot_id, json.dumps(portfolio.to_dict(), sort_keys=True)),
             )
 
+    def latest_account_snapshot(self) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, payload FROM account_snapshots ORDER BY rowid DESC LIMIT 1",
+            ).fetchone()
+        if not row:
+            return None
+        payload = json.loads(row["payload"])
+        payload["_snapshot_id"] = row["id"]
+        return payload
+
     def save_candidates(self, plan_run_id: str, candidates: list[Candidate]) -> None:
         with self._connect() as conn:
             conn.executemany(

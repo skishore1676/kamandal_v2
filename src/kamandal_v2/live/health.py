@@ -29,14 +29,17 @@ PREFLIGHT_FAIL_CLOSE_STATUSES = {
     "reprice_submit_failed",
 }
 REASON_ORDER = [
+    "portfolio_bpr_over_hard_cap",
     "reconciliation_blocker",
     "failed_close_order",
     "failed_preflight_close",
     "loss_watch",
+    "portfolio_bpr_over_target",
     "close_order_stale",
     "stale_failed_close_order",
     "position_target_reached",
     "working_close_order",
+    "pending_entry_approvals",
 ]
 
 
@@ -56,6 +59,8 @@ def run_live_health(
     open_groups = store.open_live_position_groups()
     open_group_ids = {str(group.get("group_id") or "") for group in open_groups}
     reconciliation_blockers = store.open_live_reconciliation_issues()
+    pending_entry_approvals = store.live_order_intents_by_type("open", statuses={"pending_approval"})
+    risk = _risk_overview(store, config)
 
     events: list[dict[str, Any]] = []
     group_marks: list[dict[str, Any]] = []
@@ -156,15 +161,40 @@ def run_live_health(
                     "detail": finding.get("order_status") or "",
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
-                },
-            )
+            },
+        )
+
+    if risk["severity"]:
+        events.append(
+            {
+                "severity": risk["severity"],
+                "reason": risk["reason"],
+                "detail": risk["detail"],
+                "snapshot_id": risk.get("snapshot_id") or "",
+                "bpr_used_pct": risk.get("bpr_used_pct"),
+                "hard_max_bpr_utilization_pct": risk.get("hard_max_bpr_utilization_pct"),
+                "target_max_bpr_utilization_pct": risk.get("target_max_bpr_utilization_pct"),
+            },
+        )
+
+    if pending_entry_approvals:
+        events.append(
+            {
+                "severity": "yellow",
+                "reason": "pending_entry_approvals",
+                "detail": f"{len(pending_entry_approvals)} unsubmitted open intents need approval/expiry hygiene",
+            },
+        )
 
     status = _coerce_status(events)
     return {
         "checked_at": _utc_now().isoformat(),
         "overall": status,
+        "scale": _scale(status, events, risk, pending_entry_approvals),
+        "risk": risk,
         "counts": {
             "open_groups": len(open_groups),
+            "pending_entry_approvals": len(pending_entry_approvals),
             "reconciliation_blockers": len(reconciliation_blockers),
             "working_close_orders": len([order for order in close_findings if order["reason"] in {"working_close_order", "close_order_stale"}]),
             "stale_close_orders": len([order for order in close_findings if order["reason"] == "close_order_stale"]),
@@ -200,15 +230,26 @@ def entry_health_gate(store: LocalStore, config: dict[str, Any] | None = None) -
 
 def format_live_health(report: dict[str, Any]) -> str:
     counts = report["counts"]
+    scale = report.get("scale") or {}
+    risk = report.get("risk") or {}
     lines = [
         "LIVE HEALTH "
         f"[{report['overall']}] "
+        f"score={scale.get('score', '')} "
         f"groups={counts['open_groups']} "
+        f"pending_entries={counts.get('pending_entry_approvals', 0)} "
         f"working_close={counts['working_close_orders']} "
         f"recon_blockers={counts['reconciliation_blockers']} "
         f"stale_close={counts['stale_close_orders']} "
         f"failed_close={counts['failed_close_orders']}"
     ]
+    if risk.get("bpr_used_pct") is not None:
+        lines.append(
+            "- risk "
+            f"bpr_used_pct={risk['bpr_used_pct']:.2f} "
+            f"target={risk.get('target_max_bpr_utilization_pct') or ''} "
+            f"hard={risk.get('hard_max_bpr_utilization_pct') or ''}"
+        )
     if not report["events"]:
         lines.append("- no open lifecycle blockers")
         return "\n".join(lines)
@@ -369,6 +410,88 @@ def _coerce_status(events: list[dict[str, Any]]) -> str:
     if any(str(event.get("severity")) == "yellow" for event in events):
         return "YELLOW"
     return "GREEN"
+
+
+def _scale(status: str, events: list[dict[str, Any]], risk: dict[str, Any], pending_entry_approvals: list[dict[str, Any]]) -> dict[str, Any]:
+    score = {"GREEN": 100, "YELLOW": 70, "RED": 35}.get(status, 50)
+    if risk.get("reason") == "portfolio_bpr_over_hard_cap":
+        score = min(score, 25)
+    if pending_entry_approvals:
+        score = min(score, 70)
+    return {
+        "rating": status,
+        "score": score,
+        "summary": _scale_summary(status, events),
+    }
+
+
+def _scale_summary(status: str, events: list[dict[str, Any]]) -> str:
+    if status == "GREEN":
+        return "clean_live_book"
+    reasons = _ordered_reason_codes(events)
+    return ",".join(reasons) if reasons else "needs_review"
+
+
+def _risk_overview(store: LocalStore, config: dict[str, Any]) -> dict[str, Any]:
+    snapshot = store.latest_account_snapshot()
+    portfolio = config.get("portfolio") or {}
+    target_pct = _optional_float(portfolio.get("target_max_bpr_utilization_pct"))
+    hard_pct = _optional_float(portfolio.get("hard_max_bpr_utilization_pct"))
+    result: dict[str, Any] = {
+        "snapshot_id": "",
+        "account_size": None,
+        "bpr_used": None,
+        "bpr_used_pct": None,
+        "target_max_bpr_utilization_pct": target_pct,
+        "hard_max_bpr_utilization_pct": hard_pct,
+        "severity": "",
+        "reason": "",
+        "detail": "no account snapshot",
+    }
+    if not snapshot:
+        return result
+    account_size = _optional_float(snapshot.get("account_size"))
+    bpr_used = _optional_float(snapshot.get("bpr_used"))
+    bpr_pct = _optional_float(snapshot.get("bpr_used_pct"))
+    if bpr_pct is None and account_size and bpr_used is not None:
+        bpr_pct = (bpr_used / max(account_size, 1.0)) * 100.0
+    result.update(
+        {
+            "snapshot_id": str(snapshot.get("_snapshot_id") or ""),
+            "account_size": account_size,
+            "bpr_used": bpr_used,
+            "bpr_used_pct": round(bpr_pct, 2) if bpr_pct is not None else None,
+            "detail": "account snapshot available",
+        },
+    )
+    if bpr_pct is None:
+        return result
+    if hard_pct is not None and bpr_pct > hard_pct:
+        result.update(
+            {
+                "severity": "red",
+                "reason": "portfolio_bpr_over_hard_cap",
+                "detail": f"bpr_used_pct={bpr_pct:.2f} exceeds hard cap {hard_pct:.2f}",
+            },
+        )
+    elif target_pct is not None and bpr_pct > target_pct:
+        result.update(
+            {
+                "severity": "yellow",
+                "reason": "portfolio_bpr_over_target",
+                "detail": f"bpr_used_pct={bpr_pct:.2f} exceeds target cap {target_pct:.2f}",
+            },
+        )
+    return result
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _event_sort_key(event: dict[str, Any]) -> tuple[int, str]:

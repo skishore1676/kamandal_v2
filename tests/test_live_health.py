@@ -6,6 +6,7 @@ import types
 from pathlib import Path
 from typing import Any
 
+from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.live.health import entry_health_gate, run_live_health
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -55,6 +56,50 @@ def test_live_health_green_for_clean_book(tmp_path: Path) -> None:
     assert report["counts"]["reconciliation_blockers"] == 0
     assert report["counts"]["loss_watch_groups"] == 0
     assert report["reasons"] == []
+
+
+def test_live_health_red_when_bpr_exceeds_hard_cap(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_risk", target_progress=20.0, trigger_progress=100.0)
+    store.save_account_snapshot(
+        "run_risk",
+        PortfolioState(account_size=10_000, buying_power=3_500, bpr_used=6_500, positions_count=12),
+    )
+
+    report = run_live_health(
+        store,
+        {"portfolio": {"target_max_bpr_utilization_pct": 55, "hard_max_bpr_utilization_pct": 60}},
+    )
+
+    assert report["overall"] == "RED"
+    assert report["scale"]["score"] == 25
+    assert report["risk"]["bpr_used_pct"] == 65.0
+    assert "portfolio_bpr_over_hard_cap" in report["reasons"]
+    assert entry_health_gate(store, {"portfolio": {"hard_max_bpr_utilization_pct": 60}})["blocked"] is True
+
+
+def test_live_health_yellow_for_pending_entry_approvals(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_pending", target_progress=20.0, trigger_progress=100.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "pending-open-ticket",
+            "order_id": "order-pending-open",
+            "plan_id": "plan-pending",
+            "candidate_id": "cand-pending",
+            "idea_id": "idea-pending",
+            "intent_type": "open",
+            "underlying": "AAPL",
+        },
+        status="pending_approval",
+    )
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "YELLOW"
+    assert report["counts"]["pending_entry_approvals"] == 1
+    assert report["scale"]["score"] == 70
+    assert "pending_entry_approvals" in report["reasons"]
 
 
 def test_live_health_yellow_for_working_close_order(tmp_path: Path) -> None:
