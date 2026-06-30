@@ -54,7 +54,8 @@ The system is designed as a series of short scheduled jobs rather than a long-ru
 - **Live Advisory:** Three intraday planning passes.
 - **Live Approved Orders:** Every 5 minutes during the live market window.
 - **Live Management:** Every 15 minutes during the live market window.
-- **Live Health Report:** Morning, midday, afternoon, and close readbacks through Lathi Bus.
+- **Live Health Report:** Morning, midday, afternoon, and close readbacks through Lathi Bus when operator attention is needed.
+- **Scheduled Job Health:** Every 15 minutes during the live market window; watches launchd logs for stale, missing, or failed Kamandal jobs.
 - **Weekly Reviewer:** Fridays at 10:00 AM.
 
 To install or refresh the oldmac schedule:
@@ -108,8 +109,8 @@ The system self-heals everything it can; a status only persists when it genuinel
 
 Operational receipts and launchd failures go through Lathi Bus by default:
 
-- `KAMANDAL_LAUNCHD_ALERT_MODE=live` sends Telegram notifications and requires Lathi to confirm a network send.
+- `KAMANDAL_LAUNCHD_ALERT_MODE=live` sends Telegram notifications and requires Lathi Bus to confirm a network send.
 - `KAMANDAL_LAUNCHD_ALERT_MODE=spool` is for dry-run/smoke checks.
-- `KAMANDAL_LATHI_PROFILE=jarvis-northstar` is the default profile.
+- `KAMANDAL_LATHI_BUS_PROFILE=jarvis-northstar` is the default Lathi Bus profile; `KAMANDAL_LATHI_PROFILE` remains a legacy alias.
 
-Reconciliation auto-repairs are applied by Kamandal and sent as receipts. Ambiguous reconciliation issues become bounded operator-review cards through Lathi `telegram-ask`; the fallback command remains `kamandal review <request_id> <action> [note]`.
+Healthy/self-handled checks stay in launchd logs and CLI JSON instead of Telegram. Reconciliation auto-repairs are applied by Kamandal and sent as receipts. Ambiguous reconciliation issues become bounded operator-review cards through Lathi Bus `telegram-ask`; the fallback command remains `kamandal review <request_id> <action> [note]`.

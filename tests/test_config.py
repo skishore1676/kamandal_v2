@@ -39,8 +39,8 @@ def test_portfolio_delta_guard_env_overrides(monkeypatch) -> None:
 
 def test_operator_review_lathi_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_OPERATOR_REVIEW_TRANSPORT", "openclaw")
-    monkeypatch.setenv("KAMANDAL_OPERATOR_REVIEW_LATHI_PROFILE", "codex-northstar")
-    monkeypatch.setenv("KAMANDAL_OPERATOR_REVIEW_LATHI_MODE", "spool")
+    monkeypatch.setenv("KAMANDAL_OPERATOR_REVIEW_LATHI_BUS_PROFILE", "codex-northstar")
+    monkeypatch.setenv("KAMANDAL_OPERATOR_REVIEW_LATHI_BUS_MODE", "spool")
 
     review = load_control()["live"]["operator_review"]
 

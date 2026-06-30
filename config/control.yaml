@@ -126,7 +126,7 @@ live:
     retire_stale_close_failures: true
   operator_review:
     enabled: true
-    transport: lathi # lathi | openclaw
+    transport: lathi_bus # lathi_bus | openclaw
     channel: telegram
     target: "5425926875"
     account: ""
@@ -153,6 +153,7 @@ live:
     block_entries_on_red: true
   telegram_approval:
     enabled: true
+    transport: lathi_bus # lathi_bus | openclaw
     target: "5425926875"
     account: ""
     expiry_minutes: 8

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from kamandal_v2.config import load_control
 from kamandal_v2.live.health import run_live_health
-from kamandal_v2.ops.alerts import AlertResult, send_lathi_alert, tail
+from kamandal_v2.ops.alerts import AlertResult, default_lathi_bus_profile, send_lathi_alert, tail
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -55,7 +56,67 @@ SCRIPT_JOBS = {
     "iv-afternoon": "run_iv_capture.sh",
     "weekly-reviewer": "run_weekly_reviewer.sh",
 }
-ALL_JOBS = sorted([*SCRIPT_JOBS, "live-health-report"])
+ALL_JOBS = sorted([*SCRIPT_JOBS, "live-health-report", "scheduled-job-health"])
+
+ACTIONABLE_HEALTH_REASONS = {
+    "close_order_stale",
+    "portfolio_bpr_over_target",
+    "stale_failed_close_order",
+}
+MONITORED_JOBS = [
+    "x-bookmarks",
+    "youtube",
+    "my-ideas",
+    "live-reconciliation",
+    "live-advisory",
+    "live-approved-orders",
+    "live-management",
+    "live-health-report",
+    "earnings",
+    "iv",
+    "iv-afternoon",
+    "weekly-reviewer",
+]
+JOB_LABEL_SUFFIXES = {
+    "x-bookmarks": "x_bookmarks",
+    "youtube": "youtube",
+    "my-ideas": "my_ideas",
+    "live-reconciliation": "live_reconciliation",
+    "live-advisory": "live_advisory",
+    "live-approved-orders": "live_approved_orders",
+    "live-management": "live_management",
+    "live-health-report": "live_health_report",
+    "scheduled-job-health": "scheduled_job_health",
+    "earnings": "earnings",
+    "iv": "iv",
+    "iv-afternoon": "iv_afternoon",
+    "weekly-reviewer": "weekly_reviewer",
+}
+
+
+@dataclass(frozen=True)
+class JobSchedule:
+    fixed_times: tuple[time, ...] = ()
+    cadence_minutes: int | None = None
+    window_start: time | None = None
+    window_end: time | None = None
+    weekday: int | None = None
+
+
+JOB_SCHEDULES = {
+    "x-bookmarks": JobSchedule(fixed_times=(time(8, 55),)),
+    "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 30))),
+    "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
+    "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 30))),
+    "live-advisory": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 40))),
+    "live-approved-orders": JobSchedule(cadence_minutes=5, window_start=time(9, 0), window_end=time(15, 15)),
+    "live-management": JobSchedule(cadence_minutes=15, window_start=time(9, 0), window_end=time(15, 15)),
+    "live-health-report": JobSchedule(fixed_times=(time(9, 10), time(11, 45), time(14, 45), time(15, 20))),
+    "earnings": JobSchedule(fixed_times=(time(8, 40),)),
+    "iv": JobSchedule(fixed_times=(time(8, 45),)),
+    "iv-afternoon": JobSchedule(fixed_times=(time(14, 45),)),
+    "weekly-reviewer": JobSchedule(fixed_times=(time(10, 0),), weekday=4),
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--force", action="store_true", help="Run even when today is not a trading day")
     parser.add_argument("--repo-root", default=None)
     parser.add_argument("--alert-mode", default=os.getenv("KAMANDAL_LAUNCHD_ALERT_MODE", "live"), choices=["off", "spool", "live"])
-    parser.add_argument("--alert-profile", default=os.getenv("KAMANDAL_LATHI_PROFILE", "jarvis-northstar"))
+    parser.add_argument("--alert-profile", default=default_lathi_bus_profile())
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root or Path(__file__).resolve().parents[3]).resolve()
@@ -77,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.job == "live-health-report":
             return live_health_report_job(args)
+        if args.job == "scheduled-job-health":
+            return scheduled_job_health_report_job(args, repo_root=repo_root)
         return script_job(args, repo_root=repo_root)
     except Exception as exc:  # noqa: BLE001 - scheduled jobs must alert and fail closed.
         alert = failure_alert(args, title=f"Kamandal launchd job failed: {args.job}", detail=str(exc))
@@ -106,16 +169,18 @@ def script_job(args: argparse.Namespace, *, repo_root: Path) -> int:
 def live_health_report_job(args: argparse.Namespace) -> int:
     config = load_control()
     report = run_live_health(LocalStore(), config)
-    level = alert_level_for_health(report)
-    body = render_live_health_summary(report)
-    alert = send_lathi_alert(
-        title="Kamandal live health",
-        body=body,
-        level=level,
-        mode=args.alert_mode,
-        profile=args.alert_profile,
-    )
-    ok = alert.ok or args.alert_mode == "off"
+    attention = health_attention(report)
+    alert: AlertResult | None = None
+    ok = True
+    if attention["notify"]:
+        alert = send_lathi_alert(
+            title="Kamandal live health",
+            body=render_live_health_summary(report),
+            level=str(attention["level"]),
+            mode=args.alert_mode,
+            profile=args.alert_profile,
+        )
+        ok = alert.ok or args.alert_mode == "off"
     print_result(
         {
             "job": args.job,
@@ -123,7 +188,35 @@ def live_health_report_job(args: argparse.Namespace) -> int:
             "health": report.get("overall"),
             "counts": report.get("counts"),
             "reasons": report.get("reasons"),
-            "alert": alert.to_dict(),
+            "attention": attention,
+            "alert": alert.to_dict() if alert else None,
+        }
+    )
+    return 0 if ok else 2
+
+
+def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path) -> int:
+    report = scheduled_job_health(repo_root=repo_root)
+    attention = {"notify": bool(report["issues"]), "level": "error" if report["issues"] else "info", "reason": "scheduled_job_failure" if report["issues"] else "all_scheduled_jobs_healthy"}
+    alert: AlertResult | None = None
+    ok = True
+    if attention["notify"]:
+        alert = send_lathi_alert(
+            title="Kamandal scheduled job health",
+            body=render_scheduled_job_health_summary(report),
+            level=str(attention["level"]),
+            mode=args.alert_mode,
+            profile=args.alert_profile,
+        )
+        ok = alert.ok or args.alert_mode == "off"
+    print_result(
+        {
+            "job": args.job,
+            "status": "ok" if ok else "failed",
+            "checked_at": report["checked_at"],
+            "issues": report["issues"],
+            "attention": attention,
+            "alert": alert.to_dict() if alert else None,
         }
     )
     return 0 if ok else 2
@@ -199,6 +292,28 @@ def alert_level_for_health(report: dict[str, Any]) -> str:
     return "info"
 
 
+def health_attention(report: dict[str, Any]) -> dict[str, Any]:
+    status = str(report.get("overall") or "GREEN").upper()
+    events = [event for event in report.get("events") or [] if isinstance(event, dict)]
+    red_events = [event for event in events if str(event.get("severity") or "").lower() == "red"]
+    if status == "RED" or red_events:
+        reasons = sorted({str(event.get("reason") or "") for event in red_events if event.get("reason")})
+        return {"notify": True, "level": "error", "reason": ",".join(reasons) or "red_live_health"}
+    actionable_reasons = _actionable_health_reasons()
+    reasons = {str(reason) for reason in report.get("reasons") or []}
+    matched = sorted(reasons & actionable_reasons)
+    if matched:
+        return {"notify": True, "level": "warning", "reason": ",".join(matched)}
+    return {"notify": False, "level": alert_level_for_health(report), "reason": "no_operator_attention_required"}
+
+
+def _actionable_health_reasons() -> set[str]:
+    raw = os.getenv("KAMANDAL_HEALTH_NOTIFY_REASONS", "").strip()
+    if not raw:
+        return set(ACTIONABLE_HEALTH_REASONS)
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
 def render_live_health_summary(report: dict[str, Any]) -> str:
     counts = report.get("counts") or {}
     scale = report.get("scale") or {}
@@ -224,6 +339,118 @@ def render_live_health_summary(report: dict[str, Any]) -> str:
         lines.append(f"- {event.get('reason')}{group}: {detail}")
     if len(events) > 8:
         lines.append(f"- plus {len(events) - 8} more events")
+    return "\n".join(lines)
+
+
+def scheduled_job_health(*, repo_root: Path, now: datetime | None = None, log_dir: Path | None = None, label_prefix: str | None = None) -> dict[str, Any]:
+    now = now or datetime.now(CENTRAL)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=CENTRAL)
+    log_dir = log_dir or Path(os.getenv("KAMANDAL_LAUNCHD_LOG_DIR", str(repo_root / "data" / "logs" / "launchd")))
+    label_prefix = label_prefix or os.getenv("KAMANDAL_LAUNCHD_LABEL_PREFIX", "com.kamandal.v2")
+    grace = int(os.getenv("KAMANDAL_JOB_HEALTH_GRACE_MINUTES", "20"))
+    rows = []
+    issues = []
+    for job in MONITORED_JOBS:
+        schedule = JOB_SCHEDULES[job]
+        label = f"{label_prefix}.{JOB_LABEL_SUFFIXES[job]}"
+        log_path = log_dir / f"{label}.out.log"
+        expectation = expected_job_observation(schedule, now=now, grace_minutes=grace)
+        observation = read_launchd_observation(log_path)
+        issue = evaluate_job_observation(job, expectation, observation)
+        row = {
+            "job": job,
+            "label": label,
+            "expected": expectation,
+            "last": observation,
+            "issue": issue,
+        }
+        rows.append(row)
+        if issue:
+            issues.append(issue)
+    return {
+        "checked_at": now.isoformat(),
+        "grace_minutes": grace,
+        "issues": issues,
+        "jobs": rows,
+    }
+
+
+def expected_job_observation(schedule: JobSchedule, *, now: datetime, grace_minutes: int) -> dict[str, Any]:
+    if schedule.weekday is not None and now.weekday() != schedule.weekday:
+        return {"status": "not_expected_today", "reason": "weekday_specific"}
+    today = now.date()
+    grace = timedelta(minutes=grace_minutes)
+    if schedule.cadence_minutes and schedule.window_start and schedule.window_end:
+        start_dt = datetime.combine(today, schedule.window_start, CENTRAL)
+        end_dt = datetime.combine(today, schedule.window_end, CENTRAL)
+        if now < start_dt + grace:
+            return {"status": "not_due_yet", "expected_after": start_dt.isoformat()}
+        latest_reference = min(now, end_dt)
+        acceptable_after = latest_reference - timedelta(minutes=schedule.cadence_minutes + grace_minutes)
+        return {"status": "due", "acceptable_after": acceptable_after.isoformat(), "expected_by": latest_reference.isoformat()}
+
+    due_times = [datetime.combine(today, scheduled, CENTRAL) for scheduled in schedule.fixed_times if datetime.combine(today, scheduled, CENTRAL) <= now]
+    if not due_times:
+        next_time = min((datetime.combine(today, scheduled, CENTRAL) for scheduled in schedule.fixed_times), default=None)
+        return {"status": "not_due_yet", "expected_after": next_time.isoformat() if next_time else ""}
+    latest_due = max(due_times)
+    if now < latest_due + grace:
+        return {"status": "pending_grace", "expected_by": latest_due.isoformat(), "acceptable_after": latest_due.isoformat()}
+    acceptable_after = latest_due - timedelta(minutes=grace_minutes)
+    return {"status": "due", "acceptable_after": acceptable_after.isoformat(), "expected_by": latest_due.isoformat()}
+
+
+def read_launchd_observation(log_path: Path) -> dict[str, Any]:
+    if not log_path.exists():
+        return {"status": "missing_log", "log_path": str(log_path)}
+    payload: dict[str, Any] | None = None
+    try:
+        for line in reversed(log_path.read_text(encoding="utf-8", errors="replace").splitlines()):
+            if not line.startswith(RESULT_PREFIX):
+                continue
+            parsed = json.loads(line.split("=", 1)[1])
+            if isinstance(parsed, dict):
+                payload = parsed
+                break
+    except Exception as exc:  # noqa: BLE001 - health readback should degrade into an issue.
+        return {"status": "unreadable_log", "log_path": str(log_path), "error": str(exc)}
+    mtime = datetime.fromtimestamp(log_path.stat().st_mtime, CENTRAL)
+    return {
+        "status": str((payload or {}).get("status") or "no_result_line"),
+        "job": str((payload or {}).get("job") or ""),
+        "health": (payload or {}).get("health"),
+        "reasons": (payload or {}).get("reasons"),
+        "mtime": mtime.isoformat(),
+        "log_path": str(log_path),
+    }
+
+
+def evaluate_job_observation(job: str, expectation: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any] | None:
+    if expectation["status"] in {"not_due_yet", "pending_grace", "not_expected_today"}:
+        return None
+    if observation["status"] in {"missing_log", "unreadable_log", "no_result_line"}:
+        return {"job": job, "reason": observation["status"], "detail": observation.get("error") or observation.get("log_path")}
+    observed_job = observation.get("job")
+    if observed_job and observed_job != job:
+        return {"job": job, "reason": "wrong_job_in_log", "detail": f"expected {job}, saw {observed_job}"}
+    acceptable_after = datetime.fromisoformat(str(expectation["acceptable_after"]))
+    observed_at = datetime.fromisoformat(str(observation["mtime"]))
+    if observed_at < acceptable_after:
+        return {"job": job, "reason": "stale_last_run", "detail": f"last={observed_at.isoformat()} expected_after={acceptable_after.isoformat()}"}
+    if str(observation["status"]).lower() == "failed":
+        return {"job": job, "reason": "last_run_failed", "detail": observation.get("log_path")}
+    return None
+
+
+def render_scheduled_job_health_summary(report: dict[str, Any]) -> str:
+    lines = [
+        "Kamandal scheduled job health",
+        f"Checked: {report.get('checked_at')}",
+        f"Issues: {len(report.get('issues') or [])}",
+    ]
+    for issue in report.get("issues") or []:
+        lines.append(f"- {issue.get('job')}: {issue.get('reason')} {issue.get('detail') or ''}".rstrip())
     return "\n".join(lines)
 
 

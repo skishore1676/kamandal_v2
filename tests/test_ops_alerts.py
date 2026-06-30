@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from kamandal_v2.ops.alerts import redact, send_lathi_alert
+from kamandal_v2.ops.alerts import default_lathi_bus_profile, redact, send_lathi_alert
 
 
 def test_send_lathi_alert_off_does_not_attempt() -> None:
@@ -27,6 +27,13 @@ def test_send_lathi_alert_spool_accepts_zero_return(monkeypatch) -> None:
     assert result.ok is True
     assert "--live" not in calls[0]
     assert calls[0][:2] == ["lathi-bus", "telegram-notify"]
+
+
+def test_lathi_bus_profile_prefers_new_env_name(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("KAMANDAL_LATHI_PROFILE", "legacy")
+    monkeypatch.setenv("KAMANDAL_LATHI_BUS_PROFILE", "bus")
+
+    assert default_lathi_bus_profile() == "bus"
 
 
 def test_send_lathi_alert_live_requires_network_call(monkeypatch) -> None:

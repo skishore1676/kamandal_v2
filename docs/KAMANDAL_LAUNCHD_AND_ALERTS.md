@@ -1,4 +1,4 @@
-# Kamandal Launchd and Lathi Alerts
+# Kamandal Launchd and Lathi Bus Alerts
 
 Kamandal scheduled work is owned by Kamandal launchd labels on oldmac. Lathi Bus
 is the notification and bounded-decision transport. Trading logic stays inside
@@ -50,6 +50,7 @@ All times are oldmac local time, expected to be America/Chicago.
 | `live_approved_orders` | `live-approved-orders` | Weekdays every 5 minutes, 09:00-15:15 |
 | `live_management` | `live-management` | Weekdays every 15 minutes, 09:00-15:15 |
 | `live_health_report` | `live-health-report` | Weekdays 09:10, 11:45, 14:45, 15:20 |
+| `scheduled_job_health` | `scheduled-job-health` | Weekdays every 15 minutes, 09:15-15:30 |
 | `earnings` | `earnings` | Weekdays 08:40 |
 | `iv` | `iv` | Weekdays 08:45 |
 | `iv_afternoon` | `iv-afternoon` | Weekdays 14:45 |
@@ -82,7 +83,7 @@ Safe local smoke:
 PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_job live-health-report --force --alert-mode spool
 ```
 
-## Lathi Alert Modes
+## Lathi Bus Alert Modes
 
 Operational receipts and launchd failure alerts go through
 `kamandal_v2.ops.alerts.send_lathi_alert`.
@@ -97,7 +98,7 @@ Defaults:
 
 ```bash
 KAMANDAL_LAUNCHD_ALERT_MODE=live
-KAMANDAL_LATHI_PROFILE=jarvis-northstar
+KAMANDAL_LATHI_BUS_PROFILE=jarvis-northstar
 ```
 
 Optional overrides:
@@ -108,20 +109,47 @@ KAMANDAL_LATHI_BUS_CWD=/Users/sunny/code/lathi-bus
 KAMANDAL_ALERT_TIMEOUT_SECONDS=30
 ```
 
+`KAMANDAL_LATHI_PROFILE` remains a legacy alias for older wrappers. New
+configuration should say `LATHI_BUS` so it is not confused with the separate
+Lathi job-runner application.
+
 The alert layer redacts token fields, bearer strings, and URL auth parameters
 before storing command output.
+
+## Attention Policy
+
+Routine proof belongs in logs. Telegram is for attention.
+
+- Healthy `live-health-report` runs print `KAMANDAL_LAUNCHD_JOB={...}` and do
+  not send a message.
+- RED live health always alerts.
+- YELLOW live health alerts only for configured operator-action reasons. The
+  default is `close_order_stale`, `stale_failed_close_order`, and
+  `portfolio_bpr_over_target`.
+- `scheduled-job-health` alerts when a launchd job is missing, stale, or failed
+  in the expected window.
+
+Override the YELLOW reasons with:
+
+```bash
+KAMANDAL_HEALTH_NOTIFY_REASONS=close_order_stale,stale_failed_close_order,portfolio_bpr_over_target
+```
+
+On oldmac, the live profile should send through the existing Lane Host/Jasper
+Telegram receipt bot (`jasper_receipts`) with `live_send_enabled=true` and
+`live_collect_enabled=false` unless Lathi Bus becomes the sole Telegram poller.
 
 ## Operator Review Behavior
 
 Reconciliation auto-repairs that are proven safe are applied locally and reported
 as receipts. Ambiguous reconciliation issues become operator review requests.
 
-Operator review defaults to Lathi `telegram-ask`:
+Operator review defaults to Lathi Bus `telegram-ask`:
 
 ```yaml
 live:
   operator_review:
-    transport: lathi
+    transport: lathi_bus
     lathi_profile: jarvis-northstar
 ```
 
@@ -132,9 +160,10 @@ The review card contains bounded actions such as `dismiss`, `hold`, and
 kamandal review <request_id> <action> [note]
 ```
 
-Live entry approvals are intentionally still on the existing approval path. Do
-not move those to Lathi button collection until Lathi is the sole poller for that
-Telegram bot token.
+Live entry approval sends also support Lathi Bus `telegram-ask`. Button
+collection should remain send-only (`live_collect_enabled=false`) until Lathi Bus
+is the sole poller for that Telegram bot token; fallback text/manual CLI approval
+remains the decision path.
 
 ## Oldmac Verification
 
@@ -147,6 +176,7 @@ PYTHONPATH=src .venv/bin/python -m pytest tests/test_ops_alerts.py tests/test_la
 cd /Users/sunny/code/lathi-bus && python3 -m lathi_bus.cli doctor --profile jarvis-northstar
 cd /Users/sunny/code/lathi-bus && python3 -m lathi_bus.cli telegram-doctor --profile jarvis-northstar
 cd /Users/sunny/Documents/kamandal_v2 && PYTHONPATH=src .venv/bin/python -m kamandal_v2.tools.launchd_job live-health-report --force --alert-mode spool
+cd /Users/sunny/Documents/kamandal_v2 && PYTHONPATH=src .venv/bin/python -m kamandal_v2.tools.launchd_job scheduled-job-health --force --alert-mode spool
 scripts/launchd/install_kamandal_launchd.sh install
 launchctl list | grep com.kamandal.v2
 .venv/bin/kamandal live-health --json
@@ -158,4 +188,3 @@ Log tails live under:
 data/logs/launchd/com.kamandal.v2.<label>.out.log
 data/logs/launchd/com.kamandal.v2.<label>.err.log
 ```
-

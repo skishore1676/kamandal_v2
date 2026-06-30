@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from kamandal_v2.live.orders import APPROVE_LIVE
+from kamandal_v2.ops.alerts import default_lathi_bus_profile, default_lathi_invocation, optional_bool, parse_lathi_receipt, populate_secret_fallbacks, redact
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import GoogleSheetClient
 from kamandal_v2.stores.sqlite import LocalStore
@@ -218,6 +220,10 @@ def render_live_approval_message(request: dict[str, Any], *, row: dict[str, Any]
 
 def send_live_approval_message(config: dict[str, Any], message: str) -> None:
     policy = telegram_approval_policy(config)
+    transport = str(policy.get("transport") or "lathi_bus").lower()
+    if transport in {"lathi", "lathi_bus", "lathi-bus"}:
+        _send_lathi_live_approval_message(policy, message)
+        return
     target = str(policy["target"] or "").strip()
     if not target:
         raise RuntimeError("live.telegram_approval.target is not configured")
@@ -229,6 +235,59 @@ def send_live_approval_message(config: dict[str, Any], message: str) -> None:
     if result.returncode != 0:
         tail = "\n".join((result.stdout + "\n" + result.stderr).splitlines()[-20:])
         raise RuntimeError(f"Telegram approval send failed: {tail}")
+
+
+def _send_lathi_live_approval_message(policy: dict[str, Any], message: str) -> None:
+    mode = str(policy.get("lathi_mode") or os.getenv("KAMANDAL_LAUNCHD_ALERT_MODE") or "live").lower()
+    if mode == "off":
+        return
+    if mode not in {"spool", "live"}:
+        raise RuntimeError(f"unsupported live.telegram_approval.lathi_mode={mode!r}")
+    request_id = _approval_request_id(message)
+    command, cwd = default_lathi_invocation(None)
+    args = [
+        *command,
+        "telegram-ask",
+        "--profile",
+        str(policy.get("lathi_profile") or default_lathi_bus_profile()),
+        "--template",
+        "urgent_gate",
+        "--title",
+        "Kamandal live entry approval",
+        "--prompt",
+        message,
+        "--field",
+        f"Request={request_id}",
+        "--field",
+        "Type=live_entry_approval",
+        "--button-columns",
+        "2",
+        "--link-preview",
+        "disabled",
+        "--option",
+        f"kamandal:approval:{request_id}:approve|Approve|primary",
+        "--option",
+        f"kamandal:approval:{request_id}:reject|Reject|danger",
+    ]
+    if mode == "live":
+        args.append("--live")
+    env = os.environ.copy()
+    populate_secret_fallbacks(env)
+    completed = subprocess.run(  # noqa: S603
+        args,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+    )
+    receipt = parse_lathi_receipt(completed.stdout)
+    network_call_performed = optional_bool(receipt.get("network_call_performed"))
+    ok = completed.returncode == 0 and (mode != "live" or network_call_performed is True)
+    if not ok:
+        tail = "\n".join((redact(completed.stdout) + "\n" + redact(completed.stderr)).splitlines()[-20:])
+        raise RuntimeError(f"Lathi Bus live approval send failed: {tail}")
 
 
 def update_daily_plan_operator_action(
@@ -264,8 +323,11 @@ def telegram_approval_policy(config: dict[str, Any]) -> dict[str, Any]:
         raw = {}
     return {
         "enabled": _as_bool(raw.get("enabled"), True),
+        "transport": str(raw.get("transport") or os.environ.get("KAMANDAL_TELEGRAM_APPROVAL_TRANSPORT") or "lathi_bus"),
         "target": str(raw.get("target") or "5425926875"),
         "account": str(raw.get("account") or ""),
+        "lathi_profile": str(raw.get("lathi_profile") or os.environ.get("KAMANDAL_TELEGRAM_APPROVAL_LATHI_BUS_PROFILE") or default_lathi_bus_profile()),
+        "lathi_mode": str(raw.get("lathi_mode") or os.environ.get("KAMANDAL_TELEGRAM_APPROVAL_LATHI_BUS_MODE") or os.environ.get("KAMANDAL_LAUNCHD_ALERT_MODE") or "live"),
         "expiry_minutes": max(int(raw.get("expiry_minutes") or 8), 1),
         "max_pending_requests": max(int(raw.get("max_pending_requests") or 3), 1),
     }
@@ -328,6 +390,11 @@ def _candidate_dte(candidate: Any) -> int | None:
     if not expirations:
         return None
     return min((expiration - datetime.now(UTC).date()).days for expiration in expirations)
+
+
+def _approval_request_id(message: str) -> str:
+    match = re.search(r"\bKAM-[A-Za-z0-9_-]+\b", message)
+    return match.group(0) if match else "unknown"
 
 
 def _loads(raw: Any) -> dict[str, Any]:

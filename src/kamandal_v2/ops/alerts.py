@@ -57,7 +57,7 @@ def send_lathi_alert(
     if mode == "off":
         return AlertResult(mode="off")
 
-    profile = profile or os.getenv("KAMANDAL_LATHI_PROFILE", "jarvis-northstar")
+    profile = profile or default_lathi_bus_profile()
     if command is None:
         command, cwd = default_lathi_invocation(cwd)
     cwd_path = Path(cwd).expanduser() if cwd else None
@@ -135,6 +135,10 @@ def default_lathi_invocation(cwd: str | Path | None = None) -> tuple[list[str], 
     return ["lathi-bus"], None
 
 
+def default_lathi_bus_profile() -> str:
+    return os.getenv("KAMANDAL_LATHI_BUS_PROFILE") or os.getenv("KAMANDAL_LATHI_PROFILE") or "jarvis-northstar"
+
+
 def populate_secret_fallbacks(env: dict[str, str]) -> None:
     token_fallback = Path.home() / ".lane-host" / "secrets" / "telegram_gate_token"
     user_fallback = Path.home() / ".lane-host" / "secrets" / "telegram_gate_user_id"
@@ -203,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--body", required=True)
     parser.add_argument("--level", default="info")
     parser.add_argument("--mode", choices=["off", "spool", "live"], default=os.getenv("KAMANDAL_LAUNCHD_ALERT_MODE", "live"))
-    parser.add_argument("--profile", default=os.getenv("KAMANDAL_LATHI_PROFILE", "jarvis-northstar"))
+    parser.add_argument("--profile", default=default_lathi_bus_profile())
     args = parser.parse_args(argv)
 
     result = send_lathi_alert(
@@ -219,4 +223,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

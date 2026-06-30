@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from kamandal_v2.ops.alerts import default_lathi_invocation, optional_bool, parse_lathi_receipt, populate_secret_fallbacks, redact
+from kamandal_v2.ops.alerts import default_lathi_bus_profile, default_lathi_invocation, optional_bool, parse_lathi_receipt, populate_secret_fallbacks, redact
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -36,12 +36,17 @@ def operator_review_policy(config: dict[str, Any]) -> dict[str, Any]:
     telegram = live_cfg.get("telegram_approval") or {}
     return {
         "enabled": _as_bool(review.get("enabled"), True),
-        "transport": str(review.get("transport") or os.environ.get("KAMANDAL_OPERATOR_REVIEW_TRANSPORT") or "lathi"),
+        "transport": str(review.get("transport") or os.environ.get("KAMANDAL_OPERATOR_REVIEW_TRANSPORT") or "lathi_bus"),
         "channel": str(review.get("channel") or "telegram"),
         "target": str(review.get("target") or telegram.get("target") or os.environ.get("KAMANDAL_TELEGRAM_APPROVAL_TARGET") or ""),
         "account": str(review.get("account") or telegram.get("account") or os.environ.get("KAMANDAL_TELEGRAM_APPROVAL_ACCOUNT") or ""),
-        "lathi_profile": str(review.get("lathi_profile") or os.environ.get("KAMANDAL_OPERATOR_REVIEW_LATHI_PROFILE") or os.environ.get("KAMANDAL_LATHI_PROFILE") or "jarvis-northstar"),
-        "lathi_mode": str(review.get("lathi_mode") or os.environ.get("KAMANDAL_OPERATOR_REVIEW_LATHI_MODE") or os.environ.get("KAMANDAL_LAUNCHD_ALERT_MODE") or "live"),
+        "lathi_profile": str(
+            review.get("lathi_profile")
+            or os.environ.get("KAMANDAL_OPERATOR_REVIEW_LATHI_BUS_PROFILE")
+            or os.environ.get("KAMANDAL_OPERATOR_REVIEW_LATHI_PROFILE")
+            or default_lathi_bus_profile()
+        ),
+        "lathi_mode": str(os.environ.get("KAMANDAL_OPERATOR_REVIEW_LATHI_BUS_MODE") or review.get("lathi_mode") or os.environ.get("KAMANDAL_OPERATOR_REVIEW_LATHI_MODE") or os.environ.get("KAMANDAL_LAUNCHD_ALERT_MODE") or "live"),
         "expiry_minutes": int(review.get("expiry_minutes") or telegram.get("expiry_minutes") or 30),
         "max_pending_requests": int(review.get("max_pending_requests") or telegram.get("max_pending_requests") or 10),
         "use_inline_buttons": _as_bool(review.get("use_inline_buttons"), True),
@@ -132,7 +137,7 @@ def send_operator_review_message(config: dict[str, Any], request: dict[str, Any]
     policy = operator_review_policy(config)
     if not policy["enabled"]:
         return {"request_id": request.get("request_id"), "status": "disabled"}
-    if str(policy["transport"]).lower() == "lathi":
+    if str(policy["transport"]).lower() in {"lathi", "lathi_bus", "lathi-bus"}:
         return _send_lathi_operator_review_message(policy, request, store)
     if not policy["target"]:
         raise OperatorReviewError("operator review target is not configured")
