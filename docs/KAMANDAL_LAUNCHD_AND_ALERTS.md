@@ -135,10 +135,12 @@ Override the YELLOW reasons with:
 KAMANDAL_HEALTH_NOTIFY_REASONS=close_order_stale,stale_failed_close_order,portfolio_bpr_over_target
 ```
 
-On oldmac, the live Kamandal profile should send through the existing Lane
-Host/Jasper Telegram receipt bot (`jasper_receipts`) with
-`live_send_enabled=true`. Keep `live_collect_enabled=false` while Lane Host owns
-the shared `getUpdates` poller for that token.
+On oldmac, the live Kamandal profile currently sends through the Jasper receipt
+bot (`jasper_receipts`) with `live_send_enabled=true`. This is a transitional
+compatibility path. The target architecture is documented in
+[`lathi_control_tower_kamandal_jobs.md`](lathi_control_tower_kamandal_jobs.md):
+Lathi owns live decision collection, Lathi Bus owns the Telegram/Obsidian
+surface protocol, and Lane Host is retired from the Kamandal operator path.
 
 ## Operator Review Behavior
 
@@ -162,9 +164,9 @@ kamandal review <request_id> <action> [note]
 ```
 
 Live entry approval sends also support Lathi Bus `telegram-ask`. Button presses
-are not collected by a separate Lathi Bus poller while Lane Host owns the Jasper
-bot's sole `getUpdates` loop; fallback text/manual CLI approval remains the
-decision path until the callback relay or poller ownership is cut over.
+should be collected by a Lathi-owned collector after the sole-poller cutover.
+Until that cutover is complete, fallback text/manual CLI approval remains the
+decision path.
 
 ## Oldmac Verification
 

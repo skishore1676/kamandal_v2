@@ -3,23 +3,28 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from kamandal_v2.config import load_control
 from kamandal_v2.live.health import run_live_health
 from kamandal_v2.ops.alerts import AlertResult, default_lathi_bus_profile, send_lathi_alert, tail
+from kamandal_v2.ops.launchd_registry import (
+    ALL_JOBS,
+    CENTRAL,
+    JOB_LABEL_SUFFIXES,
+    JOB_SCHEDULES,
+    MONITORED_JOBS,
+    SCRIPT_JOBS,
+)
 from kamandal_v2.stores.sqlite import LocalStore
 
 
-CENTRAL = ZoneInfo("America/Chicago")
 RESULT_PREFIX = "KAMANDAL_LAUNCHD_JOB="
 HOLIDAYS = {
     "2026-01-01",
@@ -43,79 +48,10 @@ HOLIDAYS = {
     "2027-11-25",
     "2027-12-24",
 }
-SCRIPT_JOBS = {
-    "x-bookmarks": "run_x_bookmark_extraction.sh",
-    "youtube": "run_youtube_extraction.sh",
-    "my-ideas": "run_my_ideas_import.sh",
-    "live-reconciliation": "run_live_reconciliation.sh",
-    "live-advisory": "run_live_advisory.sh",
-    "live-approved-orders": "run_live_approved_orders.sh",
-    "live-management": "run_live_management.sh",
-    "earnings": "run_earnings_capture.sh",
-    "iv": "run_iv_capture.sh",
-    "iv-afternoon": "run_iv_capture.sh",
-    "weekly-reviewer": "run_weekly_reviewer.sh",
-}
-ALL_JOBS = sorted([*SCRIPT_JOBS, "live-health-report", "scheduled-job-health"])
-
 ACTIONABLE_HEALTH_REASONS = {
     "close_order_stale",
     "portfolio_bpr_over_target",
     "stale_failed_close_order",
-}
-MONITORED_JOBS = [
-    "x-bookmarks",
-    "youtube",
-    "my-ideas",
-    "live-reconciliation",
-    "live-advisory",
-    "live-approved-orders",
-    "live-management",
-    "live-health-report",
-    "earnings",
-    "iv",
-    "iv-afternoon",
-    "weekly-reviewer",
-]
-JOB_LABEL_SUFFIXES = {
-    "x-bookmarks": "x_bookmarks",
-    "youtube": "youtube",
-    "my-ideas": "my_ideas",
-    "live-reconciliation": "live_reconciliation",
-    "live-advisory": "live_advisory",
-    "live-approved-orders": "live_approved_orders",
-    "live-management": "live_management",
-    "live-health-report": "live_health_report",
-    "scheduled-job-health": "scheduled_job_health",
-    "earnings": "earnings",
-    "iv": "iv",
-    "iv-afternoon": "iv_afternoon",
-    "weekly-reviewer": "weekly_reviewer",
-}
-
-
-@dataclass(frozen=True)
-class JobSchedule:
-    fixed_times: tuple[time, ...] = ()
-    cadence_minutes: int | None = None
-    window_start: time | None = None
-    window_end: time | None = None
-    weekday: int | None = None
-
-
-JOB_SCHEDULES = {
-    "x-bookmarks": JobSchedule(fixed_times=(time(8, 55),)),
-    "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 30))),
-    "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
-    "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 30))),
-    "live-advisory": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 40))),
-    "live-approved-orders": JobSchedule(cadence_minutes=5, window_start=time(9, 0), window_end=time(15, 15)),
-    "live-management": JobSchedule(cadence_minutes=15, window_start=time(9, 0), window_end=time(15, 15)),
-    "live-health-report": JobSchedule(fixed_times=(time(9, 10), time(11, 45), time(14, 45), time(15, 20))),
-    "earnings": JobSchedule(fixed_times=(time(8, 40),)),
-    "iv": JobSchedule(fixed_times=(time(8, 45),)),
-    "iv-afternoon": JobSchedule(fixed_times=(time(14, 45),)),
-    "weekly-reviewer": JobSchedule(fixed_times=(time(10, 0),), weekday=4),
 }
 
 

@@ -1,0 +1,342 @@
+"""Kamandal bounded control contract for Lathi Control Tower."""
+
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from datetime import UTC, datetime
+import json
+import os
+from pathlib import Path
+import re
+from typing import Any, Iterator
+import uuid
+
+from kamandal_v2.config import load_control
+from kamandal_v2.live.health import run_live_health
+from kamandal_v2.live.operator_review import (
+    OperatorReviewError,
+    apply_operator_review_decision,
+    send_pending_operator_review_requests,
+)
+from kamandal_v2.ops.alerts import AlertResult, default_lathi_bus_profile, send_lathi_alert
+from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.tools.launchd_job import (
+    health_attention,
+    render_live_health_summary,
+    scheduled_job_health,
+)
+from kamandal_v2.tools.review_queue import subject_fingerprint
+
+
+SCHEMA = "kamandal.launchd.control_result.v1"
+CONTROL_ACTIONS = {
+    "live-status",
+    "scheduled-job-health-now",
+    "live-health-report-now",
+    "send-pending-review-requests",
+    "apply-review-decision",
+}
+
+
+def run_control_action(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    action_id = str(args.action_id or f"kamandal-{uuid.uuid4().hex[:16]}")
+    store = LocalStore(args.db) if args.db else LocalStore()
+    config = load_control()
+    lock_key = _lock_key(args.command, getattr(args, "request_id", "") or "")
+    try:
+        with _control_lock(lock_key, action_id=action_id):
+            if args.command == "live-status":
+                result = _live_status(config, store, action_id)
+            elif args.command == "scheduled-job-health-now":
+                result = _scheduled_job_health_now(args, action_id)
+            elif args.command == "live-health-report-now":
+                result = _live_health_report_now(args, config, store, action_id)
+            elif args.command == "send-pending-review-requests":
+                result = _send_pending_review_requests(config, store, action_id)
+            elif args.command == "apply-review-decision":
+                result = _apply_review_decision(args, config, store, action_id)
+            else:
+                result = _base(args.command, action_id, ok=False, status="failed", error=f"unknown action: {args.command}")
+    except ControlLockBusy as exc:
+        result = _base(args.command, action_id, ok=False, status="lock_busy", error=str(exc))
+    except Exception as exc:  # noqa: BLE001 - contract should return structured failure.
+        result = _base(
+            args.command,
+            action_id,
+            ok=False,
+            status="failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+    status_code = 0 if result.get("ok") else 3 if result.get("status") == "lock_busy" else 2
+    return status_code, result
+
+
+def _live_status(config: dict[str, Any], store: LocalStore, action_id: str) -> dict[str, Any]:
+    report = run_live_health(store, config)
+    return _base(
+        "live-status",
+        action_id,
+        ok=True,
+        status="succeeded",
+        result_status=str(report.get("overall") or "NO_DATA").lower(),
+        payload=report,
+    )
+
+
+def _scheduled_job_health_now(args: argparse.Namespace, action_id: str) -> dict[str, Any]:
+    repo_root = Path(args.repo_root).expanduser().resolve() if args.repo_root else Path.cwd()
+    report = scheduled_job_health(repo_root=repo_root)
+    issues = report.get("issues") or []
+    return _base(
+        "scheduled-job-health-now",
+        action_id,
+        ok=True,
+        status="succeeded",
+        result_status="degraded" if issues else "ok",
+        payload=report,
+    )
+
+
+def _live_health_report_now(args: argparse.Namespace, config: dict[str, Any], store: LocalStore, action_id: str) -> dict[str, Any]:
+    report = run_live_health(store, config)
+    attention = health_attention(report)
+    alert: AlertResult | None = None
+    if attention.get("notify") and args.alert_mode != "off":
+        alert = send_lathi_alert(
+            title="Kamandal live health",
+            body=render_live_health_summary(report),
+            level=str(attention.get("level") or "warning"),
+            mode=args.alert_mode,
+            profile=args.alert_profile,
+        )
+    ok = True if alert is None else bool(alert.ok)
+    return _base(
+        "live-health-report-now",
+        action_id,
+        ok=ok,
+        status="succeeded" if ok else "failed",
+        result_status=str(report.get("overall") or "NO_DATA").lower(),
+        payload={
+            "health": report,
+            "attention": attention,
+            "alert": alert.to_dict() if alert else None,
+        },
+    )
+
+
+def _send_pending_review_requests(config: dict[str, Any], store: LocalStore, action_id: str) -> dict[str, Any]:
+    result = send_pending_operator_review_requests(config, store=store)
+    failed = [
+        item
+        for item in result.get("sent") or []
+        if str(item.get("status") or "").lower() == "failed"
+    ]
+    return _base(
+        "send-pending-review-requests",
+        action_id,
+        ok=not failed,
+        status="succeeded" if not failed else "failed",
+        result_status="sent" if result.get("sent") else "idle",
+        payload=result,
+    )
+
+
+def _apply_review_decision(args: argparse.Namespace, config: dict[str, Any], store: LocalStore, action_id: str) -> dict[str, Any]:
+    request = store.operator_review_request(args.request_id)
+    if not request:
+        return _base(
+            "apply-review-decision",
+            action_id,
+            ok=False,
+            status="refused",
+            result_status="not_found",
+            request_id=args.request_id,
+            selected_action=args.review_action,
+            error=f"operator review request not found: {args.request_id}",
+        )
+    current_fingerprint = subject_fingerprint(request)
+    if args.subject_fingerprint and args.subject_fingerprint != current_fingerprint:
+        return _base(
+            "apply-review-decision",
+            action_id,
+            ok=False,
+            status="refused",
+            result_status="fingerprint_mismatch",
+            request_id=args.request_id,
+            selected_action=args.review_action,
+            subject_id=str(request.get("subject_id") or ""),
+            subject_fingerprint=current_fingerprint,
+            error="subject_fingerprint did not match current Kamandal request",
+        )
+    try:
+        result = apply_operator_review_decision(
+            config,
+            args.request_id,
+            args.review_action,
+            note=args.note,
+            source=args.source,
+            decided_by=args.decided_by,
+            store=store,
+        )
+    except (OperatorReviewError, RuntimeError, ValueError) as exc:
+        return _base(
+            "apply-review-decision",
+            action_id,
+            ok=False,
+            status="refused",
+            result_status="validation_failed",
+            request_id=args.request_id,
+            selected_action=args.review_action,
+            subject_id=str(request.get("subject_id") or ""),
+            subject_fingerprint=current_fingerprint,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+    receipt = {
+        "request_id": args.request_id,
+        "action": args.review_action,
+        "source": args.source,
+        "decided_by": args.decided_by,
+        "subject_id": str(request.get("subject_id") or ""),
+        "subject_fingerprint": current_fingerprint,
+        "apply_result": result,
+    }
+    store.event(
+        "launchd_control_review_decision",
+        {
+            "action_id": action_id,
+            **receipt,
+        },
+    )
+    return _base(
+        "apply-review-decision",
+        action_id,
+        ok=True,
+        status="succeeded",
+        result_status=str(result.get("request_status") or "applied"),
+        request_id=args.request_id,
+        selected_action=args.review_action,
+        subject_id=str(request.get("subject_id") or ""),
+        subject_fingerprint=current_fingerprint,
+        payload=receipt,
+        receipt_ref=f"kamandal:event:launchd_control_review_decision:{action_id}",
+    )
+
+
+def _base(
+    action: str,
+    action_id: str,
+    *,
+    ok: bool,
+    status: str,
+    result_status: str | None = None,
+    payload: dict[str, Any] | None = None,
+    error: str | None = None,
+    error_type: str | None = None,
+    request_id: str | None = None,
+    selected_action: str | None = None,
+    subject_id: str | None = None,
+    subject_fingerprint: str | None = None,
+    receipt_ref: str | None = None,
+) -> dict[str, Any]:
+    result = {
+        "schema": SCHEMA,
+        "generated_at": _now(),
+        "ok": ok,
+        "status": status,
+        "result_status": result_status or status,
+        "source_id": "kamandal",
+        "action": action,
+        "action_id": action_id,
+    }
+    if request_id:
+        result["request_id"] = request_id
+    if selected_action:
+        result["selected_action"] = selected_action
+    if subject_id:
+        result["subject_id"] = subject_id
+    if subject_fingerprint:
+        result["subject_fingerprint"] = subject_fingerprint
+    if receipt_ref:
+        result["receipt_ref"] = receipt_ref
+    if payload is not None:
+        result["payload"] = payload
+    if error:
+        result["error"] = error
+    if error_type:
+        result["error_type"] = error_type
+    return result
+
+
+class ControlLockBusy(RuntimeError):
+    pass
+
+
+@contextmanager
+def _control_lock(key: str, *, action_id: str) -> Iterator[None]:
+    lock_dir = Path(os.getenv("KAMANDAL_CONTROL_LOCK_DIR", "data/logs/launchd/control_locks"))
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    path = lock_dir / f"{key}.lock"
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError as exc:
+        raise ControlLockBusy(f"control action already in flight: {key}") from exc
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"action_id": action_id, "created_at": _now()}, sort_keys=True))
+        yield
+    finally:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _lock_key(action: str, request_id: str = "") -> str:
+    raw = f"{action}-{request_id}" if request_id else action
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", raw)[:160]
+
+
+def _now() -> str:
+    return datetime.now(tz=UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=sorted(CONTROL_ACTIONS))
+    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
+    parser.add_argument("--action-id", default="")
+    parser.add_argument("--db", default="", help="Optional SQLite path; defaults to Kamandal data DB")
+    parser.add_argument("--repo-root", default="", help="Optional repo root for scheduled-job health")
+    parser.add_argument("--alert-mode", choices=["off", "spool", "live"], default="off")
+    parser.add_argument("--alert-profile", default=default_lathi_bus_profile())
+    parser.add_argument("--request-id", default="")
+    parser.add_argument("--action", dest="review_action", default="")
+    parser.add_argument("--source", default="lathi")
+    parser.add_argument("--decided-by", default="Lathi")
+    parser.add_argument("--note", default="")
+    parser.add_argument("--subject-fingerprint", default="")
+    args = parser.parse_args(argv)
+
+    if args.command == "apply-review-decision":
+        if not args.request_id or not args.review_action:
+            payload = _base(
+                args.command,
+                str(args.action_id or f"kamandal-{uuid.uuid4().hex[:16]}"),
+                ok=False,
+                status="failed",
+                result_status="missing_arguments",
+                error="apply-review-decision requires --request-id and --action",
+            )
+            print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+            return 2
+
+    status_code, payload = run_control_action(args)
+    print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+    return status_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

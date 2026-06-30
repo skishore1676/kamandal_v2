@@ -66,6 +66,9 @@ scripts/launchd/install_kamandal_launchd.sh install
 
 `scripts/cron_install_oldmac.sh` is now a compatibility wrapper that installs launchd labels and removes the old marked Kamandal cron block. See [docs/KAMANDAL_LAUNCHD_AND_ALERTS.md](docs/KAMANDAL_LAUNCHD_AND_ALERTS.md).
 
+For the broader Control Tower boundary across Kamandal, Lathi, and Lathi Bus,
+see [docs/lathi_control_tower_kamandal_jobs.md](docs/lathi_control_tower_kamandal_jobs.md).
+
 ## Key CLI Commands
 
 - `.venv/bin/kamandal run-intelligence-cycle` - Import transcripts, build plans, and optimize portfolio.
