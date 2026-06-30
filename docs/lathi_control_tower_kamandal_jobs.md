@@ -18,6 +18,14 @@ Lathi is the operating cockpit and action journal.
 Lathi Bus is the human surface protocol.
 ```
 
+Update 2026-06-30: Lathi is also the mobile decision collector. Kamandal
+continues to create review requests and apply/refuse decisions through its own
+validated command. Lathi mirrors each active request to one Telegram button card,
+collects Suman's phone press, journals the operator intent, and calls
+`kamandal_v2.tools.launchd_control apply-review-decision` with request id,
+selected action, action id, and subject fingerprint. Lane Host/Jasper is
+tombstoned as a Telegram poller for this path.
+
 Lathi may own the visible button, action journal event, worker dispatch, retry
 state, and Control Tower card. Kamandal still owns the trading-safe command, the
 meaning of success or failure, and every broker-impacting validation.
