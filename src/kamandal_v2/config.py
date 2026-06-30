@@ -155,6 +155,7 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "live.reconciliation.enabled": _env_bool("KAMANDAL_LIVE_RECONCILIATION_ENABLED"),
         "live.reconciliation.broker_flat_confirmations_required": _env_int("KAMANDAL_LIVE_RECONCILIATION_FLAT_CONFIRMATIONS_REQUIRED"),
         "live.reconciliation.auto_retire_ghost_after_confirmations": _env_bool("KAMANDAL_LIVE_RECONCILIATION_AUTO_RETIRE_GHOST"),
+        "live.reconciliation.auto_local_repair_enabled": _env_bool("KAMANDAL_LIVE_RECONCILIATION_AUTO_LOCAL_REPAIR"),
         "live.reconciliation.block_management_on_open_issues": _env_bool("KAMANDAL_LIVE_RECONCILIATION_BLOCK_MANAGEMENT"),
         "live.reconciliation.order_reconciliation_enabled": _env_bool("KAMANDAL_LIVE_ORDER_RECONCILIATION_ENABLED"),
         "live.reconciliation.stale_close_approval_minutes": _env_int("KAMANDAL_LIVE_STALE_CLOSE_APPROVAL_MINUTES"),

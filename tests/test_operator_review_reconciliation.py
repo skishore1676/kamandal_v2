@@ -114,6 +114,21 @@ def _put_group(group_id: str, *, long_strike: int, short_strike: int, net_credit
     }
 
 
+def _close_ticket(group: dict, ticket_hash: str = "ticket-close-filled") -> dict:
+    return {
+        "ticket_hash": ticket_hash,
+        "order_id": f"order-{ticket_hash}",
+        "plan_id": "plan-close",
+        "candidate_id": str((group.get("candidate") or {}).get("candidate_id") or group["group_id"]),
+        "idea_id": str((group.get("candidate") or {}).get("idea_id") or group["group_id"]),
+        "group_id": group["group_id"],
+        "intent_type": "close",
+        "underlying": group["underlying"],
+        "structure": group["structure"],
+        "limit_price": "1.00",
+    }
+
+
 def _config() -> dict:
     return {
         "live": {
@@ -121,6 +136,7 @@ def _config() -> dict:
                 "enabled": True,
                 "broker_flat_confirmations_required": 2,
                 "auto_retire_ghost_after_confirmations": True,
+                "auto_local_repair_enabled": True,
                 "block_management_on_open_issues": True,
             },
             "operator_review": {"enabled": True, "target": "123", "account": "default", "use_inline_buttons": True, "text_fallback": True},
@@ -244,8 +260,11 @@ def test_reconcile_auto_retires_ghost_after_two_flat_confirmations(tmp_path, mon
     assert store.live_position_group("live_group_amzn") is not None
 
     second = reconcile_live_positions(_config(), store=store)
-    assert second["issues"][0]["observed_count"] == 2
+    assert second["issues"] == []
     assert not store.open_live_position_groups()
+    retired = store.live_reconciliation_issue(first["issues"][0]["issue_id"])
+    assert retired["status"] == "retired"
+    assert retired["observed_count"] == 2
 
 
 def test_reconcile_send_review_failure_is_nonfatal(tmp_path, monkeypatch) -> None:
@@ -322,6 +341,82 @@ def test_reconcile_aggregates_duplicate_local_occ_legs(tmp_path, monkeypatch) ->
     assert result["issues"] == []
     assert store.live_reconciliation_issue("recon_stale_mrvl_qty")["status"] == "resolved"
     assert store.open_live_reconciliation_issues(underlying="MRVL") == []
+
+
+def test_reconcile_auto_retires_closed_duplicate_group_when_aggregate_matches_broker(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    closed = _put_group("live_group_mrvl_closed", long_strike=240, short_strike=250)
+    open_group = _put_group("live_group_mrvl_open", long_strike=240, short_strike=250)
+    for group in (closed, open_group):
+        store.save_live_position_group(group["group_id"], group, status="open")
+        store.save_live_position(group["group_id"], group["group_id"], group, status="open")
+    store.save_live_order_intent(_close_ticket(closed), status="close_filled")
+
+    class Broker:
+        def broker_positions(self):
+            return [
+                {
+                    "asset_type": "option",
+                    "occ_symbol": "MRVL260717P00240000",
+                    "underlying": "MRVL",
+                    "quantity": 1.0,
+                },
+                {
+                    "asset_type": "option",
+                    "occ_symbol": "MRVL260717P00250000",
+                    "underlying": "MRVL",
+                    "quantity": -1.0,
+                },
+            ]
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store, send_review=True)
+
+    assert result["issues"] == []
+    open_ids = {group["group_id"] for group in store.open_live_position_groups()}
+    assert open_ids == {"live_group_mrvl_open"}
+    retired_issues = store.open_live_reconciliation_issues(underlying="MRVL")
+    assert retired_issues == []
+    closed_group = store.live_position_group("live_group_mrvl_closed")
+    assert closed_group["closed_status"] == "reconciled_retired"
+    assert closed_group["close_reason"] == "close_filled_ticket_reconciles_broker_aggregate"
+
+
+def test_reconcile_does_not_auto_retire_duplicate_group_without_filled_close(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    first = _put_group("live_group_mrvl_1", long_strike=240, short_strike=250)
+    second = _put_group("live_group_mrvl_2", long_strike=240, short_strike=250)
+    for group in (first, second):
+        store.save_live_position_group(group["group_id"], group, status="open")
+        store.save_live_position(group["group_id"], group["group_id"], group, status="open")
+
+    class Broker:
+        def broker_positions(self):
+            return [
+                {
+                    "asset_type": "option",
+                    "occ_symbol": "MRVL260717P00240000",
+                    "underlying": "MRVL",
+                    "quantity": 1.0,
+                },
+                {
+                    "asset_type": "option",
+                    "occ_symbol": "MRVL260717P00250000",
+                    "underlying": "MRVL",
+                    "quantity": -1.0,
+                },
+            ]
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store)
+
+    assert len(result["issues"]) == 2
+    assert {group["group_id"] for group in store.open_live_position_groups()} == {"live_group_mrvl_1", "live_group_mrvl_2"}
+    decisions = [issue["decision"] for issue in result["issues"]]
+    assert {decision["tier"] for decision in decisions} == {"human_review"}
+    assert {decision["reason"] for decision in decisions} == {"quantity_mismatch_requires_review"}
 
 
 def test_live_portfolio_state_exposes_group_count_and_underlying_bpr(tmp_path) -> None:

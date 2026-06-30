@@ -117,6 +117,7 @@ live:
     enabled: true
     broker_flat_confirmations_required: 2
     auto_retire_ghost_after_confirmations: true
+    auto_local_repair_enabled: true
     block_management_on_open_issues: true
     order_reconciliation_enabled: true
     expire_stale_close_approvals: true
