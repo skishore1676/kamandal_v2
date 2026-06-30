@@ -156,3 +156,25 @@ def test_scheduled_job_health_accepts_recent_frequent_job(tmp_path, monkeypatch)
     )
 
     assert report["issues"] == []
+
+
+def test_scheduled_job_health_suppresses_missing_log_when_installed_after_due(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(launchd_job, "MONITORED_JOBS", ["x-bookmarks"])
+    log_dir = tmp_path / "logs"
+    launchd_dir = tmp_path / "LaunchAgents"
+    log_dir.mkdir()
+    launchd_dir.mkdir()
+    plist = launchd_dir / "com.kamandal.v2.x_bookmarks.plist"
+    plist.write_text("plist")
+    installed_after_due = datetime(2026, 6, 30, 15, 0, tzinfo=launchd_job.CENTRAL).timestamp()
+    os.utime(plist, (installed_after_due, installed_after_due))
+
+    report = launchd_job.scheduled_job_health(
+        repo_root=tmp_path,
+        log_dir=log_dir,
+        launchd_dir=launchd_dir,
+        label_prefix="com.kamandal.v2",
+        now=datetime(2026, 6, 30, 16, 0, tzinfo=launchd_job.CENTRAL),
+    )
+
+    assert report["issues"] == []

@@ -342,11 +342,19 @@ def render_live_health_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def scheduled_job_health(*, repo_root: Path, now: datetime | None = None, log_dir: Path | None = None, label_prefix: str | None = None) -> dict[str, Any]:
+def scheduled_job_health(
+    *,
+    repo_root: Path,
+    now: datetime | None = None,
+    log_dir: Path | None = None,
+    launchd_dir: Path | None = None,
+    label_prefix: str | None = None,
+) -> dict[str, Any]:
     now = now or datetime.now(CENTRAL)
     if now.tzinfo is None:
         now = now.replace(tzinfo=CENTRAL)
     log_dir = log_dir or Path(os.getenv("KAMANDAL_LAUNCHD_LOG_DIR", str(repo_root / "data" / "logs" / "launchd")))
+    launchd_dir = launchd_dir or Path(os.getenv("KAMANDAL_LAUNCHD_DIR", str(Path.home() / "Library" / "LaunchAgents")))
     label_prefix = label_prefix or os.getenv("KAMANDAL_LAUNCHD_LABEL_PREFIX", "com.kamandal.v2")
     grace = int(os.getenv("KAMANDAL_JOB_HEALTH_GRACE_MINUTES", "20"))
     rows = []
@@ -355,8 +363,9 @@ def scheduled_job_health(*, repo_root: Path, now: datetime | None = None, log_di
         schedule = JOB_SCHEDULES[job]
         label = f"{label_prefix}.{JOB_LABEL_SUFFIXES[job]}"
         log_path = log_dir / f"{label}.out.log"
+        plist_path = launchd_dir / f"{label}.plist"
         expectation = expected_job_observation(schedule, now=now, grace_minutes=grace)
-        observation = read_launchd_observation(log_path)
+        observation = read_launchd_observation(log_path, plist_path=plist_path)
         issue = evaluate_job_observation(job, expectation, observation)
         row = {
             "job": job,
@@ -401,9 +410,12 @@ def expected_job_observation(schedule: JobSchedule, *, now: datetime, grace_minu
     return {"status": "due", "acceptable_after": acceptable_after.isoformat(), "expected_by": latest_due.isoformat()}
 
 
-def read_launchd_observation(log_path: Path) -> dict[str, Any]:
+def read_launchd_observation(log_path: Path, *, plist_path: Path | None = None) -> dict[str, Any]:
+    installed_at = None
+    if plist_path and plist_path.exists():
+        installed_at = datetime.fromtimestamp(plist_path.stat().st_mtime, CENTRAL).isoformat()
     if not log_path.exists():
-        return {"status": "missing_log", "log_path": str(log_path)}
+        return {"status": "missing_log", "log_path": str(log_path), "installed_at": installed_at}
     payload: dict[str, Any] | None = None
     try:
         for line in reversed(log_path.read_text(encoding="utf-8", errors="replace").splitlines()):
@@ -423,12 +435,18 @@ def read_launchd_observation(log_path: Path) -> dict[str, Any]:
         "reasons": (payload or {}).get("reasons"),
         "mtime": mtime.isoformat(),
         "log_path": str(log_path),
+        "installed_at": installed_at,
     }
 
 
 def evaluate_job_observation(job: str, expectation: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any] | None:
     if expectation["status"] in {"not_due_yet", "pending_grace", "not_expected_today"}:
         return None
+    if observation["status"] == "missing_log" and observation.get("installed_at") and expectation.get("expected_by"):
+        installed_at = datetime.fromisoformat(str(observation["installed_at"]))
+        expected_by = datetime.fromisoformat(str(expectation["expected_by"]))
+        if installed_at > expected_by:
+            return None
     if observation["status"] in {"missing_log", "unreadable_log", "no_result_line"}:
         return {"job": job, "reason": observation["status"], "detail": observation.get("error") or observation.get("log_path")}
     observed_job = observation.get("job")
