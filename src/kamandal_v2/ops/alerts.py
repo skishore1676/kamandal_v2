@@ -136,7 +136,7 @@ def default_lathi_invocation(cwd: str | Path | None = None) -> tuple[list[str], 
 
 
 def default_lathi_bus_profile() -> str:
-    return os.getenv("KAMANDAL_LATHI_BUS_PROFILE") or os.getenv("KAMANDAL_LATHI_PROFILE") or "jarvis-northstar"
+    return os.getenv("KAMANDAL_LATHI_BUS_PROFILE") or os.getenv("KAMANDAL_LATHI_PROFILE") or "kamandal-northstar"
 
 
 def populate_secret_fallbacks(env: dict[str, str]) -> None:

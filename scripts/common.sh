@@ -115,7 +115,7 @@ send_telegram() {
   local title="${2:-Kamandal receipt}"
   local level="${3:-info}"
   local mode="${KAMANDAL_LAUNCHD_ALERT_MODE:-live}"
-  local profile="${KAMANDAL_LATHI_BUS_PROFILE:-${KAMANDAL_LATHI_PROFILE:-jarvis-northstar}}"
+  local profile="${KAMANDAL_LATHI_BUS_PROFILE:-${KAMANDAL_LATHI_PROFILE:-kamandal-northstar}}"
   PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" "$KAMANDAL_PYTHON" -m kamandal_v2.ops.alerts notify \
     --title "$title" \
     --body "$message" \

@@ -98,7 +98,7 @@ Defaults:
 
 ```bash
 KAMANDAL_LAUNCHD_ALERT_MODE=live
-KAMANDAL_LATHI_BUS_PROFILE=jarvis-northstar
+KAMANDAL_LATHI_BUS_PROFILE=kamandal-northstar
 ```
 
 Optional overrides:
@@ -135,9 +135,10 @@ Override the YELLOW reasons with:
 KAMANDAL_HEALTH_NOTIFY_REASONS=close_order_stale,stale_failed_close_order,portfolio_bpr_over_target
 ```
 
-On oldmac, the live profile should send through the existing Lane Host/Jasper
-Telegram receipt bot (`jasper_receipts`) with `live_send_enabled=true` and
-`live_collect_enabled=false` unless Lathi Bus becomes the sole Telegram poller.
+On oldmac, the live Kamandal profile should send through the existing Lane
+Host/Jasper Telegram receipt bot (`jasper_receipts`) with
+`live_send_enabled=true`. Keep `live_collect_enabled=false` while Lane Host owns
+the shared `getUpdates` poller for that token.
 
 ## Operator Review Behavior
 
@@ -150,7 +151,7 @@ Operator review defaults to Lathi Bus `telegram-ask`:
 live:
   operator_review:
     transport: lathi_bus
-    lathi_profile: jarvis-northstar
+    lathi_profile: kamandal-northstar
 ```
 
 The review card contains bounded actions such as `dismiss`, `hold`, and
@@ -160,10 +161,10 @@ The review card contains bounded actions such as `dismiss`, `hold`, and
 kamandal review <request_id> <action> [note]
 ```
 
-Live entry approval sends also support Lathi Bus `telegram-ask`. Button
-collection should remain send-only (`live_collect_enabled=false`) until Lathi Bus
-is the sole poller for that Telegram bot token; fallback text/manual CLI approval
-remains the decision path.
+Live entry approval sends also support Lathi Bus `telegram-ask`. Button presses
+are not collected by a separate Lathi Bus poller while Lane Host owns the Jasper
+bot's sole `getUpdates` loop; fallback text/manual CLI approval remains the
+decision path until the callback relay or poller ownership is cut over.
 
 ## Oldmac Verification
 
@@ -173,8 +174,8 @@ After deployment:
 cd /Users/sunny/Documents/kamandal_v2
 git rev-parse --short HEAD
 PYTHONPATH=src .venv/bin/python -m pytest tests/test_ops_alerts.py tests/test_launchd_job.py tests/test_operator_review_reconciliation.py tests/test_live_health.py -q
-cd /Users/sunny/code/lathi-bus && python3 -m lathi_bus.cli doctor --profile jarvis-northstar
-cd /Users/sunny/code/lathi-bus && python3 -m lathi_bus.cli telegram-doctor --profile jarvis-northstar
+cd /Users/sunny/code/lathi-bus && python3 -m lathi_bus.cli doctor --profile kamandal-northstar
+cd /Users/sunny/code/lathi-bus && python3 -m lathi_bus.cli telegram-doctor --profile kamandal-northstar
 cd /Users/sunny/Documents/kamandal_v2 && PYTHONPATH=src .venv/bin/python -m kamandal_v2.tools.launchd_job live-health-report --force --alert-mode spool
 cd /Users/sunny/Documents/kamandal_v2 && PYTHONPATH=src .venv/bin/python -m kamandal_v2.tools.launchd_job scheduled-job-health --force --alert-mode spool
 scripts/launchd/install_kamandal_launchd.sh install

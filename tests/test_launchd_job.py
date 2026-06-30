@@ -23,7 +23,7 @@ def test_launchd_job_skips_non_trading_day(monkeypatch, capsys) -> None:  # noqa
 
 
 def test_script_job_failure_sends_alert(monkeypatch, tmp_path, capsys) -> None:  # noqa: ANN001
-    args = SimpleNamespace(job="iv", force=False, alert_mode="spool", alert_profile="jarvis-northstar")
+    args = SimpleNamespace(job="iv", force=False, alert_mode="spool", alert_profile="kamandal-northstar")
     completed = subprocess.CompletedProcess(["run"], 9, stdout="bad stdout", stderr="bad stderr")
     monkeypatch.setattr(launchd_job, "run_script", lambda _script, repo_root, force: completed)
     monkeypatch.setattr(
@@ -64,7 +64,7 @@ def test_live_health_summary_and_alert_level() -> None:
 
 
 def test_live_health_report_job_suppresses_green_alert(monkeypatch, capsys) -> None:  # noqa: ANN001
-    args = SimpleNamespace(job="live-health-report", alert_mode="spool", alert_profile="jarvis-northstar")
+    args = SimpleNamespace(job="live-health-report", alert_mode="spool", alert_profile="kamandal-northstar")
     monkeypatch.setattr(launchd_job, "load_control", lambda: {})
     monkeypatch.setattr(
         launchd_job,
@@ -90,7 +90,7 @@ def test_live_health_report_job_suppresses_green_alert(monkeypatch, capsys) -> N
 
 
 def test_live_health_report_job_sends_red_alert(monkeypatch, capsys) -> None:  # noqa: ANN001
-    args = SimpleNamespace(job="live-health-report", alert_mode="spool", alert_profile="jarvis-northstar")
+    args = SimpleNamespace(job="live-health-report", alert_mode="spool", alert_profile="kamandal-northstar")
     monkeypatch.setattr(launchd_job, "load_control", lambda: {})
     monkeypatch.setattr(
         launchd_job,

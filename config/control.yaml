@@ -130,7 +130,7 @@ live:
     channel: telegram
     target: "5425926875"
     account: ""
-    lathi_profile: jarvis-northstar
+    lathi_profile: kamandal-northstar
     lathi_mode: live
     expiry_minutes: 30
     max_pending_requests: 10

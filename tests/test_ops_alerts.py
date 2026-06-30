@@ -36,6 +36,13 @@ def test_lathi_bus_profile_prefers_new_env_name(monkeypatch) -> None:  # noqa: A
     assert default_lathi_bus_profile() == "bus"
 
 
+def test_lathi_bus_profile_defaults_to_kamandal(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("KAMANDAL_LATHI_BUS_PROFILE", raising=False)
+    monkeypatch.delenv("KAMANDAL_LATHI_PROFILE", raising=False)
+
+    assert default_lathi_bus_profile() == "kamandal-northstar"
+
+
 def test_send_lathi_alert_live_requires_network_call(monkeypatch) -> None:
     def fake_run(_command, **_kwargs):  # noqa: ANN001
         return SimpleNamespace(returncode=0, stdout='{"network_call_performed": false, "live_send_requested": true}', stderr="")

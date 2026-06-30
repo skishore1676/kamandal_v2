@@ -111,6 +111,6 @@ Operational receipts and launchd failures go through Lathi Bus by default:
 
 - `KAMANDAL_LAUNCHD_ALERT_MODE=live` sends Telegram notifications and requires Lathi Bus to confirm a network send.
 - `KAMANDAL_LAUNCHD_ALERT_MODE=spool` is for dry-run/smoke checks.
-- `KAMANDAL_LATHI_BUS_PROFILE=jarvis-northstar` is the default Lathi Bus profile; `KAMANDAL_LATHI_PROFILE` remains a legacy alias.
+- `KAMANDAL_LATHI_BUS_PROFILE=kamandal-northstar` is the default Lathi Bus profile; `KAMANDAL_LATHI_PROFILE` remains a legacy alias.
 
 Healthy/self-handled checks stay in launchd logs and CLI JSON instead of Telegram. Reconciliation auto-repairs are applied by Kamandal and sent as receipts. Ambiguous reconciliation issues become bounded operator-review cards through Lathi Bus `telegram-ask`; the fallback command remains `kamandal review <request_id> <action> [note]`.
