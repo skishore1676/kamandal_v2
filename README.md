@@ -40,21 +40,30 @@ The `data/` folder stores all persistent state:
 - `audit/`: Local artifacts/audit logs for shadow plans.
 - `ideas/`: Extracted YAML thesis objects from the LLM.
 - `kamandal_v2.db`: The main active SQLite database storing positions and history.
-- `logs/`: Cron execution logs for debugging.
+- `logs/`: Scheduled job logs for debugging, including launchd logs under `data/logs/launchd/`.
 - `reports/`: End-of-day shadow portfolio summaries.
 - `reviews/`: Weekly LLM reviews of rejected candidates.
 - `sheet_cache/`: Offline cache of your Google Sheet rules to prevent API rate limits.
 
-## Scheduled Cadence (Cron)
+## Scheduled Cadence (Launchd)
 
 The system is designed as a series of short scheduled jobs rather than a long-running daemon:
 - **X Extraction:** Weekdays morning (8:55 AM).
 - **YouTube Extraction:** Intraday sweeps (9:15, 11:45, 14:30).
-- **Market Shadow Loop:** Every 15 minutes during market hours. Reloads sheets, builds candidates, optimizes plans.
-- **EOD Report:** After market close.
+- **Live Reconciliation:** Intraday broker/local ledger checks before advisory and management cycles.
+- **Live Advisory:** Three intraday planning passes.
+- **Live Approved Orders:** Every 5 minutes during the live market window.
+- **Live Management:** Every 15 minutes during the live market window.
+- **Live Health Report:** Morning, midday, afternoon, and close readbacks through Lathi Bus.
 - **Weekly Reviewer:** Fridays at 10:00 AM.
 
-*To install the cron schedule on oldmac: run `scripts/cron_install_oldmac.sh`*
+To install or refresh the oldmac schedule:
+
+```bash
+scripts/launchd/install_kamandal_launchd.sh install
+```
+
+`scripts/cron_install_oldmac.sh` is now a compatibility wrapper that installs launchd labels and removes the old marked Kamandal cron block. See [docs/KAMANDAL_LAUNCHD_AND_ALERTS.md](docs/KAMANDAL_LAUNCHD_AND_ALERTS.md).
 
 ## Key CLI Commands
 
@@ -65,6 +74,7 @@ The system is designed as a series of short scheduled jobs rather than a long-ru
 - `.venv/bin/kamandal public-smoke --symbol TSLA` - Dry run option chains against a provider.
 - `.venv/bin/kamandal live-health` - Print the live book health status (GREEN/YELLOW/RED) with reasons.
 - `.venv/bin/kamandal live-book --write-sheet` - Refresh the per-position cockpit rows in the `live_book` sheet tab.
+- `PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_job live-health-report --force --alert-mode spool` - Safe launchd/Lathi smoke test without broker submission.
 
 ## Live Health: Operator Playbook
 
@@ -93,3 +103,13 @@ The system self-heals everything it can; a status only persists when it genuinel
   `broker_flat_confirmations_required` cycles, so usually wait one cycle, intervene only if it sticks.
 - `loss_watch` — a position crossed its max-loss multiple; an auto-close fires after the
   confirmation mark. No action needed unless its close then fails (which turns into the case above).
+
+## Lathi Notifications
+
+Operational receipts and launchd failures go through Lathi Bus by default:
+
+- `KAMANDAL_LAUNCHD_ALERT_MODE=live` sends Telegram notifications and requires Lathi to confirm a network send.
+- `KAMANDAL_LAUNCHD_ALERT_MODE=spool` is for dry-run/smoke checks.
+- `KAMANDAL_LATHI_PROFILE=jarvis-northstar` is the default profile.
+
+Reconciliation auto-repairs are applied by Kamandal and sent as receipts. Ambiguous reconciliation issues become bounded operator-review cards through Lathi `telegram-ask`; the fallback command remains `kamandal review <request_id> <action> [note]`.

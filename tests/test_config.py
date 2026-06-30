@@ -35,3 +35,15 @@ def test_portfolio_delta_guard_env_overrides(monkeypatch) -> None:
     assert guard["min_delta"] == -1.25
     assert guard["max_delta"] == 0.25
     assert guard["allow_improvement_when_outside"] is False
+
+
+def test_operator_review_lathi_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("KAMANDAL_OPERATOR_REVIEW_TRANSPORT", "openclaw")
+    monkeypatch.setenv("KAMANDAL_OPERATOR_REVIEW_LATHI_PROFILE", "codex-northstar")
+    monkeypatch.setenv("KAMANDAL_OPERATOR_REVIEW_LATHI_MODE", "spool")
+
+    review = load_control()["live"]["operator_review"]
+
+    assert review["transport"] == "openclaw"
+    assert review["lathi_profile"] == "codex-northstar"
+    assert review["lathi_mode"] == "spool"

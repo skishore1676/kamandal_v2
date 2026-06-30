@@ -16,6 +16,10 @@ if [[ -f "$REPO_ROOT/.env" ]]; then
 fi
 
 KAMANDAL_BIN="${KAMANDAL_BIN:-$REPO_ROOT/.venv/bin/kamandal}"
+KAMANDAL_PYTHON="${KAMANDAL_PYTHON:-$REPO_ROOT/.venv/bin/python}"
+if [[ ! -x "$KAMANDAL_PYTHON" ]]; then
+  KAMANDAL_PYTHON="$(command -v python3)"
+fi
 
 log() {
   printf '[%s] %s\n' "$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d %H:%M:%S %Z')" "$*"
@@ -108,24 +112,21 @@ send_telegram() {
     return 0
   fi
   local message="$1"
-  local target="${2:-${KAMANDAL_TELEGRAM_TARGET:-5425926875}}"
-  local account="${3:-${KAMANDAL_TELEGRAM_ACCOUNT:-}}"
-  if ! command -v openclaw >/dev/null 2>&1; then
-    log "openclaw unavailable; telegram not sent."
-    return 0
-  fi
-  local command=(openclaw message send --channel telegram --target "$target" --message "$message" --json)
-  if [[ -n "$account" ]]; then
-    command+=(--account "$account")
-  fi
-  "${command[@]}" >/dev/null 2>&1 || log "telegram send failed."
+  local title="${2:-Kamandal receipt}"
+  local level="${3:-info}"
+  local mode="${KAMANDAL_LAUNCHD_ALERT_MODE:-live}"
+  local profile="${KAMANDAL_LATHI_PROFILE:-jarvis-northstar}"
+  PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" "$KAMANDAL_PYTHON" -m kamandal_v2.ops.alerts notify \
+    --title "$title" \
+    --body "$message" \
+    --level "$level" \
+    --mode "$mode" \
+    --profile "$profile" >/dev/null 2>&1 || log "lathi telegram receipt failed."
 }
 
 send_telegram_receipt() {
   local message="$1"
-  local target="${KAMANDAL_TELEGRAM_RECEIPT_TARGET:-${KAMANDAL_TELEGRAM_TARGET:-5425926875}}"
-  local account="${KAMANDAL_TELEGRAM_RECEIPT_ACCOUNT:-receipts}"
-  send_telegram "$message" "$target" "$account"
+  send_telegram "$message" "${KAMANDAL_TELEGRAM_RECEIPT_TITLE:-Kamandal live execution}" "info"
 }
 
 prepare_current_ideas_dir() {

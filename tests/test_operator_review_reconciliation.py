@@ -159,7 +159,7 @@ def test_operator_review_parser_accepts_button_and_text() -> None:
     }
 
 
-def test_send_operator_review_uses_presentation_buttons(tmp_path, monkeypatch) -> None:
+def test_send_operator_review_uses_lathi_telegram_ask(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     request = create_operator_review_request(
         _config(),
@@ -175,17 +175,19 @@ def test_send_operator_review_uses_presentation_buttons(tmp_path, monkeypatch) -
 
     def fake_run(command, **_kwargs):  # noqa: ANN001
         calls.append(command)
-        return type("Result", (), {"returncode": 0, "stdout": "{}", "stderr": ""})()
+        return type("Result", (), {"returncode": 0, "stdout": '{"network_call_performed": true, "live_send_requested": true}', "stderr": ""})()
 
     monkeypatch.setattr("kamandal_v2.live.operator_review.subprocess.run", fake_run)
     result = send_operator_review_message(_config(), request, store=store)
 
     assert result["status"] == "sent"
-    assert "--presentation" in calls[0]
-    assert calls[0][calls[0].index("--account") + 1] == "default"
-    presentation = json.loads(calls[0][calls[0].index("--presentation") + 1])
-    values = [button["value"] for button in presentation["blocks"][0]["buttons"]]
-    assert f"kamandal:review:{request['request_id']}:retire_local" in values
+    assert result["transport"] == "lathi"
+    assert calls[0][0:2] in (["lathi-bus", "telegram-ask"], ["python3", "-m"])
+    assert "telegram-ask" in calls[0]
+    assert "--live" in calls[0]
+    assert "--option" in calls[0]
+    options = [calls[0][index + 1] for index, part in enumerate(calls[0]) if part == "--option"]
+    assert any(f"kamandal:review:{request['request_id']}:retire_local" in option for option in options)
 
 
 def test_expired_sent_operator_reviews_do_not_consume_pending_cap(tmp_path) -> None:

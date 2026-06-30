@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+from kamandal_v2.ops.alerts import default_lathi_invocation, optional_bool, parse_lathi_receipt, populate_secret_fallbacks, redact
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -35,9 +36,12 @@ def operator_review_policy(config: dict[str, Any]) -> dict[str, Any]:
     telegram = live_cfg.get("telegram_approval") or {}
     return {
         "enabled": _as_bool(review.get("enabled"), True),
+        "transport": str(review.get("transport") or os.environ.get("KAMANDAL_OPERATOR_REVIEW_TRANSPORT") or "lathi"),
         "channel": str(review.get("channel") or "telegram"),
         "target": str(review.get("target") or telegram.get("target") or os.environ.get("KAMANDAL_TELEGRAM_APPROVAL_TARGET") or ""),
         "account": str(review.get("account") or telegram.get("account") or os.environ.get("KAMANDAL_TELEGRAM_APPROVAL_ACCOUNT") or ""),
+        "lathi_profile": str(review.get("lathi_profile") or os.environ.get("KAMANDAL_OPERATOR_REVIEW_LATHI_PROFILE") or os.environ.get("KAMANDAL_LATHI_PROFILE") or "jarvis-northstar"),
+        "lathi_mode": str(review.get("lathi_mode") or os.environ.get("KAMANDAL_OPERATOR_REVIEW_LATHI_MODE") or os.environ.get("KAMANDAL_LAUNCHD_ALERT_MODE") or "live"),
         "expiry_minutes": int(review.get("expiry_minutes") or telegram.get("expiry_minutes") or 30),
         "max_pending_requests": int(review.get("max_pending_requests") or telegram.get("max_pending_requests") or 10),
         "use_inline_buttons": _as_bool(review.get("use_inline_buttons"), True),
@@ -128,6 +132,8 @@ def send_operator_review_message(config: dict[str, Any], request: dict[str, Any]
     policy = operator_review_policy(config)
     if not policy["enabled"]:
         return {"request_id": request.get("request_id"), "status": "disabled"}
+    if str(policy["transport"]).lower() == "lathi":
+        return _send_lathi_operator_review_message(policy, request, store)
     if not policy["target"]:
         raise OperatorReviewError("operator review target is not configured")
     message = render_operator_review_message(request, text_fallback=bool(policy["text_fallback"]))
@@ -160,6 +166,92 @@ def send_operator_review_message(config: dict[str, Any], request: dict[str, Any]
     store.update_operator_review_request_status(str(request["request_id"]), status, payload)
     store.event("operator_review_message_sent", {"request_id": request.get("request_id"), "status": status, "returncode": completed.returncode})
     return {"request_id": request.get("request_id"), "status": status, "returncode": completed.returncode}
+
+
+def _send_lathi_operator_review_message(policy: dict[str, Any], request: dict[str, Any], store: LocalStore) -> dict[str, Any]:
+    command, cwd = default_lathi_invocation(None)
+    mode = str(policy.get("lathi_mode") or "live").lower()
+    if mode not in {"off", "spool", "live"}:
+        raise OperatorReviewError(f"unsupported operator review lathi_mode={mode!r}")
+    if mode == "off":
+        return {"request_id": request.get("request_id"), "status": "disabled", "transport": "lathi"}
+
+    args = [
+        *command,
+        "telegram-ask",
+        "--profile",
+        str(policy["lathi_profile"]),
+        "--template",
+        "urgent_gate",
+        "--title",
+        f"Kamandal review: {request.get('title') or request.get('request_type')}",
+        "--prompt",
+        render_operator_review_message(request, text_fallback=bool(policy["text_fallback"])),
+        "--field",
+        f"Request={request.get('request_id')}",
+        "--field",
+        f"Type={request.get('request_type')}",
+        "--button-columns",
+        "3",
+        "--link-preview",
+        "disabled",
+    ]
+    for action in request.get("allowed_actions") or []:
+        action_id = str(action).strip()
+        if not action_id:
+            continue
+        args.extend(["--option", f"kamandal:review:{request.get('request_id')}:{action_id}|{_action_label(action_id)}|{_action_style(action_id)}"])
+    if mode == "live":
+        args.append("--live")
+
+    env = os.environ.copy()
+    populate_secret_fallbacks(env)
+    completed = subprocess.run(  # noqa: S603
+        args,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+    )
+    receipt = parse_lathi_receipt(completed.stdout)
+    network_call_performed = optional_bool(receipt.get("network_call_performed"))
+    live_send_requested = optional_bool(receipt.get("live_send_requested"))
+    ok = completed.returncode == 0
+    if mode == "live":
+        ok = ok and network_call_performed is True
+    payload = {
+        "sent_at": _now(),
+        "transport": "lathi",
+        "lathi_mode": mode,
+        "lathi_profile": policy["lathi_profile"],
+        "send_returncode": completed.returncode,
+        "send_stdout": redact(completed.stdout[-4000:]),
+        "send_stderr": redact(completed.stderr[-4000:]),
+        "live_send_requested": live_send_requested,
+        "network_call_performed": network_call_performed,
+        "command": [redact(part) for part in args],
+    }
+    status = SENT if ok else FAILED
+    store.update_operator_review_request_status(str(request["request_id"]), status, payload)
+    store.event(
+        "operator_review_message_sent",
+        {
+            "request_id": request.get("request_id"),
+            "status": status,
+            "transport": "lathi",
+            "returncode": completed.returncode,
+            "network_call_performed": network_call_performed,
+        },
+    )
+    return {
+        "request_id": request.get("request_id"),
+        "status": status,
+        "transport": "lathi",
+        "returncode": completed.returncode,
+        "network_call_performed": network_call_performed,
+    }
 
 
 def render_operator_review_message(request: dict[str, Any], *, text_fallback: bool = True) -> str:
@@ -261,6 +353,15 @@ def _presentation_payload(request: dict[str, Any]) -> dict[str, Any]:
 
 def _action_label(action: str) -> str:
     return str(action).replace("_", " ").title()
+
+
+def _action_style(action: str) -> str:
+    normalized = str(action).strip().lower()
+    if normalized in {"retire_local", "dismiss", "cancel", "cancel_order"}:
+        return "danger"
+    if normalized in {"hold", "defer"}:
+        return "primary"
+    return "success"
 
 
 def _is_expired(request: dict[str, Any]) -> bool:
