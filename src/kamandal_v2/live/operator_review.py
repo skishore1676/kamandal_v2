@@ -63,6 +63,7 @@ def create_operator_review_request(
     policy = operator_review_policy(config)
     if not policy["enabled"]:
         return {"status": "disabled", "request_id": request_id or ""}
+    expire_stale_operator_review_requests(store=store)
     pending = store.operator_review_requests_by_status({PENDING, SENT})
     if len(pending) >= int(policy["max_pending_requests"]):
         raise OperatorReviewError("operator review max_pending_requests reached")
@@ -88,15 +89,38 @@ def create_operator_review_request(
 
 def send_pending_operator_review_requests(config: dict[str, Any], *, store: LocalStore | None = None) -> dict[str, Any]:
     store = store or LocalStore()
+    sweep = expire_stale_operator_review_requests(store=store, statuses={PENDING, SENT})
     sent = []
-    skipped = []
+    skipped = [{"request_id": item["request_id"], "reason": "expired"} for item in sweep["expired"]]
     for request in store.operator_review_requests_by_status({PENDING}):
-        if _is_expired(request):
-            store.update_operator_review_request_status(str(request["request_id"]), EXPIRED, {"expired_at": _now()})
-            skipped.append({"request_id": request["request_id"], "reason": "expired"})
-            continue
         sent.append(send_operator_review_message(config, request, store=store))
     return {"sent": sent, "skipped": skipped}
+
+
+def expire_stale_operator_review_requests(
+    *,
+    store: LocalStore | None = None,
+    statuses: set[str] | None = None,
+) -> dict[str, Any]:
+    store = store or LocalStore()
+    expired = []
+    for request in store.operator_review_requests_by_status(statuses or {PENDING, SENT}):
+        if not _is_expired(request):
+            continue
+        request_id = str(request.get("request_id") or "")
+        if not request_id:
+            continue
+        previous_status = str(request.get("_ledger_status") or request.get("status") or "")
+        expired_at = _now()
+        store.update_operator_review_request_status(
+            request_id,
+            EXPIRED,
+            {"expired_at": expired_at, "previous_status": previous_status},
+        )
+        expired.append({"request_id": request_id, "previous_status": previous_status, "expired_at": expired_at})
+    if expired:
+        store.event("operator_review_requests_expired", {"expired": expired})
+    return {"expired": expired}
 
 
 def send_operator_review_message(config: dict[str, Any], request: dict[str, Any], *, store: LocalStore | None = None) -> dict[str, Any]:

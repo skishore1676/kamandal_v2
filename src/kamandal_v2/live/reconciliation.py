@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
-from kamandal_v2.live.operator_review import create_operator_review_request
+from kamandal_v2.live.operator_review import OperatorReviewError, create_operator_review_request, expire_stale_operator_review_requests
 from kamandal_v2.live.order_reconciliation import reconcile_live_orders
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.market.public import occ_symbol
@@ -284,6 +284,7 @@ def _resolve_unobserved_issues(store: LocalStore, observed_issue_ids: set[str], 
 
 
 def _request_review(config: dict[str, Any], store: LocalStore, issue: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+    expire_stale_operator_review_requests(store=store)
     existing_request = store.operator_review_request(f"or_{issue['issue_id']}")
     if existing_request and str(existing_request.get("_ledger_status") or existing_request.get("status")) in {"pending", "sent"}:
         return {"request_id": existing_request["request_id"], "status": "already_pending"}
@@ -291,18 +292,28 @@ def _request_review(config: dict[str, Any], store: LocalStore, issue: dict[str, 
     request_payload = {"issue_id": issue["issue_id"], "issue": issue}
     if dry_run:
         return {"request_id": f"or_{issue['issue_id']}", "status": "dry_run", "allowed_actions": actions}
-    return create_operator_review_request(
-        config,
-        request_type="live_reconciliation",
-        subject_id=str(issue["issue_id"]),
-        title=_issue_title(issue),
-        summary=_issue_summary(issue),
-        allowed_actions=actions,
-        payload=request_payload,
-        store=store,
-        send=True,
-        request_id=f"or_{issue['issue_id']}",
+    try:
+        return create_operator_review_request(
+            config,
+            request_type="live_reconciliation",
+            subject_id=str(issue["issue_id"]),
+            title=_issue_title(issue),
+            summary=_issue_summary(issue),
+            allowed_actions=actions,
+            payload=request_payload,
+            store=store,
+            send=True,
+            request_id=f"or_{issue['issue_id']}",
+        )
+    except OperatorReviewError as exc:
+        error = str(exc)
+    except Exception as exc:  # External review transport should not stop live reconciliation.
+        error = f"{type(exc).__name__}: {exc}"
+    store.event(
+        "operator_review_request_failed_nonfatal",
+        {"issue_id": issue.get("issue_id"), "issue_type": issue.get("issue_type"), "error": error},
     )
+    return {"request_id": f"or_{issue['issue_id']}", "status": "review_send_failed_nonfatal", "error": error}
 
 
 def _allowed_actions(issue: dict[str, Any]) -> list[str]:

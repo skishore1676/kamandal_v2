@@ -5,6 +5,7 @@ from kamandal_v2.live.operator_review import (
     apply_operator_review_decision,
     create_operator_review_request,
     parse_operator_review_decision,
+    send_pending_operator_review_requests,
     send_operator_review_message,
 )
 from kamandal_v2.live.reconciliation import reconcile_live_positions
@@ -171,6 +172,62 @@ def test_send_operator_review_uses_presentation_buttons(tmp_path, monkeypatch) -
     assert f"kamandal:review:{request['request_id']}:retire_local" in values
 
 
+def test_expired_sent_operator_reviews_do_not_consume_pending_cap(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    config = _config()
+    config["live"]["operator_review"]["max_pending_requests"] = 1
+    old_request = {
+        "request_id": "or_old",
+        "request_type": "live_reconciliation",
+        "subject_id": "old_issue",
+        "title": "Old review",
+        "summary": "Expired review",
+        "allowed_actions": ["hold"],
+        "payload": {"issue_id": "old_issue"},
+        "status": "sent",
+        "created_at": "2026-01-01T00:00:00Z",
+        "expires_at": "2026-01-01T00:30:00Z",
+    }
+    store.save_operator_review_request(old_request)
+
+    request = create_operator_review_request(
+        config,
+        request_type="live_reconciliation",
+        subject_id="new_issue",
+        title="New review",
+        summary="This should fit after the stale sent request expires.",
+        allowed_actions=["hold"],
+        payload={"issue_id": "new_issue"},
+        store=store,
+    )
+
+    assert request["request_id"] != "or_old"
+    assert store.operator_review_request("or_old")["_ledger_status"] == "expired"
+
+
+def test_send_pending_operator_reviews_expires_sent_requests(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    store.save_operator_review_request(
+        {
+            "request_id": "or_old_sent",
+            "request_type": "live_reconciliation",
+            "subject_id": "old_issue",
+            "title": "Old review",
+            "summary": "Expired review",
+            "allowed_actions": ["hold"],
+            "payload": {"issue_id": "old_issue"},
+            "status": "sent",
+            "created_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-01-01T00:30:00Z",
+        }
+    )
+
+    result = send_pending_operator_review_requests(_config(), store=store)
+
+    assert result["skipped"] == [{"request_id": "or_old_sent", "reason": "expired"}]
+    assert store.operator_review_request("or_old_sent")["_ledger_status"] == "expired"
+
+
 def test_reconcile_auto_retires_ghost_after_two_flat_confirmations(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     store.save_live_position_group("live_group_amzn", _group(), status="open")
@@ -189,6 +246,39 @@ def test_reconcile_auto_retires_ghost_after_two_flat_confirmations(tmp_path, mon
     second = reconcile_live_positions(_config(), store=store)
     assert second["issues"][0]["observed_count"] == 2
     assert not store.open_live_position_groups()
+
+
+def test_reconcile_send_review_failure_is_nonfatal(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    store.save_live_position_group("live_group_amzn", _group(), status="open")
+    store.save_live_position("live_group_amzn", "live_group_amzn", _group(), status="open")
+    config = _config()
+    config["live"]["operator_review"]["max_pending_requests"] = 1
+    store.save_operator_review_request(
+        {
+            "request_id": "or_current",
+            "request_type": "live_reconciliation",
+            "subject_id": "current_issue",
+            "title": "Current review",
+            "summary": "Still pending",
+            "allowed_actions": ["hold"],
+            "payload": {"issue_id": "current_issue"},
+            "status": "sent",
+            "created_at": "2099-01-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:30:00Z",
+        }
+    )
+
+    class Broker:
+        def broker_positions(self):
+            return []
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(config, store=store, send_review=True)
+
+    assert result["status"] == "ok"
+    assert result["issues"][0]["issue_type"] == "ghost_local_position"
 
 
 def test_reconcile_aggregates_duplicate_local_occ_legs(tmp_path, monkeypatch) -> None:
