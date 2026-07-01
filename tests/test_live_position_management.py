@@ -122,6 +122,33 @@ def test_credit_position_profit_target_uses_entry_credit_and_close_debit() -> No
     assert decision["recommended_close_net"] == -37.5
 
 
+def test_missing_leg_quotes_do_not_create_false_profit_target_progress() -> None:
+    group = {
+        "group_id": "group_missing_quote",
+        "underlying": "TSLA",
+        "playbook_id": "put_spread_test",
+        "structure": "put_spread",
+        "opened_at": "2026-05-01 14:00:00",
+        "candidate": {
+            "net_credit": 1.0,
+            "legs": [
+                {"side": "sell", "option_type": "put", "expiration": "2026-07-17", "strike": 100.0, "quantity": 1},
+                {"side": "buy", "option_type": "put", "expiration": "2026-07-17", "strike": 95.0, "quantity": 1},
+            ],
+        },
+    }
+    playbook = _playbook("put_spread", profit_target_pct=50)
+
+    mark = mark_live_group(group, {}, playbook, quote_fresh=True, config=_config())
+    decision = live_exit_decision(mark, playbook, EarningsStore(), _config())
+
+    assert mark["pricing_complete"] is False
+    assert mark["target_progress_pct"] == 0.0
+    assert mark["missing_quotes"] == ["2026-07-17:put:100.0", "2026-07-17:put:95.0"]
+    assert decision["action"] == "hold"
+    assert decision["reason"] == "missing_quotes"
+
+
 def test_credit_profit_target_close_limit_prefers_current_cheaper_midpoint() -> None:
     group = {
         "group_id": "nvda_credit_group",

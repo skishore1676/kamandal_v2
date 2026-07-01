@@ -269,6 +269,56 @@ def test_reconcile_auto_retires_ghost_after_two_flat_confirmations(tmp_path, mon
     assert retired["observed_count"] == 2
 
 
+def test_reconcile_suppresses_close_filled_ghost_review_until_confirmation(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    group = _group()
+    store.save_live_position_group("live_group_amzn", group, status="open")
+    store.save_live_position("live_group_amzn", "live_group_amzn", group, status="open")
+    store.save_live_order_intent(_close_ticket(group), status="close_filled")
+
+    class Broker:
+        def broker_positions(self):
+            return []
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    first = reconcile_live_positions(_config(), store=store, send_review=True)
+
+    assert first["issues"] == []
+    open_issues = store.open_live_reconciliation_issues(group_id="live_group_amzn")
+    assert len(open_issues) == 1
+    assert open_issues[0]["decision"]["tier"] == "pending_confirmation"
+    assert open_issues[0]["decision"]["reason"] == "close_filled_waiting_for_broker_flat_confirmation"
+    assert store.operator_review_requests_by_status({"pending", "sent"}) == []
+    assert store.live_position_group("live_group_amzn") is not None
+
+    store.save_operator_review_request(
+        {
+            "request_id": f"or_{open_issues[0]['issue_id']}",
+            "request_type": "live_reconciliation",
+            "subject_id": open_issues[0]["issue_id"],
+            "title": "Old review",
+            "summary": "This was created before close-filled ghost suppression.",
+            "allowed_actions": ["retire_local", "hold"],
+            "payload": {"issue_id": open_issues[0]["issue_id"]},
+            "status": "sent",
+            "created_at": "2099-01-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:30:00Z",
+        }
+    )
+
+    second = reconcile_live_positions(_config(), store=store, send_review=True)
+
+    assert second["issues"] == []
+    assert not store.open_live_position_groups()
+    retired = store.live_reconciliation_issue(open_issues[0]["issue_id"])
+    assert retired["status"] == "retired"
+    assert retired["observed_count"] == 2
+    request = store.operator_review_request(f"or_{open_issues[0]['issue_id']}")
+    assert request["_ledger_status"] == "expired"
+    assert request["expiration_reason"] == "superseded_by_auto_reconciliation"
+
+
 def test_reconcile_send_review_failure_is_nonfatal(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     store.save_live_position_group("live_group_amzn", _group(), status="open")

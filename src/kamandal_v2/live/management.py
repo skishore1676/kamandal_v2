@@ -233,6 +233,7 @@ def _refresh_live_group_quotes(config: dict[str, Any], store: LocalStore, groups
     if not live_exit_policy(config).require_fresh_quotes:
         return {str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or "") for group in groups}
     underlyings = sorted({str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or "") for group in groups if group})
+    required_expirations = _live_group_expiration_dates(groups)
     refreshed: set[str] = set()
     if not underlyings:
         return refreshed
@@ -244,6 +245,9 @@ def _refresh_live_group_quotes(config: dict[str, Any], store: LocalStore, groups
     if hasattr(adapter, "available") and not adapter.available():
         store.event("live_quote_refresh_skipped", {"reason": "broker_unavailable", "underlyings": underlyings})
         return refreshed
+    if required_expirations and hasattr(adapter, "expiration_dates"):
+        existing = [str(item) for item in getattr(adapter, "expiration_dates", []) if item]
+        adapter.expiration_dates = _sorted_expiration_dates([*existing, *required_expirations])
     for underlying in underlyings:
         if not underlying:
             continue
@@ -254,6 +258,32 @@ def _refresh_live_group_quotes(config: dict[str, Any], store: LocalStore, groups
         except Exception as exc:  # noqa: BLE001
             store.event("live_quote_refresh_failed", {"stage": "chain_snapshot", "underlying": underlying, "error": str(exc)})
     return refreshed
+
+
+def _live_group_expiration_dates(groups: list[dict[str, Any]]) -> list[str]:
+    expirations: set[str] = set()
+    today = date.today()
+    for group in groups:
+        candidate = group.get("candidate") or {}
+        for leg in candidate.get("legs") or []:
+            raw = str(leg.get("expiration") or "")
+            try:
+                expiration = date.fromisoformat(raw)
+            except ValueError:
+                continue
+            if expiration >= today:
+                expirations.add(expiration.isoformat())
+    return _sorted_expiration_dates(expirations)
+
+
+def _sorted_expiration_dates(expirations: Any) -> list[str]:
+    valid: list[date] = []
+    for raw in expirations or []:
+        try:
+            valid.append(date.fromisoformat(str(raw)))
+        except ValueError:
+            continue
+    return [item.isoformat() for item in sorted(set(valid))]
 
 
 def _latest_chain(store: LocalStore, underlying: str) -> dict[str, Any]:

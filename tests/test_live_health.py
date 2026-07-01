@@ -149,6 +149,31 @@ def test_live_health_red_for_reconciliation_or_loss_watch(tmp_path: Path) -> Non
     assert any(event["reason"] == "loss_watch" for event in report["events"])
 
 
+def test_live_health_ignores_pending_confirmation_reconciliation_issue(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_pending", target_progress=20.0, trigger_progress=100.0)
+    store.save_live_reconciliation_issue(
+        {
+            "issue_id": "rec-pending",
+            "issue_type": "ghost_local_position",
+            "group_id": "group_pending",
+            "underlying": "AAPL",
+            "status": "open",
+            "decision": {
+                "tier": "pending_confirmation",
+                "action": "retire_local",
+                "reason": "close_filled_waiting_for_broker_flat_confirmation",
+            },
+        },
+    )
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "GREEN"
+    assert report["counts"]["reconciliation_blockers"] == 0
+    assert "reconciliation_blocker" not in report["reasons"]
+
+
 def test_live_health_ignores_close_failures_for_non_open_groups(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     _make_open_group_with_mark(store, "group_green", target_progress=20.0, trigger_progress=100.0)

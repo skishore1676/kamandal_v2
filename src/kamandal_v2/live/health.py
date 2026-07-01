@@ -58,7 +58,11 @@ def run_live_health(
 
     open_groups = store.open_live_position_groups()
     open_group_ids = {str(group.get("group_id") or "") for group in open_groups}
-    reconciliation_blockers = store.open_live_reconciliation_issues()
+    reconciliation_blockers = [
+        issue
+        for issue in store.open_live_reconciliation_issues()
+        if not _is_pending_confirmation_issue(issue)
+    ]
     pending_entry_approvals = store.live_order_intents_by_type("open", statuses={"pending_approval"})
     risk = _risk_overview(store, config)
 
@@ -258,6 +262,11 @@ def format_live_health(report: dict[str, Any]) -> str:
         group_id = f" group={event.get('group_id')}" if event.get("group_id") else ""
         lines.append(f"- {event['reason']}{group_id}: {detail}")
     return "\n".join(lines)
+
+
+def _is_pending_confirmation_issue(issue: dict[str, Any]) -> bool:
+    decision = issue.get("decision") or {}
+    return str(decision.get("tier") or "") == "pending_confirmation"
 
 
 def _collect_mark_events(group_mark: dict[str, Any], events: list[dict[str, Any]]) -> None:

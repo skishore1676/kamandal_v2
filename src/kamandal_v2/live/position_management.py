@@ -109,7 +109,8 @@ def mark_live_group(
     profit_target_pct = normalize_profit_target_pct(playbook.profit_target_pct if playbook else 50.0)
     target_profit = entry_value * (profit_target_pct / 100.0)
     target_close_net = target_profit - entry_net
-    progress = (pnl_mid / target_profit) * 100.0 if target_profit > 0 else 0.0
+    pricing_complete = not missing_quotes
+    progress = (pnl_mid / target_profit) * 100.0 if pricing_complete and target_profit > 0 else 0.0
     loss = max(-pnl_mid, 0.0)
     natural_loss = max(-pnl_natural, 0.0)
     max_loss_multiple = playbook.max_loss_multiple if playbook else None
@@ -151,6 +152,7 @@ def mark_live_group(
         "target_progress_pct": round(progress, 2),
         "trigger_progress_pct": policy.profit_target_trigger_pct,
         "quote_fresh": bool(quote_fresh),
+        "pricing_complete": pricing_complete,
         "missing_quotes": missing_quotes,
         "legs": legs,
         "marked_legs": marked_legs,

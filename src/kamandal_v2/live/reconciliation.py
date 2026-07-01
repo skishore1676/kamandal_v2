@@ -41,11 +41,14 @@ def reconcile_live_positions(
     decision_context = _decision_context(store, local_groups, broker_index)
 
     issues = []
+    observed_issue_ids: set[str] = set()
     for group in local_groups:
         issue = _local_group_issue(group, broker_index)
         if issue:
             stored = _record_issue(config, store, _with_decision(config, issue, decision_context), dry_run=dry_run)
             stored = _apply_reconciliation_decision(config, store, stored, dry_run=dry_run)
+            if stored.get("issue_id"):
+                observed_issue_ids.add(str(stored["issue_id"]))
             include_issue = _include_issue_in_report(stored)
             if include_issue:
                 issues.append(stored)
@@ -58,6 +61,8 @@ def reconcile_live_positions(
             issue = _issue("unknown_broker_payload", subject_id=f"broker_{position.get('raw_index')}", broker_position=position)
             stored = _record_issue(config, store, _with_decision(config, issue, decision_context), dry_run=dry_run)
             stored = _apply_reconciliation_decision(config, store, stored, dry_run=dry_run)
+            if stored.get("issue_id"):
+                observed_issue_ids.add(str(stored["issue_id"]))
             issues.append(stored)
             if send_review:
                 _request_review(config, store, stored, dry_run=dry_run)
@@ -72,6 +77,8 @@ def reconcile_live_positions(
             )
             stored = _record_issue(config, store, _with_decision(config, issue, decision_context), dry_run=dry_run)
             stored = _apply_reconciliation_decision(config, store, stored, dry_run=dry_run)
+            if stored.get("issue_id"):
+                observed_issue_ids.add(str(stored["issue_id"]))
             issues.append(stored)
             if send_review:
                 _request_review(config, store, stored, dry_run=dry_run)
@@ -90,13 +97,15 @@ def reconcile_live_positions(
             )
             stored = _record_issue(config, store, _with_decision(config, issue, decision_context), dry_run=dry_run)
             stored = _apply_reconciliation_decision(config, store, stored, dry_run=dry_run)
+            if stored.get("issue_id"):
+                observed_issue_ids.add(str(stored["issue_id"]))
             include_issue = _include_issue_in_report(stored)
             if include_issue:
                 issues.append(stored)
             if send_review and include_issue:
                 _request_review(config, store, stored, dry_run=dry_run)
 
-    _resolve_unobserved_issues(store, {str(issue.get("issue_id") or "") for issue in issues}, dry_run=dry_run)
+    _resolve_unobserved_issues(store, observed_issue_ids, dry_run=dry_run)
     order_reconciliation = reconcile_live_orders(config, dry_run=dry_run, store=store, adapter=adapter)
     rows = [_daily_plan_row(index, issue) for index, issue in enumerate(issues, start=1)]
     live_book_rows_written = 0
@@ -134,7 +143,7 @@ def reconciliation_blockers_for_group(
             issue for issue in store.open_live_reconciliation_issues(underlying=underlying)
             if issue.get("issue_id") not in {item.get("issue_id") for item in blockers}
         )
-    return blockers
+    return [issue for issue in blockers if not _is_pending_confirmation_issue(issue)]
 
 
 def apply_reconciliation_review_action(
@@ -205,6 +214,7 @@ def _record_issue(config: dict[str, Any], store: LocalStore, issue: dict[str, An
                 "retired",
                 {"resolution": "auto_retired_after_flat_confirmations", "retired_at": _now(), "decision": stored["decision"]},
             )
+            _expire_related_operator_review_request(store, str(stored["issue_id"]), "auto_retired_after_flat_confirmations")
             stored = store.live_reconciliation_issue(str(issue["issue_id"])) or stored
     return stored
 
@@ -230,6 +240,9 @@ def _reconciliation_decision(config: dict[str, Any], issue: dict[str, Any], cont
             evidence={"subject_id": issue.get("subject_id"), "group_ids": (issue.get("local_leg") or {}).get("group_ids") or []},
         )
     if issue_type == "ghost_local_position":
+        pending_close = _filled_close_ghost_pending_candidate(issue, context)
+        if pending_close and not _should_auto_retire(config, issue):
+            return pending_close
         return _decision(
             "auto_local_repair" if _should_auto_retire(config, issue) else "human_review",
             "retire_local",
@@ -292,6 +305,30 @@ def _filled_close_repair_candidate(issue: dict[str, Any], context: dict[str, Any
             "ticket_hash": candidate["close_ticket"].get("ticket_hash"),
             "order_id": candidate["close_ticket"].get("order_id"),
             "close_status": candidate["close_ticket"].get("_ledger_status"),
+        },
+    )
+
+
+def _filled_close_ghost_pending_candidate(issue: dict[str, Any], context: dict[str, Any]) -> dict[str, Any] | None:
+    group_id = str(issue.get("group_id") or "")
+    if not group_id:
+        return None
+    close_ticket = _latest_close_filled_ticket(context["close_tickets_by_group"].get(group_id) or [])
+    if not close_ticket:
+        return None
+    return _decision(
+        "pending_confirmation",
+        "retire_local",
+        "high",
+        False,
+        "close_filled_waiting_for_broker_flat_confirmation",
+        group_id=group_id,
+        evidence={
+            "group_id": group_id,
+            "observed_count": issue.get("observed_count"),
+            "ticket_hash": close_ticket.get("ticket_hash"),
+            "order_id": close_ticket.get("order_id"),
+            "close_status": close_ticket.get("_ledger_status") or close_ticket.get("status"),
         },
     )
 
@@ -366,13 +403,21 @@ def _apply_reconciliation_decision(config: dict[str, Any], store: LocalStore, is
         "retired",
         {"resolution": str(decision.get("reason") or "auto_local_repair"), "retired_at": _now(), "decision": applied},
     )
+    _expire_related_operator_review_request(store, str(issue["issue_id"]), str(decision.get("reason") or "auto_local_repair"))
     store.event("live_reconciliation_decision_applied", {"issue_id": issue.get("issue_id"), "group_id": group_id, "decision": applied})
     stored = store.live_reconciliation_issue(str(issue["issue_id"]))
     return stored or issue
 
 
 def _include_issue_in_report(issue: dict[str, Any]) -> bool:
+    if _is_pending_confirmation_issue(issue):
+        return False
     return str(issue.get("status") or "") == "open"
+
+
+def _is_pending_confirmation_issue(issue: dict[str, Any]) -> bool:
+    decision = issue.get("decision") or {}
+    return str(decision.get("tier") or "") == "pending_confirmation"
 
 
 def _auto_local_repair_enabled(config: dict[str, Any]) -> bool:
@@ -529,6 +574,25 @@ def _request_review(config: dict[str, Any], store: LocalStore, issue: dict[str, 
         {"issue_id": issue.get("issue_id"), "issue_type": issue.get("issue_type"), "error": error},
     )
     return {"request_id": f"or_{issue['issue_id']}", "status": "review_send_failed_nonfatal", "error": error}
+
+
+def _expire_related_operator_review_request(store: LocalStore, issue_id: str, reason: str) -> None:
+    request_id = f"or_{issue_id}"
+    request = store.operator_review_request(request_id)
+    if not request:
+        return
+    if str(request.get("_ledger_status") or request.get("status") or "") not in {"pending", "sent"}:
+        return
+    store.update_operator_review_request_status(
+        request_id,
+        "expired",
+        {
+            "expired_at": _now(),
+            "previous_status": str(request.get("_ledger_status") or request.get("status") or ""),
+            "expiration_reason": "superseded_by_auto_reconciliation",
+            "reconciliation_reason": reason,
+        },
+    )
 
 
 def _allowed_actions(issue: dict[str, Any]) -> list[str]:
