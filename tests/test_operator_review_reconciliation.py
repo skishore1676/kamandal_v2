@@ -182,7 +182,7 @@ def test_send_operator_review_uses_lathi_telegram_ask(tmp_path, monkeypatch) -> 
 
     assert result["status"] == "sent"
     assert result["transport"] == "lathi"
-    assert calls[0][0:2] in (["lathi-bus", "telegram-ask"], ["python3", "-m"])
+    assert calls[0][0].endswith("lathi-bus") or calls[0][0:2] == ["python3", "-m"]
     assert "telegram-ask" in calls[0]
     assert "--live" in calls[0]
     assert "--option" in calls[0]

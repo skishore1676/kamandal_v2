@@ -102,6 +102,7 @@ def test_import_x_digest_reads_sqlite_sources_and_writes_docs(tmp_path) -> None:
         allowed_symbols={"NVDA", "AMD", "SPY"},
         sources=["bookmarks", "timeline"],
         include_resurfaced=False,
+        birdclawctl=tmp_path / "missing-birdclawctl",
     )
 
     assert result.record_count == 2

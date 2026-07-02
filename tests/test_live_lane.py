@@ -1534,6 +1534,7 @@ def test_execute_live_close_allows_same_day_after_configured_date(tmp_path, monk
     live_control = _live_control()
     live_control["runtime"]["mode"] = "live"
     live_control["runtime"]["trading_enabled"] = True
+    live_control["live"]["exit_submit_source"] = "sheet"
     live_control["live"]["allow_same_day_exits_after"] = "2000-01-01"
     monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
 
@@ -1696,6 +1697,7 @@ def test_execute_live_close_blocks_already_active_close_ticket(tmp_path, monkeyp
     live_control = _live_control()
     live_control["runtime"]["mode"] = "live"
     live_control["runtime"]["trading_enabled"] = True
+    live_control["live"]["exit_submit_source"] = "sheet"
     live_control["live"]["allow_same_day_exits_after"] = "2000-01-01"
     monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
 
