@@ -83,6 +83,40 @@ Safe local smoke:
 PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_job live-health-report --force --alert-mode spool
 ```
 
+## Control Actions
+
+Lathi Control Tower should call Kamandal through the app-owned control contract:
+
+```bash
+PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_control <action> --json
+```
+
+Kamandal currently supports these non-broker operational actions:
+
+| Action | Purpose |
+| --- | --- |
+| `live-status` | Read current live-health state. |
+| `scheduled-job-health-now` | Run scheduled-job health immediately. |
+| `live-health-report-now` | Run the live-health report immediately. |
+| `send-pending-review-requests` | Re-send pending bounded review cards. |
+| `apply-review-decision` | Apply a bounded reconciliation decision after Kamandal revalidates it. |
+| `retry-job` | Re-run a safe intelligence job. |
+
+`retry-job` is intentionally restricted to intelligence ingestion jobs that do
+not submit, cancel, replace, or close broker orders:
+
+```bash
+PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_control retry-job --job x-bookmarks --json
+PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_control retry-job --job youtube --json
+```
+
+The retry runs the normal launchd job runner with `--force`, captures the
+`KAMANDAL_LAUNCHD_JOB={...}` result, and returns one structured control result
+for Lathi's action journal. A failed retry is still useful evidence; for
+example, if oldmac Codex auth is broken, the retry result should preserve the
+auth failure in a compact stdout/stderr tail while the full trace remains in the
+launchd logs.
+
 ## Lathi Bus Alert Modes
 
 Operational receipts and launchd failure alerts go through
@@ -107,6 +141,7 @@ Optional overrides:
 KAMANDAL_LATHI_BUS_CMD='python3 -m lathi_bus.cli'
 KAMANDAL_LATHI_BUS_CWD=/Users/sunny/code/lathi-bus
 KAMANDAL_ALERT_TIMEOUT_SECONDS=30
+KAMANDAL_ALERT_BODY_MAX_CHARS=3200
 ```
 
 `KAMANDAL_LATHI_PROFILE` remains a legacy alias for older wrappers. New
@@ -114,7 +149,19 @@ configuration should say `LATHI_BUS` so it is not confused with the separate
 Lathi job-runner application.
 
 The alert layer redacts token fields, bearer strings, and URL auth parameters
-before storing command output.
+before storing command output. Kamandal also compacts long alert bodies before
+they reach Lathi Bus. The alert should carry the job name, root error, and log
+path, not a full traceback. Full stdout/stderr remains in
+`data/logs/launchd/`.
+
+Ownership split:
+
+- Kamandal owns semantic alert shaping: what deserves attention, what summary is
+  useful, and where the complete app-owned logs live.
+- Lathi Bus should still keep a transport-level hard cap so one verbose app can
+  never make Telegram delivery fail. That shared cap belongs in Lathi Bus, not
+  in every app, but Kamandal should not wait for it before sending compact
+  domain alerts.
 
 ## Attention Policy
 

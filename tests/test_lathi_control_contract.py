@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 
 from kamandal_v2.live.operator_review import create_operator_review_request
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.tools import launchd_control, launchd_status, review_queue
+from kamandal_v2.tools.launchd_job import RESULT_PREFIX
 
 
 def _config() -> dict:
@@ -137,3 +139,40 @@ def test_launchd_control_refuses_fingerprint_mismatch(tmp_path: Path, monkeypatc
     assert payload["ok"] is False
     assert payload["result_status"] == "fingerprint_mismatch"
     assert store.operator_review_request(request["request_id"])["_ledger_status"] == "pending"
+
+
+def test_launchd_control_retries_allowed_job(tmp_path: Path, monkeypatch, capsys) -> None:  # noqa: ANN001
+    calls = []
+
+    def fake_run(command, **kwargs):  # noqa: ANN001
+        calls.append((command, kwargs))
+        stdout = RESULT_PREFIX + json.dumps({"job": "x-bookmarks", "status": "ok", "return_code": 0}) + "\n"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("kamandal_v2.tools.launchd_control.subprocess.run", fake_run)
+    monkeypatch.setenv("KAMANDAL_CONTROL_LOCK_DIR", str(tmp_path / "locks"))
+
+    code = launchd_control.main([
+        "retry-job",
+        "--job",
+        "x-bookmarks",
+        "--repo-root",
+        str(tmp_path),
+        "--json",
+    ])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["payload"]["job"] == "x-bookmarks"
+    assert payload["payload"]["runner_result"]["status"] == "ok"
+    assert calls[0][0][2:4] == ["kamandal_v2.tools.launchd_job", "x-bookmarks"]
+    assert "--force" in calls[0][0]
+
+
+def test_launchd_control_retry_job_requires_job(capsys) -> None:  # noqa: ANN001
+    code = launchd_control.main(["retry-job", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["result_status"] == "missing_arguments"

@@ -211,10 +211,10 @@ def command_failure_detail(completed: subprocess.CompletedProcess[str]) -> str:
             f"Return code: {completed.returncode}",
             "",
             "stdout:",
-            tail(completed.stdout),
+            tail(completed.stdout, max_lines=18, max_chars=1200),
             "",
             "stderr:",
-            tail(completed.stderr),
+            tail(completed.stderr, max_lines=18, max_chars=1600),
         ]
     )
 

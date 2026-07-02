@@ -29,6 +29,25 @@ def test_send_lathi_alert_spool_accepts_zero_return(monkeypatch) -> None:
     assert calls[0][:2] == ["lathi-bus", "telegram-notify"]
 
 
+def test_send_lathi_alert_truncates_oversized_body(monkeypatch) -> None:
+    calls = []
+
+    def fake_run(command, **_kwargs):  # noqa: ANN001
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout='{"network_call_performed": false}', stderr="")
+
+    monkeypatch.setattr("kamandal_v2.ops.alerts.subprocess.run", fake_run)
+    monkeypatch.setenv("KAMANDAL_ALERT_BODY_MAX_CHARS", "600")
+
+    result = send_lathi_alert(title="Hello", body="x" * 5000, mode="spool", command=["lathi-bus"])
+
+    assert result.ok is True
+    body = calls[0][calls[0].index("--body") + 1]
+    assert len(body) < 800
+    assert "truncated" in body
+    assert "ACTION REQUIRED" in body
+
+
 def test_lathi_bus_profile_prefers_new_env_name(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setenv("KAMANDAL_LATHI_PROFILE", "legacy")
     monkeypatch.setenv("KAMANDAL_LATHI_BUS_PROFILE", "bus")

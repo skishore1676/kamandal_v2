@@ -126,6 +126,7 @@ Kamandal also has these operator-safety pieces today:
 | Live health | Implemented | `.venv/bin/kamandal live-health --json` and `live-health-report` summarize book health and block entries on RED by policy. |
 | Scheduled job health | Implemented | `scheduled-job-health` reads launchd logs and alerts only when a job is missing, stale, unreadable, wrong, or failed. |
 | Lathi Bus receipts | Implemented | `kamandal_v2.ops.alerts.send_lathi_alert` supports `off`, `spool`, and `live`; live mode requires `network_call_performed=true`. |
+| Alert compaction | Implemented | Kamandal clips verbose failure bodies before Lathi Bus delivery and leaves full output in launchd logs. Lathi Bus should still own a shared transport hard cap. |
 | Operator review requests | Implemented | Ambiguous reconciliation requests are stored in SQLite, sent via Lathi Bus `telegram-ask`, and can be applied by `kamandal review <request_id> <action> [note]`. |
 | Reconciliation auto-repair | Implemented | Proven-safe cases are handled by Kamandal without asking Suman; ambiguous cases become bounded review requests. |
 | Lane Host dependency | Transitional | Some Telegram token fallbacks and live collection assumptions still point at Lane Host-era files. This is a compatibility bridge, not the target architecture. |
@@ -453,11 +454,18 @@ Initial actions:
 | `scheduled-job-health-now` | `launchd_job scheduled-job-health --force --alert-mode spool|live` | No broker action. |
 | `live-health-report-now` | `launchd_job live-health-report --force` | No broker action; may notify only when attention policy says so. |
 | `send-pending-review-requests` | `kamandal send-operator-review-requests` | No broker action; sends review cards only. |
+| `retry-job --job x-bookmarks` | `launchd_job x-bookmarks --force` | No broker action; retries X intelligence ingestion only. |
+| `retry-job --job youtube` | `launchd_job youtube --force` | No broker action; retries YouTube intelligence ingestion only. |
 | `apply-review-decision` | `kamandal review <request_id> <action> [note]` | Requires request id, allowed action, non-expired request, and Kamandal revalidation. |
 
 Actions that submit, cancel, or modify broker orders should not be exposed as
 one-click Control Tower buttons in the first phase. If they are added later,
 they need an explicit confirmation gate and app-side preflight.
+
+`retry-job` exists because `x-bookmarks` and `youtube` can fail for external
+reasons such as Codex auth or transcript/provider outages. These retries should
+be visible as Control Tower buttons, but they remain app-owned Kamandal
+commands. They should not become a generic "rerun anything" Lathi action.
 
 The command should accept or create an `action_id` and echo it in every result:
 

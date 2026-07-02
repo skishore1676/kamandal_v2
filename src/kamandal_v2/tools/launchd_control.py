@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
+import sys
 from typing import Any, Iterator
 import uuid
 
@@ -22,6 +24,7 @@ from kamandal_v2.live.operator_review import (
 from kamandal_v2.ops.alerts import AlertResult, default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.tools.launchd_job import (
+    RESULT_PREFIX,
     health_attention,
     render_live_health_summary,
     scheduled_job_health,
@@ -34,9 +37,11 @@ CONTROL_ACTIONS = {
     "live-status",
     "scheduled-job-health-now",
     "live-health-report-now",
+    "retry-job",
     "send-pending-review-requests",
     "apply-review-decision",
 }
+RETRYABLE_JOBS = {"x-bookmarks", "youtube"}
 
 
 def run_control_action(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
@@ -52,6 +57,8 @@ def run_control_action(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 result = _scheduled_job_health_now(args, action_id)
             elif args.command == "live-health-report-now":
                 result = _live_health_report_now(args, config, store, action_id)
+            elif args.command == "retry-job":
+                result = _retry_job(args, action_id)
             elif args.command == "send-pending-review-requests":
                 result = _send_pending_review_requests(config, store, action_id)
             elif args.command == "apply-review-decision":
@@ -122,6 +129,63 @@ def _live_health_report_now(args: argparse.Namespace, config: dict[str, Any], st
             "health": report,
             "attention": attention,
             "alert": alert.to_dict() if alert else None,
+        },
+    )
+
+
+def _retry_job(args: argparse.Namespace, action_id: str) -> dict[str, Any]:
+    job = str(args.job or "")
+    if job not in RETRYABLE_JOBS:
+        return _base(
+            "retry-job",
+            action_id,
+            ok=False,
+            status="refused",
+            result_status="job_not_retryable",
+            error=f"retry-job supports only {sorted(RETRYABLE_JOBS)}",
+            payload={"requested_job": job},
+        )
+    repo_root = Path(args.repo_root).expanduser().resolve() if args.repo_root else Path.cwd()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo_root / "src")
+    command = [
+        sys.executable,
+        "-m",
+        "kamandal_v2.tools.launchd_job",
+        job,
+        "--force",
+        "--repo-root",
+        str(repo_root),
+        "--alert-mode",
+        str(args.alert_mode or "off"),
+        "--alert-profile",
+        str(args.alert_profile),
+    ]
+    completed = subprocess.run(  # noqa: S603
+        command,
+        cwd=str(repo_root),
+        env=env,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=float(os.getenv("KAMANDAL_CONTROL_RETRY_TIMEOUT_SECONDS", "1800")),
+    )
+    runner_result = _last_launchd_result(completed.stdout)
+    ok = completed.returncode == 0
+    return _base(
+        "retry-job",
+        action_id,
+        ok=ok,
+        status="succeeded" if ok else "failed",
+        result_status=str((runner_result or {}).get("status") or ("ok" if ok else "failed")),
+        payload={
+            "job": job,
+            "return_code": completed.returncode,
+            "command": command,
+            "runner_result": runner_result,
+            "stdout_tail": _compact_tail(completed.stdout),
+            "stderr_tail": _compact_tail(completed.stderr),
         },
     )
 
@@ -225,6 +289,27 @@ def _apply_review_decision(args: argparse.Namespace, config: dict[str, Any], sto
     )
 
 
+def _last_launchd_result(stdout: str) -> dict[str, Any] | None:
+    for line in reversed(stdout.splitlines()):
+        if not line.startswith(RESULT_PREFIX):
+            continue
+        try:
+            parsed = json.loads(line.split("=", 1)[1])
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _compact_tail(text: str, *, max_lines: int = 20, max_chars: int = 2000) -> str:
+    result = "\n".join(text.splitlines()[-max_lines:])
+    if len(result) <= max_chars:
+        return result
+    marker = f"\n... [truncated {len(result) - max_chars} chars]"
+    keep = max(max_chars - len(marker), 0)
+    return result[:keep].rstrip() + marker
+
+
 def _base(
     action: str,
     action_id: str,
@@ -312,6 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", default="", help="Optional repo root for scheduled-job health")
     parser.add_argument("--alert-mode", choices=["off", "spool", "live"], default="off")
     parser.add_argument("--alert-profile", default=default_lathi_bus_profile())
+    parser.add_argument("--job", choices=sorted(RETRYABLE_JOBS), default="")
     parser.add_argument("--request-id", default="")
     parser.add_argument("--action", dest="review_action", default="")
     parser.add_argument("--source", default="lathi")
@@ -332,6 +418,18 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps(payload, indent=2, sort_keys=True, default=str))
             return 2
+
+    if args.command == "retry-job" and not args.job:
+        payload = _base(
+            args.command,
+            str(args.action_id or f"kamandal-{uuid.uuid4().hex[:16]}"),
+            ok=False,
+            status="failed",
+            result_status="missing_arguments",
+            error="retry-job requires --job",
+        )
+        print(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        return 2
 
     status_code, payload = run_control_action(args)
     print(json.dumps(payload, indent=2, sort_keys=True, default=str))

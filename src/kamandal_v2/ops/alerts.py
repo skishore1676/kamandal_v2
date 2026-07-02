@@ -21,6 +21,7 @@ _TOKEN_FIELD_RE = re.compile(r'("?access_token"?|"?refresh_token"?|"?id_token"?)
 _BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._-]+")
 _DANGER_LEVELS = {"error", "critical", "fatal", "failure", "failed"}
 _WARNING_LEVELS = {"warning", "warn"}
+DEFAULT_ALERT_BODY_MAX_CHARS = 3200
 
 
 @dataclass(slots=True)
@@ -61,6 +62,7 @@ def send_lathi_alert(
     if command is None:
         command, cwd = default_lathi_invocation(cwd)
     cwd_path = Path(cwd).expanduser() if cwd else None
+    prepared_body = prepare_alert_body(body, level)
     args = [
         *command,
         "telegram-notify",
@@ -69,7 +71,7 @@ def send_lathi_alert(
         "--title",
         decorate_title(title, level),
         "--body",
-        redact(decorate_body(body, level)),
+        prepared_body,
         "--level",
         level,
     ]
@@ -190,14 +192,31 @@ def decorate_body(body: str, level: str) -> str:
     return body
 
 
+def prepare_alert_body(body: str, level: str, *, max_chars: int | None = None) -> str:
+    limit = max_chars
+    if limit is None:
+        limit = int(os.getenv("KAMANDAL_ALERT_BODY_MAX_CHARS", str(DEFAULT_ALERT_BODY_MAX_CHARS)))
+    clipped_body = clip_text(redact(body), max_chars=max(limit - 180, 400))
+    return redact(decorate_body(clipped_body, level))
+
+
+def clip_text(text: str, *, max_chars: int) -> str:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    marker = f"\n... [truncated {len(text) - max_chars} chars; see Kamandal launchd logs for full output]"
+    keep = max(max_chars - len(marker), 0)
+    return text[:keep].rstrip() + marker
+
+
 def redact(text: str) -> str:
     text = _URL_SECRET_RE.sub(lambda match: f"{match.group(1)}=<redacted>", text)
     text = _BEARER_RE.sub("Bearer <redacted>", text)
     return _TOKEN_FIELD_RE.sub(lambda match: f"{match.group(1)}=<redacted>", text)
 
 
-def tail(text: str, *, max_lines: int = 40) -> str:
-    return "\n".join(text.splitlines()[-max_lines:])
+def tail(text: str, *, max_lines: int = 40, max_chars: int | None = None) -> str:
+    result = "\n".join(text.splitlines()[-max_lines:])
+    return clip_text(result, max_chars=max_chars) if max_chars else result
 
 
 def main(argv: list[str] | None = None) -> int:
