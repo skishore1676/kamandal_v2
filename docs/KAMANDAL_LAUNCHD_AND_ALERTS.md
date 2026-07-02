@@ -176,6 +176,9 @@ Routine proof belongs in logs. Telegram is for attention.
 - `exit_pipeline_stalled` is RED. It means policy approved a close locally but
   `live-approved-orders` did not submit it within
   `live.health.exit_pipeline_stalled_minutes`.
+- `urgent_close_order_stale` is RED. It means a broker-working `max_loss` or
+  `pre_event` close is still open past
+  `live.health.urgent_close_order_stale_minutes`.
 - `scheduled-job-health` alerts when a launchd job is missing, stale, or failed
   in the expected window.
 
@@ -212,8 +215,19 @@ Close lifecycle vocabulary:
 | `submitted` / `repriced` | Broker acknowledged a working close. |
 | `exit_pipeline_pending` | Health sees local pending pipeline state, not broker risk. |
 | `exit_pipeline_stalled` | Local approved close did not drain fast enough; check `live-approved-orders` logs. |
+| `urgent_close_order_stale` | Health reason for an urgent broker-working close that has not filled fast enough. |
 | `expired_eod` | DAY close was cancelled/expired; management can re-stage next session. |
+| `expired_stale_close_approval` | Local close intent was never submitted and aged past the stale approval window. |
 | `rejected_by_operator` | Operator rejected a local not-yet-submitted close using `REJECT_CLOSE`. |
+
+Profit-target close repricing is sign-aware and floor-aware. The floor is the
+minimum acceptable close cashflow, computed from the larger of
+`exit_pricing.min_profit_to_trigger` and
+`target_profit * exit_pricing.profit_floor_pct / 100`. For credit spreads this
+prevents repricing through the maximum acceptable close debit; for debit/long
+premium positions it prevents repricing below the minimum acceptable close
+credit. The full close ticket stores both net values and broker limit prices so
+future reprice attempts do not have to infer strategy direction from shape.
 
 Operator commands:
 

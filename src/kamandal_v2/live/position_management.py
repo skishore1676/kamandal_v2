@@ -16,6 +16,7 @@ CONTRACT_MULTIPLIER = 100.0
 class LiveExitPolicy:
     profit_target_trigger_pct: float = 95.0
     min_profit_to_trigger: float = 5.0
+    profit_floor_pct: float = 50.0
     require_fresh_quotes: bool = True
     max_loss_action: str = "review"
     max_loss_requires_confirmation: bool = True
@@ -35,6 +36,7 @@ def live_exit_policy(config: dict[str, Any] | None) -> LiveExitPolicy:
     return LiveExitPolicy(
         profit_target_trigger_pct=_as_float(raw.get("profit_target_trigger_pct"), 95.0),
         min_profit_to_trigger=_as_float(raw.get("min_profit_to_trigger"), 5.0),
+        profit_floor_pct=max(_as_float(raw.get("profit_floor_pct"), 50.0), 0.0),
         require_fresh_quotes=_as_bool(raw.get("require_fresh_quotes"), True),
         max_loss_action=_max_loss_action(raw.get("max_loss_action")),
         max_loss_requires_confirmation=_as_bool(raw.get("max_loss_requires_confirmation"), True),
@@ -218,6 +220,8 @@ def live_exit_decision(
         "entry_kind": mark.get("entry_kind"),
         "entry_value": mark.get("entry_value"),
         "entry_net_cashflow": mark.get("entry_net_cashflow"),
+        "min_profit_to_trigger": policy.min_profit_to_trigger,
+        "profit_floor_pct": policy.profit_floor_pct,
         "close_mid_net": mark.get("close_mid_net"),
         "close_natural_net": mark.get("close_natural_net"),
         "recommended_close_net": round(close_net, 2),

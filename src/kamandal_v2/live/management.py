@@ -272,16 +272,51 @@ def _annotate_exit_ticket(ticket: dict[str, Any], decision: dict[str, Any]) -> N
     ticket["exit_decision"] = {
         key: value
         for key, value in decision.items()
-        if key in {"reason", "urgency", "entry_value", "current_value", "pnl_mid", "recommended_close_net", "min_profit_to_trigger"}
+        if key in {
+            "reason",
+            "urgency",
+            "entry_kind",
+            "entry_value",
+            "entry_net_cashflow",
+            "current_value",
+            "pnl_mid",
+            "recommended_close_net",
+            "close_natural_net",
+            "target_profit",
+            "profit_target_pct",
+            "min_profit_to_trigger",
+            "profit_floor_pct",
+        }
     }
     natural = _optional_float(decision.get("close_natural_net"))
     if natural is not None:
+        ticket["exit_natural_net"] = round(natural, 2)
         ticket["exit_natural_limit_price"] = f"{abs(natural) / 100.0:.2f}"
-    entry_value = _optional_float(decision.get("entry_value"))
+    ticket["exit_entry_kind"] = str(decision.get("entry_kind") or "")
+    entry_net = _optional_float(decision.get("entry_net_cashflow"))
+    if entry_net is not None:
+        ticket["exit_entry_net_cashflow"] = round(entry_net, 2)
     min_profit = _optional_float(decision.get("min_profit_to_trigger"))
-    if entry_value is not None and min_profit is not None:
-        floor = max((entry_value - min_profit) / 100.0, 0.01)
-        ticket["exit_profit_floor_limit_price"] = f"{floor:.2f}"
+    target_profit = _optional_float(decision.get("target_profit"))
+    floor_pct = _optional_float(decision.get("profit_floor_pct"))
+    if entry_net is not None and min_profit is not None:
+        retained_target_profit = (target_profit or 0.0) * (floor_pct if floor_pct is not None else 50.0) / 100.0
+        floor_profit = max(min_profit, retained_target_profit)
+        floor_net = floor_profit - entry_net
+        ticket["exit_min_profit_to_trigger"] = round(min_profit, 2)
+        ticket["exit_profit_floor_pct"] = round(floor_pct if floor_pct is not None else 50.0, 2)
+        ticket["exit_profit_floor_net"] = round(floor_net, 2)
+        ticket["exit_profit_floor_limit_price"] = _close_limit_price_from_net(ticket, floor_net)
+
+
+def _close_limit_price_from_net(ticket: dict[str, Any], close_net: float) -> str:
+    per_contract = abs(close_net) / 100.0
+    legs = list(ticket.get("legs") or [])
+    if len(legs) == 1:
+        return f"{max(per_contract, 0.01):.2f}"
+    if close_net > 0:
+        return f"-{max(per_contract, 0.01):.2f}"
+    return f"{max(per_contract, 0.01):.2f}"
 
 
 def _same_day_exit_blocked(config: dict[str, Any], group: dict[str, Any]) -> bool:

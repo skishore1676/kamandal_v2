@@ -73,6 +73,22 @@ def test_order_reconciler_expires_stale_pending_close_approval(tmp_path: Path) -
     assert stored["order_reconciliation"]["reason"] == "local_close_approval_stale"
 
 
+def test_order_reconciler_expires_stale_approved_close_pending_submit(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = _close_ticket("ticket-close-approved-stale")
+    store.save_live_order_intent(ticket, status="approved_close_pending_submit")
+    _set_order_updated_at(store, ticket["ticket_hash"], "2000-01-01 00:00:00")
+
+    result = reconcile_live_orders(_config(), store=store)
+
+    assert result["expired_stale_close_approvals"] == 1
+    assert result["results"][0]["ledger_status"] == "approved_close_pending_submit"
+    assert result["results"][0]["reconciled_status"] == "expired_stale_close_approval"
+    stored = store.live_order_intent(ticket["ticket_hash"])
+    assert stored is not None
+    assert stored["_ledger_status"] == "expired_stale_close_approval"
+
+
 def test_order_reconciler_reports_stale_approval_without_apply_config(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     ticket = _close_ticket()

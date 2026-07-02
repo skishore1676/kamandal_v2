@@ -1259,6 +1259,10 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
     assert detail["lane"] == "live_close_advisory"
     assert detail["order_ticket_json"]["intent_type"] == "close"
     assert detail["order_ticket_json"]["exit_natural_limit_price"] == f"{abs(detail['decision']['close_natural_net']) / 100.0:.2f}"
+    assert detail["order_ticket_json"]["exit_min_profit_to_trigger"] == control["live"]["exit_pricing"]["min_profit_to_trigger"]
+    assert detail["order_ticket_json"]["exit_profit_floor_pct"] == control["live"]["exit_pricing"]["profit_floor_pct"]
+    assert detail["order_ticket_json"].get("exit_profit_floor_net") is not None
+    assert detail["order_ticket_json"].get("exit_profit_floor_limit_price") is not None
     assert row["operator_action"] == APPROVE_LIVE_CLOSE
 
 
@@ -2138,6 +2142,128 @@ def test_sync_live_orders_reprices_stale_close_order(tmp_path, monkeypatch) -> N
     assert child["_ledger_status"] == "submitted"
     assert child["parent_ticket_hash"] == ticket["ticket_hash"]
     assert child["limit_price"] == "2.20"
+
+
+def test_sync_live_orders_profit_target_reprice_respects_floor(tmp_path, monkeypatch) -> None:
+    from kamandal_v2.live.orders import ticket_hash
+
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "order_id": "close-order-floor",
+        "plan_id": "close-plan",
+        "candidate_id": "close-candidate",
+        "idea_id": "close-idea",
+        "group_id": "close-group",
+        "intent_type": "close",
+        "underlying": "QQQ",
+        "structure": "put_spread",
+        "quantity": 1,
+        "limit_price": "2.40",
+        "time_in_force": "DAY",
+        "created_at": "2026-05-29T14:00:00Z",
+        "exit_reason": "profit_target",
+        "exit_natural_net": -280.0,
+        "exit_profit_floor_net": -230.0,
+        "legs": [
+            {"role": "long_put", "side": "buy", "option_type": "put", "strike": 920, "expiration": "2026-07-10", "quantity": 1},
+            {"role": "short_put", "side": "sell", "option_type": "put", "strike": 925, "expiration": "2026-07-10", "quantity": 1},
+        ],
+        "submit_payload": {"orderId": "close-order-floor", "quantity": "1", "type": "LIMIT", "limitPrice": "2.40", "legs": []},
+    }
+    ticket["ticket_hash"] = ticket_hash(ticket)
+    store.save_live_order_intent(ticket, status="submitted")
+    calls = []
+
+    class RepriceCloseBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, _order_id):
+            return {"status": "NEW", "createdAt": "2026-05-29T14:00:00Z"}
+
+        def cancel_order(self, order_id):
+            return {"orderId": order_id, "status": "CANCEL_REQUESTED"}
+
+        def preflight_ticket(self, repriced_ticket):
+            calls.append(("preflight", repriced_ticket["limit_price"]))
+            return PreflightResult(ok=True, bpr=0, message="ok", raw={"request": repriced_ticket["submit_payload"]})
+
+        def place_order_ticket(self, repriced_ticket):
+            return {"orderId": repriced_ticket["order_id"]}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", RepriceCloseBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.datetime", type("FrozenDateTime", (datetime,), {"now": classmethod(lambda cls, tz=None: datetime(2026, 5, 29, 14, 12, tzinfo=UTC))}))
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    config = _live_control()
+    config["runtime"]["mode"] = "live"
+    config["runtime"]["trading_enabled"] = True
+    config["live"]["exit_reprice"] = {"enabled": True, "after_minutes": 10, "max_reprices": 1, "step_multiplier": 1.0, "expire_after_minutes": 390}
+
+    synced = sync_live_orders(config, store=store)
+
+    assert synced["orders"][0]["reprice_status"] == "submitted"
+    assert ("preflight", "2.30") in calls
+
+
+def test_sync_live_orders_profit_target_reprice_handles_credit_close_floor(tmp_path, monkeypatch) -> None:
+    from kamandal_v2.live.orders import ticket_hash
+
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "order_id": "close-order-credit-floor",
+        "plan_id": "close-plan",
+        "candidate_id": "close-candidate",
+        "idea_id": "close-idea",
+        "group_id": "close-group",
+        "intent_type": "close",
+        "underlying": "AAPL",
+        "structure": "calendar",
+        "quantity": 1,
+        "limit_price": "-15.00",
+        "time_in_force": "DAY",
+        "created_at": "2026-05-29T14:00:00Z",
+        "exit_reason": "profit_target",
+        "exit_natural_net": 1200.0,
+        "exit_profit_floor_net": 1250.0,
+        "legs": [
+            {"role": "near_short_call", "side": "buy", "option_type": "call", "strike": 100, "expiration": "2026-07-10", "quantity": 1},
+            {"role": "far_long_call", "side": "sell", "option_type": "call", "strike": 100, "expiration": "2026-08-21", "quantity": 1},
+        ],
+        "submit_payload": {"orderId": "close-order-credit-floor", "quantity": "1", "type": "LIMIT", "limitPrice": "-15.00", "legs": []},
+    }
+    ticket["ticket_hash"] = ticket_hash(ticket)
+    store.save_live_order_intent(ticket, status="submitted")
+    calls = []
+
+    class RepriceCloseBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, _order_id):
+            return {"status": "NEW", "createdAt": "2026-05-29T14:00:00Z"}
+
+        def cancel_order(self, order_id):
+            return {"orderId": order_id, "status": "CANCEL_REQUESTED"}
+
+        def preflight_ticket(self, repriced_ticket):
+            calls.append(("preflight", repriced_ticket["limit_price"]))
+            return PreflightResult(ok=True, bpr=0, message="ok", raw={"request": repriced_ticket["submit_payload"]})
+
+        def place_order_ticket(self, repriced_ticket):
+            return {"orderId": repriced_ticket["order_id"]}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", RepriceCloseBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.datetime", type("FrozenDateTime", (datetime,), {"now": classmethod(lambda cls, tz=None: datetime(2026, 5, 29, 14, 12, tzinfo=UTC))}))
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    config = _live_control()
+    config["runtime"]["mode"] = "live"
+    config["runtime"]["trading_enabled"] = True
+    config["live"]["exit_reprice"] = {"enabled": True, "after_minutes": 10, "max_reprices": 1, "step_multiplier": 1.0, "expire_after_minutes": 390}
+
+    synced = sync_live_orders(config, store=store)
+
+    assert synced["orders"][0]["reprice_status"] == "submitted"
+    assert ("preflight", "-12.50") in calls
 
 
 def test_sync_live_orders_reprices_stale_entry_twice_then_expires(tmp_path, monkeypatch) -> None:

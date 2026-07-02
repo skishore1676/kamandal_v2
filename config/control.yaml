@@ -131,6 +131,7 @@ live:
     enabled: true
     after_minutes: 10
     max_reprices: 2
+    step_multipliers: [0.5, 1.0]
     expire_after_minutes: 390
   liquidity_policy:
     low_oi_mode: price_through
@@ -162,6 +163,7 @@ live:
   exit_pricing:
     profit_target_trigger_pct: 95
     min_profit_to_trigger: 5
+    profit_floor_pct: 50
     require_fresh_quotes: true
     max_loss_action: close # review | close_when_confirmed | close
     max_loss_requires_confirmation: false
@@ -174,6 +176,7 @@ live:
   health:
     stale_close_order_minutes: 120
     exit_pipeline_stalled_minutes: 20
+    urgent_close_order_stale_minutes: 30
     block_entries_on_red: true
   telegram_approval:
     enabled: true

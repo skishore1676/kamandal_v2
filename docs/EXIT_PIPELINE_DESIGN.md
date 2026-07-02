@@ -160,7 +160,7 @@ is the parameterization and terminal state, per exit reason:
 
 | Exit reason | Start price | Regress toward | Floor / terminal |
 |---|---|---|---|
-| `profit_target` | improved mid | partway to natural | stop at min-acceptable-profit (`exit_pricing.min_profit_to_trigger`); if unfilled, leave resting order at floor and hold — the only exit allowed to wait |
+| `profit_target` | improved mid | partway to natural | stop at retained-profit floor: max(`exit_pricing.min_profit_to_trigger`, `target_profit * profit_floor_pct`) |
 | `dte_target`, `half_time` | mid | natural by end of day | must be flat by EOD; alert if not |
 | `max_loss`, `pre_event` | natural | cross the spread | alert operator if unfilled ~30 min; never end the day holding |
 
@@ -187,12 +187,16 @@ live:
   exit_reprice:
     enabled: true
     after_minutes: 10              # per-step wait before cancel/replace
-    presets:
-      profit_target: {start: improved_mid, regress: partial_natural, floor: min_profit, terminal: rest_at_floor}
-      dte_target:    {start: mid,          regress: natural,         eod_deadline: true, terminal: alert}
-      half_time:     {start: mid,          regress: natural,         eod_deadline: true, terminal: alert}
-      max_loss:      {start: natural,      regress: cross_spread,    after_minutes: 5,   terminal: alert_operator}
-      pre_event:     {start: natural,      regress: cross_spread,    after_minutes: 5,   terminal: alert_operator}
+    max_reprices: 2
+    step_multipliers: [0.5, 1.0]   # first move halfway, then to the reason-aware bound
+    expire_after_minutes: 390
+  exit_pricing:
+    profit_target_trigger_pct: 95
+    min_profit_to_trigger: 5
+    profit_floor_pct: 50           # retain at least 50% of target profit on profit-target reprices
+  health:
+    exit_pipeline_stalled_minutes: 20
+    urgent_close_order_stale_minutes: 30
 ```
 
 Env overrides (same pattern as the risk manager; flags live in `.env` on
@@ -204,7 +208,9 @@ oldmac):
 - `KAMANDAL_LIVE_EXIT_REPRICE_AFTER_MINUTES`
 - `KAMANDAL_LIVE_EXIT_REPRICE_MAX_REPRICES`
 - `KAMANDAL_LIVE_EXIT_REPRICE_EXPIRE_AFTER_MINUTES`
+- `KAMANDAL_EXIT_PROFIT_FLOOR_PCT`
 - `KAMANDAL_LIVE_HEALTH_EXIT_PIPELINE_STALLED_MINUTES`
+- `KAMANDAL_LIVE_HEALTH_URGENT_CLOSE_ORDER_STALE_MINUTES`
 
 `sheet_approval` and `disabled` exit modes keep working unchanged.
 

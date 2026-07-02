@@ -599,24 +599,61 @@ def _repriced_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str
 
 
 def _repriced_close_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str:
-    current = abs(float(str(ticket.get("limit_price") or "0").replace("-", "")))
-    natural = _optional_float(ticket.get("exit_natural_limit_price"))
-    if natural is None:
-        natural = current
+    current_net = _close_net_from_limit_price(ticket)
+    natural_net = _optional_float(ticket.get("exit_natural_net"))
+    if natural_net is None:
+        natural_price = _optional_float(ticket.get("exit_natural_limit_price"))
+        natural_net = _close_net_from_price_with_current_side(ticket, natural_price) if natural_price is not None else current_net
     reason = str(ticket.get("exit_reason") or "").lower()
-    floor = _optional_float(ticket.get("exit_profit_floor_limit_price"))
+    floor_net = _optional_float(ticket.get("exit_profit_floor_net"))
+    if floor_net is None:
+        floor_price = _optional_float(ticket.get("exit_profit_floor_limit_price"))
+        if floor_price is not None:
+            floor_net = _close_net_from_price_with_current_side(ticket, floor_price)
     attempt = int(ticket.get("reprice_attempt") or 0) + 1
     if reason in {"max_loss", "pre_event"}:
-        target = natural + (0.05 * attempt)
-    elif reason == "profit_target" and floor is not None:
-        target = min(natural, floor)
+        target_net = natural_net - (5.0 * attempt)
+    elif reason == "profit_target" and floor_net is not None:
+        target_net = max(natural_net, floor_net)
     else:
-        target = natural
+        target_net = natural_net
     step = _exit_reprice_step_multiplier(config, attempt)
-    target = current + ((target - current) * step)
-    if reason == "profit_target" and floor is not None:
-        target = min(target, floor)
-    return f"{max(_round_cent(target), 0.01):.2f}"
+    repriced_net = current_net + ((target_net - current_net) * step)
+    if reason == "profit_target" and floor_net is not None:
+        repriced_net = max(repriced_net, floor_net)
+    return _close_limit_price_from_net(ticket, repriced_net)
+
+
+def _close_net_from_limit_price(ticket: dict[str, Any]) -> float:
+    raw = str(ticket.get("limit_price") or "0").strip()
+    try:
+        price = float(raw)
+    except ValueError:
+        price = 0.0
+    legs = list(ticket.get("legs") or [])
+    if len(legs) == 1:
+        side = str((legs[0] or {}).get("side") or "").lower()
+        return abs(price) * 100.0 if side == "sell" else -abs(price) * 100.0
+    return -price * 100.0
+
+
+def _close_net_from_price_with_current_side(ticket: dict[str, Any], price: float) -> float:
+    current_net = _close_net_from_limit_price(ticket)
+    absolute = abs(float(price)) * 100.0
+    if current_net >= 0:
+        return absolute
+    return -absolute
+
+
+def _close_limit_price_from_net(ticket: dict[str, Any], close_net: float) -> str:
+    per_contract = max(abs(close_net) / 100.0, 0.01)
+    rounded = _round_cent(per_contract)
+    legs = list(ticket.get("legs") or [])
+    if len(legs) == 1:
+        return f"{rounded:.2f}"
+    if close_net > 0:
+        return f"-{rounded:.2f}"
+    return f"{rounded:.2f}"
 
 
 def _exit_reprice_step_multiplier(config: dict[str, Any], attempt: int) -> float:

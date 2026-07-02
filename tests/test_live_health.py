@@ -128,6 +128,37 @@ def test_live_health_yellow_for_working_close_order(tmp_path: Path) -> None:
     assert any(event["reason"] == "working_close_order" for event in report["events"])
 
 
+def test_live_health_red_for_stale_urgent_close_order(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_urgent", target_progress=20.0, trigger_progress=100.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "close-ticket-urgent",
+            "order_id": "order-close-urgent",
+            "plan_id": "plan-urgent",
+            "candidate_id": "cand-urgent",
+            "idea_id": "idea-urgent",
+            "group_id": "group_urgent",
+            "intent_type": "close",
+            "underlying": "AAPL",
+            "exit_reason": "max_loss",
+        },
+        status="submitted",
+    )
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "UPDATE live_order_intents SET updated_at = ?, created_at = ? WHERE ticket_hash = ?",
+            ("2000-01-01 00:00:00", "2000-01-01 00:00:00", "close-ticket-urgent"),
+        )
+
+    report = run_live_health(store, {"live": {"health": {"urgent_close_order_stale_minutes": 1}}})
+
+    assert report["overall"] == "RED"
+    assert report["counts"]["urgent_close_orders"] == 1
+    assert "urgent_close_order_stale" in report["reasons"]
+    assert any(event["reason"] == "urgent_close_order_stale" for event in report["events"])
+
+
 def test_live_health_distinguishes_pending_close_pipeline_from_working_broker_order(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     _make_open_group_with_mark(store, "group_pending_close", target_progress=100.0, trigger_progress=95.0)
