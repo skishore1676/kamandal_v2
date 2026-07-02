@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from typing import Any, Iterator
@@ -22,9 +23,9 @@ from kamandal_v2.live.operator_review import (
     send_pending_operator_review_requests,
 )
 from kamandal_v2.ops.alerts import AlertResult, default_lathi_bus_profile, send_lathi_alert
+from kamandal_v2.ops.launchd_registry import launchd_job
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.tools.launchd_job import (
-    RESULT_PREFIX,
     health_attention,
     render_live_health_summary,
     scheduled_job_health,
@@ -146,6 +147,104 @@ def _retry_job(args: argparse.Namespace, action_id: str) -> dict[str, Any]:
             payload={"requested_job": job},
         )
     repo_root = Path(args.repo_root).expanduser().resolve() if args.repo_root else Path.cwd()
+    trigger = _trigger_retry_job(
+        job,
+        action_id=action_id,
+        repo_root=repo_root,
+        alert_mode=str(args.alert_mode or "off"),
+        alert_profile=str(args.alert_profile),
+    )
+    ok = bool(trigger.get("ok"))
+    return _base(
+        "retry-job",
+        action_id,
+        ok=ok,
+        status="triggered" if ok else "failed",
+        result_status=str(trigger.get("result_status") or ("trigger_accepted" if ok else "trigger_failed")),
+        payload=trigger,
+    )
+
+
+def _trigger_retry_job(
+    job: str,
+    *,
+    action_id: str,
+    repo_root: Path,
+    alert_mode: str,
+    alert_profile: str,
+) -> dict[str, Any]:
+    registered = launchd_job(job)
+    mode = os.getenv("KAMANDAL_CONTROL_RETRY_TRIGGER_MODE", "auto").strip().lower() or "auto"
+    label = registered.label
+    if mode in {"auto", "launchd"} and shutil.which("launchctl"):
+        completed = _launchctl_kickstart(label)
+        if completed.returncode == 0:
+            return {
+                "ok": True,
+                "status": "triggered",
+                "result_status": "launchd_triggered",
+                "job": job,
+                "label": label,
+                "trigger_mode": "launchd",
+                "action_id": action_id,
+                "stdout_tail": _compact_tail(completed.stdout),
+                "stderr_tail": _compact_tail(completed.stderr),
+            }
+        if mode == "launchd":
+            return {
+                "ok": False,
+                "status": "failed",
+                "result_status": "launchd_trigger_failed",
+                "job": job,
+                "label": label,
+                "trigger_mode": "launchd",
+                "action_id": action_id,
+                "return_code": completed.returncode,
+                "stdout_tail": _compact_tail(completed.stdout),
+                "stderr_tail": _compact_tail(completed.stderr),
+            }
+    if mode in {"auto", "detached"}:
+        return _trigger_detached_job(
+            job,
+            action_id=action_id,
+            repo_root=repo_root,
+            alert_mode=alert_mode,
+            alert_profile=alert_profile,
+            label=label,
+        )
+    return {
+        "ok": False,
+        "status": "failed",
+        "result_status": "unsupported_trigger_mode",
+        "job": job,
+        "label": label,
+        "trigger_mode": mode,
+        "action_id": action_id,
+        "error": f"unsupported retry trigger mode: {mode}",
+    }
+
+
+def _launchctl_kickstart(label: str) -> subprocess.CompletedProcess[str]:
+    uid = os.getuid()
+    return subprocess.run(  # noqa: S603
+        ["launchctl", "kickstart", f"gui/{uid}/{label}"],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=float(os.getenv("KAMANDAL_CONTROL_TRIGGER_TIMEOUT_SECONDS", "10")),
+    )
+
+
+def _trigger_detached_job(
+    job: str,
+    *,
+    action_id: str,
+    repo_root: Path,
+    alert_mode: str,
+    alert_profile: str,
+    label: str,
+) -> dict[str, Any]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
     command = [
@@ -157,37 +256,41 @@ def _retry_job(args: argparse.Namespace, action_id: str) -> dict[str, Any]:
         "--repo-root",
         str(repo_root),
         "--alert-mode",
-        str(args.alert_mode or "off"),
+        alert_mode,
         "--alert-profile",
-        str(args.alert_profile),
+        alert_profile,
     ]
-    completed = subprocess.run(  # noqa: S603
-        command,
-        cwd=str(repo_root),
-        env=env,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        timeout=float(os.getenv("KAMANDAL_CONTROL_RETRY_TIMEOUT_SECONDS", "1800")),
-    )
-    runner_result = _last_launchd_result(completed.stdout)
-    ok = completed.returncode == 0
-    return _base(
-        "retry-job",
-        action_id,
-        ok=ok,
-        status="succeeded" if ok else "failed",
-        result_status=str((runner_result or {}).get("status") or ("ok" if ok else "failed")),
-        payload={
-            "job": job,
-            "return_code": completed.returncode,
-            "command": command,
-            "runner_result": runner_result,
-            "stdout_tail": _compact_tail(completed.stdout),
-            "stderr_tail": _compact_tail(completed.stderr),
-        },
-    )
+    log_dir = repo_root / "data" / "logs" / "launchd" / "control_triggers"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    safe_action = re.sub(r"[^A-Za-z0-9_.-]+", "_", action_id)[:120]
+    stdout_path = log_dir / f"{job}_{safe_action}.out.log"
+    stderr_path = log_dir / f"{job}_{safe_action}.err.log"
+    stdout_handle = stdout_path.open("ab")
+    stderr_handle = stderr_path.open("ab")
+    try:
+        process = subprocess.Popen(  # noqa: S603
+            command,
+            cwd=str(repo_root),
+            env=env,
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            start_new_session=True,
+        )
+    finally:
+        stdout_handle.close()
+        stderr_handle.close()
+    return {
+        "ok": True,
+        "status": "triggered",
+        "result_status": "detached_triggered",
+        "job": job,
+        "label": label,
+        "trigger_mode": "detached",
+        "action_id": action_id,
+        "pid": process.pid,
+        "stdout_log": str(stdout_path),
+        "stderr_log": str(stderr_path),
+    }
 
 
 def _send_pending_review_requests(config: dict[str, Any], store: LocalStore, action_id: str) -> dict[str, Any]:
@@ -287,18 +390,6 @@ def _apply_review_decision(args: argparse.Namespace, config: dict[str, Any], sto
         payload=receipt,
         receipt_ref=f"kamandal:event:launchd_control_review_decision:{action_id}",
     )
-
-
-def _last_launchd_result(stdout: str) -> dict[str, Any] | None:
-    for line in reversed(stdout.splitlines()):
-        if not line.startswith(RESULT_PREFIX):
-            continue
-        try:
-            parsed = json.loads(line.split("=", 1)[1])
-        except Exception:
-            return None
-        return parsed if isinstance(parsed, dict) else None
-    return None
 
 
 def _compact_tail(text: str, *, max_lines: int = 20, max_chars: int = 2000) -> str:

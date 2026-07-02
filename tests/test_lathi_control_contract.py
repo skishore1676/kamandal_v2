@@ -2,12 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import subprocess
 
 from kamandal_v2.live.operator_review import create_operator_review_request
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.tools import launchd_control, launchd_status, review_queue
-from kamandal_v2.tools.launchd_job import RESULT_PREFIX
 
 
 def _config() -> dict:
@@ -149,13 +147,16 @@ def test_launchd_control_refuses_fingerprint_mismatch(tmp_path: Path, monkeypatc
 def test_launchd_control_retries_allowed_job(tmp_path: Path, monkeypatch, capsys) -> None:  # noqa: ANN001
     calls = []
 
-    def fake_run(command, **kwargs):  # noqa: ANN001
-        calls.append((command, kwargs))
-        stdout = RESULT_PREFIX + json.dumps({"job": "x-bookmarks", "status": "ok", "return_code": 0}) + "\n"
-        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+    class FakeProcess:
+        pid = 4242
 
-    monkeypatch.setattr("kamandal_v2.tools.launchd_control.subprocess.run", fake_run)
+    def fake_popen(command, **kwargs):  # noqa: ANN001
+        calls.append((command, kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr("kamandal_v2.tools.launchd_control.subprocess.Popen", fake_popen)
     monkeypatch.setenv("KAMANDAL_CONTROL_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("KAMANDAL_CONTROL_RETRY_TRIGGER_MODE", "detached")
 
     code = launchd_control.main([
         "retry-job",
@@ -169,8 +170,10 @@ def test_launchd_control_retries_allowed_job(tmp_path: Path, monkeypatch, capsys
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is True
+    assert payload["status"] == "triggered"
+    assert payload["result_status"] == "detached_triggered"
     assert payload["payload"]["job"] == "x-bookmarks"
-    assert payload["payload"]["runner_result"]["status"] == "ok"
+    assert payload["payload"]["pid"] == 4242
     assert calls[0][0][2:4] == ["kamandal_v2.tools.launchd_job", "x-bookmarks"]
     assert "--force" in calls[0][0]
 

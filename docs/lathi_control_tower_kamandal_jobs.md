@@ -454,8 +454,8 @@ Initial actions:
 | `scheduled-job-health-now` | `launchd_job scheduled-job-health --force --alert-mode spool|live` | No broker action. |
 | `live-health-report-now` | `launchd_job live-health-report --force` | No broker action; may notify only when attention policy says so. |
 | `send-pending-review-requests` | `kamandal send-operator-review-requests` | No broker action; sends review cards only. |
-| `retry-job --job x-bookmarks` | `launchd_job x-bookmarks --force` | No broker action; retries X intelligence ingestion only. |
-| `retry-job --job youtube` | `launchd_job youtube --force` | No broker action; retries YouTube intelligence ingestion only. |
+| `retry-job --job x-bookmarks` | Trigger `com.kamandal.v2.x_bookmarks` through launchd, with detached runner fallback for dev. | No broker action; retries X intelligence ingestion only. |
+| `retry-job --job youtube` | Trigger `com.kamandal.v2.youtube` through launchd, with detached runner fallback for dev. | No broker action; retries YouTube intelligence ingestion only. |
 | `apply-review-decision` | `kamandal review <request_id> <action> [note]` | Requires request id, allowed action, non-expired request, and Kamandal revalidation. |
 
 Actions that submit, cancel, or modify broker orders should not be exposed as
@@ -466,6 +466,13 @@ they need an explicit confirmation gate and app-side preflight.
 reasons such as Codex auth or transcript/provider outages. These retries should
 be visible as Control Tower buttons, but they remain app-owned Kamandal
 commands. They should not become a generic "rerun anything" Lathi action.
+
+`retry-job` is a trigger-style action. Kamandal validates the requested job,
+kicks the corresponding launchd label, and returns quickly with
+`status=triggered`. Lathi should treat that as the completed operator receipt;
+the later job result is reported by the normal Kamandal launchd status/health
+rows after source refresh. This keeps the operator workflow short: click one or
+more safe intelligence retries, see that each trigger was accepted, and move on.
 
 The command should accept or create an `action_id` and echo it in every result:
 

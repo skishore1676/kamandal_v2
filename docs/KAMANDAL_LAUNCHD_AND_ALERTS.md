@@ -110,11 +110,11 @@ PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_control retry-job --job x-bo
 PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_control retry-job --job youtube --json
 ```
 
-The retry runs the normal launchd job runner with `--force`, captures the
-`KAMANDAL_LAUNCHD_JOB={...}` result, and returns one structured control result
-for Lathi's action journal. A failed retry is still useful evidence; for
-example, if oldmac Codex auth is broken, the retry result should preserve the
-auth failure in a compact stdout/stderr tail while the full trace remains in the
+The retry is a fast trigger, not a completion wait. Kamandal validates the job,
+kicks the matching launchd label, and returns `status=triggered` for Lathi's
+action journal. On dev machines without a loaded launchd label, the command can
+fall back to a detached local runner and returns the spawned pid/log paths.
+Later success or failure is reported by the normal scheduled-job status rows and
 launchd logs.
 
 ## Lathi Bus Alert Modes
