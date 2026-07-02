@@ -30,6 +30,7 @@ run_youtube_extraction() {
   recent_fallback="${KAMANDAL_YOUTUBE_RECENT_FALLBACK:-true}"
   recent_fallback_limit="${KAMANDAL_YOUTUBE_RECENT_FALLBACK_LIMIT:-5}"
   recent_fallback_scan_limit="${KAMANDAL_YOUTUBE_RECENT_FALLBACK_SCAN_LIMIT:-50}"
+  empty_transcripts_status="${KAMANDAL_YOUTUBE_EMPTY_TRANSCRIPTS_STATUS:-ok}"
 
   mkdir -p "$transcript_dir" "$digest_dir" "$ideas_dir"
 
@@ -163,6 +164,10 @@ run_youtube_extraction() {
   fi
   if (( fetched_count == 0 )); then
     log "No transcripts fetched successfully; failed_count=$failed_count."
+    if [[ "$empty_transcripts_status" == "ok" ]]; then
+      log "No usable YouTube transcripts available; treating this intake as a clean no-op."
+      exit 0
+    fi
     exit 1
   fi
   if (( failed_count > 0 )); then

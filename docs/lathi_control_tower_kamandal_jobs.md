@@ -467,6 +467,13 @@ reasons such as Codex auth or transcript/provider outages. These retries should
 be visible as Control Tower buttons, but they remain app-owned Kamandal
 commands. They should not become a generic "rerun anything" Lathi action.
 
+For YouTube specifically, a run that completes discovery and fetch attempts but
+finds no usable transcripts should drain as a clean no-op by default. That
+keeps source/content misses from turning into persistent Lathi infrastructure
+red. Internal failures, LLM extraction failures after a transcript exists, and
+explicit debug runs with `KAMANDAL_YOUTUBE_EMPTY_TRANSCRIPTS_STATUS=failed`
+still fail closed.
+
 `retry-job` is a trigger-style action. Kamandal validates the requested job,
 kicks the corresponding launchd label, and returns quickly with
 `status=triggered`. Lathi should treat that as the completed operator receipt;

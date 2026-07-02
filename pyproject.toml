@@ -12,7 +12,7 @@ dependencies = [
   "lxml>=5.2.0",
   "yfinance>=0.2.66",
   "youtube-transcript-api>=1.2.0",
-  "yt-dlp>=2026.3.17",
+  "yt-dlp>=2026.6.9",
 ]
 
 [project.scripts]

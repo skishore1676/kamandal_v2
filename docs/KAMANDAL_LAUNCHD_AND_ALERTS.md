@@ -77,6 +77,13 @@ The runner skips non-trading days unless `--force` is passed, captures stdout an
 stderr tails, sends a Lathi failure alert when a scheduled job fails, and returns
 nonzero on failure.
 
+The YouTube job treats "no usable transcripts available" as a clean no-op by
+default. It still discovers videos and attempts transcript fetches, but a
+zero-transcript day should not leave Control Tower stuck red after all safe
+intake attempts are exhausted. Set
+`KAMANDAL_YOUTUBE_EMPTY_TRANSCRIPTS_STATUS=failed` to make zero-transcript days
+fail closed during debugging.
+
 Safe local smoke:
 
 ```bash
