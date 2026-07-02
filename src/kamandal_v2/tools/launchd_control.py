@@ -397,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", default="", help="Optional repo root for scheduled-job health")
     parser.add_argument("--alert-mode", choices=["off", "spool", "live"], default="off")
     parser.add_argument("--alert-profile", default=default_lathi_bus_profile())
-    parser.add_argument("--job", choices=sorted(RETRYABLE_JOBS), default="")
+    parser.add_argument("--job", default="")
     parser.add_argument("--request-id", default="")
     parser.add_argument("--action", dest="review_action", default="")
     parser.add_argument("--source", default="lathi")

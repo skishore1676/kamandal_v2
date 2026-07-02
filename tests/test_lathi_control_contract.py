@@ -176,3 +176,12 @@ def test_launchd_control_retry_job_requires_job(capsys) -> None:  # noqa: ANN001
     assert code == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["result_status"] == "missing_arguments"
+
+
+def test_launchd_control_retry_job_refuses_unknown_job(capsys) -> None:  # noqa: ANN001
+    code = launchd_control.main(["retry-job", "--job", "live-management", "--json"])
+
+    assert code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["result_status"] == "job_not_retryable"
