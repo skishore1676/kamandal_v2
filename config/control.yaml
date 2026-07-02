@@ -72,6 +72,8 @@ live:
   max_new_positions_per_plan: 3
   max_orders_per_plan: 3
   max_live_entry_submits_per_run: 3
+  exit_submit_source: sheet # sheet | ledger
+  max_close_submits_per_run: 10
   max_new_plans_per_day: 3
   max_live_baskets_per_day: 3
   basket:
@@ -125,6 +127,11 @@ live:
     improvement_multiplier: 0.5
     improvement_multipliers: [0.5, 0.0]
     expire_after_minutes: 30
+  exit_reprice:
+    enabled: true
+    after_minutes: 10
+    max_reprices: 2
+    expire_after_minutes: 390
   liquidity_policy:
     low_oi_mode: price_through
     wide_bid_ask_mode: price_through
@@ -166,6 +173,7 @@ live:
     loss_watch_window_minutes: 120
   health:
     stale_close_order_minutes: 120
+    exit_pipeline_stalled_minutes: 20
     block_entries_on_red: true
   telegram_approval:
     enabled: true

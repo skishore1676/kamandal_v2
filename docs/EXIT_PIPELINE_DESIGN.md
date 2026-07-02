@@ -1,7 +1,7 @@
 # Exit Pipeline Redesign: Ledger-Authoritative Close Submission
 
-Status: **approved design, not yet implemented** (2026-07-02)
-Owners: Suman + Claude
+Status: **implemented behind rollout flag** (2026-07-02)
+Owners: Suman + Codex
 Scope: live exit path only (`live-management` / `live-approved-orders` jobs). Entries are untouched except where noted.
 
 ---
@@ -202,14 +202,17 @@ oldmac):
 - `KAMANDAL_LIVE_MAX_CLOSE_SUBMITS_PER_RUN`
 - `KAMANDAL_LIVE_EXIT_REPRICE_ENABLED`
 - `KAMANDAL_LIVE_EXIT_REPRICE_AFTER_MINUTES`
+- `KAMANDAL_LIVE_EXIT_REPRICE_MAX_REPRICES`
+- `KAMANDAL_LIVE_EXIT_REPRICE_EXPIRE_AFTER_MINUTES`
+- `KAMANDAL_LIVE_HEALTH_EXIT_PIPELINE_STALLED_MINUTES`
 
 `sheet_approval` and `disabled` exit modes keep working unchanged.
 
 ---
 
-## 6. Implementation plan
+## 6. Implementation status
 
-### Phase 0 — Regression tests that reproduce the bug (½ day)
+### Phase 0 — Regression tests that reproduce the bug (implemented)
 
 - Test: two groups hit target in one cycle → **both** must reach `submitted`
   (fails today at `rows[:1]`).
@@ -217,37 +220,45 @@ oldmac):
   sheet write (fails today via lane wipe).
 - Test: local staged ticket in auto mode does not block re-approval for 120
   minutes; health reports `exit_pipeline_stalled` when the drain is disabled.
-- Files: `tests/test_exit_pipeline.py` (new), fixtures follow
-  `tests/test_live_lane.py` / `tests/test_live_health.py` patterns.
+- Files: covered in `tests/test_live_lane.py` and `tests/test_live_health.py`
+  so the assertions sit beside the existing live lifecycle fixtures.
 
-### Phase 1 — Ledger-authoritative drain (the core fix, ~1 day)
+### Phase 1 — Ledger-authoritative drain (implemented)
 
 - `execution.py`: ledger drain behind `exit_submit_source=ledger`;
   `max_close_submits_per_run`; sheet_approval pre-step (sheet commands →
   ledger transition).
 - `management.py`: stage-as-approved in auto mode; stale-approved re-ticket;
   dedup unchanged in shape but now self-healing.
-- `sheets.py` / `management.py`: full-mirror lane projection.
+- `management.py`: projected rows describe ledger-approved closes without
+  `APPROVE_LIVE_CLOSE` in ledger mode. A full historical mirror of every close
+  intent remains a follow-up; `live_book` is the complete per-position read
+  model today.
 - `health.py`: `working_close_order` narrowed to broker-acknowledged;
   `exit_pipeline_stalled` RED; REASON_ORDER updated.
 - `config.py` + `control.yaml` + `.env.example`: flag + knobs.
-- Exit criteria: Phase 0 tests green; full suite green; deployed to oldmac
-  with `exit_submit_source=sheet` (dormant).
+- Exit criteria: Phase 0 tests green; deployed first with
+  `exit_submit_source=sheet` (dormant), then cut over by env on oldmac.
 
-### Phase 2 — Close reprice ladder (~1 day)
+### Phase 2 — Close reprice ladder (implemented, first pass)
 
-- Extend `_reprice_live_entry_order` / `_expire_live_entry_order` into a
-  shared engine parameterized by intent type + exit-reason preset.
-- EOD deadline handling + `expired_eod` + next-session auto re-stage.
-- Escalation alerts (Lathi/Telegram) for `terminal: alert*` presets.
-- Tests: per-preset ladder walks, floor enforcement (profit-target must never
-  submit below min profit), EOD flattening for dte/max-loss reasons.
+- Close orders now reuse the cancel + replace pattern from entries, with close
+  child tickets linked by `parent_ticket_hash`.
+- Profit-target closes can improve toward natural but never violate the
+  min-profit floor. DTE/half-time closes move toward natural. Max-loss and
+  pre-event exits may cross by a nickel per reprice attempt.
+- DAY close orders can be cancelled and marked `expired_eod`; management can
+  re-stage next session because that status is terminal for dedup purposes.
+- Follow-up: reason-specific Lathi escalation for `terminal: alert*` presets.
 
-### Phase 3 — Operator polish (~½ day)
+### Phase 3 — Operator polish (partially implemented)
 
-- `REJECT_CLOSE` command honored from the sheet in auto mode.
-- Live-book `recommended_action` strings updated (`hold:working_close_order`
-  now means broker-working only).
+- `REJECT_CLOSE` command honored from the sheet in ledger auto mode for local,
+  not-yet-submitted close intents. It retires the ledger ticket as
+  `rejected_by_operator`; it does not cancel broker-working orders.
+- Live-book and health semantics now reserve `working_close_order` for
+  broker-acknowledged statuses (`submitted`/`repriced`). Local approvals are
+  `exit_pipeline_pending` / `exit_pipeline_stalled`.
 - Runbook section in `docs/KAMANDAL_LAUNCHD_AND_ALERTS.md` for
   `exit_pipeline_stalled`.
 

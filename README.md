@@ -79,6 +79,7 @@ see [docs/lathi_control_tower_kamandal_jobs.md](docs/lathi_control_tower_kamanda
 - `.venv/bin/kamandal live-health` - Print the live book health status (GREEN/YELLOW/RED) with reasons.
 - `.venv/bin/kamandal live-book --write-sheet` - Refresh the per-position cockpit rows in the `live_book` sheet tab.
 - `PYTHONPATH=src python3 -m kamandal_v2.tools.launchd_job live-health-report --force --alert-mode spool` - Safe launchd/Lathi smoke test without broker submission.
+- [docs/RISK_MANAGER.md](docs/RISK_MANAGER.md) - Current and future design notes for the disabled-by-default live entry risk manager.
 
 ## Live Health: Operator Playbook
 
@@ -90,6 +91,8 @@ The system self-heals everything it can; a status only persists when it genuinel
 
 **YELLOW** — informational; check in once a day:
 - `working_close_order` — a close is in flight at the broker. No action.
+- `exit_pipeline_pending` — the ledger has an approved close waiting for the
+  submitter. No action unless it becomes RED.
 - `position_target_reached` — profit target hit; a close should appear within a cycle. If it
   persists more than ~2 cycles, see the position row for what blocked it.
 - `close_order_stale` — a close has been working longer than `stale_close_order_minutes`.
@@ -102,6 +105,11 @@ The system self-heals everything it can; a status only persists when it genuinel
   broker keeps refusing (see `broker_error_code` on the position row, e.g. 157 = quantity
   mismatch / pending order conflict). Action: close the position manually in the Public app,
   or cancel the conflicting working order so the next cycle's close can pass preflight.
+- `exit_pipeline_stalled` — management approved an auto close locally, but
+  `live-approved-orders` did not drain it within
+  `KAMANDAL_LIVE_HEALTH_EXIT_PIPELINE_STALLED_MINUTES`. Action: check the
+  launchd log for `live_approved_orders`; the broker may not have received any
+  order yet.
 - `reconciliation_blocker` — local book and broker disagree about what you own. Action: compare
   the position row against the Public app; the reconciler auto-retires confirmed ghosts after
   `broker_flat_confirmations_required` cycles, so usually wait one cycle, intervene only if it sticks.

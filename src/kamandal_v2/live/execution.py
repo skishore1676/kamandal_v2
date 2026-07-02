@@ -21,13 +21,15 @@ from kamandal_v2.stores.sqlite import LocalStore
 
 TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED"}
 COMPLETED_TICKET_STATUSES = {"filled", "close_filled", "manual_fill_recorded"}
-PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", "dry_run"}
+APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
+EXPIRED_EOD_STATUS = "expired_eod"
+PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
 ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
 CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired"}
 EXPIRED_BROKER_MISSING_STATUS = "expired_broker_status_missing"
 RETIRED_STALE_ENTRY_APPROVAL_STATUS = "retired_stale_entry_approval"
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
-FAILED_TICKET_STATUSES = {"rejected", "expired", "failed", "cancelled", "canceled"}
+FAILED_TICKET_STATUSES = {"rejected", "expired", EXPIRED_EOD_STATUS, "failed", "cancelled", "canceled"}
 DEFAULT_STALE_ENTRY_APPROVAL_MINUTES = 120
 
 
@@ -39,8 +41,19 @@ def execute_live_approved(
     store: LocalStore | None = None,
 ) -> dict[str, Any]:
     store = store or LocalStore()
-    rows = _approved_rows(config, close=close)
     action = APPROVE_LIVE_CLOSE if close else APPROVE_LIVE
+    if close and _exit_submit_source(config) == "ledger":
+        promoted = _promote_sheet_approved_closes_to_ledger(config, store)
+        promoted += _promote_legacy_auto_rule_closes_to_ledger(config, store)
+        tickets = _ledger_approved_close_tickets(store, config)
+        if not tickets:
+            return {"action": action, "submit": submit, "processed": 0, "results": [], "source": "ledger", "promoted": promoted}
+        _assert_submit_allowed(config, submit=submit)
+        adapter = broker_adapter(config)
+        results = [_execute_ticket(config, adapter, store, ticket, submit=submit, close=True) for ticket in tickets]
+        return {"action": action, "submit": submit, "processed": len(results), "results": results, "source": "ledger", "promoted": promoted}
+
+    rows = _approved_rows(config, close=close)
     if not rows:
         return {"action": action, "submit": submit, "processed": 0, "results": []}
     _assert_submit_allowed(config, submit=submit)
@@ -95,7 +108,9 @@ def _execute_ticket(
     if intent.get("ticket_hash") != ticket.get("ticket_hash"):
         return _failure(ticket, "ticket_hash_mismatch")
     ledger_status = str(intent.get("_ledger_status") or "")
-    allowed_statuses = {"dry_run", "pending_close_approval" if close else "pending_approval"}
+    allowed_statuses = {"dry_run", "pending_approval"}
+    if close:
+        allowed_statuses = {"dry_run", "pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT}
     if ledger_status and ledger_status not in allowed_statuses:
         return _failure(ticket, f"ticket_already_{ledger_status}")
     if close and _same_day_close_blocked(config, store, ticket):
@@ -202,13 +217,22 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
             })
             continue
         status = str(response.get("status") or "UNKNOWN").upper()
-        should_manage_entry = manage_entries and ledger_status == "submitted"
+        intent_type = str(ticket.get("intent_type") or "")
+        should_manage_submitted = manage_entries and ledger_status == "submitted"
         store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
-        if status in {"NEW", "OPEN", "WORKING"} and should_manage_entry and _entry_expire_due(store, ticket, response, config):
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "close" and _close_expire_due(store, ticket, response, config):
+            expire_result = _expire_live_close_order(adapter, store, config, ticket, response)
+            results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **expire_result})
+            continue
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "close" and _close_reprice_due(store, ticket, response, config):
+            reprice_result = _reprice_live_close_order(adapter, store, config, ticket, response)
+            results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **reprice_result})
+            continue
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "open" and _entry_expire_due(store, ticket, response, config):
             expire_result = _expire_live_entry_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **expire_result})
             continue
-        if status in {"NEW", "OPEN", "WORKING"} and should_manage_entry and _entry_reprice_due(store, ticket, response, config):
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "open" and _entry_reprice_due(store, ticket, response, config):
             reprice_result = _reprice_live_entry_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **reprice_result})
             continue
@@ -228,12 +252,143 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
     return {"synced": len(results), "manage_entries": manage_entries, "orders": results}
 
 
+def _exit_submit_source(config: dict[str, Any]) -> str:
+    raw = str((config.get("live") or {}).get("exit_submit_source") or "sheet").strip().lower()
+    return raw if raw in {"sheet", "ledger"} else "sheet"
+
+
+def _exit_approval_mode(config: dict[str, Any]) -> str:
+    return str((config.get("live") or {}).get("exit_approval_mode") or "sheet_approval").strip().lower()
+
+
+def _max_close_submits_per_run(config: dict[str, Any]) -> int:
+    return max(int((config.get("live") or {}).get("max_close_submits_per_run") or 10), 1)
+
+
+def _ledger_approved_close_tickets(store: LocalStore, config: dict[str, Any]) -> list[dict[str, Any]]:
+    tickets = store.live_order_intents_by_type("close", statuses={APPROVED_CLOSE_PENDING_SUBMIT})
+    tickets.sort(key=lambda item: (str(item.get("_ledger_created_at") or ""), str(item.get("ticket_hash") or "")))
+    return tickets[:_max_close_submits_per_run(config)]
+
+
+def _promote_sheet_approved_closes_to_ledger(config: dict[str, Any], store: LocalStore) -> int:
+    if _exit_approval_mode(config) != "sheet_approval":
+        return 0
+    promoted = 0
+    for row in _approved_rows(config, close=True):
+        for ticket in _tickets_from_row(row, close=True):
+            ticket_hash = str(ticket.get("ticket_hash") or "")
+            intent = store.live_order_intent(ticket_hash)
+            if not intent:
+                continue
+            if str(intent.get("_ledger_status") or "") == "pending_close_approval":
+                store.update_live_order_intent_status(ticket_hash, APPROVED_CLOSE_PENDING_SUBMIT)
+                promoted += 1
+    return promoted
+
+
+def _promote_legacy_auto_rule_closes_to_ledger(config: dict[str, Any], store: LocalStore) -> int:
+    if _exit_approval_mode(config) != "auto_rules":
+        return 0
+    open_group_ids = {str(group.get("group_id") or "") for group in store.open_live_position_groups()}
+    promoted = 0
+    for ticket in store.live_order_intents_by_type("close", statuses={"pending_close_approval"}):
+        group_id = str(ticket.get("group_id") or "")
+        if group_id and group_id not in open_group_ids:
+            continue
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), APPROVED_CLOSE_PENDING_SUBMIT)
+        promoted += 1
+    if promoted:
+        store.event("live_legacy_auto_close_approvals_promoted", {"promoted": promoted})
+    return promoted
+
+
 def _safe_broker_error(exc: Exception) -> str:
     return re.sub(r"/trading/[^/]+/", "/trading/<account>/", str(exc))
 
 
 def _broker_error_is_404(error: str) -> bool:
     return "status=404" in error or "status = 404" in error
+
+
+def _expire_live_close_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
+    try:
+        _assert_submit_allowed(config, submit=True)
+        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        store.record_live_order_status(str(ticket["order_id"]), "CLOSE_EXPIRE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
+        store.record_live_order_attempt(
+            ticket,
+            action="expire_close",
+            submit=True,
+            ok=True,
+            request_payload={"orderId": ticket.get("order_id"), "reason": "exit_reprice_expired_eod"},
+            response_payload=cancel_response,
+        )
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), EXPIRED_EOD_STATUS)
+        store.event("live_order_close_expired_eod", {
+            "ticket_hash": ticket.get("ticket_hash"),
+            "order_id": ticket.get("order_id"),
+            "broker_status": broker_status.get("status"),
+            "age_minutes": _close_order_age_minutes(store, ticket, broker_status),
+        })
+        return {"expire_status": "cancel_requested"}
+    except Exception as exc:  # noqa: BLE001
+        store.event("live_order_close_expire_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": str(exc)})
+        return {"expire_status": "failed", "expire_message": str(exc)}
+
+
+def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
+    try:
+        _assert_submit_allowed(config, submit=True)
+        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        store.record_live_order_status(str(ticket["order_id"]), "CLOSE_REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
+        new_ticket = _repriced_close_ticket(ticket, config)
+        fresh_preflight = adapter.preflight_ticket(new_ticket)
+        if not fresh_preflight.ok:
+            store.record_live_order_attempt(
+                new_ticket,
+                action="reprice_preflight_close",
+                submit=True,
+                ok=False,
+                request_payload=dict((fresh_preflight.raw or {}).get("request") or new_ticket.get("submit_payload") or {}),
+                response_payload=fresh_preflight.to_dict(),
+            )
+            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "reprice_blocked_preflight_failed")
+            return {"reprice_status": "blocked_preflight_failed", "reprice_message": fresh_preflight.message}
+        new_ticket["preflight"] = fresh_preflight.to_dict()
+        new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
+        response = adapter.place_order_ticket(new_ticket)
+        ok = bool(response.get("orderId"))
+        store.save_live_order_intent(new_ticket, status="submitted" if ok else "submit_failed")
+        store.record_live_order_attempt(
+            new_ticket,
+            action="reprice_submit_close",
+            submit=True,
+            ok=ok,
+            request_payload=dict(new_ticket.get("submit_payload") or {}),
+            response_payload=response,
+        )
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "repriced" if ok else "reprice_submit_failed")
+        store.event("live_order_close_repriced", {
+            "from_ticket_hash": ticket.get("ticket_hash"),
+            "to_ticket_hash": new_ticket.get("ticket_hash"),
+            "from_order_id": ticket.get("order_id"),
+            "to_order_id": new_ticket.get("order_id"),
+            "from_limit_price": ticket.get("limit_price"),
+            "to_limit_price": new_ticket.get("limit_price"),
+            "broker_status": broker_status.get("status"),
+            "attempt": new_ticket.get("reprice_attempt"),
+            "ok": ok,
+        })
+        return {
+            "reprice_status": "submitted" if ok else "submit_failed",
+            "reprice_ticket_hash": new_ticket.get("ticket_hash"),
+            "reprice_order_id": new_ticket.get("order_id"),
+            "reprice_limit_price": new_ticket.get("limit_price"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        store.event("live_order_close_reprice_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": str(exc)})
+        return {"reprice_status": "failed", "reprice_message": str(exc)}
 
 
 def _expire_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
@@ -329,6 +484,19 @@ def _entry_expire_due(store: LocalStore, ticket: dict[str, Any], broker_status: 
     return age_minutes is not None and age_minutes >= expire_after
 
 
+def _close_expire_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
+    if str(ticket.get("intent_type") or "") != "close":
+        return False
+    policy = ((config.get("live") or {}).get("exit_reprice") or {})
+    if not _as_bool(policy.get("enabled"), False):
+        return False
+    expire_after = int(policy.get("expire_after_minutes") or 0)
+    if expire_after <= 0:
+        return False
+    age_minutes = _close_order_age_minutes(store, ticket, broker_status)
+    return age_minutes is not None and age_minutes >= expire_after
+
+
 def _entry_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
     if str(ticket.get("intent_type") or "") != "open":
         return False
@@ -339,6 +507,22 @@ def _entry_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status:
     if int(ticket.get("reprice_attempt") or 0) >= max_reprices:
         return False
     after_minutes = max(int(policy.get("after_minutes") or 5), 1)
+    age_minutes = _active_order_age_minutes(ticket, broker_status)
+    if age_minutes is None:
+        return False
+    return age_minutes >= after_minutes
+
+
+def _close_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
+    if str(ticket.get("intent_type") or "") != "close":
+        return False
+    policy = ((config.get("live") or {}).get("exit_reprice") or {})
+    if not _as_bool(policy.get("enabled"), False):
+        return False
+    max_reprices = int(policy.get("max_reprices") or 0)
+    if int(ticket.get("reprice_attempt") or 0) >= max_reprices:
+        return False
+    after_minutes = max(int(policy.get("after_minutes") or 10), 1)
     age_minutes = _active_order_age_minutes(ticket, broker_status)
     if age_minutes is None:
         return False
@@ -372,6 +556,33 @@ def _repriced_open_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> dic
     return new_ticket
 
 
+def _repriced_close_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    new_ticket = json.loads(json.dumps(ticket, sort_keys=True, default=str))
+    attempt = int(ticket.get("reprice_attempt") or 0) + 1
+    new_limit = _repriced_close_limit_price(ticket, config)
+    seed = json.dumps(
+        {
+            "parent_ticket_hash": ticket.get("ticket_hash"),
+            "attempt": attempt,
+            "limit_price": new_limit,
+        },
+        sort_keys=True,
+    )
+    new_order_id = str(uuid5(NAMESPACE_URL, "kamandal-live-close-reprice:" + seed))
+    new_ticket["order_id"] = new_order_id
+    new_ticket["limit_price"] = new_limit
+    new_ticket["parent_ticket_hash"] = ticket.get("ticket_hash")
+    new_ticket["reprice_attempt"] = attempt
+    new_ticket["close_order_started_at"] = ticket.get("close_order_started_at") or ticket.get("created_at")
+    new_ticket["created_at"] = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    submit_payload = dict(new_ticket.get("submit_payload") or {})
+    submit_payload["orderId"] = new_order_id
+    submit_payload["limitPrice"] = new_limit
+    new_ticket["submit_payload"] = submit_payload
+    new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
+    return new_ticket
+
+
 def _repriced_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str:
     metadata = (((ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {})
     current = abs(float(str(ticket.get("limit_price") or "0").replace("-", "")))
@@ -385,6 +596,40 @@ def _repriced_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str
     if signed.startswith("-"):
         return f"-{_round_cent(target):.2f}"
     return f"{_round_cent(target):.2f}"
+
+
+def _repriced_close_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str:
+    current = abs(float(str(ticket.get("limit_price") or "0").replace("-", "")))
+    natural = _optional_float(ticket.get("exit_natural_limit_price"))
+    if natural is None:
+        natural = current
+    reason = str(ticket.get("exit_reason") or "").lower()
+    floor = _optional_float(ticket.get("exit_profit_floor_limit_price"))
+    attempt = int(ticket.get("reprice_attempt") or 0) + 1
+    if reason in {"max_loss", "pre_event"}:
+        target = natural + (0.05 * attempt)
+    elif reason == "profit_target" and floor is not None:
+        target = min(natural, floor)
+    else:
+        target = natural
+    step = _exit_reprice_step_multiplier(config, attempt)
+    target = current + ((target - current) * step)
+    if reason == "profit_target" and floor is not None:
+        target = min(target, floor)
+    return f"{max(_round_cent(target), 0.01):.2f}"
+
+
+def _exit_reprice_step_multiplier(config: dict[str, Any], attempt: int) -> float:
+    policy = ((config.get("live") or {}).get("exit_reprice") or {})
+    raw_sequence = policy.get("step_multipliers") or policy.get("improvement_multipliers")
+    if isinstance(raw_sequence, list) and raw_sequence:
+        index = max(attempt - 1, 0)
+        raw = raw_sequence[index] if index < len(raw_sequence) else raw_sequence[-1]
+        return max(0.0, min(float(raw), 1.0))
+    raw = policy.get("step_multiplier")
+    if raw in (None, ""):
+        raw = 1.0
+    return max(0.0, min(float(raw), 1.0))
 
 
 def _reprice_improvement_multiplier(config: dict[str, Any], attempt: int) -> float:
@@ -418,6 +663,13 @@ def _entry_order_age_minutes(store: LocalStore, ticket: dict[str, Any], broker_s
     return (datetime.now(UTC) - started).total_seconds() / 60.0
 
 
+def _close_order_age_minutes(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any]) -> float | None:
+    started = _close_order_started_at(store, ticket) or _parse_utc(str(broker_status.get("createdAt") or ticket.get("created_at") or ""))
+    if started is None:
+        return None
+    return (datetime.now(UTC) - started).total_seconds() / 60.0
+
+
 def _active_order_age_minutes(ticket: dict[str, Any], broker_status: dict[str, Any]) -> float | None:
     created = _parse_utc(str(broker_status.get("createdAt") or ticket.get("created_at") or ""))
     if created is None:
@@ -443,8 +695,35 @@ def _entry_order_started_at(store: LocalStore, ticket: dict[str, Any]) -> dateti
     return _parse_utc(str((current or ticket).get("created_at") or ""))
 
 
+def _close_order_started_at(store: LocalStore, ticket: dict[str, Any]) -> datetime | None:
+    explicit = _parse_utc(str(ticket.get("close_order_started_at") or ""))
+    if explicit is not None:
+        return explicit
+    current = ticket
+    seen: set[str] = set()
+    while current:
+        parent_hash = str(current.get("parent_ticket_hash") or "")
+        if not parent_hash or parent_hash in seen:
+            break
+        seen.add(parent_hash)
+        parent = store.live_order_intent(parent_hash)
+        if not parent:
+            break
+        current = parent
+    return _parse_utc(str((current or ticket).get("created_at") or ""))
+
+
 def _round_cent(value: float) -> float:
     return round(float(value) + 1e-9, 2)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_utc(raw: str) -> datetime | None:

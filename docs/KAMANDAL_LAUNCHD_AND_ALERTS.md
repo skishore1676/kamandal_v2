@@ -126,6 +126,9 @@ Routine proof belongs in logs. Telegram is for attention.
 - YELLOW live health alerts only for configured operator-action reasons. The
   default is `close_order_stale`, `stale_failed_close_order`, and
   `portfolio_bpr_over_target`.
+- `exit_pipeline_stalled` is RED. It means policy approved a close locally but
+  `live-approved-orders` did not submit it within
+  `live.health.exit_pipeline_stalled_minutes`.
 - `scheduled-job-health` alerts when a launchd job is missing, stale, or failed
   in the expected window.
 
@@ -134,6 +137,42 @@ Override the YELLOW reasons with:
 ```bash
 KAMANDAL_HEALTH_NOTIFY_REASONS=close_order_stale,stale_failed_close_order,portfolio_bpr_over_target
 ```
+
+## Live Exit Pipeline
+
+Live exit submission has two modes:
+
+```yaml
+live:
+  exit_submit_source: sheet   # sheet | ledger
+```
+
+`sheet` is the legacy bridge: `live-management` writes
+`APPROVE_LIVE_CLOSE` rows and `live-approved-orders` reads them. It is kept as a
+rollback path.
+
+`ledger` is the preferred live mode: when `exit_approval_mode=auto_rules`,
+`live-management` writes approved close intents directly to SQLite as
+`approved_close_pending_submit`; `live-approved-orders` drains every eligible
+close up to `live.max_close_submits_per_run`. The Sheet becomes a projection,
+not the execution queue.
+
+Close lifecycle vocabulary:
+
+| Status | Meaning |
+| --- | --- |
+| `approved_close_pending_submit` | Local policy approved the exit; submitter should drain it. |
+| `submitted` / `repriced` | Broker acknowledged a working close. |
+| `exit_pipeline_pending` | Health sees local pending pipeline state, not broker risk. |
+| `exit_pipeline_stalled` | Local approved close did not drain fast enough; check `live-approved-orders` logs. |
+| `expired_eod` | DAY close was cancelled/expired; management can re-stage next session. |
+| `rejected_by_operator` | Operator rejected a local not-yet-submitted close using `REJECT_CLOSE`. |
+
+Operator commands:
+
+- `APPROVE_LIVE_CLOSE` remains the gate only for `exit_approval_mode=sheet_approval`.
+- `REJECT_CLOSE` in the `daily_plan` row retires a local, not-yet-submitted
+  ledger close. It does **not** cancel a broker-working order.
 
 On oldmac, the live Kamandal profile currently sends through the Jasper receipt
 bot (`jasper_receipts`) with `live_send_enabled=true`. This is a transitional

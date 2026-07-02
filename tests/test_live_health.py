@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import sys
 import types
 from pathlib import Path
@@ -125,6 +126,60 @@ def test_live_health_yellow_for_working_close_order(tmp_path: Path) -> None:
     assert report["counts"]["working_close_orders"] == 1
     assert "working_close_order" in report["reasons"]
     assert any(event["reason"] == "working_close_order" for event in report["events"])
+
+
+def test_live_health_distinguishes_pending_close_pipeline_from_working_broker_order(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_pending_close", target_progress=100.0, trigger_progress=95.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "close-ticket-pipeline",
+            "order_id": "order-close-pipeline",
+            "plan_id": "plan-pipeline",
+            "candidate_id": "cand-pipeline",
+            "idea_id": "idea-pipeline",
+            "group_id": "group_pending_close",
+            "intent_type": "close",
+            "underlying": "AAPL",
+        },
+        status="approved_close_pending_submit",
+    )
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "YELLOW"
+    assert report["counts"]["working_close_orders"] == 0
+    assert report["counts"]["exit_pipeline_pending"] == 1
+    assert "exit_pipeline_pending" in report["reasons"]
+
+
+def test_live_health_red_for_stalled_ledger_close_pipeline(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_stalled_close", target_progress=100.0, trigger_progress=95.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "close-ticket-stalled",
+            "order_id": "order-close-stalled",
+            "plan_id": "plan-stalled",
+            "candidate_id": "cand-stalled",
+            "idea_id": "idea-stalled",
+            "group_id": "group_stalled_close",
+            "intent_type": "close",
+            "underlying": "AAPL",
+        },
+        status="approved_close_pending_submit",
+    )
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "UPDATE live_order_intents SET updated_at = ?, created_at = ? WHERE ticket_hash = ?",
+            ("2000-01-01 00:00:00", "2000-01-01 00:00:00", "close-ticket-stalled"),
+        )
+
+    report = run_live_health(store, {"live": {"health": {"exit_pipeline_stalled_minutes": 1}}})
+
+    assert report["overall"] == "RED"
+    assert report["counts"]["exit_pipeline_stalled"] == 1
+    assert "exit_pipeline_stalled" in report["reasons"]
 
 
 def test_live_health_red_for_reconciliation_or_loss_watch(tmp_path: Path) -> None:

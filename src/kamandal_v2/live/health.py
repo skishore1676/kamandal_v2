@@ -10,9 +10,12 @@ from kamandal_v2.stores.sqlite import LocalStore
 
 
 DEFAULT_STALE_CLOSE_ORDER_MINUTES = 120
-WORKING_CLOSE_STATUSES = {"pending_close_approval", "dry_run", "submitted", "repriced"}
+DEFAULT_EXIT_PIPELINE_STALLED_MINUTES = 20
+APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
+LOCAL_CLOSE_PIPELINE_STATUSES = {"pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
+WORKING_CLOSE_STATUSES = {"submitted", "repriced"}
 CLOSED_CLOSE_STATUSES = {"filled", "manual_fill_recorded", "close_filled"}
-NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES = {"expired_stale_close_approval", "retired_stale_close_failure"}
+NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES = {"expired_stale_close_approval", "retired_stale_close_failure", "rejected_by_operator", "expired_eod"}
 FAILED_CLOSE_STATUSES = {
     "rejected",
     "failed",
@@ -38,12 +41,14 @@ REASON_ORDER = [
     "reconciliation_blocker",
     "failed_close_order",
     "failed_preflight_close",
+    "exit_pipeline_stalled",
     "loss_watch",
     "portfolio_bpr_over_target",
     "close_order_stale",
     "stale_failed_close_order",
     "position_target_reached",
     "working_close_order",
+    "exit_pipeline_pending",
     "pending_entry_approvals",
 ]
 
@@ -60,6 +65,7 @@ def run_live_health(
         default=DEFAULT_STALE_CLOSE_ORDER_MINUTES,
     )
     stale_minutes = int(stale_close_order_minutes if stale_close_order_minutes is not None else configured_stale)
+    stalled_minutes = _exit_pipeline_stalled_minutes(config)
 
     open_groups = store.open_live_position_groups()
     open_group_ids = {str(group.get("group_id") or "") for group in open_groups}
@@ -94,9 +100,11 @@ def run_live_health(
     for order in close_orders:
         finding = _close_order_finding(order)
         finding["group_id"] = finding["group_id"] or str(order.get("group_id") or "")
-        if finding["reason"] in {"working_close_order", "close_order_stale"}:
+        if finding["reason"] in {"working_close_order", "close_order_stale", "exit_pipeline_pending"}:
             finding["age_minutes"] = _order_age_minutes(order, now=_utc_now())
-            if (finding["age_minutes"] or 0.0) > stale_minutes:
+            if finding["reason"] == "exit_pipeline_pending" and (finding["age_minutes"] or 0.0) > stalled_minutes:
+                finding["reason"] = "exit_pipeline_stalled"
+            elif finding["reason"] in {"working_close_order", "close_order_stale"} and (finding["age_minutes"] or 0.0) > stale_minutes:
                 finding["reason"] = "close_order_stale"
         if finding["is_failed_close"]:
             _demote_stale_failed_close(store, finding, order, latest_close_ticket_by_group)
@@ -134,6 +142,30 @@ def run_live_health(
                     "severity": "yellow",
                     "reason": "working_close_order",
                     "detail": _close_order_detail(finding, stale_minutes),
+                    "group_id": finding.get("group_id"),
+                    "ticket_hash": finding.get("ticket_hash"),
+                    "age_minutes": finding.get("age_minutes"),
+                },
+            )
+            continue
+        if finding["reason"] == "exit_pipeline_stalled":
+            events.append(
+                {
+                    "severity": "red",
+                    "reason": "exit_pipeline_stalled",
+                    "detail": _close_order_detail(finding, stalled_minutes),
+                    "group_id": finding.get("group_id"),
+                    "ticket_hash": finding.get("ticket_hash"),
+                    "age_minutes": finding.get("age_minutes"),
+                },
+            )
+            continue
+        if finding["reason"] == "exit_pipeline_pending":
+            events.append(
+                {
+                    "severity": "yellow",
+                    "reason": "exit_pipeline_pending",
+                    "detail": _close_order_detail(finding, stalled_minutes),
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
                     "age_minutes": finding.get("age_minutes"),
@@ -217,6 +249,8 @@ def run_live_health(
             "pending_entry_approvals": len(pending_entry_approvals),
             "reconciliation_blockers": len(reconciliation_blockers),
             "working_close_orders": len([order for order in close_findings if order["reason"] in {"working_close_order", "close_order_stale"}]),
+            "exit_pipeline_pending": len([order for order in close_findings if order["reason"] == "exit_pipeline_pending"]),
+            "exit_pipeline_stalled": len([order for order in close_findings if order["reason"] == "exit_pipeline_stalled"]),
             "stale_close_orders": len([order for order in close_findings if order["reason"] == "close_order_stale"]),
             "failed_close_orders": len([order for order in close_findings if order["is_failed_close"]]),
             "stale_failed_close_orders": len([order for order in close_findings if order["reason"] == "stale_failed_close_order"]),
@@ -380,6 +414,8 @@ def _close_order_finding(order: dict[str, Any]) -> dict[str, Any]:
         reason = "close_completed"
     elif status in NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES:
         reason = "close_expired"
+    elif status in LOCAL_CLOSE_PIPELINE_STATUSES:
+        reason = "exit_pipeline_pending"
     elif status in WORKING_CLOSE_STATUSES:
         reason = "working_close_order"
     elif status in PREFLIGHT_FAIL_CLOSE_STATUSES:
@@ -407,7 +443,12 @@ def _close_order_detail(finding: dict[str, Any], stale_minutes: int) -> str:
     status = str(finding.get("order_status") or "")
     group_id = str(finding.get("group_id") or "unknown_group")
     age = finding.get("age_minutes")
-    if finding["reason"] == "close_order_stale":
+    if finding["reason"] == "close_order_stale" and isinstance(age, (int, float)):
+        return (
+            f"status={status} group={group_id} age={age:.1f}m "
+            f"older than {stale_minutes}m"
+        )
+    if finding["reason"] == "exit_pipeline_stalled" and isinstance(age, (int, float)):
         return (
             f"status={status} group={group_id} age={age:.1f}m "
             f"older than {stale_minutes}m"
@@ -571,6 +612,11 @@ def _int_value(raw: Any, *, default: int | None = None) -> int | None:
         return int(float(raw))
     except (TypeError, ValueError):
         return default
+
+
+def _exit_pipeline_stalled_minutes(config: dict[str, Any]) -> int:
+    raw = ((config.get("live") or {}).get("health") or {}).get("exit_pipeline_stalled_minutes")
+    return int(_int_value(raw, default=DEFAULT_EXIT_PIPELINE_STALLED_MINUTES) or DEFAULT_EXIT_PIPELINE_STALLED_MINUTES)
 
 
 def _utc_now() -> datetime:

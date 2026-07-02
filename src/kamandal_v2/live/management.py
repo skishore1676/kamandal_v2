@@ -11,17 +11,21 @@ from zoneinfo import ZoneInfo
 
 from kamandal_v2.events.earnings import EarningsStore
 from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
-from kamandal_v2.live.orders import APPROVE_LIVE_CLOSE, build_close_ticket
+from kamandal_v2.live.orders import APPROVE_LIVE_CLOSE, REJECT_CLOSE, build_close_ticket
 from kamandal_v2.live.position_management import live_exit_decision, live_exit_policy, mark_live_group
 from kamandal_v2.live.reconciliation import reconciliation_blockers_for_group
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.schemas import DAILY_PLAN_HEADER, LIVE_BOOK_HEADER
-from kamandal_v2.sheets import write_daily_plan, write_live_book
+from kamandal_v2.sheets import pull_sheet_tables, write_daily_plan, write_live_book
 from kamandal_v2.stores.sqlite import LocalStore
 
 
-NONTERMINAL_CLOSE_STATUSES = {"pending_close_approval", "dry_run", "submitted", "repriced"}
+APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
+EXPIRED_EOD_STATUS = "expired_eod"
+LOCAL_CLOSE_PIPELINE_STATUSES = {"pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
+BROKER_WORKING_CLOSE_STATUSES = {"submitted", "repriced"}
+NONTERMINAL_CLOSE_STATUSES = {*LOCAL_CLOSE_PIPELINE_STATUSES, *BROKER_WORKING_CLOSE_STATUSES}
 
 
 def run_live_management_plan(
@@ -38,6 +42,8 @@ def run_live_management_plan(
     groups = store.open_live_position_groups()
     fresh_underlyings = _refresh_live_group_quotes(config, store, groups)
     exit_mode = _exit_approval_mode(config)
+    exit_submit_source = _exit_submit_source(config)
+    operator_commands = _apply_close_operator_commands(config, store) if exit_submit_source == "ledger" else {"retired": 0, "blocked": 0}
     rows: list[list[Any]] = []
     decisions = []
     marks = []
@@ -89,12 +95,15 @@ def run_live_management_plan(
             working_close = _working_close_order(store, group)
             if working_close:
                 working_close_orders += 1
+                working_reason = "working_close_order"
+                if str(working_close.get("_ledger_status") or "") in LOCAL_CLOSE_PIPELINE_STATUSES:
+                    working_reason = "exit_pipeline_pending"
                 decision = {
                     **decision,
                     "action": "hold",
                     "blocked_action": "close",
                     "blocked_reason": str(decision.get("reason") or ""),
-                    "reason": "working_close_order",
+                    "reason": working_reason,
                     "working_close_order": _working_close_summary(working_close),
                 }
         decisions.append(decision)
@@ -112,8 +121,12 @@ def run_live_management_plan(
             close_net_credit=float(decision.get("recommended_close_net") or 0.0) / 100.0,
             seed_salt=_close_seed_salt(store, group, config),
         )
-        store.save_live_order_intent(ticket, status="pending_close_approval")
-        rows.append(_close_plan_row(index, group, decision, ticket, approval_mode=exit_mode))
+        _annotate_exit_ticket(ticket, decision)
+        close_status = "pending_close_approval"
+        if exit_mode == "auto_rules" and exit_submit_source == "ledger":
+            close_status = APPROVED_CLOSE_PENDING_SUBMIT
+        store.save_live_order_intent(ticket, status=close_status)
+        rows.append(_close_plan_row(index, group, decision, ticket, approval_mode=exit_mode, submit_source=exit_submit_source))
         close_recommendations += 1
     live_book_rows_written = 0
     if write_sheet and rows:
@@ -126,6 +139,7 @@ def run_live_management_plan(
         "close_recommendations": close_recommendations,
         "review_recommendations": review_recommendations,
         "working_close_orders": working_close_orders,
+        "operator_commands": operator_commands,
         "live_book_rows_written": live_book_rows_written,
         "marks": marks,
         "decisions": decisions,
@@ -137,10 +151,12 @@ DEAD_CLOSE_STATUSES = {
     "cancelled",
     "canceled",
     "expired",
+    EXPIRED_EOD_STATUS,
     "rejected",
     "failed",
     "expired_stale_close_approval",
     "retired_stale_close_failure",
+    "rejected_by_operator",
     "BROKER_STATUS_FETCH_FAILED",
 }
 DEAD_CLOSE_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
@@ -165,6 +181,49 @@ def _close_seed_salt(store: LocalStore, group: dict[str, Any], config: dict[str,
     return f"{datetime.now(market_tz).date().isoformat()}:retry{dead}"
 
 
+def _apply_close_operator_commands(config: dict[str, Any], store: LocalStore) -> dict[str, Any]:
+    try:
+        rows = pull_sheet_tables(config).get("daily_plan") or []
+    except Exception as exc:  # noqa: BLE001
+        store.event("live_close_operator_commands_read_failed", {"error": str(exc)})
+        return {"retired": 0, "blocked": 0, "error": str(exc)}
+    retired: list[dict[str, Any]] = []
+    blocked: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("operator_action") or "").strip().upper() != REJECT_CLOSE:
+            continue
+        detail = _loads(row.get("plan_detail_json"))
+        if str(detail.get("lane") or row.get("mode") or "") != "live_close_advisory":
+            continue
+        ticket = detail.get("order_ticket_json")
+        if not isinstance(ticket, dict):
+            continue
+        ticket_hash = str(ticket.get("ticket_hash") or "")
+        intent = store.live_order_intent(ticket_hash)
+        if not intent:
+            continue
+        status = str(intent.get("_ledger_status") or "")
+        if status in LOCAL_CLOSE_PIPELINE_STATUSES:
+            store.update_live_order_intent_status_with_payload(
+                ticket_hash,
+                "rejected_by_operator",
+                {
+                    "operator_command": {
+                        "action": REJECT_CLOSE,
+                        "reason": str(row.get("operator_notes") or "operator_rejected_close"),
+                        "prior_status": status,
+                        "applied_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                    }
+                },
+            )
+            retired.append({"ticket_hash": ticket_hash, "prior_status": status})
+        else:
+            blocked.append({"ticket_hash": ticket_hash, "status": status, "reason": "broker_cancel_required"})
+    if retired or blocked:
+        store.event("live_close_operator_commands_applied", {"retired": retired, "blocked": blocked})
+    return {"retired": len(retired), "blocked": len(blocked), "retired_tickets": retired, "blocked_tickets": blocked}
+
+
 def _working_close_order(store: LocalStore, group: dict[str, Any]) -> dict[str, Any] | None:
     group_id = str(group.get("group_id") or "")
     tickets = store.live_close_order_intents_for_group(group_id, statuses=NONTERMINAL_CLOSE_STATUSES)
@@ -175,6 +234,8 @@ def _working_close_status_rank(ticket: dict[str, Any]) -> int:
     status = str(ticket.get("_ledger_status") or "")
     if status in {"submitted", "repriced"}:
         return 0
+    if status == APPROVED_CLOSE_PENDING_SUBMIT:
+        return 1
     if status == "pending_close_approval":
         return 1
     return 2
@@ -199,6 +260,28 @@ def _exit_approval_mode(config: dict[str, Any]) -> str:
     if raw not in allowed:
         raise ValueError(f"unsupported live.exit_approval_mode={raw!r}; expected one of {sorted(allowed)}")
     return raw
+
+
+def _exit_submit_source(config: dict[str, Any]) -> str:
+    raw = str(((config.get("live") or {}).get("exit_submit_source") or "sheet")).strip().lower()
+    return raw if raw in {"sheet", "ledger"} else "sheet"
+
+
+def _annotate_exit_ticket(ticket: dict[str, Any], decision: dict[str, Any]) -> None:
+    ticket["exit_reason"] = str(decision.get("reason") or "")
+    ticket["exit_decision"] = {
+        key: value
+        for key, value in decision.items()
+        if key in {"reason", "urgency", "entry_value", "current_value", "pnl_mid", "recommended_close_net", "min_profit_to_trigger"}
+    }
+    recommended = _optional_float(decision.get("recommended_close_net"))
+    if recommended is not None:
+        ticket["exit_natural_limit_price"] = f"{abs(recommended) / 100.0:.2f}"
+    entry_value = _optional_float(decision.get("entry_value"))
+    min_profit = _optional_float(decision.get("min_profit_to_trigger"))
+    if entry_value is not None and min_profit is not None:
+        floor = max((entry_value - min_profit) / 100.0, 0.01)
+        ticket["exit_profit_floor_limit_price"] = f"{floor:.2f}"
 
 
 def _same_day_exit_blocked(config: dict[str, Any], group: dict[str, Any]) -> bool:
@@ -341,7 +424,7 @@ def _review_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any]
     return [row.get(column, "") for column in DAILY_PLAN_HEADER]
 
 
-def _close_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any], ticket: dict[str, Any], *, approval_mode: str) -> list[Any]:
+def _close_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any], ticket: dict[str, Any], *, approval_mode: str, submit_source: str = "sheet") -> list[Any]:
     detail = {
         "lane": "live_close_advisory",
         "live_gate_status": "eligible",
@@ -368,8 +451,8 @@ def _close_plan_row(index: int, group: dict[str, Any], decision: dict[str, Any],
         "blocked_by": "",
         "plan_metrics_json": json.dumps({"decision": decision}, sort_keys=True),
         "plan_detail_json": json.dumps(detail, sort_keys=True),
-        "operator_action": APPROVE_LIVE_CLOSE if approval_mode == "auto_rules" else "",
-        "operator_notes": "",
+        "operator_action": APPROVE_LIVE_CLOSE if approval_mode == "auto_rules" and submit_source == "sheet" else "",
+        "operator_notes": "ledger-approved close pending submit" if approval_mode == "auto_rules" and submit_source == "ledger" else "",
     }
     return [row.get(column, "") for column in DAILY_PLAN_HEADER]
 
@@ -379,3 +462,13 @@ def _optional_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _loads(raw: Any) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}

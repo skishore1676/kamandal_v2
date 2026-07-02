@@ -14,7 +14,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 
 
 WORKING_OPEN_STATUSES = {"pending_approval", "dry_run", "submitted", "repriced"}
-NONTERMINAL_CLOSE_STATUSES = {"pending_close_approval", "dry_run", "submitted", "repriced"}
+NONTERMINAL_CLOSE_STATUSES = {"pending_close_approval", "approved_close_pending_submit", "dry_run", "submitted", "repriced"}
 HEALTH_ROW_SYMBOL = "_HEALTH_"
 
 
