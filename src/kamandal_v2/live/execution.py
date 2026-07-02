@@ -44,13 +44,22 @@ def execute_live_approved(
     if not rows:
         return {"action": action, "submit": submit, "processed": 0, "results": []}
     _assert_submit_allowed(config, submit=submit)
+    cluster_capped: dict[str, str] = {}
     if submit and not close:
         gate = entry_health_gate(store, config)
         if gate["blocked"]:
-            reason = "blocked_live_health_red:" + ",".join(gate["reasons"])
-            store.event("live_entries_blocked_by_health", {"overall": gate["overall"], "reasons": gate["reasons"], "counts": gate["counts"]})
+            risk_manager = gate.get("risk_manager") or {}
+            if bool(risk_manager.get("enabled")) and bool(risk_manager.get("blocked")):
+                reason = "blocked_risk_manager:" + ",".join(gate["reasons"])
+                store.event("live_entries_blocked_by_risk_manager", {"overall": gate["overall"], "reasons": gate["reasons"], "risk_manager": risk_manager})
+            else:
+                reason = "blocked_live_health_red:" + ",".join(gate["reasons"])
+                store.event("live_entries_blocked_by_health", {"overall": gate["overall"], "reasons": gate["reasons"], "counts": gate["counts"]})
             results = [{"status": "blocked", "reason": reason, "trade_bundle": row.get("trade_bundle")} for row in rows[:1]]
             return {"action": action, "submit": submit, "processed": len(results), "results": results, "health_gate": gate}
+        for cluster, symbols in ((gate.get("risk_manager") or {}).get("clusters_at_cap") or {}).items():
+            for symbol in symbols:
+                cluster_capped[str(symbol).upper()] = str(cluster)
     adapter = broker_adapter(config)
     results = []
     for row in rows[:1]:
@@ -62,6 +71,11 @@ def execute_live_approved(
             results.append({"status": "blocked", "reason": "max_live_baskets_per_day_reached", "trade_bundle": row.get("trade_bundle")})
             continue
         for ticket in tickets:
+            capped_cluster = cluster_capped.get(str(ticket.get("underlying") or "").upper())
+            if capped_cluster and submit and not close:
+                store.event("live_entry_blocked_by_cluster_cap", {"ticket_hash": ticket.get("ticket_hash"), "underlying": ticket.get("underlying"), "cluster": capped_cluster})
+                results.append({"status": "blocked", "reason": f"blocked_risk_cluster_cap:{capped_cluster}", "underlying": ticket.get("underlying"), "ticket_hash": ticket.get("ticket_hash")})
+                continue
             results.append(_execute_ticket(config, adapter, store, ticket, submit=submit, close=close))
     return {"action": action, "submit": submit, "processed": len(results), "results": results}
 

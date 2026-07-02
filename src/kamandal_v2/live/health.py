@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from kamandal_v2.live.risk_manager import evaluate_entry_risk
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -29,6 +30,10 @@ PREFLIGHT_FAIL_CLOSE_STATUSES = {
     "reprice_submit_failed",
 }
 REASON_ORDER = [
+    "risk_daily_drawdown_breaker",
+    "risk_weekly_drawdown_breaker",
+    "risk_consecutive_loss_cooldown",
+    "risk_daily_new_position_cap",
     "portfolio_bpr_over_hard_cap",
     "reconciliation_blocker",
     "failed_close_order",
@@ -190,10 +195,21 @@ def run_live_health(
             },
         )
 
+    risk_manager_decision = evaluate_entry_risk(store, config)
+    for reason in risk_manager_decision.reasons:
+        events.append(
+            {
+                "severity": str(reason.get("severity") or "yellow"),
+                "reason": str(reason.get("code") or "risk_manager"),
+                "detail": str(reason.get("detail") or ""),
+            },
+        )
+
     status = _coerce_status(events)
     return {
         "checked_at": _utc_now().isoformat(),
         "overall": status,
+        "risk_manager": risk_manager_decision.to_dict(),
         "scale": _scale(status, events, risk, pending_entry_approvals),
         "risk": risk,
         "counts": {
@@ -222,13 +238,16 @@ def entry_health_gate(store: LocalStore, config: dict[str, Any] | None = None) -
         default=True,
     )
     report = run_live_health(store, config)
-    blocked = block_on_red and report["overall"] == "RED"
+    risk_manager = report.get("risk_manager") or {}
+    risk_blocked = bool(risk_manager.get("enabled")) and bool(risk_manager.get("blocked"))
+    blocked = (block_on_red and report["overall"] == "RED") or risk_blocked
     return {
         "blocked": blocked,
         "block_entries_on_red": block_on_red,
         "overall": report["overall"],
         "reasons": report["reasons"],
         "counts": report["counts"],
+        "risk_manager": risk_manager,
     }
 
 

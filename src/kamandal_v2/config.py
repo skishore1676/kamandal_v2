@@ -87,6 +87,13 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "portfolio.delta_guard.allow_improvement_when_outside": _env_bool(
             "KAMANDAL_PORTFOLIO_DELTA_GUARD_ALLOW_IMPROVEMENT"
         ),
+        "risk_manager.enabled": _env_bool("KAMANDAL_RISK_MANAGER_ENABLED"),
+        "risk_manager.max_daily_drawdown_pct": _env_float("KAMANDAL_RISK_MAX_DAILY_DRAWDOWN_PCT"),
+        "risk_manager.max_weekly_drawdown_pct": _env_float("KAMANDAL_RISK_MAX_WEEKLY_DRAWDOWN_PCT"),
+        "risk_manager.consecutive_loss_limit": _env_int("KAMANDAL_RISK_CONSECUTIVE_LOSS_LIMIT"),
+        "risk_manager.cooldown_days": _env_int("KAMANDAL_RISK_COOLDOWN_DAYS"),
+        "risk_manager.max_new_positions_per_day": _env_int("KAMANDAL_RISK_MAX_NEW_POSITIONS_PER_DAY"),
+        "risk_manager.max_positions_per_cluster": _env_int("KAMANDAL_RISK_MAX_POSITIONS_PER_CLUSTER"),
         "shadow.account_size_override": _env_float("KAMANDAL_SHADOW_ACCOUNT_SIZE"),
         "shadow.buying_power_override": _env_float("KAMANDAL_SHADOW_BUYING_POWER"),
         "shadow.bpr_used_override": _env_float("KAMANDAL_SHADOW_BPR_USED"),

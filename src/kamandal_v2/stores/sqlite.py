@@ -290,6 +290,19 @@ class LocalStore:
         payload["_snapshot_id"] = row["id"]
         return payload
 
+    def recent_account_snapshots(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, payload FROM account_snapshots ORDER BY rowid DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        snapshots = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["_snapshot_id"] = row["id"]
+            snapshots.append(payload)
+        return snapshots
+
     def save_candidates(self, plan_run_id: str, candidates: list[Candidate]) -> None:
         with self._connect() as conn:
             conn.executemany(
@@ -806,6 +819,37 @@ class LocalStore:
             payload["positions"] = positions_by_group.get(str(row["group_id"]), [])
             groups.append(payload)
         return groups
+
+    def closed_live_position_groups(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        """Non-open groups, most recently closed first (closed_at falls back to opened_at)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT group_id, status, opened_at, closed_at, payload
+                FROM live_position_groups
+                WHERE status != 'open'
+                ORDER BY COALESCE(closed_at, opened_at) DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        groups = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload["group_id"] = payload.get("group_id") or str(row["group_id"])
+            payload["_status"] = row["status"]
+            payload["_opened_at"] = row["opened_at"]
+            payload["_closed_at"] = row["closed_at"]
+            groups.append(payload)
+        return groups
+
+    def count_live_position_groups_opened_since(self, opened_since: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM live_position_groups WHERE opened_at >= ?",
+                (opened_since,),
+            ).fetchone()
+        return int(row["n"] or 0) if row else 0
 
     def live_position_group(self, group_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
