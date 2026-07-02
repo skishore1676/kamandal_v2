@@ -112,11 +112,27 @@ JOB_RISK_CLASSES = {
 }
 
 JOB_AVAILABLE_ACTIONS = {
+    "x-bookmarks": ("retry-job",),
+    "youtube": ("retry-job",),
     "live-health-report": ("live-health-report-now",),
     "scheduled-job-health": ("scheduled-job-health-now",),
 }
 
 JOB_ACTION_REQUIREMENTS = {
+    "x-bookmarks": {
+        "retry-job": {
+            "requires_confirmation": False,
+            "reason": "Retry X bookmark intelligence ingestion. This does not submit, cancel, or modify broker orders.",
+            "command_args": ["--job", "x-bookmarks"],
+        }
+    },
+    "youtube": {
+        "retry-job": {
+            "requires_confirmation": False,
+            "reason": "Retry YouTube/transcript intelligence ingestion. This does not submit, cancel, or modify broker orders.",
+            "command_args": ["--job", "youtube"],
+        }
+    },
     "live-health-report": {
         "live-health-report-now": {
             "requires_confirmation": False,

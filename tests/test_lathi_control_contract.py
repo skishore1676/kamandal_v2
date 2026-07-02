@@ -68,6 +68,11 @@ def test_launchd_status_outputs_units_without_broker_mutation(tmp_path: Path) ->
     assert "kamandal:live-health" in unit_ids
     assert "kamandal:review-queue" in unit_ids
     assert payload["review_queue"]["counts"]["active"] == 1
+    units = {unit["unit_id"]: unit for unit in payload["units"]}
+    youtube = units["com.kamandal.v2.youtube"]
+    assert youtube["available_actions"] == ["retry-job"]
+    assert youtube["action_requirements"]["retry-job"]["command_args"] == ["--job", "youtube"]
+    assert youtube["action_requirements"]["retry-job"]["requires_confirmation"] is False
 
 
 def test_launchd_control_applies_review_decision_with_fingerprint(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
