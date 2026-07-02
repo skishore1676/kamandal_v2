@@ -168,7 +168,8 @@ def main() -> None:
     x_bookmarks_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     x_bookmarks_parser.add_argument("--filter-universe", action="store_true", help="Report configured universe symbol hits")
 
-    x_digest_parser = subparsers.add_parser("import-x-digest", help="Import Birdclaw SQLite X digest posts as LLM source docs")
+    x_digest_parser = subparsers.add_parser("import-x-digest", help="Import Birdclaw CLI X digest posts as LLM source docs")
+    x_digest_parser.add_argument("--birdclawctl", default="", help="Birdclaw CLI path; defaults to <trial-root>/birdclawctl when present")
     x_digest_parser.add_argument("--db-path", default="", help="Birdclaw x_digest SQLite DB; defaults to canonical_store in latest state")
     x_digest_parser.add_argument("--latest-state", default="", help="OpenClaw x_daily_digest latest.json")
     x_digest_parser.add_argument("--trial-root", default="", help="Birdclaw trial root used to resolve relative DB paths")
@@ -477,6 +478,7 @@ def main() -> None:
             since_hours=args.since_hours or int(x_config.get("since_hours") or 96),
             include_resurfaced=args.include_resurfaced,
             allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
+            birdclawctl=args.birdclawctl or x_config.get("birdclawctl") or None,
         )
         print(json.dumps(result.to_dict(), indent=2))
         return

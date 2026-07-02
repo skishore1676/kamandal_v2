@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -50,6 +51,8 @@ class XDigestImportResult:
     skipped_resurfaced_count: int
     cashtags: dict[str, int]
     symbol_hits: dict[str, int]
+    source_contract: str
+    freshness: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +66,8 @@ class XDigestImportResult:
             "skipped_resurfaced_count": self.skipped_resurfaced_count,
             "cashtags": dict(self.cashtags),
             "symbol_hits": dict(self.symbol_hits),
+            "source_contract": self.source_contract,
+            "freshness": dict(self.freshness),
         }
 
 
@@ -79,8 +84,9 @@ def import_x_digest(
     limit: int = 50,
     since_hours: int = 96,
     include_resurfaced: bool = False,
+    birdclawctl: str | Path | None = None,
 ) -> XDigestImportResult:
-    """Read Birdclaw's canonical X digest SQLite DB and emit LLM source docs.
+    """Read Birdclaw's canonical X digest export and emit LLM source docs.
 
     Birdclaw owns X collection and deduplication. Kamandal only reads sanitized,
     canonical digest records, preserving source lane metadata for extraction.
@@ -88,18 +94,33 @@ def import_x_digest(
 
     state_path = _resolve_optional_state(latest_state)
     resolved_db = _resolve_db_path(db_path, state_path=state_path, trial_root=trial_root)
-    if not resolved_db.exists():
-        raise FileNotFoundError(f"Birdclaw X digest DB not found: {resolved_db}")
-
     normalized_sources = _normalize_sources(sources)
     cutoff = datetime.now(UTC) - timedelta(hours=max(1, int(since_hours)))
-    records, skipped_resurfaced = _load_records(
-        resolved_db,
+    per_source_limit = max(1, int(limit))
+    export = _load_records_from_birdclawctl(
+        birdclawctl=birdclawctl,
+        trial_root=trial_root,
         sources=normalized_sources,
-        limit=max(1, int(limit)),
+        limit=per_source_limit,
+        since_hours=max(1, int(since_hours)),
         cutoff=cutoff,
         include_resurfaced=include_resurfaced,
     )
+    if export is None:
+        if not resolved_db.exists():
+            raise FileNotFoundError(f"Birdclaw X digest DB not found: {resolved_db}")
+        records, skipped_resurfaced = _load_records(
+            resolved_db,
+            sources=normalized_sources,
+            limit=per_source_limit,
+            cutoff=cutoff,
+            include_resurfaced=include_resurfaced,
+        )
+        source_contract = "birdclaw.sqlite.fallback"
+        freshness: dict[str, Any] = {}
+    else:
+        records, skipped_resurfaced, resolved_db, freshness = export
+        source_contract = "birdclawctl.export.digest.v1"
 
     today = run_date or date.today()
     output_root = resolve_path(output_dir) / today.isoformat()
@@ -135,6 +156,8 @@ def import_x_digest(
         skipped_resurfaced_count=skipped_resurfaced,
         cashtags=cashtags,
         symbol_hits=symbol_hits,
+        source_contract=source_contract,
+        freshness=freshness,
     )
 
 
@@ -162,6 +185,13 @@ def _resolve_db_path(db_path: str | Path | None, *, state_path: Path | None, tri
             if rooted.exists():
                 return rooted
     return resolve_path(DEFAULT_DIGEST_DB)
+
+
+def _resolve_birdclawctl(birdclawctl: str | Path | None, trial_root: str | Path) -> Path | None:
+    if birdclawctl:
+        return resolve_path(birdclawctl)
+    candidate = resolve_path(trial_root) / "birdclawctl"
+    return candidate if candidate.exists() else None
 
 
 def _normalize_sources(sources: Iterable[str]) -> list[str]:
@@ -245,6 +275,94 @@ def _load_records(
     for source in sorted(grouped, key=lambda item: (-SOURCE_PRIORITIES.get(item, 0), item)):
         ordered.extend(grouped[source])
     return ordered, skipped_resurfaced
+
+
+def _load_records_from_birdclawctl(
+    *,
+    birdclawctl: str | Path | None,
+    trial_root: str | Path,
+    sources: list[str],
+    limit: int,
+    since_hours: int,
+    cutoff: datetime,
+    include_resurfaced: bool,
+) -> tuple[list[XDigestRecord], int, Path, dict[str, Any]] | None:
+    command_path = _resolve_birdclawctl(birdclawctl, trial_root)
+    if command_path is None or not command_path.exists():
+        return None
+    command = [
+        str(command_path),
+        "export",
+        "digest",
+        "--json",
+        "--sources",
+        ",".join(sources),
+        "--since-hours",
+        str(since_hours),
+        "--limit",
+        str(max(limit * max(1, len(sources)), limit)),
+    ]
+    completed = subprocess.run(command, cwd=command_path.parent, capture_output=True, text=True, timeout=60, check=False)
+    if completed.returncode != 0:
+        return None
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != "birdclaw.digest_export.v1":
+        return None
+    freshness = payload.get("freshness") if isinstance(payload.get("freshness"), dict) else {}
+    if freshness.get("is_stale") is True:
+        raise RuntimeError("Birdclaw X digest export is stale")
+    raw_records = payload.get("records") or []
+    if not isinstance(raw_records, list):
+        raise RuntimeError("Birdclaw X digest export records must be a list")
+    grouped: dict[str, list[XDigestRecord]] = {source: [] for source in sources}
+    skipped_resurfaced = 0
+    for raw in raw_records:
+        if not isinstance(raw, dict):
+            continue
+        source = str(raw.get("source") or "x").strip().lower()
+        if source == "bookmark":
+            source = "bookmarks"
+        if source not in sources:
+            continue
+        seen_at = _parse_dt(str(raw.get("seen_at") or ""))
+        if seen_at and seen_at < cutoff:
+            continue
+        delta = str(raw.get("delta") or "NEW")
+        if delta != "NEW" and not include_resurfaced:
+            skipped_resurfaced += 1
+            continue
+        if len(grouped.setdefault(source, [])) >= limit:
+            continue
+        grouped[source].append(_record_from_export(raw, source=source, delta=delta))
+
+    ordered: list[XDigestRecord] = []
+    for source in sorted(grouped, key=lambda item: (-SOURCE_PRIORITIES.get(item, 0), item)):
+        ordered.extend(grouped[source])
+    db_path = resolve_path(payload.get("db_path") or DEFAULT_DIGEST_DB)
+    return ordered, skipped_resurfaced, db_path, freshness
+
+
+def _record_from_export(raw: dict[str, Any], *, source: str, delta: str) -> XDigestRecord:
+    return XDigestRecord(
+        post_id=int(raw.get("post_id") or 0),
+        source_id=str(raw.get("source_id") or ""),
+        source=source,
+        text=str(raw.get("text") or "").strip(),
+        url=str(raw.get("url") or ""),
+        author=str(raw.get("author") or ""),
+        created_at=str(raw.get("created_at") or ""),
+        first_seen_at=str(raw.get("first_seen_at") or ""),
+        last_seen_at=str(raw.get("last_seen_at") or ""),
+        seen_at=str(raw.get("seen_at") or ""),
+        seen_count=int(raw.get("seen_count") or 0),
+        run_id=str(raw.get("run_id") or ""),
+        delta=delta,
+        metadata={},
+        source_metadata={},
+    )
 
 
 def _record_from_row(row: sqlite3.Row, *, delta: str) -> XDigestRecord:

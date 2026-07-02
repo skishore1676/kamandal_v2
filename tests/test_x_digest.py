@@ -2,6 +2,8 @@ import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from kamandal_v2.intelligence.x_digest import import_x_digest
 
 
@@ -142,3 +144,99 @@ def test_import_x_digest_resolves_db_from_state(tmp_path) -> None:
     assert result.db_path == db_path
     assert result.record_count == 1
     assert result.cashtags == {"TSLA": 1}
+
+
+def test_import_x_digest_prefers_birdclawctl_export(tmp_path) -> None:
+    birdclawctl = tmp_path / "birdclawctl"
+    payload = {
+        "schema": "birdclaw.digest_export.v1",
+        "db_path": str(tmp_path / "missing.sqlite"),
+        "freshness": {"is_stale": False, "latest_run_id": "run-cli"},
+        "records": [
+            {
+                "post_id": 1,
+                "source_id": "tweet-1",
+                "source": "bookmarks",
+                "text": "CLI export likes $NVDA.",
+                "url": "https://x.com/example/status/1",
+                "author": "source_author",
+                "created_at": datetime.now(UTC).isoformat(),
+                "first_seen_at": datetime.now(UTC).isoformat(),
+                "last_seen_at": datetime.now(UTC).isoformat(),
+                "seen_at": datetime.now(UTC).isoformat(),
+                "seen_count": 1,
+                "run_id": "run-cli",
+                "delta": "NEW",
+            },
+            {
+                "post_id": 2,
+                "source_id": "tweet-2",
+                "source": "timeline",
+                "text": "Resurfaced $SPY note.",
+                "url": "https://x.com/example/status/2",
+                "author": "source_author",
+                "created_at": datetime.now(UTC).isoformat(),
+                "first_seen_at": datetime.now(UTC).isoformat(),
+                "last_seen_at": datetime.now(UTC).isoformat(),
+                "seen_at": datetime.now(UTC).isoformat(),
+                "seen_count": 2,
+                "run_id": "run-cli",
+                "delta": "SEEN_RECENTLY",
+            },
+        ],
+    }
+    birdclawctl.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        f"print({json.dumps(json.dumps(payload))})\n",
+        encoding="utf-8",
+    )
+    birdclawctl.chmod(0o755)
+
+    result = import_x_digest(
+        birdclawctl=birdclawctl,
+        latest_state="",
+        trial_root=tmp_path / "trial",
+        output_dir=tmp_path / "source_docs",
+        digest_dir=tmp_path / "digest",
+        allowed_symbols={"NVDA", "SPY"},
+        sources=["bookmarks", "timeline"],
+        include_resurfaced=False,
+    )
+
+    assert result.source_contract == "birdclawctl.export.digest.v1"
+    assert result.record_count == 1
+    assert result.records_by_source == {"bookmarks": 1}
+    assert result.skipped_resurfaced_count == 1
+    assert result.cashtags == {"NVDA": 1}
+    assert result.freshness["latest_run_id"] == "run-cli"
+    docs = "\n".join(path.read_text(encoding="utf-8") for path in result.source_doc_paths)
+    assert "CLI export likes $NVDA." in docs
+    assert "Resurfaced $SPY note." not in docs
+
+
+def test_import_x_digest_rejects_stale_birdclawctl_export(tmp_path) -> None:
+    birdclawctl = tmp_path / "birdclawctl"
+    payload = {
+        "schema": "birdclaw.digest_export.v1",
+        "db_path": str(tmp_path / "missing.sqlite"),
+        "freshness": {"is_stale": True, "latest_run_id": "run-stale"},
+        "records": [],
+    }
+    birdclawctl.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        f"print({json.dumps(json.dumps(payload))})\n",
+        encoding="utf-8",
+    )
+    birdclawctl.chmod(0o755)
+
+    with pytest.raises(RuntimeError, match="Birdclaw X digest export is stale"):
+        import_x_digest(
+            birdclawctl=birdclawctl,
+            latest_state="",
+            trial_root=tmp_path / "trial",
+            output_dir=tmp_path / "source_docs",
+            digest_dir=tmp_path / "digest",
+            sources=["bookmarks"],
+        )
