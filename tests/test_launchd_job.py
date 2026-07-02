@@ -178,3 +178,58 @@ def test_scheduled_job_health_suppresses_missing_log_when_installed_after_due(tm
     )
 
     assert report["issues"] == []
+
+
+def test_scheduled_job_health_accepts_newer_x_bookmarks_artifact(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(launchd_job, "MONITORED_JOBS", ["x-bookmarks"])
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    label = "com.kamandal.v2.x_bookmarks"
+    log_path = log_dir / f"{label}.out.log"
+    log_path.write_text(launchd_job.RESULT_PREFIX + json.dumps({"job": "x-bookmarks", "status": "failed"}) + "\n")
+    failed_at = datetime(2026, 7, 2, 8, 55, tzinfo=launchd_job.CENTRAL).timestamp()
+    os.utime(log_path, (failed_at, failed_at))
+    artifact = tmp_path / "data" / "digest" / "x_bookmarks" / "2026-07-02" / "llm" / "2026-07-02_llm_raw.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('[{"ideas": []}]', encoding="utf-8")
+    healed_at = datetime(2026, 7, 2, 15, 6, tzinfo=launchd_job.CENTRAL).timestamp()
+    os.utime(artifact, (healed_at, healed_at))
+
+    report = launchd_job.scheduled_job_health(
+        repo_root=tmp_path,
+        log_dir=log_dir,
+        label_prefix="com.kamandal.v2",
+        now=datetime(2026, 7, 2, 15, 30, tzinfo=launchd_job.CENTRAL),
+    )
+
+    assert report["issues"] == []
+    last = report["jobs"][0]["last"]
+    assert last["status"] == "ok"
+    assert last["success_source"] == "artifact"
+    assert last["previous_status"] == "failed"
+    assert last["artifact_path"] == str(artifact)
+
+
+def test_scheduled_job_health_keeps_newer_x_bookmarks_failure(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(launchd_job, "MONITORED_JOBS", ["x-bookmarks"])
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    artifact = tmp_path / "data" / "digest" / "x_bookmarks" / "2026-07-02" / "llm" / "2026-07-02_llm_raw.json"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('[{"ideas": []}]', encoding="utf-8")
+    old_success_at = datetime(2026, 7, 2, 8, 50, tzinfo=launchd_job.CENTRAL).timestamp()
+    os.utime(artifact, (old_success_at, old_success_at))
+    label = "com.kamandal.v2.x_bookmarks"
+    log_path = log_dir / f"{label}.out.log"
+    log_path.write_text(launchd_job.RESULT_PREFIX + json.dumps({"job": "x-bookmarks", "status": "failed"}) + "\n")
+    failed_at = datetime(2026, 7, 2, 8, 55, tzinfo=launchd_job.CENTRAL).timestamp()
+    os.utime(log_path, (failed_at, failed_at))
+
+    report = launchd_job.scheduled_job_health(
+        repo_root=tmp_path,
+        log_dir=log_dir,
+        label_prefix="com.kamandal.v2",
+        now=datetime(2026, 7, 2, 15, 30, tzinfo=launchd_job.CENTRAL),
+    )
+
+    assert report["issues"] == [{"job": "x-bookmarks", "reason": "last_run_failed", "detail": str(log_path)}]

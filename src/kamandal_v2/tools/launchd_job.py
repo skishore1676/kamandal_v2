@@ -302,6 +302,7 @@ def scheduled_job_health(
         plist_path = launchd_dir / f"{label}.plist"
         expectation = expected_job_observation(schedule, now=now, grace_minutes=grace)
         observation = read_launchd_observation(log_path, plist_path=plist_path)
+        observation = fresher_success_observation(job, observation, repo_root=repo_root, now=now)
         issue = evaluate_job_observation(job, expectation, observation)
         row = {
             "job": job,
@@ -373,6 +374,71 @@ def read_launchd_observation(log_path: Path, *, plist_path: Path | None = None) 
         "log_path": str(log_path),
         "installed_at": installed_at,
     }
+
+
+def fresher_success_observation(
+    job: str,
+    observation: dict[str, Any],
+    *,
+    repo_root: Path,
+    now: datetime,
+) -> dict[str, Any]:
+    artifact = intelligence_success_artifact(job, repo_root=repo_root, now=now)
+    if not artifact:
+        return observation
+    observed_at = _observation_time(observation)
+    if observed_at and artifact["observed_at"] <= observed_at:
+        return observation
+    return {
+        **observation,
+        "status": "ok",
+        "job": job,
+        "mtime": artifact["observed_at"].isoformat(),
+        "success_source": "artifact",
+        "artifact_path": str(artifact["path"]),
+        "previous_status": observation.get("status"),
+        "previous_log_path": observation.get("log_path"),
+    }
+
+
+def intelligence_success_artifact(job: str, *, repo_root: Path, now: datetime) -> dict[str, Any] | None:
+    today = now.astimezone(CENTRAL).date().isoformat()
+    candidates: list[Path]
+    if job == "x-bookmarks":
+        candidates = [
+            repo_root / "data" / "digest" / "x_bookmarks" / today / "llm" / f"{today}_llm_raw.json",
+            repo_root / "data" / "digest" / "x_bookmarks" / today / "llm" / f"{today}_llm.md",
+            repo_root / "data" / "ideas" / "active" / f"x_bookmarks_imported_{today}.yaml",
+        ]
+    elif job == "youtube":
+        candidates = [
+            repo_root / "data" / "digest" / "youtube" / today / f"{today}_llm_raw.json",
+            repo_root / "data" / "digest" / "youtube" / today / f"{today}_llm.md",
+            repo_root / "data" / "ideas" / "active" / f"llm_imported_{today}.yaml",
+        ]
+    else:
+        return None
+    existing = [path for path in candidates if path.exists() and path.stat().st_size > 0]
+    if not existing:
+        return None
+    newest = max(existing, key=lambda path: path.stat().st_mtime)
+    return {
+        "path": newest,
+        "observed_at": datetime.fromtimestamp(newest.stat().st_mtime, CENTRAL),
+    }
+
+
+def _observation_time(observation: dict[str, Any]) -> datetime | None:
+    raw = observation.get("mtime")
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=CENTRAL)
+    return parsed
 
 
 def evaluate_job_observation(job: str, expectation: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any] | None:
