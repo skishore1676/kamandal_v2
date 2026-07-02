@@ -274,9 +274,9 @@ def _annotate_exit_ticket(ticket: dict[str, Any], decision: dict[str, Any]) -> N
         for key, value in decision.items()
         if key in {"reason", "urgency", "entry_value", "current_value", "pnl_mid", "recommended_close_net", "min_profit_to_trigger"}
     }
-    recommended = _optional_float(decision.get("recommended_close_net"))
-    if recommended is not None:
-        ticket["exit_natural_limit_price"] = f"{abs(recommended) / 100.0:.2f}"
+    natural = _optional_float(decision.get("close_natural_net"))
+    if natural is not None:
+        ticket["exit_natural_limit_price"] = f"{abs(natural) / 100.0:.2f}"
     entry_value = _optional_float(decision.get("entry_value"))
     min_profit = _optional_float(decision.get("min_profit_to_trigger"))
     if entry_value is not None and min_profit is not None:

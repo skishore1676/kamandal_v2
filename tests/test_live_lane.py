@@ -1249,6 +1249,7 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
     control = load_control()
     control["live"]["allow_same_day_exits"] = True
     control["live"]["exit_approval_mode"] = "auto_rules"
+    control["live"]["exit_submit_source"] = "sheet"
     control["live"]["exit_pricing"]["require_fresh_quotes"] = False
     managed = run_live_management_plan(control, config_source="seed", write_sheet=False, store=store)
 
@@ -1257,6 +1258,7 @@ def test_live_management_writes_full_group_close_advisory(tmp_path, monkeypatch)
     detail = json.loads(row["plan_detail_json"])
     assert detail["lane"] == "live_close_advisory"
     assert detail["order_ticket_json"]["intent_type"] == "close"
+    assert detail["order_ticket_json"]["exit_natural_limit_price"] == f"{abs(detail['decision']['close_natural_net']) / 100.0:.2f}"
     assert row["operator_action"] == APPROVE_LIVE_CLOSE
 
 
