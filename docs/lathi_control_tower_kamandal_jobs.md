@@ -152,14 +152,14 @@ business ledger.
 Target Kamandal profile shape:
 
 ```text
-10 Lathi/A. Kamandal/Inbox
-10 Lathi/A. Kamandal/Archive
+06 Lathi/A. Kamandal/Inbox
+06 Lathi/A. Kamandal/Archive
 _system/lathi-bus/kamandal/receipts
 _system/lathi-bus/kamandal/collected
 ```
 
 The current `kamandal-northstar` profile is transitional if it points at an
-OpenClaw/Lane Host drawer. The target is a Kamandal drawer under `10 Lathi`,
+OpenClaw/Lane Host drawer. The target is a Kamandal drawer under `06 Lathi`,
 with Lathi as the sole live decision collector.
 
 ## Desired Feature State
@@ -651,7 +651,7 @@ not become the primary Kamandal scheduler in this slice.
 
 ## Lathi Bus Development Contract
 
-### 1. Move Kamandal's human drawer under `10 Lathi`
+### 1. Move Kamandal's human drawer under `06 Lathi`
 
 The target drawer should be owned by the shared Lathi Bus profile config, not by
 OpenClaw/Lane Host conventions.
@@ -660,7 +660,7 @@ Recommended profile:
 
 ```toml
 [profiles.kamandal-control-tower.obsidian]
-human_root = "10 Lathi/A. Kamandal"
+human_root = "06 Lathi/A. Kamandal"
 inbox = "Inbox"
 archive = "Archive"
 system_root = "_system/lathi-bus/kamandal"
@@ -761,7 +761,7 @@ Goal: retire Lane Host as the live Telegram decision owner.
 
 Build across Lathi and Lathi Bus:
 
-- move Kamandal profile under `10 Lathi/A. Kamandal`;
+- move Kamandal profile under `06 Lathi/A. Kamandal`;
 - make Lathi the sole `getUpdates` poller for the relevant interaction bot;
 - collect Telegram and Obsidian decisions into Lathi action journal;
 - dispatch collected decisions to Kamandal `launchd_control`;
