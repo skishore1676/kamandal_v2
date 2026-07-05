@@ -178,6 +178,66 @@ def test_launchd_control_retries_allowed_job(tmp_path: Path, monkeypatch, capsys
     assert "--force" in calls[0][0]
 
 
+def test_launchd_control_retry_job_lock_is_scoped_per_job(tmp_path: Path, monkeypatch, capsys) -> None:  # noqa: ANN001
+    """Regression: retry-job for one job must not collide with a lock held for another.
+
+    Prior to this fix, the control lock key for retry-job was the bare command
+    name ("retry-job") regardless of --job, so two concurrent retries for
+    different jobs (e.g. x-bookmarks and youtube) fought over the same lock
+    file. Tower action journal 2026-07-02 (tower-b9b5497c..., tower-43466a...)
+    showed exactly this: one retry-job call got lock_busy while a second,
+    unrelated retry-job call hung past its caller-side timeout.
+    """
+    calls = []
+
+    class FakeProcess:
+        pid = 4242
+
+    def fake_popen(command, **kwargs):  # noqa: ANN001
+        calls.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr("kamandal_v2.tools.launchd_control.subprocess.Popen", fake_popen)
+    lock_dir = tmp_path / "locks"
+    monkeypatch.setenv("KAMANDAL_CONTROL_LOCK_DIR", str(lock_dir))
+    monkeypatch.setenv("KAMANDAL_CONTROL_RETRY_TRIGGER_MODE", "detached")
+
+    # Simulate a lock already held for the youtube retry-job (as if another
+    # in-flight call holds it) and confirm a concurrent x-bookmarks retry-job
+    # is unaffected because the lock key is now scoped by --job.
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    (lock_dir / "retry-job-youtube.lock").write_text("{}", encoding="utf-8")
+
+    code = launchd_control.main([
+        "retry-job",
+        "--job",
+        "x-bookmarks",
+        "--repo-root",
+        str(tmp_path),
+        "--json",
+    ])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["status"] == "triggered"
+    assert payload["payload"]["job"] == "x-bookmarks"
+    assert len(calls) == 1
+
+    # The youtube retry-job is still correctly refused as lock_busy.
+    code = launchd_control.main([
+        "retry-job",
+        "--job",
+        "youtube",
+        "--repo-root",
+        str(tmp_path),
+        "--json",
+    ])
+    assert code == 3
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "lock_busy"
+
+
 def test_launchd_control_retry_job_requires_job(capsys) -> None:  # noqa: ANN001
     code = launchd_control.main(["retry-job", "--json"])
 

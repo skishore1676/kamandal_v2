@@ -49,7 +49,8 @@ def run_control_action(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     action_id = str(args.action_id or f"kamandal-{uuid.uuid4().hex[:16]}")
     store = LocalStore(args.db) if args.db else LocalStore()
     config = load_control()
-    lock_key = _lock_key(args.command, getattr(args, "request_id", "") or "")
+    lock_scope = getattr(args, "request_id", "") or getattr(args, "job", "") or ""
+    lock_key = _lock_key(args.command, lock_scope)
     try:
         with _control_lock(lock_key, action_id=action_id):
             if args.command == "live-status":

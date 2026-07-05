@@ -14,6 +14,7 @@ from typing import Any
 from kamandal_v2.config import load_control
 from kamandal_v2.live.health import run_live_health
 from kamandal_v2.ops.alerts import AlertResult, default_lathi_bus_profile, send_lathi_alert, tail
+from kamandal_v2.ops.log_rotation import rotate_log_directories
 from kamandal_v2.ops.launchd_registry import (
     ALL_JOBS,
     CENTRAL,
@@ -66,6 +67,9 @@ def main(argv: list[str] | None = None) -> int:
 
     repo_root = Path(args.repo_root or Path(__file__).resolve().parents[3]).resolve()
     os.chdir(repo_root)
+
+    if args.job == "scheduled-job-health":
+        rotate_log_directories(repo_root=repo_root)
 
     if should_skip_for_calendar(args.job, force=args.force):
         print_result({"job": args.job, "status": "skipped", "reason": "non_trading_day"})
