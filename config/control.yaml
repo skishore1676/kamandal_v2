@@ -252,7 +252,7 @@ broker:
     account_cache_file: config/tastytrade_account.json
 
 llm:
-  provider: codex_cli
+  provider: agent_broker
   model: ""
   codex_binary: ""
   codex_workdir: ""
