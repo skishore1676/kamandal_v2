@@ -1,4 +1,10 @@
-"""Provider-neutral JSON LLM client with a Codex CLI implementation."""
+"""Provider-neutral JSON LLM client.
+
+Default implementation routes through Agent Broker (the repo-wide brain — one
+failover chain, one credential hub, one model hierarchy). The legacy Codex-CLI
+client is kept as a graceful fallback (agent-broker not installed) and an
+explicit `llm.provider: codex_cli` escape hatch.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -15,6 +22,43 @@ from kamandal_v2.paths import PROJECT_ROOT, resolve_path
 class JsonLlmClient(Protocol):
     def chat_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         ...
+
+
+class BrokerJsonClient:
+    """Hire a JSON turn through Agent Broker, bound to a kamandal actor/brain."""
+
+    def __init__(self, *, actor: str = "agent", timeout_seconds: int = 300) -> None:
+        self.actor = actor
+        self.timeout_seconds = timeout_seconds
+        self.policy_path = resolve_path(PROJECT_ROOT) / ".agent-broker.yaml"
+
+    def chat_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        from agent_broker import (  # noqa: PLC0415 - optional dependency
+            AgentBroker,
+            AgentContext,
+            AgentSpec,
+            AgentTask,
+            load_policy,
+        )
+
+        broker = AgentBroker(load_policy(self.policy_path))
+        spec = AgentSpec(lane_id="kamandal", actor=self.actor, role=self.actor)
+        task = AgentTask(
+            task_id=f"kamandal-{self.actor}-{uuid.uuid4().hex[:8]}",
+            objective=f"{self.actor}: produce the requested JSON.",
+            context=AgentContext(system=system_prompt),
+            raw_prompt=user_prompt,  # kamandal owns its prompt -> verbatim
+            allowed_outcomes=(),
+            timeout_seconds=self.timeout_seconds,
+        )
+        receipt = broker.run(spec, task).receipt
+        text = (receipt.output_text or "").strip()
+        if receipt.status != "succeeded" or not text:
+            raise RuntimeError(
+                f"agent-broker failed ({receipt.failure_summary or 'no output'}); "
+                f"chain={list(receipt.provider_chain)}"
+            )
+        return _extract_json_object(text)
 
 
 class CodexCliJsonClient:
@@ -74,11 +118,29 @@ class CodexCliJsonClient:
         return _extract_json_object(message)
 
 
-def build_llm_client(config: dict[str, Any]) -> JsonLlmClient:
+def _agent_broker_available() -> bool:
+    try:
+        import agent_broker  # noqa: F401, PLC0415
+    except ImportError:
+        return False
+    return True
+
+
+def build_llm_client(config: dict[str, Any], *, actor: str = "agent") -> JsonLlmClient:
+    """Build the JSON LLM client for an actor.
+
+    Default provider is ``agent_broker`` (the repo-wide brain); it falls back to
+    the legacy ``codex_cli`` client if agent-broker is not installed. Pin
+    ``llm.provider: codex_cli`` in config to force the legacy path.
+    """
     llm_config = config.get("llm") or {}
-    provider = str(llm_config.get("provider") or "codex_cli")
-    if provider != "codex_cli":
-        raise RuntimeError(f"Unsupported LLM provider for this build: {provider}")
+    provider = str(llm_config.get("provider") or "agent_broker")
+    if provider == "agent_broker" and _agent_broker_available():
+        return BrokerJsonClient(
+            actor=actor,
+            timeout_seconds=int(llm_config.get("codex_timeout_seconds") or 300),
+        )
+    # Legacy / fallback: the Codex CLI client.
     return CodexCliJsonClient(
         binary=str(llm_config.get("codex_binary") or "") or None,
         model=str(llm_config.get("model") or "") or None,

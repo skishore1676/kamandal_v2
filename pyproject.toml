@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Local-first multileg options portfolio planning and management cockpit."
 requires-python = ">=3.12"
 dependencies = [
+  "agent-broker>=0.3.0",
   "google-auth>=2.40.0",
   "gspread>=6.0.0",
   "pydantic>=2.11.0",
@@ -14,6 +15,9 @@ dependencies = [
   "youtube-transcript-api>=1.2.0",
   "yt-dlp>=2026.6.9",
 ]
+
+[tool.uv.sources]
+agent-broker = { path = "../agent-broker", editable = true }
 
 [project.scripts]
 kamandal = "kamandal_v2.cli:main"

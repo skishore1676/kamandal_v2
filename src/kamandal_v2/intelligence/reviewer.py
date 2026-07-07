@@ -31,7 +31,7 @@ def review_rejections(
     output_dir: str | Path = "data/reviews",
     client: JsonLlmClient | None = None,
 ) -> ReviewResult:
-    client = client or build_llm_client(config)
+    client = client or build_llm_client(config, actor="rejection_reviewer")
     latest_file = resolve_path(latest_run)
     payload = json.loads(latest_file.read_text(encoding="utf-8"))
     ideas_text = ""

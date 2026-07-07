@@ -50,7 +50,7 @@ def extract_ideas_llm(
     allowed_symbols: set[str] | None = None,
     client: JsonLlmClient | None = None,
 ) -> LlmExtractionResult:
-    client = client or build_llm_client(config)
+    client = client or build_llm_client(config, actor="thesis_extractor")
     source_path = resolve_path(source_dir)
     digest_path = resolve_path(digest_dir)
     ideas_path = resolve_path(ideas_dir)
