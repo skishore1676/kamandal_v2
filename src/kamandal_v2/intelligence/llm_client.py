@@ -25,14 +25,35 @@ class JsonLlmClient(Protocol):
 
 
 class BrokerJsonClient:
-    """Hire a JSON turn through Agent Broker, bound to a kamandal actor/brain."""
+    """Hire a JSON turn through Agent Broker, bound to a kamandal actor/brain.
 
-    def __init__(self, *, actor: str = "agent", timeout_seconds: int = 300) -> None:
+    Falls back to a legacy client (the read-only Codex CLI) on ANY broker failure
+    — bad policy/brains, auth, all providers down — so extraction/review never
+    breaks. Review finding: the import-guarded promise must cover runtime errors,
+    not just a missing package.
+    """
+
+    def __init__(
+        self,
+        *,
+        actor: str = "agent",
+        timeout_seconds: int = 300,
+        fallback: JsonLlmClient | None = None,
+    ) -> None:
         self.actor = actor
         self.timeout_seconds = timeout_seconds
         self.policy_path = resolve_path(PROJECT_ROOT) / ".agent-broker.yaml"
+        self._fallback = fallback
 
     def chat_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        try:
+            return self._chat_json_broker(system_prompt, user_prompt)
+        except Exception:
+            if self._fallback is None:
+                raise
+            return self._fallback.chat_json(system_prompt, user_prompt)
+
+    def _chat_json_broker(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         from agent_broker import (  # noqa: PLC0415 - optional dependency
             AgentBroker,
             AgentContext,
@@ -135,18 +156,24 @@ def build_llm_client(config: dict[str, Any], *, actor: str = "agent") -> JsonLlm
     """
     llm_config = config.get("llm") or {}
     provider = str(llm_config.get("provider") or "agent_broker")
-    if provider == "agent_broker" and _agent_broker_available():
-        return BrokerJsonClient(
-            actor=actor,
-            timeout_seconds=int(llm_config.get("codex_timeout_seconds") or 300),
+    timeout = int(llm_config.get("codex_timeout_seconds") or 300)
+
+    def _legacy() -> JsonLlmClient:
+        return CodexCliJsonClient(
+            binary=str(llm_config.get("codex_binary") or "") or None,
+            model=str(llm_config.get("model") or "") or None,
+            workdir=str(llm_config.get("codex_workdir") or "") or PROJECT_ROOT,
+            timeout_seconds=timeout,
         )
-    # Legacy / fallback: the Codex CLI client.
-    return CodexCliJsonClient(
-        binary=str(llm_config.get("codex_binary") or "") or None,
-        model=str(llm_config.get("model") or "") or None,
-        workdir=str(llm_config.get("codex_workdir") or "") or PROJECT_ROOT,
-        timeout_seconds=int(llm_config.get("codex_timeout_seconds") or 300),
-    )
+
+    if provider == "agent_broker" and _agent_broker_available():
+        try:
+            fallback: JsonLlmClient | None = _legacy()
+        except Exception:
+            fallback = None  # codex unavailable here -> broker-only
+        return BrokerJsonClient(actor=actor, timeout_seconds=timeout, fallback=fallback)
+    # Explicit legacy path (llm.provider: codex_cli) or broker unavailable.
+    return _legacy()
 
 
 def _discover_codex(configured: str | None) -> str:
