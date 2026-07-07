@@ -176,6 +176,11 @@ Routine proof belongs in logs. Telegram is for attention.
 
 - Healthy `live-health-report` runs print `KAMANDAL_LAUNCHD_JOB={...}` and do
   not send a message.
+- Live health performs bounded self-healing for stale local entry approvals
+  before it scores the book. A prior-market-day `pending_approval` entry ticket
+  is retired locally as `retired_stale_entry_approval`; it is not a broker
+  action and should disappear from Control Tower/Blackboard on the next Lathi
+  projection.
 - RED live health always alerts.
 - YELLOW live health alerts only for configured operator-action reasons. The
   default is `close_order_stale`, `stale_failed_close_order`, and

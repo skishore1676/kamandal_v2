@@ -105,7 +105,8 @@ def _job_unit(job: Any, schedule_report: dict[str, Any]) -> dict[str, Any]:
 
 def _live_health_unit(live_health: dict[str, Any]) -> dict[str, Any]:
     status = str(live_health.get("overall") or "NO_DATA").upper()
-    lifecycle = "idle" if status == "GREEN" else "waiting_you" if status == "YELLOW" else "stuck"
+    lifecycle = _live_health_lifecycle(live_health)
+    events = list(live_health.get("events") or [])
     return {
         "unit_id": "kamandal:live-health",
         "kind": "external_health",
@@ -120,6 +121,9 @@ def _live_health_unit(live_health: dict[str, Any]) -> dict[str, Any]:
         "last_run_at": live_health.get("checked_at"),
         "observed_at": live_health.get("checked_at"),
         "findings": [str(reason) for reason in live_health.get("reasons") or []],
+        "finding_details": events,
+        "self_healing": live_health.get("self_healing") or {},
+        "operator_state": _operator_state(events, lifecycle),
         "available_actions": ["live-status", "live-health-report-now"],
         "action_requirements": {
             "live-status": {"requires_confirmation": False, "reason": "Read-only live-health status."},
@@ -131,6 +135,31 @@ def _live_health_unit(live_health: dict[str, Any]) -> dict[str, Any]:
         "source_id": "kamandal",
         "readiness_role": "Kamandal live book health.",
     }
+
+
+def _live_health_lifecycle(live_health: dict[str, Any]) -> str:
+    status = str(live_health.get("overall") or "NO_DATA").upper()
+    if status == "GREEN":
+        return "idle"
+    if status == "RED":
+        return "stuck"
+    return "waiting_you"
+
+
+def _operator_state(events: list[dict[str, Any]], lifecycle: str) -> str:
+    if lifecycle == "idle":
+        return "clear"
+    if lifecycle == "stuck":
+        return "operator_needed"
+    states = {str(event.get("operator_state") or "") for event in events}
+    states.discard("")
+    if not states:
+        return "operator_needed"
+    if states == {"self_healing"}:
+        return "self_healing"
+    if "blocked_self_healing" in states:
+        return "blocked_self_healing"
+    return "operator_needed"
 
 
 def _review_queue_unit(review_queue: dict[str, Any]) -> dict[str, Any]:

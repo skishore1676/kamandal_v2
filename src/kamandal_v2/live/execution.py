@@ -11,6 +11,11 @@ from uuid import NAMESPACE_URL, uuid5
 from zoneinfo import ZoneInfo
 
 from kamandal_v2.live.health import entry_health_gate
+from kamandal_v2.live.entry_hygiene import (
+    market_today,
+    retire_stale_entry_approvals,
+    stale_entry_approval_minutes,
+)
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.market.broker import broker_adapter
@@ -27,10 +32,8 @@ PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", APPROVE
 ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
 CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired"}
 EXPIRED_BROKER_MISSING_STATUS = "expired_broker_status_missing"
-RETIRED_STALE_ENTRY_APPROVAL_STATUS = "retired_stale_entry_approval"
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
 FAILED_TICKET_STATUSES = {"rejected", "expired", EXPIRED_EOD_STATUS, "failed", "cancelled", "canceled"}
-DEFAULT_STALE_ENTRY_APPROVAL_MINUTES = 120
 
 
 def execute_live_approved(
@@ -827,40 +830,7 @@ def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None =
 
 def _retire_stale_entry_approvals(config: dict[str, Any], store: LocalStore, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     active_hashes = _live_advisory_ticket_hashes(rows, config)
-    now = datetime.now(UTC)
-    stale_minutes = _stale_entry_approval_minutes(config)
-    retired = []
-    for ticket in store.live_order_intents_by_type("open", statuses={"pending_approval"}):
-        ticket_hash = str(ticket.get("ticket_hash") or "")
-        if ticket_hash in active_hashes:
-            continue
-        age_minutes = _ticket_age_minutes(ticket, now=now)
-        if age_minutes is None or age_minutes <= stale_minutes:
-            continue
-        store.update_live_order_intent_status_with_payload(
-            ticket_hash,
-            RETIRED_STALE_ENTRY_APPROVAL_STATUS,
-            {
-                "order_reconciliation": {
-                    "status": RETIRED_STALE_ENTRY_APPROVAL_STATUS,
-                    "prior_status": "pending_approval",
-                    "reason": "stale_entry_approval_not_in_current_daily_plan",
-                    "age_minutes": round(age_minutes, 2),
-                    "stale_after_minutes": stale_minutes,
-                    "reconciled_at": _now_utc(),
-                }
-            },
-        )
-        item = {
-            "ticket_hash": ticket_hash,
-            "order_id": ticket.get("order_id"),
-            "underlying": ticket.get("underlying"),
-            "structure": ticket.get("structure"),
-            "age_minutes": round(age_minutes, 2),
-            "status": RETIRED_STALE_ENTRY_APPROVAL_STATUS,
-        }
-        retired.append(item)
-    return retired
+    return retire_stale_entry_approvals(config, store, active_hashes=active_hashes, source="live_approval_cleanup")
 
 
 def _live_advisory_ticket_hashes(rows: list[dict[str, Any]], config: dict[str, Any]) -> set[str]:
@@ -884,13 +854,11 @@ def _live_advisory_ticket_hashes(rows: list[dict[str, Any]], config: dict[str, A
 
 
 def _stale_entry_approval_minutes(config: dict[str, Any]) -> int:
-    recon = ((config.get("live") or {}).get("reconciliation") or {})
-    return int(recon.get("stale_entry_approval_minutes") or DEFAULT_STALE_ENTRY_APPROVAL_MINUTES)
+    return stale_entry_approval_minutes(config)
 
 
 def _market_today(config: dict[str, Any]) -> str:
-    market_tz = str((config.get("runtime") or {}).get("market_timezone") or os.environ.get("KAMANDAL_MARKET_TZ") or "America/Chicago")
-    return datetime.now(ZoneInfo(market_tz)).date().isoformat()
+    return market_today(config)
 
 
 def record_manual_live_fill(ticket_hash: str, *, store: LocalStore | None = None) -> dict[str, Any]:

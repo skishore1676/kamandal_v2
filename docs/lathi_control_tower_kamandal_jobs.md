@@ -566,6 +566,23 @@ Fields should map cleanly onto existing tower ideas:
 The tower renders Kamandal status, but Kamandal receipts and commands remain the
 evidence.
 
+Live-health findings are source-truth reconciled, not append-only notices. A
+finding may still reach Blackboard when it first appears, but Kamandal must clear
+it from the source contract once the app handles it. For stale local entry
+approvals, Kamandal self-retires prior-market-day `pending_approval` tickets as
+`retired_stale_entry_approval`; the next `launchd_status` output should then
+return `kamandal:live-health` without that finding so Lathi drops the Blackboard
+line automatically.
+
+The live-health unit includes these extra fields for downstream surfaces:
+
+- `finding_details`: structured current events with reason, detail, severity,
+  and `operator_state` when applicable.
+- `self_healing`: bounded actions Kamandal already performed while building
+  the status, such as retired stale entry approvals.
+- `operator_state`: `clear`, `operator_needed`, `self_healing`, or
+  `blocked_self_healing`.
+
 ### 3. Review queue and decision dispatch
 
 Kamandal should expose a read-only review queue command separate from the

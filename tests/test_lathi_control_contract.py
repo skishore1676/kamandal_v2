@@ -73,6 +73,41 @@ def test_launchd_status_outputs_units_without_broker_mutation(tmp_path: Path) ->
     assert youtube["action_requirements"]["retry-job"]["requires_confirmation"] is False
 
 
+def test_launchd_status_marks_prior_day_pending_entries_self_healed(tmp_path: Path) -> None:
+    import sqlite3
+
+    db = tmp_path / "kamandal.db"
+    repo = tmp_path / "repo"
+    (repo / "data" / "logs" / "launchd").mkdir(parents=True)
+    store = LocalStore(db)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "old-entry-ticket",
+            "order_id": "old-entry-order",
+            "plan_id": "old-plan",
+            "candidate_id": "old-cand",
+            "idea_id": "old-idea",
+            "intent_type": "open",
+            "underlying": "NVDA",
+        },
+        status="pending_approval",
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE live_order_intents SET updated_at = ?, created_at = ? WHERE ticket_hash = ?",
+            ("2000-01-01 00:00:00", "2000-01-01 00:00:00", "old-entry-ticket"),
+        )
+
+    payload = launchd_status.build_status(repo_root=repo, db_path=db, config={"runtime": {"market_timezone": "America/Chicago"}})
+
+    units = {unit["unit_id"]: unit for unit in payload["units"]}
+    live_health = units["kamandal:live-health"]
+    assert live_health["lifecycle"] == "idle"
+    assert live_health["operator_state"] == "clear"
+    assert live_health["findings"] == []
+    assert live_health["self_healing"]["entry_approvals_retired"] == 1
+
+
 def test_launchd_control_applies_review_decision_with_fingerprint(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
     db = tmp_path / "kamandal.db"
     store = LocalStore(db)

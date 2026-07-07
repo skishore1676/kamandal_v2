@@ -101,6 +101,37 @@ def test_live_health_yellow_for_pending_entry_approvals(tmp_path: Path) -> None:
     assert report["counts"]["pending_entry_approvals"] == 1
     assert report["scale"]["score"] == 70
     assert "pending_entry_approvals" in report["reasons"]
+    assert report["events"][0]["operator_state"] == "operator_needed"
+
+
+def test_live_health_self_retires_prior_day_pending_entry_approvals(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_self_heal", target_progress=20.0, trigger_progress=100.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "old-pending-open-ticket",
+            "order_id": "old-order-pending-open",
+            "plan_id": "old-plan-pending",
+            "candidate_id": "old-cand-pending",
+            "idea_id": "old-idea-pending",
+            "intent_type": "open",
+            "underlying": "AAPL",
+        },
+        status="pending_approval",
+    )
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "UPDATE live_order_intents SET updated_at = ?, created_at = ? WHERE ticket_hash = ?",
+            ("2000-01-01 00:00:00", "2000-01-01 00:00:00", "old-pending-open-ticket"),
+        )
+
+    report = run_live_health(store, {"runtime": {"market_timezone": "America/Chicago"}})
+
+    assert report["overall"] == "GREEN"
+    assert report["counts"]["pending_entry_approvals"] == 0
+    assert report["self_healing"]["entry_approvals_retired"] == 1
+    assert report["self_healing"]["entry_approval_rows"][0]["reason"] == "stale_entry_approval_from_prior_market_day"
+    assert store.live_order_intent("old-pending-open-ticket")["_ledger_status"] == "retired_stale_entry_approval"
 
 
 def test_live_health_yellow_for_working_close_order(tmp_path: Path) -> None:

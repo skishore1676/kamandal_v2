@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from kamandal_v2.live.entry_hygiene import retire_stale_entry_approvals
 from kamandal_v2.live.risk_manager import evaluate_entry_risk
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -77,6 +78,7 @@ def run_live_health(
         for issue in store.open_live_reconciliation_issues()
         if not _is_pending_confirmation_issue(issue)
     ]
+    pending_entry_self_heal = retire_stale_entry_approvals(config, store)
     pending_entry_approvals = store.live_order_intents_by_type("open", statuses={"pending_approval"})
     risk = _risk_overview(store, config)
 
@@ -245,6 +247,8 @@ def run_live_health(
                 "severity": "yellow",
                 "reason": "pending_entry_approvals",
                 "detail": f"{len(pending_entry_approvals)} unsubmitted open intents need approval/expiry hygiene",
+                "operator_state": "operator_needed",
+                "self_healing": False,
             },
         )
 
@@ -281,6 +285,10 @@ def run_live_health(
         },
         "reasons": _ordered_reason_codes(events),
         "events": events,
+        "self_healing": {
+            "entry_approvals_retired": len(pending_entry_self_heal),
+            "entry_approval_rows": pending_entry_self_heal,
+        },
         "close_orders": close_findings,
         "group_marks": group_marks,
     }
