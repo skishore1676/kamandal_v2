@@ -14,6 +14,7 @@ from kamandal_v2.domain.models import Candidate, PortfolioState
 from kamandal_v2.live.approval import create_live_approval_request
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket
 from kamandal_v2.live.reconciliation import reconciliation_blockers_for_group
+from kamandal_v2.planner.bpr import structure_bpr_cap
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.engine import PlanRunResult, run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
@@ -208,7 +209,7 @@ def _contract_key(underlying: str, leg: Any) -> str:
 def _candidate_bpr_cap(candidate: Candidate, portfolio: PortfolioState, live_cfg: dict[str, Any]) -> float:
     absolute = _candidate_live_bpr_cap(candidate)
     if absolute is None:
-        absolute = _structure_bpr_cap(candidate.structure, live_cfg)
+        absolute = structure_bpr_cap(candidate.structure, live_cfg)
     pct_raw = live_cfg.get("max_bpr_per_order_pct")
     if pct_raw in (None, ""):
         return absolute
@@ -227,20 +228,6 @@ def _candidate_live_bpr_cap(candidate: Candidate) -> float | None:
             return None
         return value if value > 0 else None
     return None
-
-
-def _structure_bpr_cap(structure: str, live_cfg: dict[str, Any]) -> float:
-    fallback = float(live_cfg.get("max_bpr_per_order") or 300.0)
-    by_structure = live_cfg.get("max_bpr_per_order_by_structure") or {}
-    if not isinstance(by_structure, dict):
-        return fallback
-    key = str(structure or "").strip().lower()
-    if key == "short_strangle" and "strangle" in by_structure and key not in by_structure:
-        key = "strangle"
-    raw = by_structure.get(key, by_structure.get("default", fallback))
-    if raw in (None, ""):
-        return fallback
-    return float(raw)
 
 
 def _mentioned_strategy_mismatch(candidate: Candidate, live_cfg: dict[str, Any]) -> str:

@@ -9,6 +9,7 @@ from itertools import product
 from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, OptionQuote, Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.liquidity import bad_quote_reason, candidate_liquidity_metrics
 from kamandal_v2.market.interfaces import MarketDataProvider, PreflightClient
+from kamandal_v2.planner.bpr import structure_bpr_cap
 from kamandal_v2.planner.shape_validators import validate_structure
 
 
@@ -72,6 +73,13 @@ class DeltaSelection:
     dte_max: int
     fallback_role: str = ""
     fallback_dtes: list[int] | None = None
+
+
+@dataclass(slots=True)
+class VerticalWidthSearchSettings:
+    enabled: bool = False
+    widths: tuple[float, ...] = (5.0, 7.5, 10.0)
+    respect_bpr_cap: bool = True
 
 
 def build_candidates(
@@ -451,9 +459,9 @@ def _build_for_playbook(
     if playbook.structure == "long_put":
         return _long_option_candidates(idea, playbook, quotes, option_type="put")
     if playbook.structure == "put_spread":
-        return _put_spread_candidates(idea, playbook, quotes)
+        return _put_spread_candidates(idea, playbook, quotes, config=config)
     if playbook.structure == "call_spread":
-        return _call_spread_candidates(idea, playbook, quotes)
+        return _call_spread_candidates(idea, playbook, quotes, config=config)
     if playbook.structure == "iron_condor":
         return _iron_condor_candidates(idea, playbook, quotes)
     if playbook.structure == "call_calendar":
@@ -489,10 +497,70 @@ def _long_option_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQ
     return candidates
 
 
-def _put_spread_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:
-    candidates = []
+def _put_spread_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> list[Candidate]:
+    settings = _vertical_width_search_settings(config)
     shorts = _near_delta(quotes, "put", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
+    if not settings.enabled:
+        candidates = []
+        for short in shorts[:4]:
+            long_choices = [
+                quote for quote in quotes
+                if quote.option_type == "put"
+                and quote.expiration == short.expiration
+                and quote.strike < short.strike
+            ]
+            if not long_choices:
+                continue
+            long = sorted(long_choices, key=lambda quote: abs((short.strike - quote.strike) - (playbook.spread_width or 5.0)))[0]
+            candidates.append(_candidate(idea, playbook, [
+                OptionLeg.from_quote(long, role="long_put", side="buy"),
+                OptionLeg.from_quote(short, role="short_put", side="sell"),
+            ]))
+        return candidates
+    candidates = []
     for short in shorts[:4]:
+        candidate = _vertical_spread_for_short(idea, playbook, quotes, short, option_type="put", settings=settings, config=config)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _call_spread_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> list[Candidate]:
+    settings = _vertical_width_search_settings(config)
+    shorts = _near_delta(quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
+    if not settings.enabled:
+        candidates = []
+        for short in shorts[:4]:
+            long_choices = [
+                quote for quote in quotes
+                if quote.option_type == "call"
+                and quote.expiration == short.expiration
+                and quote.strike > short.strike
+            ]
+            if not long_choices:
+                continue
+            long = sorted(long_choices, key=lambda quote: abs((quote.strike - short.strike) - (playbook.spread_width or 5.0)))[0]
+            candidates.append(_candidate(idea, playbook, [
+                OptionLeg.from_quote(short, role="short_call", side="sell"),
+                OptionLeg.from_quote(long, role="long_call", side="buy"),
+            ]))
+        return candidates
+    candidates = []
+    for short in shorts[:4]:
+        candidate = _vertical_spread_for_short(idea, playbook, quotes, short, option_type="call", settings=settings, config=config)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _vertical_long_for_width(
+    quotes: list[OptionQuote],
+    short: OptionQuote,
+    width_target: float,
+    option_type: str,
+) -> OptionQuote | None:
+    """Pick the long strike nearest `width_target` points from `short`."""
+    if option_type == "put":
         long_choices = [
             quote for quote in quotes
             if quote.option_type == "put"
@@ -500,33 +568,103 @@ def _put_spread_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQu
             and quote.strike < short.strike
         ]
         if not long_choices:
-            continue
-        long = sorted(long_choices, key=lambda quote: abs((short.strike - quote.strike) - (playbook.spread_width or 5.0)))[0]
-        candidates.append(_candidate(idea, playbook, [
+            return None
+        return sorted(long_choices, key=lambda quote: abs((short.strike - quote.strike) - width_target))[0]
+    long_choices = [
+        quote for quote in quotes
+        if quote.option_type == "call"
+        and quote.expiration == short.expiration
+        and quote.strike > short.strike
+    ]
+    if not long_choices:
+        return None
+    return sorted(long_choices, key=lambda quote: abs((quote.strike - short.strike) - width_target))[0]
+
+
+def _vertical_legs(short: OptionQuote, long: OptionQuote, option_type: str) -> list[OptionLeg]:
+    if option_type == "put":
+        return [
             OptionLeg.from_quote(long, role="long_put", side="buy"),
             OptionLeg.from_quote(short, role="short_put", side="sell"),
-        ]))
-    return candidates
-
-
-def _call_spread_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:
-    candidates = []
-    shorts = _near_delta(quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
-    for short in shorts[:4]:
-        long_choices = [
-            quote for quote in quotes
-            if quote.option_type == "call"
-            and quote.expiration == short.expiration
-            and quote.strike > short.strike
         ]
-        if not long_choices:
+    return [
+        OptionLeg.from_quote(short, role="short_call", side="sell"),
+        OptionLeg.from_quote(long, role="long_call", side="buy"),
+    ]
+
+
+def _width_targets(playbook: Playbook, structure: str, config: dict | None) -> list[float]:
+    settings = _vertical_width_search_settings(config)
+    widths = {playbook.spread_width or 5.0}
+    widths.update(settings.widths)
+    return sorted(widths)
+
+
+def _vertical_gate_passes(candidate: Candidate, playbook: Playbook) -> bool:
+    """Mirror the credit-width-ratio branch of `_filter_rejections` exactly."""
+    if playbook.min_credit_to_width_ratio is None or candidate.net_credit <= 0:
+        return True
+    width = _risk_width(candidate)
+    if width <= 0:
+        return True
+    return (candidate.net_credit / width) >= playbook.min_credit_to_width_ratio
+
+
+def _vertical_spread_for_short(
+    idea: Idea,
+    playbook: Playbook,
+    quotes: list[OptionQuote],
+    short: OptionQuote,
+    *,
+    option_type: str,
+    settings: VerticalWidthSearchSettings,
+    config: dict | None,
+) -> Candidate | None:
+    cap = structure_bpr_cap(playbook.structure, (config or {}).get("live") or {}) if settings.respect_bpr_cap else None
+    constructions: list[tuple[float, Candidate, float]] = []
+    for width_target in _width_targets(playbook, playbook.structure, config):
+        long = _vertical_long_for_width(quotes, short, width_target, option_type)
+        if long is None:
             continue
-        long = sorted(long_choices, key=lambda quote: abs((quote.strike - short.strike) - (playbook.spread_width or 5.0)))[0]
-        candidates.append(_candidate(idea, playbook, [
-            OptionLeg.from_quote(short, role="short_call", side="sell"),
-            OptionLeg.from_quote(long, role="long_call", side="buy"),
-        ]))
-    return candidates
+        candidate = _candidate(idea, playbook, _vertical_legs(short, long, option_type))
+        width = _risk_width(candidate)
+        ratio = (candidate.net_credit / width) if width > 0 else 0.0
+        constructions.append((width_target, candidate, ratio))
+    if not constructions:
+        return None
+    widths_tried = sorted({width_target for width_target, _candidate_ref, _ratio in constructions})
+    bpr_ok = [
+        item for item in constructions
+        if cap is None or item[1].estimated_bpr <= cap
+    ]
+    pool = bpr_ok or constructions
+    gate_passing = [item for item in pool if _vertical_gate_passes(item[1], playbook)]
+    if gate_passing:
+        chosen = min(gate_passing, key=lambda item: (_risk_width(item[1]), -item[2]))
+    else:
+        chosen = max(pool, key=lambda item: item[2])
+    candidate = chosen[1]
+    candidate.reasons.append("widths_tried=[" + ",".join(str(width) for width in widths_tried) + "]")
+    return candidate
+
+
+def _vertical_width_search_settings(config: dict | None) -> VerticalWidthSearchSettings:
+    section = ((((config or {}).get("planner") or {}).get("vertical_width_search")) or {})
+    if not isinstance(section, dict):
+        section = {}
+    enabled = _config_bool(section.get("enabled"), default=False)
+    raw_widths = section.get("widths")
+    widths: list[float] = []
+    if isinstance(raw_widths, (list, tuple)):
+        for value in raw_widths:
+            try:
+                widths.append(float(value))
+            except (TypeError, ValueError):
+                continue
+    if not widths:
+        widths = [5.0, 7.5, 10.0]
+    respect_bpr_cap = _config_bool(section.get("respect_bpr_cap"), default=True)
+    return VerticalWidthSearchSettings(enabled=enabled, widths=tuple(sorted(set(widths))), respect_bpr_cap=respect_bpr_cap)
 
 
 def _iron_condor_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:

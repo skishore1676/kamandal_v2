@@ -489,7 +489,26 @@ def _plan_metrics(
         "account_size_effective": portfolio_effective.account_size,
         "buying_power_raw": portfolio_raw.buying_power,
         "buying_power_effective": portfolio_effective.buying_power,
+        "vertical_gate_unmet": _vertical_gate_unmet_count(candidates),
     }
+
+
+def _vertical_gate_unmet_count(candidates: list[Candidate]) -> int:
+    """Count idea x playbook vertical pairs where constructions were built but
+    none cleared the credit-width-ratio gate at any width searched."""
+    groups: dict[tuple[str, str], list[Candidate]] = {}
+    for candidate in candidates:
+        if candidate.structure not in {"put_spread", "call_spread"}:
+            continue
+        groups.setdefault((candidate.idea_id, candidate.playbook_id), []).append(candidate)
+    return sum(
+        1
+        for group_candidates in groups.values()
+        if group_candidates and all(
+            candidate.rejection_reason.startswith("credit_width_ratio_below_min")
+            for candidate in group_candidates
+        )
+    )
 
 
 def _rejection_summary(

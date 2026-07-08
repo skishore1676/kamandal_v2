@@ -18,6 +18,7 @@ Kamandal operates through a strictly bounded pipeline designed to keep the AI cr
 3. **Deterministic Planning**
    - A Python-based deterministic planner maps the LLM's generic ideas against your predefined **Playbooks** (strategy templates defined by you in your configuration).
    - It captures current Implied Volatility (IV) and live option chains to mathematically construct executable option candidates (e.g., Call Debit Spreads, Iron Condors).
+   - Put/call spread construction can optionally search a set of widths (`planner.vertical_width_search` in `control.yaml`, off by default) instead of a single fixed width, keeping the narrowest construction that clears both the playbook's credit-to-width gate and the structure's per-order BPR cap — see `docs/CANDIDATE_GATE_SEARCH.md`.
 
 4. **Portfolio Optimization**
    - Candidates are evaluated and grouped into "Plans". A beam-search portfolio optimizer selects the best combination of trades that maximize the overall score while strictly respecting your Buying Power Reduction (BPR) limits and max position caps.
