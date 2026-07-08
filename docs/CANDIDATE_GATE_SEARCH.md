@@ -1,6 +1,6 @@
 # Candidate Builder: Solve for the Credit Gate (Width Search)
 
-Status: **design approved, ready to implement** (2026-07-08)
+Status: **implemented, flag off by default** (2026-07-08)
 Owners: Suman (product) + Claude (design/review) + implementing agent
 Scope: vertical spread construction in the planner. Iron condors optionally in
 phase 2. No changes to exits, execution, or the sheet schema.

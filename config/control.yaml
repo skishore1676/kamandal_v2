@@ -278,3 +278,7 @@ planner:
       enabled: true
       max_near_gap_days: 7
       max_far_gap_days: 14
+  vertical_width_search:
+    enabled: false            # rollout flag — flip after one shadow day
+    widths: [5.0, 7.5, 10.0]  # union'd with playbook.spread_width per playbook
+    respect_bpr_cap: true     # never emit a construction over the per-order cap

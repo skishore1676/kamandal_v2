@@ -49,3 +49,21 @@ def test_operator_review_lathi_env_overrides(monkeypatch) -> None:
     assert review["transport"] == "openclaw"
     assert review["lathi_profile"] == "codex-northstar"
     assert review["lathi_mode"] == "spool"
+
+
+def test_planner_vertical_width_search_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("KAMANDAL_PLANNER_WIDTH_SEARCH_ENABLED", "true")
+    monkeypatch.setenv("KAMANDAL_PLANNER_WIDTH_SEARCH_WIDTHS", "5.0,7.5,10.0")
+
+    width_search = load_control()["planner"]["vertical_width_search"]
+
+    assert width_search["enabled"] is True
+    assert width_search["widths"] == [5.0, 7.5, 10.0]
+
+
+def test_planner_vertical_width_search_defaults_when_unset() -> None:
+    width_search = load_control()["planner"]["vertical_width_search"]
+
+    assert width_search["enabled"] is False
+    assert width_search["widths"] == [5.0, 7.5, 10.0]
+    assert width_search["respect_bpr_cap"] is True

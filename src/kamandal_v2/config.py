@@ -62,6 +62,14 @@ def _env_float(name: str) -> float | None:
     return float(raw)
 
 
+def _env_float_list(name: str) -> list[float] | None:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return None
+    values = [float(item.strip()) for item in raw.split(",") if item.strip()]
+    return values or None
+
+
 def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
     """Load local control config plus environment overrides."""
 
@@ -201,6 +209,8 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "live.health.exit_pipeline_stalled_minutes": _env_int("KAMANDAL_LIVE_HEALTH_EXIT_PIPELINE_STALLED_MINUTES"),
         "live.health.urgent_close_order_stale_minutes": _env_int("KAMANDAL_LIVE_HEALTH_URGENT_CLOSE_ORDER_STALE_MINUTES"),
         "live.health.block_entries_on_red": _env_bool("KAMANDAL_LIVE_HEALTH_BLOCK_ENTRIES_ON_RED"),
+        "planner.vertical_width_search.enabled": _env_bool("KAMANDAL_PLANNER_WIDTH_SEARCH_ENABLED"),
+        "planner.vertical_width_search.widths": _env_float_list("KAMANDAL_PLANNER_WIDTH_SEARCH_WIDTHS"),
         "execution.approval_mode": os.environ.get("KAMANDAL_APPROVAL_MODE"),
         "google_sheets.spreadsheet_id": os.environ.get("KAMANDAL_SHEET_ID"),
         "google_sheets.credentials_file": os.environ.get("GOOGLE_API_CREDENTIALS_PATH"),
