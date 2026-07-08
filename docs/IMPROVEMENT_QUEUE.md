@@ -16,7 +16,7 @@ watched session; rollback is flipping the flag back.
 
 | # | Doc | Priority | Status |
 |---|-----|----------|--------|
-| 1 | [CANDIDATE_GATE_SEARCH.md](CANDIDATE_GATE_SEARCH.md) — builder width search so verticals solve the 0.28 credit gate instead of dying on it | P0 — currently zero eligible verticals in afternoon runs | ready to implement |
+| 1 | [CANDIDATE_GATE_SEARCH.md](CANDIDATE_GATE_SEARCH.md) — builder width search so verticals solve the 0.28 credit gate instead of dying on it | P0 — currently zero eligible verticals in afternoon runs | implemented + reviewed 2026-07-08, deployed flag-off; flip `KAMANDAL_PLANNER_WIDTH_SEARCH_ENABLED=true` during a watched session |
 | 2 | [PLAYBOOK_EXPECTANCY_REPORT.md](PLAYBOOK_EXPECTANCY_REPORT.md) — per-playbook scorecard so tuning stops being anecdotal | P1 | ready to implement |
 | 3 | [HOUSE_IDEAS_IV_SCAN.md](HOUSE_IDEAS_IV_SCAN.md) — IV-regime house ideas feeding neutral/vol structures | P1 (enable after risk manager is on) | ready to implement |
 | 4 | Max-loss close escalation alert (spec inline below) | P2 — small | ready to implement |
