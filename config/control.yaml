@@ -32,7 +32,7 @@ risk_manager:
   # Portfolio-level circuit breakers for NEW live entries (exits are never blocked).
   # Master switch stays false until knobs are tuned; flip via KAMANDAL_RISK_MANAGER_ENABLED in .env.
   enabled: false
-  max_account_snapshot_age_minutes: 180 # block new entries if account truth is stale
+  max_account_snapshot_age_minutes: 1440 # block new entries if account truth is older than one day
   max_daily_drawdown_pct: 4.0        # rolling 1d peak-to-latest account_size drop; deposits/withdrawals distort
   max_weekly_drawdown_pct: 7.0       # rolling 7d peak-to-latest
   consecutive_loss_limit: 4          # N losing closes in a row pauses entries...

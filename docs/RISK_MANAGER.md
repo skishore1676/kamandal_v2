@@ -43,6 +43,9 @@ too approximate for always-on live authority:
 - Daily new-position counting uses position-group timestamps rather than an
   explicit market-session ledger.
 - Account snapshot freshness is enforced before entry-side risk decisions.
+  The default freshness window is 24 hours so the morning health check does not
+  page before the first advisory/account-snapshot refresh, while still catching
+  a dead feed that spans a full trading day.
 - Daily new-position counting uses the configured market day instead of a raw
   UTC calendar day.
 - Live-health records `risk_manager_decision` rows; entry submission records
