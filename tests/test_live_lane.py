@@ -429,6 +429,7 @@ def test_live_bpr_cap_rejects_default_structure_above_default_absolute(tmp_path,
     control["live"]["max_bpr_per_order"] = 2500
     control["live"]["max_bpr_per_order_pct"] = 25
     control["live"]["max_bpr_per_order_by_structure"] = {"default": 10, "strangle": 2500}
+    control["planner"]["vertical_width_search"]["enabled"] = False
     result = run_live_advisory_plan(
         control,
         idea_paths=[_ideas_file(tmp_path)],
