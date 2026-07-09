@@ -222,6 +222,29 @@ def test_vertical_width_search_excludes_construction_over_bpr_cap() -> None:
     assert chosen.estimated_bpr <= 300
 
 
+def test_vertical_width_search_rejects_when_all_widths_exceed_bpr_cap() -> None:
+    idea = _idea()
+    playbook = _playbook("put_spread", min_credit_to_width_ratio=0.28)
+    quotes = _vertical_quotes(
+        option_type="put",
+        short_strike=100.0,
+        short_mid=3.00,
+        longs={95.0: 1.50, 92.5: 0.50},
+    )
+    config = {
+        "planner": {"vertical_width_search": {"enabled": True, "widths": [5.0, 7.5], "respect_bpr_cap": True}},
+        "live": {"max_bpr_per_order_by_structure": {"put_spread": 100, "default": 100}},
+    }
+
+    candidates = _put_spread_candidates(idea, playbook, quotes, config=config)
+
+    assert len(candidates) == 1
+    chosen = candidates[0]
+    assert chosen.rejection_reason == "vertical_bpr_above_cap:350.0>100.0"
+    assert "widths_tried=[5.0,7.5]" in chosen.reasons
+    assert not chosen.eligible
+
+
 def test_vertical_width_search_keeps_narrowest_gate_passing_construction() -> None:
     idea = _idea()
     playbook = _playbook("put_spread", min_credit_to_width_ratio=0.28)

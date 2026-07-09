@@ -108,6 +108,34 @@ def test_launchd_status_marks_prior_day_pending_entries_self_healed(tmp_path: Pa
     assert live_health["self_healing"]["entry_approvals_retired"] == 1
 
 
+def test_launchd_status_marks_cluster_cap_self_handled(tmp_path: Path) -> None:
+    db = tmp_path / "kamandal.db"
+    repo = tmp_path / "repo"
+    (repo / "data" / "logs" / "launchd").mkdir(parents=True)
+    store = LocalStore(db)
+    store.save_live_position_group("group_nvda", {"group_id": "group_nvda", "underlying": "NVDA"})
+    store.save_live_position_group("group_amd", {"group_id": "group_amd", "underlying": "AMD"})
+
+    payload = launchd_status.build_status(
+        repo_root=repo,
+        db_path=db,
+        config={
+            "risk_manager": {
+                "enabled": True,
+                "max_positions_per_cluster": 2,
+                "correlation_clusters": {"semis": ["NVDA", "AMD", "MRVL"]},
+            }
+        },
+    )
+
+    units = {unit["unit_id"]: unit for unit in payload["units"]}
+    live_health = units["kamandal:live-health"]
+    assert live_health["lifecycle"] == "idle"
+    assert live_health["operator_state"] == "self_handled"
+    assert live_health["findings"] == ["risk_cluster_at_cap"]
+    assert live_health["finding_details"][0]["operator_state"] == "self_handled"
+
+
 def test_launchd_control_applies_review_decision_with_fingerprint(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
     db = tmp_path / "kamandal.db"
     store = LocalStore(db)

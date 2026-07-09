@@ -120,6 +120,9 @@ def build_candidates(
                     candidate.rejection_reason = result.reason
                     rejected_for_idea.append(candidate)
                     continue
+                if candidate.rejection_reason:
+                    rejected_for_idea.append(candidate)
+                    continue
                 filter_rejections = _filter_rejections(candidate, playbook, config)
                 hard_filter_rejections = []
                 for filter_rejection in filter_rejections:
@@ -637,7 +640,15 @@ def _vertical_spread_for_short(
         item for item in constructions
         if cap is None or item[1].estimated_bpr <= cap
     ]
-    pool = bpr_ok or constructions
+    pool = bpr_ok
+    if not pool:
+        chosen = min(constructions, key=lambda item: item[1].estimated_bpr)
+        candidate = chosen[1]
+        candidate.reasons.append("widths_tried=[" + ",".join(str(width) for width in widths_tried) + "]")
+        candidate.rejection_reason = (
+            f"vertical_bpr_above_cap:{candidate.estimated_bpr}>{cap}"
+        )
+        return candidate
     gate_passing = [item for item in pool if _vertical_gate_passes(item[1], playbook)]
     if gate_passing:
         chosen = min(gate_passing, key=lambda item: (_risk_width(item[1]), -item[2]))

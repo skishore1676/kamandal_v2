@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from kamandal_v2.live.entry_hygiene import retire_stale_entry_approvals
-from kamandal_v2.live.risk_manager import evaluate_entry_risk
+from kamandal_v2.live.risk_manager import REASON_CLUSTER_AT_CAP, evaluate_entry_risk
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -253,12 +253,20 @@ def run_live_health(
         )
 
     risk_manager_decision = evaluate_entry_risk(store, config)
+    if risk_manager_decision.enabled:
+        store.event("risk_manager_decision", risk_manager_decision.to_dict())
     for reason in risk_manager_decision.reasons:
         events.append(
             {
                 "severity": str(reason.get("severity") or "yellow"),
                 "reason": str(reason.get("code") or "risk_manager"),
                 "detail": str(reason.get("detail") or ""),
+                "operator_state": (
+                    "self_handled"
+                    if str(reason.get("code") or "") == REASON_CLUSTER_AT_CAP
+                    else "operator_needed"
+                ),
+                "self_healing": False,
             },
         )
 

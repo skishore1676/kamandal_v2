@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -102,6 +103,7 @@ def evaluate_entry_risk(
     _check_daily_new_positions(
         store,
         decision,
+        config=config,
         now=now,
         max_new_positions=_int_value(settings.get("max_new_positions_per_day")),
     )
@@ -225,12 +227,13 @@ def _check_daily_new_positions(
     store: LocalStore,
     decision: RiskDecision,
     *,
+    config: dict[str, Any] | None,
     now: datetime,
     max_new_positions: int | None,
 ) -> None:
     if not max_new_positions or max_new_positions <= 0:
         return
-    since = now.strftime("%Y-%m-%d 00:00:00")
+    since = _market_day_start(config, now).strftime("%Y-%m-%d %H:%M:%S")
     opened_today = store.count_live_position_groups_opened_since(since)
     if opened_today >= max_new_positions:
         decision.blocked = True
@@ -240,8 +243,20 @@ def _check_daily_new_positions(
                 "severity": "red",
                 "detail": f"{opened_today} position groups opened today, cap {max_new_positions}",
                 "opened_today": opened_today,
+                "market_day_start": since,
             },
         )
+
+
+def _market_day_start(config: dict[str, Any] | None, now: datetime) -> datetime:
+    tz_name = str(((config or {}).get("runtime") or {}).get("market_timezone") or "America/Chicago")
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001 - fall back to CT if config is invalid.
+        tz = ZoneInfo("America/Chicago")
+    local_now = now.astimezone(tz)
+    local_start = datetime.combine(local_now.date(), time.min, tzinfo=tz)
+    return local_start.astimezone(UTC).replace(tzinfo=None)
 
 
 def _check_cluster_concentration(

@@ -8,12 +8,10 @@
 # (thesis_extractor could move to `bulk` for free-first once you sign off; kept
 # conservative here — no free model on a trading path without review.)
 #
-# ACTIVATION (deliberately NOT flipped): config/control.yaml pins
-# `llm.provider: codex_cli`, so the production path still uses the legacy single
-# Codex client. To activate the broker (failover + brains), set
-# `llm.provider: agent_broker` (or remove the pin) in control.yaml. That changes
-# the primary model codex -> sonnet (codex retained as the last failover tier) —
-# a trading behavior change, hence gated on explicit sign-off. Rollback = one line.
+# ACTIVATION: config/control.yaml now sets `llm.provider: agent_broker`, so
+# extraction/review use this broker policy first and fall back to the legacy
+# Codex CLI client on broker failure. Rollback = set `llm.provider: codex_cli`
+# or KAMANDAL_LLM_PROVIDER=codex_cli.
 schema: agent_broker.policy.v1
 lanes:
   kamandal:

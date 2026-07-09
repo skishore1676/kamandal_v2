@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+import sqlite3
 
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import PortfolioState
@@ -128,6 +129,27 @@ def test_daily_new_position_cap(tmp_path: Path) -> None:
 
     assert decision.blocked is True
     assert BREAKER_DAILY_NEW_POSITIONS in decision.reason_codes()
+
+
+def test_daily_new_position_cap_uses_configured_market_day(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    for index in range(4):
+        _open_group(store, f"group_{index}")
+    with sqlite3.connect(tmp_path / "kamandal_v2.db") as conn:
+        conn.execute("UPDATE live_position_groups SET opened_at = ? WHERE group_id = ?", ("2026-07-02 02:00:00", "group_0"))
+        conn.execute("UPDATE live_position_groups SET opened_at = ? WHERE group_id = ?", ("2026-07-02 06:00:00", "group_1"))
+        conn.execute("UPDATE live_position_groups SET opened_at = ? WHERE group_id = ?", ("2026-07-02 07:00:00", "group_2"))
+        conn.execute("UPDATE live_position_groups SET opened_at = ? WHERE group_id = ?", ("2026-07-02 08:00:00", "group_3"))
+
+    decision = evaluate_entry_risk(
+        store,
+        {"runtime": {"market_timezone": "America/Chicago"}, "risk_manager": {"enabled": True, "max_new_positions_per_day": 3}},
+        now=datetime(2026, 7, 2, 15, 0, 0, tzinfo=UTC),
+    )
+
+    reason = next(item for item in decision.reasons if item["code"] == BREAKER_DAILY_NEW_POSITIONS)
+    assert reason["opened_today"] == 3
+    assert reason["market_day_start"] == "2026-07-02 05:00:00"
 
 
 def test_cluster_cap_reports_without_global_block(tmp_path: Path) -> None:

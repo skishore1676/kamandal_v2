@@ -24,10 +24,11 @@ watched session; rollback is flipping the flag back.
 
 ## Ops actions (no code)
 
-- **Flip the risk manager on** (`KAMANDAL_RISK_MANAGER_ENABLED=true` in oldmac
-  `.env`). All breakers built and tested 2026-07-02; book is small (3
-  positions) so now is the cheap time. Note: the live book currently holds two
-  same-direction NVDA positions — exactly what the cluster caps manage.
+- **Keep the risk manager off as global live authority** until
+  [RISK_MANAGER.md](RISK_MANAGER.md)'s readiness checklist is done. The code is
+  useful as advisory health/cluster-cap plumbing, but drawdown freshness,
+  realized close economics, market-session windows, and decision-ledger
+  durability are not yet strong enough for always-on autonomous blocking.
 - **Watch the first live close** through the new ledger/ladder path end to
   end (floor annotation fixed in code but unproven in production).
 

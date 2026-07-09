@@ -14,6 +14,7 @@ from kamandal_v2.domain.models import Candidate, PortfolioState
 from kamandal_v2.live.approval import create_live_approval_request
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket
 from kamandal_v2.live.reconciliation import reconciliation_blockers_for_group
+from kamandal_v2.live.risk_manager import cluster_capped_symbols, cluster_for_symbol, evaluate_entry_risk
 from kamandal_v2.planner.bpr import structure_bpr_cap
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.engine import PlanRunResult, run_plan
@@ -147,11 +148,23 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
     traded_ids = store.live_idea_ids_opened_since(_market_day_start())
     open_ids = store.open_live_idea_ids()
     open_contracts = _open_live_contract_keys(store)
+    risk_decision = evaluate_entry_risk(store, config)
+    risk_block_reason = ""
+    cluster_capped = set[str]()
+    if risk_decision.enabled:
+        if risk_decision.blocked:
+            risk_block_reason = "live_risk_manager_blocked:" + ",".join(risk_decision.reason_codes())
+        cluster_capped = cluster_capped_symbols(risk_decision)
     for candidate in candidates:
         if not candidate.eligible:
             continue
         max_bpr = _candidate_bpr_cap(candidate, portfolio, live_cfg)
-        if len(candidate.legs) < min_entry_legs:
+        if risk_block_reason:
+            candidate.rejection_reason = risk_block_reason
+        elif candidate.underlying.upper() in cluster_capped:
+            cluster = cluster_for_symbol(config, candidate.underlying) or "unknown"
+            candidate.rejection_reason = f"live_risk_cluster_cap:{cluster}"
+        elif len(candidate.legs) < min_entry_legs:
             candidate.rejection_reason = f"live_leg_count_below_min:{len(candidate.legs)}<{min_entry_legs}"
         elif any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs):
             candidate.rejection_reason = "live_contract_limit"

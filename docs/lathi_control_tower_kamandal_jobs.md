@@ -580,8 +580,8 @@ The live-health unit includes these extra fields for downstream surfaces:
   and `operator_state` when applicable.
 - `self_healing`: bounded actions Kamandal already performed while building
   the status, such as retired stale entry approvals.
-- `operator_state`: `clear`, `operator_needed`, `self_healing`, or
-  `blocked_self_healing`.
+- `operator_state`: `clear`, `operator_needed`, `self_healing`,
+  `self_handled`, or `blocked_self_healing`.
 
 ### 3. Review queue and decision dispatch
 

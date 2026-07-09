@@ -11,6 +11,8 @@ default live authority yet.
 - It can be enabled with `KAMANDAL_RISK_MANAGER_ENABLED=true`.
 - It only blocks new live entries. It never blocks exits or live management.
 - Its decision is included in `kamandal live-health --json`.
+- Enabled decisions are recorded as `risk_manager_decision` events when live
+  health runs.
 - `execute_live_approved` consults the live health gate before submitting new
   entries.
 
@@ -41,8 +43,8 @@ too approximate for always-on live authority:
   direction, delta, hedge intent, or overlapping index exposure.
 - Daily new-position counting uses position-group timestamps rather than an
   explicit market-session ledger.
-- The risk decision is visible in health output, but not yet recorded as its own
-  durable decision ledger on every evaluation.
+- Daily new-position counting now uses the configured market day instead of a
+  raw UTC calendar day.
 
 ## Required before switching on
 
@@ -54,8 +56,7 @@ following should be true:
 3. Closed-trade streaks use realized close economics, not only latest marks.
 4. Cluster caps understand directional exposure well enough to avoid blocking
    legitimate hedges.
-5. A risk-manager decision row is recorded for each live health evaluation and
-   entry-submission gate.
+5. A risk-manager decision row is recorded for each entry-submission gate.
 6. Operator-facing health explains whether a risk alert is self-handled,
    entry-blocking, or needs human action.
 7. The first live enablement is done in an explicit observation window with
@@ -69,7 +70,8 @@ Risk-manager signals should be read as entry-side protection:
 - `enabled=false`: risk-manager code is deployed but advisory only.
 - `blocked=false`: no global entry block is active.
 - `risk_cluster_at_cap`: new entries in those symbols should be blocked, but
-  unrelated entries and all exits remain allowed.
+  unrelated entries and all exits remain allowed. This is self-handled by
+  Kamandal and should not page the operator by itself.
 - drawdown or loss-cooldown reasons: new entries should be blocked until the
   cooldown or operator reset condition is met.
 

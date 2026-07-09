@@ -9,6 +9,7 @@ explicit `llm.provider: codex_cli` escape hatch.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from kamandal_v2.paths import PROJECT_ROOT, resolve_path
+
+LOGGER = logging.getLogger(__name__)
 
 
 class JsonLlmClient(Protocol):
@@ -51,6 +54,7 @@ class BrokerJsonClient:
         except Exception:
             if self._fallback is None:
                 raise
+            LOGGER.warning("agent_broker_json_failed_using_fallback actor=%s", self.actor)
             return self._fallback.chat_json(system_prompt, user_prompt)
 
     def _chat_json_broker(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
