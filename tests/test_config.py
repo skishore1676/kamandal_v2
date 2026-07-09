@@ -62,8 +62,8 @@ def test_planner_vertical_width_search_env_overrides(monkeypatch) -> None:
 
 
 def test_planner_vertical_width_search_defaults_when_unset(monkeypatch) -> None:
-    monkeypatch.delenv("KAMANDAL_PLANNER_WIDTH_SEARCH_ENABLED", raising=False)
-    monkeypatch.delenv("KAMANDAL_PLANNER_WIDTH_SEARCH_WIDTHS", raising=False)
+    monkeypatch.setenv("KAMANDAL_PLANNER_WIDTH_SEARCH_ENABLED", "false")
+    monkeypatch.setenv("KAMANDAL_PLANNER_WIDTH_SEARCH_WIDTHS", "5.0,7.5,10.0")
 
     width_search = load_control()["planner"]["vertical_width_search"]
 
