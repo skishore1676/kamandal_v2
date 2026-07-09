@@ -8,6 +8,7 @@ from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.live.health import entry_health_gate, run_live_health
 from kamandal_v2.live.risk_manager import (
+    BREAKER_ACCOUNT_SNAPSHOT_STALE,
     BREAKER_CONSECUTIVE_LOSSES,
     BREAKER_DAILY_NEW_POSITIONS,
     BREAKER_WEEKLY_DRAWDOWN,
@@ -84,6 +85,36 @@ def test_drawdown_within_limit_allows(tmp_path: Path) -> None:
 
     assert decision.blocked is False
     assert decision.reasons == []
+
+
+def test_stale_account_snapshot_blocks_entries_when_configured(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _snapshot(store, NOW - timedelta(hours=4), 10_000)
+
+    decision = evaluate_entry_risk(
+        store,
+        _enabled_config(max_account_snapshot_age_minutes=180),
+        now=NOW,
+    )
+
+    assert decision.blocked is True
+    assert BREAKER_ACCOUNT_SNAPSHOT_STALE in decision.reason_codes()
+    reason = next(item for item in decision.reasons if item["code"] == BREAKER_ACCOUNT_SNAPSHOT_STALE)
+    assert reason["age_minutes"] == 240.0
+    assert reason["max_age_minutes"] == 180
+
+
+def test_missing_account_snapshot_blocks_entries_when_configured(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+
+    decision = evaluate_entry_risk(
+        store,
+        _enabled_config(max_account_snapshot_age_minutes=180),
+        now=NOW,
+    )
+
+    assert decision.blocked is True
+    assert BREAKER_ACCOUNT_SNAPSHOT_STALE in decision.reason_codes()
 
 
 def test_consecutive_losses_trigger_cooldown(tmp_path: Path) -> None:
@@ -187,6 +218,7 @@ def test_breaker_blocks_through_entry_health_gate(tmp_path: Path) -> None:
 
 def test_env_overrides_wire_risk_manager(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_RISK_MANAGER_ENABLED", "true")
+    monkeypatch.setenv("KAMANDAL_RISK_MAX_ACCOUNT_SNAPSHOT_AGE_MINUTES", "90")
     monkeypatch.setenv("KAMANDAL_RISK_MAX_WEEKLY_DRAWDOWN_PCT", "7.5")
     monkeypatch.setenv("KAMANDAL_RISK_CONSECUTIVE_LOSS_LIMIT", "4")
 
@@ -195,5 +227,6 @@ def test_env_overrides_wire_risk_manager(tmp_path: Path, monkeypatch) -> None:
     assert config["risk_manager"]["enabled"] is True
     assert config["risk_manager"]["max_weekly_drawdown_pct"] == 7.5
     assert config["risk_manager"]["consecutive_loss_limit"] == 4
+    assert config["risk_manager"]["max_account_snapshot_age_minutes"] == 90
     # yaml defaults still present for knobs without env overrides
-    assert config["risk_manager"]["max_new_positions_per_day"] == 3
+    assert config["risk_manager"]["max_new_positions_per_day"] == 4

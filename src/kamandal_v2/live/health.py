@@ -35,6 +35,7 @@ PREFLIGHT_FAIL_CLOSE_STATUSES = {
     "reprice_submit_failed",
 }
 REASON_ORDER = [
+    "risk_account_snapshot_stale",
     "risk_daily_drawdown_breaker",
     "risk_weekly_drawdown_breaker",
     "risk_consecutive_loss_cooldown",

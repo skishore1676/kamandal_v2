@@ -63,8 +63,10 @@ def execute_live_approved(
     cluster_capped: dict[str, str] = {}
     if submit and not close:
         gate = entry_health_gate(store, config)
+        risk_manager = gate.get("risk_manager") or {}
+        if bool(risk_manager.get("enabled")):
+            store.event("risk_manager_entry_gate_decision", {"gate": gate, "risk_manager": risk_manager})
         if gate["blocked"]:
-            risk_manager = gate.get("risk_manager") or {}
             if bool(risk_manager.get("enabled")) and bool(risk_manager.get("blocked")):
                 reason = "blocked_risk_manager:" + ",".join(gate["reasons"])
                 store.event("live_entries_blocked_by_risk_manager", {"overall": gate["overall"], "reasons": gate["reasons"], "risk_manager": risk_manager})

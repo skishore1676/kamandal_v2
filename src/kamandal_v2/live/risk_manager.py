@@ -26,6 +26,7 @@ BREAKER_DAILY_DRAWDOWN = "risk_daily_drawdown_breaker"
 BREAKER_WEEKLY_DRAWDOWN = "risk_weekly_drawdown_breaker"
 BREAKER_CONSECUTIVE_LOSSES = "risk_consecutive_loss_cooldown"
 BREAKER_DAILY_NEW_POSITIONS = "risk_daily_new_position_cap"
+BREAKER_ACCOUNT_SNAPSHOT_STALE = "risk_account_snapshot_stale"
 REASON_CLUSTER_AT_CAP = "risk_cluster_at_cap"
 
 _SNAPSHOT_ID_RE = re.compile(r"(\d{8}T\d{6})Z?$")
@@ -77,6 +78,12 @@ def evaluate_entry_risk(
         return decision
 
     settings = risk_manager_config(config)
+    _check_snapshot_freshness(
+        store,
+        decision,
+        now=now,
+        max_age_minutes=_int_value(settings.get("max_account_snapshot_age_minutes")),
+    )
     _check_drawdown(
         store,
         decision,
@@ -131,6 +138,55 @@ def cluster_for_symbol(config: dict[str, Any] | None, symbol: str) -> str:
         if wanted in {str(member).strip().upper() for member in (members or [])}:
             return str(name)
     return ""
+
+
+def _check_snapshot_freshness(
+    store: LocalStore,
+    decision: RiskDecision,
+    *,
+    now: datetime,
+    max_age_minutes: int | None,
+) -> None:
+    if not max_age_minutes or max_age_minutes <= 0:
+        return
+    snapshot = store.latest_account_snapshot()
+    if not snapshot:
+        decision.blocked = True
+        decision.reasons.append(
+            {
+                "code": BREAKER_ACCOUNT_SNAPSHOT_STALE,
+                "severity": "red",
+                "detail": f"no account snapshot available, max age {max_age_minutes}m",
+                "max_age_minutes": max_age_minutes,
+            },
+        )
+        return
+    stamp = _parse_snapshot_timestamp(str(snapshot.get("_snapshot_id") or ""))
+    if stamp is None:
+        decision.blocked = True
+        decision.reasons.append(
+            {
+                "code": BREAKER_ACCOUNT_SNAPSHOT_STALE,
+                "severity": "red",
+                "detail": f"account snapshot timestamp is not parseable, max age {max_age_minutes}m",
+                "snapshot_id": str(snapshot.get("_snapshot_id") or ""),
+                "max_age_minutes": max_age_minutes,
+            },
+        )
+        return
+    age_minutes = max(0.0, (now - stamp).total_seconds() / 60.0)
+    if age_minutes > max_age_minutes:
+        decision.blocked = True
+        decision.reasons.append(
+            {
+                "code": BREAKER_ACCOUNT_SNAPSHOT_STALE,
+                "severity": "red",
+                "detail": f"account snapshot age {age_minutes:.1f}m exceeds max {max_age_minutes}m",
+                "snapshot_id": str(snapshot.get("_snapshot_id") or ""),
+                "age_minutes": round(age_minutes, 1),
+                "max_age_minutes": max_age_minutes,
+            },
+        )
 
 
 def _check_drawdown(

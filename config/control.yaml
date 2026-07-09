@@ -32,12 +32,13 @@ risk_manager:
   # Portfolio-level circuit breakers for NEW live entries (exits are never blocked).
   # Master switch stays false until knobs are tuned; flip via KAMANDAL_RISK_MANAGER_ENABLED in .env.
   enabled: false
-  max_daily_drawdown_pct: 3.0        # rolling 1d peak-to-latest account_size drop; deposits/withdrawals distort
-  max_weekly_drawdown_pct: 5.0       # rolling 7d peak-to-latest
-  consecutive_loss_limit: 3          # N losing closes in a row pauses entries...
+  max_account_snapshot_age_minutes: 180 # block new entries if account truth is stale
+  max_daily_drawdown_pct: 4.0        # rolling 1d peak-to-latest account_size drop; deposits/withdrawals distort
+  max_weekly_drawdown_pct: 7.0       # rolling 7d peak-to-latest
+  consecutive_loss_limit: 4          # N losing closes in a row pauses entries...
   cooldown_days: 2                   # ...for this many days after the last losing close
-  max_new_positions_per_day: 3       # position groups opened per calendar day (UTC)
-  max_positions_per_cluster: 2       # open positions per correlation cluster below
+  max_new_positions_per_day: 4       # position groups opened per configured market day
+  max_positions_per_cluster: 3       # open positions per correlation cluster below
   correlation_clusters:
     semis: [NVDA, AMD, MRVL, AVGO, MU, TSM, SMCI, DELL, INTC, QCOM]
     megacap_tech: [AAPL, MSFT, GOOGL, AMZN, META, NFLX, TSLA, CRM, NOW, ORCL, PLTR]

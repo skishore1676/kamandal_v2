@@ -96,6 +96,7 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
             "KAMANDAL_PORTFOLIO_DELTA_GUARD_ALLOW_IMPROVEMENT"
         ),
         "risk_manager.enabled": _env_bool("KAMANDAL_RISK_MANAGER_ENABLED"),
+        "risk_manager.max_account_snapshot_age_minutes": _env_int("KAMANDAL_RISK_MAX_ACCOUNT_SNAPSHOT_AGE_MINUTES"),
         "risk_manager.max_daily_drawdown_pct": _env_float("KAMANDAL_RISK_MAX_DAILY_DRAWDOWN_PCT"),
         "risk_manager.max_weekly_drawdown_pct": _env_float("KAMANDAL_RISK_MAX_WEEKLY_DRAWDOWN_PCT"),
         "risk_manager.consecutive_loss_limit": _env_int("KAMANDAL_RISK_CONSECUTIVE_LOSS_LIMIT"),

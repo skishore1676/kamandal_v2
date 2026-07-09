@@ -19,6 +19,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 def _live_control() -> dict:
     control = load_control()
     control["live"]["max_bpr_per_order"] = 1000
+    control["risk_manager"]["enabled"] = False
     return control
 
 
@@ -2430,6 +2431,8 @@ def test_live_submit_blocks_entries_when_health_red(tmp_path, monkeypatch) -> No
     live_control = _live_control()
     live_control["runtime"]["mode"] = "live"
     live_control["runtime"]["trading_enabled"] = True
+    live_control["risk_manager"]["enabled"] = True
+    live_control["risk_manager"]["max_account_snapshot_age_minutes"] = 0
     monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
     executed = execute_live_approved(live_control, submit=True, store=store)
 
@@ -2439,6 +2442,13 @@ def test_live_submit_blocks_entries_when_health_red(tmp_path, monkeypatch) -> No
     assert "reconciliation_blocker" in executed["results"][0]["reason"]
     assert executed["health_gate"]["blocked"] is True
     assert executed["results"][0]["trade_bundle"] == "bundle-health-gate"
+    with sqlite3.connect(tmp_path / "kamandal.db") as conn:
+        row = conn.execute(
+            "SELECT payload FROM events WHERE event_type = 'risk_manager_entry_gate_decision' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    payload = json.loads(row[0])
+    assert payload["risk_manager"]["enabled"] is True
 
 
 def test_close_ticket_seed_salt_changes_order_identity() -> None:

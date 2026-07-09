@@ -23,6 +23,7 @@ Current checks:
 - consecutive losing close cooldown;
 - max new position groups per day;
 - static correlation cluster caps.
+- account snapshot freshness breaker.
 
 Cluster caps are deliberately narrower than full risk blocking: a capped
 cluster blocks new entries in that cluster, but does not block unrelated
@@ -33,8 +34,6 @@ symbols and never blocks exits.
 The current implementation is a useful guardrail, but several inputs are still
 too approximate for always-on live authority:
 
-- Drawdown uses stored account snapshots. If snapshots are stale, the breaker is
-  stale.
 - Drawdown uses `account_size`, so deposits and withdrawals can distort the
   measured move.
 - Consecutive-loss cooldown uses the latest stored position mark for closed
@@ -43,23 +42,22 @@ too approximate for always-on live authority:
   direction, delta, hedge intent, or overlapping index exposure.
 - Daily new-position counting uses position-group timestamps rather than an
   explicit market-session ledger.
-- Daily new-position counting now uses the configured market day instead of a
-  raw UTC calendar day.
+- Account snapshot freshness is enforced before entry-side risk decisions.
+- Daily new-position counting uses the configured market day instead of a raw
+  UTC calendar day.
+- Live-health records `risk_manager_decision` rows; entry submission records
+  `risk_manager_entry_gate_decision` rows.
 
 ## Required before switching on
 
 Before setting `KAMANDAL_RISK_MANAGER_ENABLED=true` in live runtime, the
 following should be true:
 
-1. Account snapshot freshness is enforced by health and risk-manager logic.
-2. Drawdown adjusts for deposits, withdrawals, or other non-market cash moves.
-3. Closed-trade streaks use realized close economics, not only latest marks.
-4. Cluster caps understand directional exposure well enough to avoid blocking
+1. Drawdown adjusts for deposits, withdrawals, or other non-market cash moves.
+2. Closed-trade streaks use realized close economics, not only latest marks.
+3. Cluster caps understand directional exposure well enough to avoid blocking
    legitimate hedges.
-5. A risk-manager decision row is recorded for each entry-submission gate.
-6. Operator-facing health explains whether a risk alert is self-handled,
-   entry-blocking, or needs human action.
-7. The first live enablement is done in an explicit observation window with
+4. The first live enablement is done in an explicit observation window with
    `live-health`, `live-approved-orders`, and launchd logs checked after each
    scheduled cycle.
 
