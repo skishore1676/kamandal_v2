@@ -221,6 +221,7 @@ def test_env_overrides_wire_risk_manager(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_RISK_MAX_ACCOUNT_SNAPSHOT_AGE_MINUTES", "90")
     monkeypatch.setenv("KAMANDAL_RISK_MAX_WEEKLY_DRAWDOWN_PCT", "7.5")
     monkeypatch.setenv("KAMANDAL_RISK_CONSECUTIVE_LOSS_LIMIT", "4")
+    monkeypatch.setenv("KAMANDAL_RISK_MAX_NEW_POSITIONS_PER_DAY", "4")
 
     config = load_control()
 
