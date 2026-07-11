@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -165,12 +165,20 @@ def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path
 def should_skip_for_calendar(_job: str, *, force: bool) -> bool:
     if force:
         return False
-    today = datetime.now(CENTRAL).date()
-    if today.weekday() >= 5:
+    return is_non_trading_day(datetime.now(CENTRAL).date())
+
+
+def is_non_trading_day(day: date) -> bool:
+    """Return whether normal weekday jobs should be idle on ``day``.
+
+    Keep execution and freshness monitoring on the same calendar contract so
+    a correctly idle weekend or market holiday cannot look like a missed run.
+    """
+    if day.weekday() >= 5:
         return True
     if os.getenv("KAMANDAL_MARKET_HOLIDAY_CALENDAR", "nyse").lower() == "off":
         return False
-    return today.isoformat() in HOLIDAYS
+    return day.isoformat() in HOLIDAYS
 
 
 def run_script(script: str, *, repo_root: Path, force: bool) -> subprocess.CompletedProcess[str]:
@@ -330,6 +338,8 @@ def expected_job_observation(schedule: JobSchedule, *, now: datetime, grace_minu
     if schedule.weekday is not None and now.weekday() != schedule.weekday:
         return {"status": "not_expected_today", "reason": "weekday_specific"}
     today = now.date()
+    if is_non_trading_day(today):
+        return {"status": "not_expected_today", "reason": "non_trading_day"}
     grace = timedelta(minutes=grace_minutes)
     if schedule.cadence_minutes and schedule.window_start and schedule.window_end:
         start_dt = datetime.combine(today, schedule.window_start, CENTRAL)

@@ -138,6 +138,56 @@ def test_scheduled_job_health_detects_stale_frequent_job(tmp_path) -> None:
     assert live_management["reason"] == "stale_last_run"
 
 
+def test_expected_job_observation_suppresses_weekend_fixed_time_job() -> None:
+    schedule = launchd_job.JOB_SCHEDULES["earnings"]
+
+    expectation = launchd_job.expected_job_observation(
+        schedule,
+        now=datetime(2026, 7, 11, 9, 0, tzinfo=launchd_job.CENTRAL),
+        grace_minutes=20,
+    )
+
+    assert expectation == {"status": "not_expected_today", "reason": "non_trading_day"}
+
+
+def test_expected_job_observation_suppresses_weekend_cadence_job() -> None:
+    schedule = launchd_job.JOB_SCHEDULES["live-management"]
+
+    expectation = launchd_job.expected_job_observation(
+        schedule,
+        now=datetime(2026, 7, 11, 14, 0, tzinfo=launchd_job.CENTRAL),
+        grace_minutes=20,
+    )
+
+    assert expectation == {"status": "not_expected_today", "reason": "non_trading_day"}
+
+
+def test_expected_job_observation_suppresses_market_holiday(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("KAMANDAL_MARKET_HOLIDAY_CALENDAR", raising=False)
+    schedule = launchd_job.JOB_SCHEDULES["earnings"]
+
+    expectation = launchd_job.expected_job_observation(
+        schedule,
+        now=datetime(2026, 7, 3, 9, 0, tzinfo=launchd_job.CENTRAL),
+        grace_minutes=20,
+    )
+
+    assert expectation == {"status": "not_expected_today", "reason": "non_trading_day"}
+
+
+def test_expected_job_observation_honors_disabled_holiday_calendar(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("KAMANDAL_MARKET_HOLIDAY_CALENDAR", "off")
+    schedule = launchd_job.JOB_SCHEDULES["earnings"]
+
+    expectation = launchd_job.expected_job_observation(
+        schedule,
+        now=datetime(2026, 7, 3, 9, 0, tzinfo=launchd_job.CENTRAL),
+        grace_minutes=20,
+    )
+
+    assert expectation["status"] == "due"
+
+
 def test_scheduled_job_health_accepts_recent_frequent_job(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setattr(launchd_job, "MONITORED_JOBS", ["live-management"])
     log_dir = tmp_path / "logs"
