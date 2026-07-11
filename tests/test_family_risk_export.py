@@ -73,10 +73,13 @@ def test_export_uses_allowlisted_atomic_persisted_facts(tmp_path: Path) -> None:
     assert row["mark_as_of"] == "2026-07-10T19:59:30+00:00"
     assert row["broker_as_of"] == "2026-07-10T18:00:05+00:00"
     assert row["contract_multiplier"] == 100.0
-    assert row["multiplier_provenance"] == "app_standard_equity_option_multiplier_constant"
+    assert row["multiplier_provenance"] == "app_standard_option_contract"
+    assert row["multiplier_provenance_detail"] == "app standard equity-option multiplier constant"
     # Credit call spread: (width 5 - credit 1.5) * 100 * qty 1 = 350 defined-risk max loss.
     assert row["worst_case_loss_usd"] == 350.0
     assert row["estimated_bpr"] == 350.0
+    assert row["bpr_basis"] == "defined_risk_max_loss"
+    assert row["bpr_basis_detail"].startswith("app_defined_risk_credit_vertical")
     assert row["structure"] == "call_spread"
     assert row["planned_stop_loss_usd"] is None
     assert row["cluster"] == "broad_index"
@@ -108,7 +111,8 @@ def test_missing_entry_economics_leaves_risk_explicitly_null(tmp_path: Path) -> 
                        now=datetime(2026, 7, 10, 20, tzinfo=UTC))["live_positions"][0]
     assert row["worst_case_loss_usd"] is None
     assert row["estimated_bpr"] is None
-    assert row["bpr_basis"] == "unknown_or_unsupported_structure"
+    assert row["bpr_basis"] == "unknown"
+    assert row["bpr_basis_detail"] == "unknown_or_unsupported_structure"
     assert row["contract_multiplier"] == 100.0  # multiplier is still a known app fact
 
 

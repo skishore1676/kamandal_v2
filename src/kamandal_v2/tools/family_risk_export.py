@@ -173,8 +173,13 @@ def _map_group(group: sqlite3.Row, positions: list[sqlite3.Row], mark: sqlite3.R
     # non-conflicting override.
     multiplier = explicit_multiplier if explicit_multiplier is not None else _STANDARD_OPTION_MULTIPLIER
     multiplier_provenance = (
-        "producer_status_export_explicit_leg_multiplier" if explicit_multiplier is not None
-        else "app_standard_equity_option_multiplier_constant"
+        "producer_status_export" if explicit_multiplier is not None
+        else "app_standard_option_contract"
+    )
+    multiplier_provenance_detail = (
+        "explicit identical multiplier persisted on every candidate and broker leg"
+        if explicit_multiplier is not None
+        else "app standard equity-option multiplier constant"
     )
     structure = str(candidate.get("structure") or payload.get("structure") or "").strip().lower() or None
     risk = _structured_vertical_risk(candidate_legs, _number(candidate.get("net_credit")), multiplier, quantity, structure)
@@ -201,8 +206,10 @@ def _map_group(group: sqlite3.Row, positions: list[sqlite3.Row], mark: sqlite3.R
         "strategy_quantity": quantity,
         "contract_multiplier": multiplier,
         "multiplier_provenance": multiplier_provenance,
+        "multiplier_provenance_detail": multiplier_provenance_detail,
         "estimated_bpr": risk["estimated_bpr"],
         "bpr_basis": risk["bpr_basis"],
+        "bpr_basis_detail": risk["bpr_basis_detail"],
         "worst_case_loss_usd": risk["worst_case_loss_usd"],
         "worst_case_loss_basis": risk["worst_case_loss_basis"],
         "planned_stop_loss_usd": None,
@@ -271,7 +278,8 @@ def _structured_vertical_risk(
     """
     unknown = {
         "estimated_bpr": None, "worst_case_loss_usd": None,
-        "bpr_basis": "unknown_or_unsupported_structure",
+        "bpr_basis": "unknown",
+        "bpr_basis_detail": "unknown_or_unsupported_structure",
         "worst_case_loss_basis": "unknown_or_unsupported_structure",
     }
     if multiplier is None or multiplier <= 0 or net_credit is None or net_credit == 0:
@@ -285,17 +293,19 @@ def _structured_vertical_risk(
     per_unit_entry = abs(net_credit) * multiplier
     if net_credit > 0:  # credit vertical
         per_unit_max_loss = width_dollars - per_unit_entry
-        basis = "app_defined_risk_credit_vertical_width_minus_credit_times_multiplier"
+        detail = "app_defined_risk_credit_vertical_width_minus_credit_times_multiplier"
         if per_unit_max_loss <= 0:
             return {**unknown, "worst_case_loss_basis": "credit_at_or_above_width_unresolvable",
-                    "bpr_basis": "credit_at_or_above_width_unresolvable"}
+                    "bpr_basis_detail": "credit_at_or_above_width_unresolvable"}
     else:  # debit vertical
         per_unit_max_loss = per_unit_entry
-        basis = "app_defined_risk_debit_vertical_net_debit_times_multiplier"
+        detail = "app_defined_risk_debit_vertical_net_debit_times_multiplier"
         if per_unit_max_loss <= 0:
             return unknown
     total = round(per_unit_max_loss * strategy_quantity, 2)
-    return {"estimated_bpr": total, "worst_case_loss_usd": total, "bpr_basis": basis, "worst_case_loss_basis": basis}
+    return {"estimated_bpr": total, "worst_case_loss_usd": total,
+            "bpr_basis": "defined_risk_max_loss", "bpr_basis_detail": detail,
+            "worst_case_loss_basis": detail}
 
 
 def _vertical_geometry(legs: list[Any]) -> dict[str, Any] | None:
