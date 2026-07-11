@@ -19,6 +19,8 @@ import yaml
 
 SCHEMA = "family-risk-shadow/v1"
 _SNAPSHOT_ID = re.compile(r"(\d{8}T\d{6})Z?$")
+# App-owned equity-option contract multiplier (see live/position_management.CONTRACT_MULTIPLIER).
+_STANDARD_OPTION_MULTIPLIER = 100.0
 
 
 def build_export(
@@ -68,12 +70,22 @@ def build_export(
 
     account_payload = json.loads(latest_account["payload"]) if latest_account else {}
     account_observed = _snapshot_timestamp(latest_account["id"]) if latest_account else None
-    # A mark proves quote freshness, not continued broker position existence.
-    # Only an empty broker account snapshot with zero positions can currently
-    # prove an empty book. Open groups have no current persisted broker-position
-    # observation, so snapshot-wide source freshness must remain unknown.
-    positions_count = _number(account_payload.get("positions_count"))
-    source_observed = account_observed if not groups and positions_count == 0 else None
+    # Source freshness is the most recent genuine broker observation backing this
+    # export: the account snapshot readback and each open group's persisted FILLED
+    # order observation. A FILLED order confirms the position at fill time; it is
+    # not a continuous broker re-poll, so per-position broker_as_of carries the
+    # position-level freshness the Kernel should judge staleness against.
+    observed_candidates: list[datetime] = [account_observed] if account_observed else []
+    for exposure in exposures:
+        broker_as_of = exposure.get("broker_as_of")
+        if broker_as_of:
+            observed_candidates.append(datetime.fromisoformat(broker_as_of))
+    source_observed = max(observed_candidates) if observed_candidates else None
+    account_size = _number(account_payload.get("account_size"))
+    bpr_used = _number(account_payload.get("bpr_used"))
+    bpr_used_pct = round((bpr_used / account_size) * 100.0, 2) if account_size and bpr_used is not None else None
+    assigned_capital, assigned_capital_provenance = _assigned_capital(config, account_payload)
+    correlation_clusters = _correlation_clusters(config)
     identity = _account_identity(config_path.parent, config, broker_provider)
     basis = (
         "public_nlv_option_bp_difference" if broker_provider == "public"
@@ -82,14 +94,15 @@ def build_export(
     )
     gaps = [
         "Account topology relative to other family apps is not verified.",
-        "Per-position BPR and worst-case loss are not persisted with canonical live groups.",
-        "Broker position freshness is limited to the last persisted filled-order observation.",
-        "Open groups have no current persisted broker-position observation; source_observed_at remains null.",
+        "Broker position freshness reflects the last persisted FILLED order observation, not a continuous broker re-poll.",
+        "BPR and worst-case loss are computed only for defined-risk unit vertical spreads; other structures stay null with an explicit basis.",
     ]
     if not identity["verified"]:
         gaps.append("Stable account identity is unavailable from app-owned config/cache state.")
     if source_observed is None:
-        gaps.append("No account or position-mark observation is persisted; source_observed_at is null.")
+        gaps.append("No account or broker-fill observation is persisted; source_observed_at is null.")
+    if assigned_capital is None:
+        gaps.append("Assigned capital is not configured and no broker account snapshot is available.")
     return {
         "schema": SCHEMA,
         "source": "kamandal_v2",
@@ -105,11 +118,16 @@ def build_export(
         "account_identity_provenance": identity["provenance"],
         "account_topology": "unknown",
         "account_bpr_basis": basis,
+        "assigned_capital": assigned_capital,
+        "assigned_capital_provenance": assigned_capital_provenance,
+        "correlation_clusters": correlation_clusters,
         "adapter_gaps": gaps,
         "account_snapshot": {
-            "account_size": _number(account_payload.get("account_size")),
+            "account_size": account_size,
             "buying_power": _number(account_payload.get("buying_power")),
-            "bpr_used": _number(account_payload.get("bpr_used")),
+            "bpr_used": bpr_used,
+            "bpr_used_pct": bpr_used_pct,
+            "bpr_used_pct_basis": "bpr_used_over_account_size" if bpr_used_pct is not None else "unknown",
             "greeks": _allow_greeks(account_payload.get("greeks")),
             "observed_at": account_observed.isoformat() if account_observed else None,
         },
@@ -149,7 +167,17 @@ def _map_group(group: sqlite3.Row, positions: list[sqlite3.Row], mark: sqlite3.R
 
     candidate_legs = candidate.get("legs") if isinstance(candidate.get("legs"), list) else []
     safe_legs = [_safe_candidate_leg(leg) for leg in candidate_legs]
-    multiplier = _common_explicit_multiplier(candidate_legs, broker_legs)
+    explicit_multiplier = _common_explicit_multiplier(candidate_legs, broker_legs)
+    # Every broker leg above is a validated standard OPTION instrument, so the
+    # app-owned equity-option multiplier applies unless a leg persists an explicit,
+    # non-conflicting override.
+    multiplier = explicit_multiplier if explicit_multiplier is not None else _STANDARD_OPTION_MULTIPLIER
+    multiplier_provenance = (
+        "producer_status_export_explicit_leg_multiplier" if explicit_multiplier is not None
+        else "app_standard_equity_option_multiplier_constant"
+    )
+    structure = str(candidate.get("structure") or payload.get("structure") or "").strip().lower() or None
+    risk = _structured_vertical_risk(candidate_legs, _number(candidate.get("net_credit")), multiplier, quantity, structure)
     mark_payload = _object(mark["payload"], label=f"mark for {group_id}") if mark else {}
     greeks, direction = _strategy_greeks(mark_payload.get("legs"))
     underlying = str(payload.get("underlying") or candidate.get("underlying") or "").upper()
@@ -158,6 +186,7 @@ def _map_group(group: sqlite3.Row, positions: list[sqlite3.Row], mark: sqlite3.R
     cluster = _cluster_for(config, underlying)
     mark_at = _sqlite_utc(mark["created_at"]) if mark and bool(mark["quote_fresh"]) else None
     position_at = _sqlite_utc(group["opened_at"])
+    broker_at = _sqlite_utc(status_row["created_at"])
     return {
         "id": group_id,
         "group_id": group_id,
@@ -166,14 +195,18 @@ def _map_group(group: sqlite3.Row, positions: list[sqlite3.Row], mark: sqlite3.R
         "broker_identity_provenance": "persisted_filled_order_and_option_contract_fingerprints",
         "status": "open",
         "underlying": underlying,
+        "structure": structure,
         "cluster": cluster or None,
         "direction": direction,
         "strategy_quantity": quantity,
         "contract_multiplier": multiplier,
-        "multiplier_provenance": "producer_status_export" if multiplier is not None else None,
-        "estimated_bpr": None,
-        "bpr_basis": "unknown",
-        "worst_case_loss_usd": None,
+        "multiplier_provenance": multiplier_provenance,
+        "estimated_bpr": risk["estimated_bpr"],
+        "bpr_basis": risk["bpr_basis"],
+        "worst_case_loss_usd": risk["worst_case_loss_usd"],
+        "worst_case_loss_basis": risk["worst_case_loss_basis"],
+        "planned_stop_loss_usd": None,
+        "planned_stop_loss_basis": "planned_stop_multiple_not_persisted_with_live_group",
         "greeks": greeks,
         "greek_metadata": ({"scope": "strategy_unit_current_mark", "units": "per_share_option_greeks",
                             "signedness": "producer_computed_from_leg_side",
@@ -181,7 +214,8 @@ def _map_group(group: sqlite3.Row, positions: list[sqlite3.Row], mark: sqlite3.R
         "opened_at": _sqlite_utc(group["opened_at"]),
         "position_as_of": position_at,
         "mark_as_of": mark_at,
-        "broker_as_of": None,
+        "broker_as_of": broker_at,
+        "broker_observation_basis": "persisted_filled_order_status_fill_confirmation",
         "payload": {"candidate": {"legs": safe_legs}},
     }
 
@@ -222,6 +256,101 @@ def _common_explicit_multiplier(candidate_legs: list[Any], broker_legs: list[Any
         if value is not None:
             values.append(value)
     return values[0] if values and len(values) == len(candidate_legs) + len(broker_legs) and len(set(values)) == 1 else None
+
+
+def _structured_vertical_risk(
+    legs: list[Any], net_credit: float | None, multiplier: float | None,
+    strategy_quantity: float | None, structure: str | None,
+) -> dict[str, Any]:
+    """Structure-aware BPR/worst-case loss for defined-risk unit vertical spreads.
+
+    Reuses the app's own defined-risk vertical economics: for a credit spread the
+    max loss is (width - credit) * multiplier; for a debit spread it is the net
+    debit paid. Broker margin (BPR) on a defined-risk vertical equals that max
+    loss. Anything that is not an unambiguous unit vertical stays explicitly null.
+    """
+    unknown = {
+        "estimated_bpr": None, "worst_case_loss_usd": None,
+        "bpr_basis": "unknown_or_unsupported_structure",
+        "worst_case_loss_basis": "unknown_or_unsupported_structure",
+    }
+    if multiplier is None or multiplier <= 0 or net_credit is None or net_credit == 0:
+        return unknown
+    if strategy_quantity is None or strategy_quantity <= 0:
+        return unknown
+    geometry = _vertical_geometry(legs)
+    if geometry is None:
+        return unknown
+    width_dollars = geometry["width"] * multiplier
+    per_unit_entry = abs(net_credit) * multiplier
+    if net_credit > 0:  # credit vertical
+        per_unit_max_loss = width_dollars - per_unit_entry
+        basis = "app_defined_risk_credit_vertical_width_minus_credit_times_multiplier"
+        if per_unit_max_loss <= 0:
+            return {**unknown, "worst_case_loss_basis": "credit_at_or_above_width_unresolvable",
+                    "bpr_basis": "credit_at_or_above_width_unresolvable"}
+    else:  # debit vertical
+        per_unit_max_loss = per_unit_entry
+        basis = "app_defined_risk_debit_vertical_net_debit_times_multiplier"
+        if per_unit_max_loss <= 0:
+            return unknown
+    total = round(per_unit_max_loss * strategy_quantity, 2)
+    return {"estimated_bpr": total, "worst_case_loss_usd": total, "bpr_basis": basis, "worst_case_loss_basis": basis}
+
+
+def _vertical_geometry(legs: list[Any]) -> dict[str, Any] | None:
+    if not isinstance(legs, list) or len(legs) != 2:
+        return None
+    option_types: set[str] = set()
+    sides: list[str] = []
+    strikes: list[float] = []
+    expirations: set[str] = set()
+    for leg in legs:
+        if not isinstance(leg, dict):
+            return None
+        quantity = _number(leg.get("quantity"))
+        if quantity is None:
+            quantity = 1.0
+        if quantity != 1.0:  # net_credit is per single spread unit; only unit legs stay unambiguous.
+            return None
+        option_type = str(leg.get("option_type") or "").lower()
+        side = str(leg.get("side") or "").lower()
+        strike = _number(leg.get("strike"))
+        expiration = str(leg.get("expiration") or "").strip()
+        if option_type not in {"put", "call"} or side not in {"buy", "sell"} or strike is None or not expiration:
+            return None
+        option_types.add(option_type)
+        sides.append(side)
+        strikes.append(strike)
+        expirations.add(expiration)
+    if len(option_types) != 1 or set(sides) != {"buy", "sell"} or len(expirations) != 1 or len(set(strikes)) != 2:
+        return None
+    return {"width": abs(strikes[0] - strikes[1]), "option_type": next(iter(option_types))}
+
+
+def _assigned_capital(config: dict[str, Any], account_payload: dict[str, Any]) -> tuple[float | None, str]:
+    for path in (("family_risk", "assigned_capital"), ("portfolio", "assigned_capital"),
+                 ("risk_manager", "assigned_capital")):
+        node: Any = config
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        value = _number(node)
+        if value is not None:
+            return value, f"configured:{'.'.join(path)}"
+    size = _number(account_payload.get("account_size"))
+    if size is not None:
+        return size, "broker_account_net_liquidation_snapshot"
+    return None, "no assigned-capital config or broker account snapshot available"
+
+
+def _correlation_clusters(config: dict[str, Any]) -> dict[str, list[str]]:
+    clusters = ((config.get("risk_manager") or {}).get("correlation_clusters") or {})
+    result: dict[str, list[str]] = {}
+    for name, members in clusters.items():
+        symbols = sorted({str(item).upper() for item in (members or []) if str(item).strip()})
+        if symbols:
+            result[str(name)] = symbols
+    return result
 
 
 def _cluster_for(config: dict[str, Any], symbol: str) -> str:
