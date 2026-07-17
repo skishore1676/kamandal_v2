@@ -241,8 +241,16 @@ def _reconciliation_decision(config: dict[str, Any], issue: dict[str, Any], cont
         )
     if issue_type == "ghost_local_position":
         pending_close = _filled_close_ghost_pending_candidate(issue, context)
-        if pending_close and not _should_auto_retire(config, issue):
-            return pending_close
+        if _should_wait_for_ghost_confirmation(config, issue):
+            return pending_close or _decision(
+                "pending_confirmation",
+                "retire_local",
+                "medium",
+                False,
+                "broker_flat_waiting_for_confirmation",
+                group_id=str(issue.get("group_id") or ""),
+                evidence={"observed_count": issue.get("observed_count"), "group_id": issue.get("group_id")},
+            )
         return _decision(
             "auto_local_repair" if _should_auto_retire(config, issue) else "human_review",
             "retire_local",
@@ -562,7 +570,9 @@ def _request_review(config: dict[str, Any], store: LocalStore, issue: dict[str, 
             allowed_actions=actions,
             payload=request_payload,
             store=store,
-            send=True,
+            # Lathi owns the Telegram projection for external review rows.  The
+            # app only persists the guarded request so one surface sends it.
+            send=False,
             request_id=f"or_{issue['issue_id']}",
         )
     except OperatorReviewError as exc:
@@ -719,6 +729,16 @@ def _should_auto_retire(config: dict[str, Any], issue: dict[str, Any]) -> bool:
         return False
     required = int(recon.get("broker_flat_confirmations_required") or 2)
     return int(issue.get("observed_count") or 0) >= required
+
+
+def _should_wait_for_ghost_confirmation(config: dict[str, Any], issue: dict[str, Any]) -> bool:
+    if str(issue.get("issue_type") or "") != "ghost_local_position":
+        return False
+    recon = ((config.get("live") or {}).get("reconciliation") or {})
+    if not _as_bool(recon.get("auto_retire_ghost_after_confirmations"), True):
+        return False
+    required = int(recon.get("broker_flat_confirmations_required") or 2)
+    return int(issue.get("observed_count") or 0) < required
 
 
 def _reconciliation_enabled(config: dict[str, Any]) -> bool:

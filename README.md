@@ -119,10 +119,16 @@ The system self-heals everything it can; a status only persists when it genuinel
 
 ## Lathi Notifications
 
-Operational receipts and launchd failures go through Lathi Bus by default:
+Attention alerts and launchd failures go through Lathi Bus by default:
 
 - `KAMANDAL_LAUNCHD_ALERT_MODE=live` sends Telegram notifications and requires Lathi Bus to confirm a network send.
 - `KAMANDAL_LAUNCHD_ALERT_MODE=spool` is for dry-run/smoke checks.
 - `KAMANDAL_LATHI_BUS_PROFILE=kamandal-northstar` is the default Lathi Bus profile; `KAMANDAL_LATHI_PROFILE` remains a legacy alias.
 
-Healthy/self-handled checks stay in launchd logs and CLI JSON instead of Telegram. Reconciliation auto-repairs are applied by Kamandal and sent as receipts. Ambiguous reconciliation issues become bounded operator-review cards through Lathi Bus `telegram-ask`; the fallback command remains `kamandal review <request_id> <action> [note]`.
+Healthy, progressing, and self-handled work stays in SQLite, launchd logs, CLI
+JSON, and Control Tower instead of Telegram. Order submission, fill, reprice,
+cancel, and successful auto-repair are operational facts, not notifications.
+Kamandal waits through the configured broker-flat confirmation window before a
+ghost position can become a review request. Unresolved ambiguous issues are
+persisted once; Lathi owns their single Telegram projection and callback. The
+fallback command remains `kamandal review <request_id> <action> [note]`.

@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 from kamandal_v2.live.entry_hygiene import retire_stale_entry_approvals
-from kamandal_v2.live.risk_manager import REASON_CLUSTER_AT_CAP, evaluate_entry_risk
+from kamandal_v2.live.risk_manager import (
+    BREAKER_CONSECUTIVE_LOSSES,
+    BREAKER_DAILY_NEW_POSITIONS,
+    REASON_CLUSTER_AT_CAP,
+    evaluate_entry_risk,
+)
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -94,7 +99,7 @@ def run_live_health(
             continue
         group_mark = _mark_overview(group_id, mark)
         group_marks.append(group_mark)
-        _collect_mark_events(group_mark, events)
+        _collect_mark_events(group_mark, events, config=config)
 
     close_orders = [
         order
@@ -132,6 +137,8 @@ def run_live_health(
                 "issue_id": str(issue.get("issue_id") or ""),
                 "status": str(issue.get("status") or "open"),
                 "observed_count": int(issue.get("observed_count") or 1),
+                "operator_state": "operator_needed",
+                "attention_surface": "external_review",
             },
         )
 
@@ -145,6 +152,7 @@ def run_live_health(
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
                     "age_minutes": finding.get("age_minutes"),
+                    "operator_state": "operator_needed",
                 },
             )
             continue
@@ -157,6 +165,7 @@ def run_live_health(
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
                     "age_minutes": finding.get("age_minutes"),
+                    "operator_state": "self_healing",
                 },
             )
             continue
@@ -169,6 +178,7 @@ def run_live_health(
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
                     "age_minutes": finding.get("age_minutes"),
+                    "operator_state": "operator_needed",
                 },
             )
             continue
@@ -181,6 +191,7 @@ def run_live_health(
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
                     "age_minutes": finding.get("age_minutes"),
+                    "operator_state": "operator_needed",
                 },
             )
             continue
@@ -193,6 +204,7 @@ def run_live_health(
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
                     "age_minutes": finding.get("age_minutes"),
+                    "operator_state": "self_healing",
                 },
             )
             continue
@@ -204,6 +216,7 @@ def run_live_health(
                     "detail": finding.get("order_status") or "",
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
+                    "operator_state": "operator_needed",
                 },
             )
             continue
@@ -215,6 +228,7 @@ def run_live_health(
                     "detail": finding.get("order_status") or "",
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
+                    "operator_state": "operator_needed",
                 },
             )
             continue
@@ -226,8 +240,9 @@ def run_live_health(
                     "detail": finding.get("order_status") or "",
                     "group_id": finding.get("group_id"),
                     "ticket_hash": finding.get("ticket_hash"),
-            },
-        )
+                    "operator_state": "self_healing",
+                },
+            )
 
     if risk["severity"]:
         events.append(
@@ -239,16 +254,19 @@ def run_live_health(
                 "bpr_used_pct": risk.get("bpr_used_pct"),
                 "hard_max_bpr_utilization_pct": risk.get("hard_max_bpr_utilization_pct"),
                 "target_max_bpr_utilization_pct": risk.get("target_max_bpr_utilization_pct"),
+                "operator_state": "self_handled" if risk["reason"] == "portfolio_bpr_over_target" else "operator_needed",
             },
         )
 
     if pending_entry_approvals:
+        approval_mode = str(((config.get("live") or {}).get("entry_approval_mode") or "sheet_approval"))
+        pending_operator_state = "self_handled" if approval_mode == "auto_top_plan" else "operator_needed"
         events.append(
             {
                 "severity": "yellow",
                 "reason": "pending_entry_approvals",
                 "detail": f"{len(pending_entry_approvals)} unsubmitted open intents need approval/expiry hygiene",
-                "operator_state": "operator_needed",
+                "operator_state": pending_operator_state,
                 "self_healing": False,
             },
         )
@@ -264,7 +282,8 @@ def run_live_health(
                 "detail": str(reason.get("detail") or ""),
                 "operator_state": (
                     "self_handled"
-                    if str(reason.get("code") or "") == REASON_CLUSTER_AT_CAP
+                    if str(reason.get("code") or "")
+                    in {REASON_CLUSTER_AT_CAP, BREAKER_CONSECUTIVE_LOSSES, BREAKER_DAILY_NEW_POSITIONS}
                     else "operator_needed"
                 ),
                 "self_healing": False,
@@ -361,7 +380,16 @@ def _is_pending_confirmation_issue(issue: dict[str, Any]) -> bool:
     return str(decision.get("tier") or "") == "pending_confirmation"
 
 
-def _collect_mark_events(group_mark: dict[str, Any], events: list[dict[str, Any]]) -> None:
+def _collect_mark_events(
+    group_mark: dict[str, Any],
+    events: list[dict[str, Any]],
+    *,
+    config: dict[str, Any],
+) -> None:
+    live = config.get("live") or {}
+    target_state = "self_healing" if str(live.get("exit_approval_mode") or "sheet_approval") == "auto_rules" else "operator_needed"
+    loss_action = str((live.get("exit_pricing") or {}).get("max_loss_action") or "review")
+    loss_state = "self_healing" if loss_action in {"close", "close_when_confirmed"} else "operator_needed"
     if bool(group_mark.get("target_reached")):
         events.append(
             {
@@ -369,6 +397,7 @@ def _collect_mark_events(group_mark: dict[str, Any], events: list[dict[str, Any]
                 "reason": "position_target_reached",
                 "detail": _format_mark_summary(group_mark),
                 "group_id": group_mark.get("group_id"),
+                "operator_state": target_state,
             },
         )
     if bool(group_mark.get("loss_watch")):
@@ -378,6 +407,7 @@ def _collect_mark_events(group_mark: dict[str, Any], events: list[dict[str, Any]
                 "reason": "loss_watch",
                 "detail": _format_mark_summary(group_mark),
                 "group_id": group_mark.get("group_id"),
+                "operator_state": loss_state,
             },
         )
 

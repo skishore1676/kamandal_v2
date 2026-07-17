@@ -126,7 +126,7 @@ launchd logs.
 
 ## Lathi Bus Alert Modes
 
-Operational receipts and launchd failure alerts go through
+Operator-attention and launchd failure alerts go through
 `kamandal_v2.ops.alerts.send_lathi_alert`.
 
 | Mode | Behavior |
@@ -172,19 +172,40 @@ Ownership split:
 
 ## Attention Policy
 
-Routine proof belongs in logs. Telegram is for attention.
+Routine proof belongs in the ledger, logs, and Control Tower. Telegram is an
+attention surface, not an execution feed.
+
+The paging predicate is:
+
+```text
+unresolved
+AND human_action_required
+AND (recovery_exhausted OR no_safe_auto_action)
+AND not_duplicate
+```
 
 - Healthy `live-health-report` runs print `KAMANDAL_LAUNCHD_JOB={...}` and do
   not send a message.
+- Successful order submission, fill, reprice, cancellation, and auto-repair do
+  not send messages. Their normal command output and SQLite records remain the
+  audit trail.
 - Live health performs bounded self-healing for stale local entry approvals
   before it scores the book. A prior-market-day `pending_approval` entry ticket
   is retired locally as `retired_stale_entry_approval`; it is not a broker
   action and should disappear from Control Tower/Blackboard on the next Lathi
-  projection.
-- RED live health always alerts.
+  projection. Pending lower-ranked entries under `auto_top_plan` are also
+  self-handled and do not page.
+- RED is a safety classification, not by itself a paging decision. Events
+  marked `self_healing` or `self_handled` remain silent. A RED event without
+  recovery metadata still fails safe and alerts.
 - YELLOW live health alerts only for configured operator-action reasons. The
-  default is `close_order_stale`, `stale_failed_close_order`, and
-  `portfolio_bpr_over_target`.
+  default is `close_order_stale`.
+- Reconciliation review requests use the dedicated external-review surface, so
+  the live-health reporter does not send a second Telegram message for the same
+  blocker.
+- Live-health incidents have a stable fingerprint. An unchanged open incident
+  sends once, remains visible in Control Tower, and can notify again only after
+  it clears or its affected reason/group/order changes.
 - `exit_pipeline_stalled` is RED. It means policy approved a close locally but
   `live-approved-orders` did not submit it within
   `live.health.exit_pipeline_stalled_minutes`.
@@ -197,7 +218,7 @@ Routine proof belongs in logs. Telegram is for attention.
 Override the YELLOW reasons with:
 
 ```bash
-KAMANDAL_HEALTH_NOTIFY_REASONS=close_order_stale,stale_failed_close_order,portfolio_bpr_over_target
+KAMANDAL_HEALTH_NOTIFY_REASONS=close_order_stale
 ```
 
 ## Live Exit Pipeline
@@ -256,10 +277,15 @@ surface protocol, and Lane Host is retired from the Kamandal operator path.
 
 ## Operator Review Behavior
 
-Reconciliation auto-repairs that are proven safe are applied locally and reported
-as receipts. Ambiguous reconciliation issues become operator review requests.
+Reconciliation auto-repairs that are proven safe are applied locally and stay in
+the ledger. A broker-flat ghost remains `pending_confirmation` until
+`broker_flat_confirmations_required` is met, then auto-retires without paging.
+Only an ambiguity that remains after the available recovery policy becomes an
+operator review request.
 
-Operator review defaults to Lathi Bus `telegram-ask`:
+Kamandal persists the guarded request; Lathi's external-review sync owns the
+single Telegram card and callback. The direct Lathi Bus sender remains a manual
+fallback for `send-pending-review-requests`, configured by:
 
 ```yaml
 live:

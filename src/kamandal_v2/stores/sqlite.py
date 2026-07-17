@@ -1195,6 +1195,17 @@ class LocalStore:
                 (event_type, json.dumps(payload, sort_keys=True)),
             )
 
+    def latest_event(self, event_type: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT created_at, payload FROM events WHERE event_type = ? ORDER BY id DESC LIMIT 1",
+                (event_type,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(str(row["payload"]))
+        return {**payload, "_created_at": str(row["created_at"])}
+
 
 def _candidate_greeks(candidate: dict[str, Any]) -> Greeks:
     raw = candidate.get("greeks")

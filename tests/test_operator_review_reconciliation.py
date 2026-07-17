@@ -258,13 +258,18 @@ def test_reconcile_auto_retires_ghost_after_two_flat_confirmations(tmp_path, mon
     monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
 
     first = reconcile_live_positions(_config(), store=store)
-    assert first["issues"][0]["issue_type"] == "ghost_local_position"
+    assert first["issues"] == []
+    pending = store.open_live_reconciliation_issues(group_id="live_group_amzn")
+    assert len(pending) == 1
+    assert pending[0]["issue_type"] == "ghost_local_position"
+    assert pending[0]["decision"]["tier"] == "pending_confirmation"
+    assert pending[0]["decision"]["reason"] == "broker_flat_waiting_for_confirmation"
     assert store.live_position_group("live_group_amzn") is not None
 
     second = reconcile_live_positions(_config(), store=store)
     assert second["issues"] == []
     assert not store.open_live_position_groups()
-    retired = store.live_reconciliation_issue(first["issues"][0]["issue_id"])
+    retired = store.live_reconciliation_issue(pending[0]["issue_id"])
     assert retired["status"] == "retired"
     assert retired["observed_count"] == 2
 
@@ -321,8 +326,6 @@ def test_reconcile_suppresses_close_filled_ghost_review_until_confirmation(tmp_p
 
 def test_reconcile_send_review_failure_is_nonfatal(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
-    store.save_live_position_group("live_group_amzn", _group(), status="open")
-    store.save_live_position("live_group_amzn", "live_group_amzn", _group(), status="open")
     config = _config()
     config["live"]["operator_review"]["max_pending_requests"] = 1
     store.save_operator_review_request(
@@ -342,14 +345,49 @@ def test_reconcile_send_review_failure_is_nonfatal(tmp_path, monkeypatch) -> Non
 
     class Broker:
         def broker_positions(self):
-            return []
+            return [
+                {
+                    "asset_type": "option",
+                    "occ_symbol": "AMZN260717C00200000",
+                    "underlying": "AMZN",
+                    "quantity": 1.0,
+                },
+            ]
 
     monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
 
     result = reconcile_live_positions(config, store=store, send_review=True)
 
     assert result["status"] == "ok"
-    assert result["issues"][0]["issue_type"] == "ghost_local_position"
+    assert result["issues"][0]["issue_type"] == "orphan_broker_position"
+
+
+def test_reconcile_queues_one_lathi_owned_review_without_direct_send(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+
+    class Broker:
+        def broker_positions(self):
+            return [
+                {
+                    "asset_type": "option",
+                    "occ_symbol": "AMZN260717C00200000",
+                    "underlying": "AMZN",
+                    "quantity": 1.0,
+                },
+            ]
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+    monkeypatch.setattr(
+        "kamandal_v2.live.operator_review.subprocess.run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Kamandal must not project Telegram directly")),
+    )
+
+    result = reconcile_live_positions(_config(), store=store, send_review=True)
+
+    assert result["issues"][0]["issue_type"] == "orphan_broker_position"
+    requests = store.operator_review_requests_by_status({"pending", "sent"})
+    assert len(requests) == 1
+    assert requests[0]["_ledger_status"] == "pending"
 
 
 def test_reconcile_aggregates_duplicate_local_occ_legs(tmp_path, monkeypatch) -> None:

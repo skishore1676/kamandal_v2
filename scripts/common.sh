@@ -107,28 +107,6 @@ with_lock() {
   "$@"
 }
 
-send_telegram() {
-  if [[ "${KAMANDAL_TELEGRAM_ENABLED:-true}" != "true" ]]; then
-    return 0
-  fi
-  local message="$1"
-  local title="${2:-Kamandal receipt}"
-  local level="${3:-info}"
-  local mode="${KAMANDAL_LAUNCHD_ALERT_MODE:-live}"
-  local profile="${KAMANDAL_LATHI_BUS_PROFILE:-${KAMANDAL_LATHI_PROFILE:-kamandal-northstar}}"
-  PYTHONPATH="$REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" "$KAMANDAL_PYTHON" -m kamandal_v2.ops.alerts notify \
-    --title "$title" \
-    --body "$message" \
-    --level "$level" \
-    --mode "$mode" \
-    --profile "$profile" >/dev/null 2>&1 || log "lathi telegram receipt failed."
-}
-
-send_telegram_receipt() {
-  local message="$1"
-  send_telegram "$message" "${KAMANDAL_TELEGRAM_RECEIPT_TITLE:-Kamandal live execution}" "info"
-}
-
 prepare_current_ideas_dir() {
   local source_dir="$1"
   local lane="$2"
@@ -159,34 +137,4 @@ prepare_current_ideas_dir() {
 
   CURRENT_IDEAS_DIR="$dest"
   log "Filtered active ideas to current day: source=$source_dir current=$dest kept=$kept date=$today."
-}
-
-notify_live_execution_result() {
-  local lane="$1"
-  local json_file="$2"
-  python3 - "$lane" "$json_file" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-lane = sys.argv[1]
-path = Path(sys.argv[2])
-try:
-    payload = json.loads(path.read_text())
-except Exception:
-    sys.exit(0)
-processed = int(payload.get("processed") or 0)
-if processed <= 0:
-    sys.exit(0)
-results = [item for item in (payload.get("results") or []) if isinstance(item, dict)]
-if results and all(str(item.get("status") or "").lower() == "blocked" for item in results):
-    sys.exit(0)
-lines = [f"Kamandal live {lane}: processed={processed} submit={payload.get('submit')}"]
-for item in results:
-    status = item.get("status") or item.get("reason") or "unknown"
-    order_id = str(item.get("order_id") or "")
-    ticket_hash = str(item.get("ticket_hash") or "")
-    lines.append(f"- status={status} order={order_id[:8]} ticket={ticket_hash[:8]}")
-print("\n".join(lines))
-PY
 }
