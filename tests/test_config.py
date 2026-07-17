@@ -70,3 +70,23 @@ def test_planner_vertical_width_search_defaults_when_unset(monkeypatch) -> None:
     assert width_search["enabled"] is False
     assert width_search["widths"] == [5.0, 7.5, 10.0]
     assert width_search["respect_bpr_cap"] is True
+
+
+def test_sheet_retry_and_terminal_receipt_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("KAMANDAL_SHEETS_RETRY_ATTEMPTS", "5")
+    monkeypatch.setenv("KAMANDAL_SHEETS_RETRY_BASE_DELAY_SECONDS", "0.5")
+    monkeypatch.setenv("KAMANDAL_SHEETS_RETRY_MAX_DELAY_SECONDS", "3")
+    monkeypatch.setenv("KAMANDAL_ENTRY_TERMINAL_RECEIPT_ENABLED", "false")
+    monkeypatch.setenv("KAMANDAL_ENTRY_TERMINAL_RECEIPT_MODE", "spool")
+
+    control = load_control()
+
+    assert control["google_sheets"]["retry"] == {
+        "attempts": 5,
+        "base_delay_seconds": 0.5,
+        "max_delay_seconds": 3.0,
+    }
+    assert control["live"]["entry_reprice"]["terminal_unfilled_receipt"] == {
+        "enabled": False,
+        "mode": "spool",
+    }

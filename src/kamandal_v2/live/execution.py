@@ -19,6 +19,7 @@ from kamandal_v2.live.entry_hygiene import (
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.market.broker import broker_adapter
+from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
 from kamandal_v2.stores.sqlite import LocalStore
@@ -245,9 +246,24 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
             _save_live_position_from_ticket(store, ticket, status=status.lower(), order_status=response)
         if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "close":
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "close_filled")
+        activity_receipt = None
         if status in TERMINAL_UNFILLED_ORDER_STATUSES:
-            store.update_live_order_intent_status(str(ticket["ticket_hash"]), status.lower().replace("canceled", "cancelled"))
+            normalized_status = status.lower().replace("canceled", "cancelled")
+            transitioned = store.transition_live_order_intent_status(
+                str(ticket["ticket_hash"]),
+                expected_statuses={ledger_status},
+                status=normalized_status,
+            )
+            if transitioned and intent_type == "open" and ledger_status != "repriced":
+                activity_receipt = _send_terminal_entry_receipt(
+                    config,
+                    store,
+                    ticket,
+                    broker_status=status,
+                )
         result = {"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, "ledger_status": ledger_status}
+        if activity_receipt is not None:
+            result["activity_receipt"] = activity_receipt
         if ledger_status in CANCEL_PENDING_TICKET_STATUSES and status in {"NEW", "OPEN", "WORKING"}:
             result["cancel_pending"] = True
             result["needs_broker_cancel_review"] = True
@@ -255,6 +271,90 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
             result["entry_management_skipped"] = True
         results.append(result)
     return {"synced": len(results), "manage_entries": manage_entries, "orders": results}
+
+
+def _send_terminal_entry_receipt(
+    config: dict[str, Any],
+    store: LocalStore,
+    ticket: dict[str, Any],
+    *,
+    broker_status: str,
+) -> dict[str, Any] | None:
+    policy = (((config.get("live") or {}).get("entry_reprice") or {}).get("terminal_unfilled_receipt") or {})
+    if not _as_bool(policy.get("enabled"), False):
+        return None
+
+    lineage = _entry_ticket_lineage(store, ticket)
+    body = render_terminal_entry_receipt(lineage, broker_status=broker_status)
+    underlying = str(ticket.get("underlying") or "entry").upper()
+    mode = str(policy.get("mode") or "live").strip().lower()
+    if mode not in {"off", "spool", "live"}:
+        mode = "live"
+    alert = send_lathi_alert(
+        title=f"Kamandal entry attempt completed: {underlying} unfilled",
+        body=body,
+        level="info",
+        mode=mode,  # type: ignore[arg-type]
+        profile=str(policy.get("profile") or default_lathi_bus_profile()),
+    )
+    receipt = {
+        "attempted": alert.attempted,
+        "ok": alert.ok,
+        "mode": alert.mode,
+        "ticket_hash": ticket.get("ticket_hash"),
+        "underlying": underlying,
+        "broker_status": broker_status,
+        "attempt_count": len(lineage),
+    }
+    store.event("live_order_terminal_entry_receipt", {**receipt, "delivery": alert.to_dict()})
+    return receipt
+
+
+def render_terminal_entry_receipt(lineage: list[dict[str, Any]], *, broker_status: str) -> str:
+    ticket = lineage[-1] if lineage else {}
+    underlying = str(ticket.get("underlying") or "UNKNOWN").upper()
+    structure = str(ticket.get("structure") or "entry").replace("_", " ")
+    limits = " -> ".join(_display_entry_limit(item.get("limit_price")) for item in lineage)
+    expiration = next(
+        (str(leg.get("expiration")) for leg in (ticket.get("legs") or []) if leg.get("expiration")),
+        "unknown",
+    )
+    return "\n".join(
+        [
+            f"{underlying} {structure} was attempted but not filled.",
+            f"Outcome: {broker_status.lower().replace('_', ' ')}; no live position was opened.",
+            f"Broker attempts: {len(lineage)} ({max(len(lineage) - 1, 0)} reprices).",
+            f"Limit path: {limits or 'unknown'}.",
+            f"Expiration: {expiration}.",
+        ]
+    )
+
+
+def _entry_ticket_lineage(store: LocalStore, ticket: dict[str, Any]) -> list[dict[str, Any]]:
+    lineage = [ticket]
+    current = ticket
+    seen = {str(ticket.get("ticket_hash") or "")}
+    while current:
+        parent_hash = str(current.get("parent_ticket_hash") or "")
+        if not parent_hash or parent_hash in seen:
+            break
+        seen.add(parent_hash)
+        parent = store.live_order_intent(parent_hash)
+        if not parent:
+            break
+        lineage.append(parent)
+        current = parent
+    lineage.reverse()
+    return lineage
+
+
+def _display_entry_limit(value: Any) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value or "unknown")
+    side = "credit" if numeric < 0 else "debit"
+    return f"${abs(numeric):.2f} {side}"
 
 
 def _exit_submit_source(config: dict[str, Any]) -> str:
