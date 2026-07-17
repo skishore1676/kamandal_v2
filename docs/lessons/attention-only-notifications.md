@@ -4,7 +4,7 @@ type: decision
 area: live operations and Telegram notifications
 date: 2026-07-16
 tags: [alerts, reconciliation, lathi, operations]
-refs: [scripts/run_live_management.sh:19, scripts/run_live_approved_orders.sh:17, src/kamandal_v2/live/reconciliation.py:575, src/kamandal_v2/tools/launchd_job.py:265]
+refs: [scripts/run_live_management.sh:19, scripts/run_live_approved_orders.sh:17, src/kamandal_v2/live/execution.py:252, src/kamandal_v2/live/reconciliation.py:575, src/kamandal_v2/stores/sqlite.py:664, src/kamandal_v2/tools/launchd_job.py:265]
 ---
 
 # Page on Exhausted Recovery, Not Workflow Status
@@ -21,7 +21,9 @@ on every scheduled report.
 Severity and progress are not operator attention. Beacon should fire only when a
 condition is unresolved, a human action is required, and safe automatic recovery
 is exhausted or unavailable. Everything else belongs in SQLite, launchd logs,
-CLI output, and Control Tower.
+CLI output, and Control Tower. The narrow informational exception is a completed
+entry attempt that opened no position: without one terminal summary, the operator
+cannot distinguish inactivity from an attempted order that expired unfilled.
 
 ## Why / When It Applies
 
@@ -46,13 +48,20 @@ and operator-state metadata rather than color or lifecycle milestones alone.
   (`src/kamandal_v2/tools/launchd_job.py:265`).
 - A stable reason/group/order fingerprint suppresses an unchanged incident until
   it clears or materially changes (`src/kamandal_v2/tools/launchd_job.py:310`).
+- A broker-confirmed terminal unfilled entry sends one informational summary of
+  its attempts, reprices, limit path, and expiration while keeping intermediate
+  submit and reprice milestones silent (`src/kamandal_v2/live/execution.py:252`).
+- The ledger status transition is an atomic claim, so overlapping sync cycles
+  cannot both send the terminal summary (`src/kamandal_v2/stores/sqlite.py:664`).
 
 ## Apply It Next Time
 
 When adding a new alert, first name the recovery path and the exact action only a
 human can take. If either is missing, store the event but do not add a Telegram
 send. Give actionable incidents a stable identity so scheduled checks update one
-incident rather than generating repeated pages.
+incident rather than generating repeated pages. For a non-actionable receipt,
+require a terminal state, a concrete visibility gap it closes, and an idempotent
+claim before sending.
 
 ## Dead Ends
 
@@ -62,3 +71,6 @@ incident rather than generating repeated pages.
   decision.
 - Sending success receipts makes the pager an execution feed and hides the rare
   event that genuinely needs intervention.
+- Sending every submit, reprice, cancel, and expiration step recreates the noisy
+  execution feed. Summarize the lineage once, after the broker confirms the entry
+  ended without a position.
