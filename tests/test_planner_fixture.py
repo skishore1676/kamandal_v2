@@ -1,11 +1,21 @@
 import json
 import sqlite3
 
+import pytest
+
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, PreflightResult
 from kamandal_v2.planner.engine import _live_overlap_preflight_guard, _rejection_summary, run_plan, run_shadow_cycle
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
+
+
+@pytest.fixture(autouse=True)
+def _isolate_fixture_plans_from_runtime_earnings(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "kamandal_v2.events.earnings.EarningsStore.latest",
+        lambda _self, _symbol, *, source=None: None,
+    )
 
 
 SAMPLE_IDEAS = "tests/fixtures/sample_ideas.yaml"
