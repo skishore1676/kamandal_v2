@@ -118,6 +118,78 @@ def test_live_health_report_job_sends_red_alert(monkeypatch, capsys) -> None:  #
     assert payload["alert"]["ok"] is True
 
 
+def test_health_attention_suppresses_self_handled_red_state() -> None:
+    attention = launchd_job.health_attention(
+        {
+            "overall": "RED",
+            "events": [
+                {
+                    "severity": "red",
+                    "reason": "risk_cluster_at_cap",
+                    "operator_state": "self_handled",
+                },
+            ],
+        },
+    )
+
+    assert attention["notify"] is False
+    assert attention["reason"] == "no_operator_attention_required"
+
+
+def test_health_attention_leaves_external_review_to_lathi() -> None:
+    attention = launchd_job.health_attention(
+        {
+            "overall": "RED",
+            "events": [
+                {
+                    "severity": "red",
+                    "reason": "reconciliation_blocker",
+                    "operator_state": "operator_needed",
+                    "attention_surface": "external_review",
+                },
+            ],
+        },
+    )
+
+    assert attention["notify"] is False
+
+
+def test_health_attention_deduplicates_one_open_incident_until_clear(tmp_path) -> None:
+    store = launchd_job.LocalStore(tmp_path / "kamandal.db")
+    attention = launchd_job.health_attention(
+        {
+            "overall": "RED",
+            "events": [
+                {
+                    "severity": "red",
+                    "reason": "failed_close_order",
+                    "operator_state": "operator_needed",
+                    "group_id": "group-1",
+                    "ticket_hash": "ticket-1",
+                },
+            ],
+        },
+    )
+
+    first = launchd_job.dedupe_health_attention(store, attention)
+    assert first["notify"] is True
+    launchd_job.record_health_attention_open(store, first)
+
+    repeated = launchd_job.dedupe_health_attention(store, attention)
+    assert repeated["notify"] is False
+    assert repeated["reason"] == "unchanged_operator_attention"
+
+    cleared = launchd_job.dedupe_health_attention(
+        store,
+        {"notify": False, "level": "info", "reason": "no_operator_attention_required", "events": []},
+    )
+    assert cleared["notify"] is False
+    assert store.latest_event(launchd_job.LIVE_HEALTH_ATTENTION_STATE_EVENT)["status"] == "cleared"
+
+    reopened = launchd_job.dedupe_health_attention(store, attention)
+    assert reopened["notify"] is True
+
+
 def test_scheduled_job_health_detects_stale_frequent_job(tmp_path) -> None:
     log_dir = tmp_path / "logs"
     log_dir.mkdir()

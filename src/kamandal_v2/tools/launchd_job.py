@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date, datetime, timedelta
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -51,9 +52,25 @@ HOLIDAYS = {
 }
 ACTIONABLE_HEALTH_REASONS = {
     "close_order_stale",
-    "portfolio_bpr_over_target",
-    "stale_failed_close_order",
 }
+NON_PAGING_OPERATOR_STATES = {"self_handled", "self_healing"}
+OPERATOR_ATTENTION_STATES = {"operator_needed", "blocked_self_healing"}
+DELEGATED_ATTENTION_SURFACES = {"external_review"}
+OPERATOR_ACTIONS = {
+    "close_order_stale": "Check the working close at the broker; cancel or reprice it if it is no longer progressing.",
+    "urgent_close_order_stale": "Check the urgent close at the broker now; cancel or reprice it so Kamandal can continue.",
+    "exit_pipeline_stalled": "Check the live-approved-orders job and broker state; the approved close has not reached a working order.",
+    "failed_preflight_close": "Resolve the broker conflict or close the position manually; Kamandal cannot submit the required close.",
+    "failed_close_order": "Inspect the broker rejection and close manually if the conflict cannot be cleared.",
+    "portfolio_bpr_over_hard_cap": "Reduce exposure or confirm the broker/account snapshot; the portfolio is above the hard risk cap.",
+    "risk_account_snapshot_stale": "Check the account snapshot job and broker connectivity; safe new entries are blocked until the snapshot refreshes.",
+    "risk_daily_drawdown_breaker": "Review today's account drawdown and decide whether the entry pause should remain in place.",
+    "risk_weekly_drawdown_breaker": "Review the weekly account drawdown and decide whether the entry pause should remain in place.",
+    "pending_entry_approvals": "Approve, reject, or clear the waiting entry in the configured approval surface.",
+    "position_target_reached": "Approve or reject the staged profit exit; automatic exit approval is not enabled.",
+    "loss_watch": "Review the loss-watch position and choose close or hold; automatic loss action is not enabled.",
+}
+LIVE_HEALTH_ATTENTION_STATE_EVENT = "live_health_attention_state"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -108,19 +125,24 @@ def script_job(args: argparse.Namespace, *, repo_root: Path) -> int:
 
 def live_health_report_job(args: argparse.Namespace) -> int:
     config = load_control()
-    report = run_live_health(LocalStore(), config)
+    store = LocalStore()
+    report = run_live_health(store, config)
     attention = health_attention(report)
+    if args.alert_mode == "live":
+        attention = dedupe_health_attention(store, attention)
     alert: AlertResult | None = None
     ok = True
     if attention["notify"]:
         alert = send_lathi_alert(
             title="Kamandal live health",
-            body=render_live_health_summary(report),
+            body=render_live_health_summary(report, attention=attention),
             level=str(attention["level"]),
             mode=args.alert_mode,
             profile=args.alert_profile,
         )
         ok = alert.ok or args.alert_mode == "off"
+        if alert.ok and args.alert_mode == "live":
+            record_health_attention_open(store, attention)
     print_result(
         {
             "job": args.job,
@@ -243,16 +265,83 @@ def alert_level_for_health(report: dict[str, Any]) -> str:
 def health_attention(report: dict[str, Any]) -> dict[str, Any]:
     status = str(report.get("overall") or "GREEN").upper()
     events = [event for event in report.get("events") or [] if isinstance(event, dict)]
-    red_events = [event for event in events if str(event.get("severity") or "").lower() == "red"]
-    if status == "RED" or red_events:
-        reasons = sorted({str(event.get("reason") or "") for event in red_events if event.get("reason")})
-        return {"notify": True, "level": "error", "reason": ",".join(reasons) or "red_live_health"}
     actionable_reasons = _actionable_health_reasons()
-    reasons = {str(reason) for reason in report.get("reasons") or []}
-    matched = sorted(reasons & actionable_reasons)
-    if matched:
-        return {"notify": True, "level": "warning", "reason": ",".join(matched)}
-    return {"notify": False, "level": alert_level_for_health(report), "reason": "no_operator_attention_required"}
+    attention_events = []
+    for event in events:
+        if str(event.get("attention_surface") or "") in DELEGATED_ATTENTION_SURFACES:
+            continue
+        operator_state = str(event.get("operator_state") or "")
+        if operator_state in NON_PAGING_OPERATOR_STATES:
+            continue
+        reason = str(event.get("reason") or "")
+        severity = str(event.get("severity") or "").lower()
+        if operator_state in OPERATOR_ATTENTION_STATES or severity == "red" or reason in actionable_reasons:
+            attention_events.append(event)
+    if attention_events:
+        reasons = sorted({str(event.get("reason") or "") for event in attention_events if event.get("reason")})
+        level = "error" if any(str(event.get("severity") or "").lower() == "red" for event in attention_events) else "warning"
+        return {"notify": True, "level": level, "reason": ",".join(reasons) or "operator_attention_required", "events": attention_events}
+    if status == "RED" and not events:
+        return {"notify": True, "level": "error", "reason": "red_live_health_without_events", "events": []}
+    return {
+        "notify": False,
+        "level": alert_level_for_health(report),
+        "reason": "no_operator_attention_required",
+        "events": [],
+    }
+
+
+def attention_fingerprint(attention: dict[str, Any]) -> str:
+    identities = []
+    for event in attention.get("events") or []:
+        identities.append(
+            {
+                key: str(event.get(key) or "")
+                for key in ("reason", "group_id", "ticket_hash", "issue_id", "snapshot_id")
+            },
+        )
+    payload = {
+        "reason": str(attention.get("reason") or ""),
+        "events": sorted(identities, key=lambda item: json.dumps(item, sort_keys=True)),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def dedupe_health_attention(store: LocalStore, attention: dict[str, Any]) -> dict[str, Any]:
+    previous = store.latest_event(LIVE_HEALTH_ATTENTION_STATE_EVENT) or {}
+    if not attention.get("notify"):
+        if previous.get("status") == "open":
+            store.event(
+                LIVE_HEALTH_ATTENTION_STATE_EVENT,
+                {
+                    "status": "cleared",
+                    "fingerprint": previous.get("fingerprint") or "",
+                    "reason": previous.get("reason") or "",
+                },
+            )
+        return attention
+
+    fingerprint = attention_fingerprint(attention)
+    if previous.get("status") == "open" and previous.get("fingerprint") == fingerprint:
+        return {
+            **attention,
+            "notify": False,
+            "reason": "unchanged_operator_attention",
+            "attention_reason": attention.get("reason") or "",
+            "fingerprint": fingerprint,
+        }
+    return {**attention, "fingerprint": fingerprint}
+
+
+def record_health_attention_open(store: LocalStore, attention: dict[str, Any]) -> None:
+    store.event(
+        LIVE_HEALTH_ATTENTION_STATE_EVENT,
+        {
+            "status": "open",
+            "fingerprint": attention.get("fingerprint") or attention_fingerprint(attention),
+            "reason": attention.get("reason") or "",
+        },
+    )
 
 
 def _actionable_health_reasons() -> set[str]:
@@ -262,29 +351,42 @@ def _actionable_health_reasons() -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 
-def render_live_health_summary(report: dict[str, Any]) -> str:
+def render_live_health_summary(report: dict[str, Any], *, attention: dict[str, Any] | None = None) -> str:
     counts = report.get("counts") or {}
     scale = report.get("scale") or {}
-    lines = [
-        f"Status: {report.get('overall')}",
-        f"Score: {scale.get('score', '')}",
-        (
-            "Counts: "
-            f"groups={counts.get('open_groups', 0)} "
-            f"pending_entries={counts.get('pending_entry_approvals', 0)} "
-            f"recon_blockers={counts.get('reconciliation_blockers', 0)} "
-            f"loss_watch={counts.get('loss_watch_groups', 0)} "
-            f"working_close={counts.get('working_close_orders', 0)}"
-        ),
-    ]
-    reasons = report.get("reasons") or []
+    if attention is not None:
+        lines = ["Kamandal exhausted safe automatic recovery and needs operator attention."]
+        if attention.get("fingerprint"):
+            lines.append(f"Incident: {str(attention['fingerprint'])[:12]}")
+    else:
+        lines = [
+            f"Status: {report.get('overall')}",
+            f"Score: {scale.get('score', '')}",
+            (
+                "Counts: "
+                f"groups={counts.get('open_groups', 0)} "
+                f"pending_entries={counts.get('pending_entry_approvals', 0)} "
+                f"recon_blockers={counts.get('reconciliation_blockers', 0)} "
+                f"loss_watch={counts.get('loss_watch_groups', 0)} "
+                f"working_close={counts.get('working_close_orders', 0)}"
+            ),
+        ]
+    reasons = (
+        sorted({str(event.get("reason") or "") for event in attention.get("events") or [] if event.get("reason")})
+        if attention is not None
+        else report.get("reasons") or []
+    )
     if reasons:
         lines.append("Reasons: " + ", ".join(str(reason) for reason in reasons))
-    events = report.get("events") or []
+    events = (attention or {}).get("events") if attention is not None else report.get("events")
+    events = events or []
     for event in events[:8]:
         group = f" group={event.get('group_id')}" if event.get("group_id") else ""
         detail = str(event.get("detail") or "")
         lines.append(f"- {event.get('reason')}{group}: {detail}")
+        action = OPERATOR_ACTIONS.get(str(event.get("reason") or ""))
+        if action:
+            lines.append(f"  Action: {action}")
     if len(events) > 8:
         lines.append(f"- plus {len(events) - 8} more events")
     return "\n".join(lines)

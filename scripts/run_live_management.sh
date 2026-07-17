@@ -16,15 +16,7 @@ run_live_management() {
   "$KAMANDAL_BIN" live-management-plan --config-source sheet --write-sheet
   local submit_args=()
   submit_args+=(--submit-auto)
-  local result_file
-  result_file="$(mktemp)"
-  "$KAMANDAL_BIN" execute-live-approved-closes ${submit_args+"${submit_args[@]}"} | tee "$result_file"
-  local message
-  message="$(notify_live_execution_result "exit" "$result_file" || true)"
-  rm -f "$result_file"
-  if [[ -n "$message" ]]; then
-    send_telegram_receipt "$message"
-  fi
+  "$KAMANDAL_BIN" execute-live-approved-closes ${submit_args+"${submit_args[@]}"}
   "$KAMANDAL_BIN" sync-live-orders
   "$KAMANDAL_BIN" cleanup-live-approvals
 }

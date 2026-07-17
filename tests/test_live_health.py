@@ -104,6 +104,29 @@ def test_live_health_yellow_for_pending_entry_approvals(tmp_path: Path) -> None:
     assert report["events"][0]["operator_state"] == "operator_needed"
 
 
+def test_live_health_marks_auto_top_plan_pending_entries_self_handled(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_pending", target_progress=20.0, trigger_progress=100.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "pending-open-ticket",
+            "order_id": "order-pending-open",
+            "plan_id": "plan-pending",
+            "candidate_id": "cand-pending",
+            "idea_id": "idea-pending",
+            "intent_type": "open",
+            "underlying": "AAPL",
+        },
+        status="pending_approval",
+    )
+
+    report = run_live_health(store, {"live": {"entry_approval_mode": "auto_top_plan"}})
+
+    assert report["overall"] == "YELLOW"
+    pending = next(event for event in report["events"] if event["reason"] == "pending_entry_approvals")
+    assert pending["operator_state"] == "self_handled"
+
+
 def test_live_health_self_retires_prior_day_pending_entry_approvals(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     _make_open_group_with_mark(store, "group_self_heal", target_progress=20.0, trigger_progress=100.0)
