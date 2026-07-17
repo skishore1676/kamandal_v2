@@ -9,7 +9,14 @@ from kamandal_v2.cli import _live_submit_requested
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, Playbook, PortfolioState, PreflightResult, UniverseEntry
 from kamandal_v2.live.approval import approve_live_request, expire_live_approval_requests, send_pending_live_approval_requests
 from kamandal_v2.live.advisory import _live_candidate_policy, live_config, render_live_plan_rows, run_live_advisory_plan
-from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill, sync_live_orders
+from kamandal_v2.live.execution import (
+    cleanup_live_approvals,
+    execute_live_approved,
+    record_manual_live_fill,
+    render_terminal_entry_receipt,
+    sync_live_orders,
+)
+from kamandal_v2.ops.alerts import AlertResult
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, REJECT_CLOSE, _limit_price, build_close_ticket, build_open_ticket
 from kamandal_v2.planner.engine import run_plan
@@ -2403,6 +2410,83 @@ def test_sync_live_orders_reprices_stale_entry_twice_then_expires(tmp_path, monk
     assert store.live_order_intent(second_ticket["ticket_hash"])["_ledger_status"] == "expired"
     assert calls.count(("cancel", "order-old")) == 1
     assert any(call[0] == "cancel" and call[1] == second_ticket["order_id"] for call in calls)
+
+
+def test_sync_live_orders_sends_one_terminal_unfilled_entry_receipt(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    root = {
+        "ticket_hash": "ticket-root",
+        "order_id": "order-root",
+        "plan_id": "plan",
+        "candidate_id": "cand",
+        "idea_id": "idea",
+        "intent_type": "open",
+        "underlying": "TSM",
+        "structure": "put_spread",
+        "limit_price": "-1.80",
+        "created_at": "2026-07-17T14:30:00Z",
+        "legs": [{"expiration": "2026-08-28"}],
+    }
+    repriced = {
+        **root,
+        "ticket_hash": "ticket-final",
+        "order_id": "order-final",
+        "parent_ticket_hash": "ticket-root",
+        "reprice_attempt": 1,
+        "limit_price": "-1.45",
+        "created_at": "2026-07-17T14:45:00Z",
+    }
+    store.save_live_order_intent(root, status="repriced")
+    store.save_live_order_intent(repriced, status="expired")
+
+    class CancelledBrokerAdapter:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, _order_id):
+            return {"status": "CANCELLED"}
+
+    sent = []
+
+    def fake_send_lathi_alert(**kwargs):
+        sent.append(kwargs)
+        return AlertResult(attempted=True, ok=True, mode="spool")
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", CancelledBrokerAdapter)
+    monkeypatch.setattr("kamandal_v2.live.execution.send_lathi_alert", fake_send_lathi_alert)
+    config = _live_control()
+    config["live"]["entry_reprice"]["terminal_unfilled_receipt"] = {"enabled": True, "mode": "spool"}
+
+    first = sync_live_orders(config, store=store)
+    second = sync_live_orders(config, store=store)
+
+    receipt_order = next(order for order in first["orders"] if order.get("activity_receipt"))
+    assert receipt_order["activity_receipt"]["attempt_count"] == 2
+    assert receipt_order["activity_receipt"]["ok"] is True
+    assert second["orders"] == []
+    assert len(sent) == 1
+    assert sent[0]["title"] == "Kamandal entry attempt completed: TSM unfilled"
+    assert "Broker attempts: 2 (1 reprices)." in sent[0]["body"]
+    assert "Limit path: $1.80 credit -> $1.45 credit." in sent[0]["body"]
+    assert store.live_order_intent("ticket-final")["_ledger_status"] == "cancelled"
+
+
+def test_render_terminal_entry_receipt_for_debit_entry() -> None:
+    body = render_terminal_entry_receipt(
+        [
+            {
+                "underlying": "NVDA",
+                "structure": "call_diagonal",
+                "limit_price": "6.56",
+                "legs": [{"expiration": "2026-09-18"}],
+            }
+        ],
+        broker_status="REJECTED",
+    )
+
+    assert "NVDA call diagonal was attempted but not filled." in body
+    assert "Limit path: $6.56 debit." in body
+    assert "no live position was opened" in body
 
 
 def test_live_submit_blocks_entries_when_health_red(tmp_path, monkeypatch) -> None:

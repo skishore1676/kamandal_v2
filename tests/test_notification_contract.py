@@ -15,3 +15,10 @@ def test_live_execution_scripts_do_not_send_success_receipts() -> None:
 
     assert "send_telegram_receipt" not in combined
     assert "notify_live_execution_result" not in combined
+
+
+def test_terminal_unfilled_entry_receipt_is_not_emitted_by_shell_runner() -> None:
+    runner = (REPO_ROOT / "scripts" / "run_live_approved_orders.sh").read_text(encoding="utf-8")
+
+    assert "telegram-notify" not in runner
+    assert "terminal_unfilled" not in runner

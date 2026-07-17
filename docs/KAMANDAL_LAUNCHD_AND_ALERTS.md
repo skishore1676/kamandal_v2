@@ -184,11 +184,31 @@ AND (recovery_exhausted OR no_safe_auto_action)
 AND not_duplicate
 ```
 
+Google Sheets reads and writes use bounded retry before a launchd cycle is
+declared failed. The defaults are three attempts with 1s/2s exponential delay,
+capped at 4s. Only rate limits, server failures (`429/500/502/503/504`), and
+transient transport errors retry; permanent request/configuration errors still
+fail closed immediately. Configure with `google_sheets.retry` or:
+
+```bash
+KAMANDAL_SHEETS_RETRY_ATTEMPTS=3
+KAMANDAL_SHEETS_RETRY_BASE_DELAY_SECONDS=1
+KAMANDAL_SHEETS_RETRY_MAX_DELAY_SECONDS=4
+```
+
 - Healthy `live-health-report` runs print `KAMANDAL_LAUNCHD_JOB={...}` and do
   not send a message.
-- Successful order submission, fill, reprice, cancellation, and auto-repair do
-  not send messages. Their normal command output and SQLite records remain the
-  audit trail.
+- Successful order submission, fill, intermediate reprice, cancellation, and
+  auto-repair do not send messages. Their normal command output and SQLite
+  records remain the audit trail. One exception is an entry workflow that ends
+  without a position: after the broker confirms the terminal unfilled status,
+  Kamandal sends one informational summary containing the symbol, structure,
+  attempt count, limit path, and explicit `no live position was opened` result.
+  This terminal summary is claimed by an atomic ledger transition, so competing
+  sync cycles cannot send duplicates.
+  `KAMANDAL_ENTRY_TERMINAL_RECEIPT_ENABLED=false` disables it, and
+  `KAMANDAL_ENTRY_TERMINAL_RECEIPT_MODE=spool` exercises the projection without
+  a network send.
 - Live health performs bounded self-healing for stale local entry approvals
   before it scores the book. A prior-market-day `pending_approval` entry ticket
   is retired locally as `retired_stale_entry_approval`; it is not a broker
