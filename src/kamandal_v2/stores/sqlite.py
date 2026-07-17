@@ -661,6 +661,29 @@ class LocalStore:
                 (status, ticket_hash),
             )
 
+    def transition_live_order_intent_status(
+        self,
+        ticket_hash: str,
+        *,
+        expected_statuses: set[str],
+        status: str,
+    ) -> bool:
+        """Atomically claim a ledger transition and report whether this caller won."""
+
+        if not expected_statuses:
+            return False
+        placeholders = ",".join("?" for _ in expected_statuses)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE live_order_intents
+                SET status = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE ticket_hash = ? AND status IN ({placeholders})
+                """,
+                (status, ticket_hash, *sorted(expected_statuses)),
+            )
+        return cursor.rowcount == 1
+
     def update_live_order_intent_status_with_payload(
         self,
         ticket_hash: str,

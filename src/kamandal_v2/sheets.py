@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-import json
 from datetime import date
-from typing import Any, Sequence
+import json
+from pathlib import Path
+import re
+import sys
+import time
+from typing import Any, Callable, Sequence, TypeVar
 
 from kamandal_v2.config import google_credentials_path, spreadsheet_id
+
+
+T = TypeVar("T")
+TRANSIENT_SHEETS_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 @dataclass
@@ -18,9 +25,19 @@ class BootstrapResult:
 
 
 class GoogleSheetClient:
-    def __init__(self, *, credentials_path: Path, spreadsheet_id_value: str):
+    def __init__(
+        self,
+        *,
+        credentials_path: Path,
+        spreadsheet_id_value: str,
+        retry_attempts: int = 3,
+        retry_base_delay_seconds: float = 1.0,
+        retry_max_delay_seconds: float = 4.0,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
         try:
             import gspread  # type: ignore
+            from gspread.exceptions import WorksheetNotFound
             from google.oauth2.service_account import Credentials
         except ImportError as exc:
             raise RuntimeError(
@@ -32,14 +49,26 @@ class GoogleSheetClient:
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         self._client = gspread.authorize(credentials)
-        self._spreadsheet = self._client.open_by_key(spreadsheet_id_value)
+        self._worksheet_not_found = WorksheetNotFound
+        self._retry_attempts = max(int(retry_attempts), 1)
+        self._retry_base_delay_seconds = max(float(retry_base_delay_seconds), 0.0)
+        self._retry_max_delay_seconds = max(float(retry_max_delay_seconds), self._retry_base_delay_seconds)
+        self._sleep = sleep
+        self._spreadsheet = self._retry(
+            lambda: self._client.open_by_key(spreadsheet_id_value),
+            operation="open spreadsheet",
+        )
         self.spreadsheet_id = spreadsheet_id_value
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "GoogleSheetClient":
+        retry = ((config.get("google_sheets") or {}).get("retry") or {})
         return cls(
             credentials_path=google_credentials_path(config),
             spreadsheet_id_value=spreadsheet_id(config),
+            retry_attempts=int(retry.get("attempts") or 3),
+            retry_base_delay_seconds=float(retry.get("base_delay_seconds") or 1.0),
+            retry_max_delay_seconds=float(retry.get("max_delay_seconds") or 4.0),
         )
 
     def replace_tab(
@@ -50,22 +79,25 @@ class GoogleSheetClient:
         rows: Sequence[Sequence[Any]],
     ) -> int:
         worksheet = self._worksheet(title, rows=max(len(rows) + 10, 100), cols=max(len(header), 26))
-        worksheet.clear()
+        self._retry(worksheet.clear, operation=f"clear worksheet {title!r}")
         values = [list(header)]
         for row in rows:
             padded = list(row) + [""] * (len(header) - len(row))
             values.append([_cell(value) for value in padded[: len(header)]])
-        worksheet.update(
-            range_name=f"A1:{_col_letter(len(header))}{len(values)}",
-            values=values,
-            value_input_option="USER_ENTERED",
+        self._retry(
+            lambda: worksheet.update(
+                range_name=f"A1:{_col_letter(len(header))}{len(values)}",
+                values=values,
+                value_input_option="USER_ENTERED",
+            ),
+            operation=f"update worksheet {title!r}",
         )
-        worksheet.freeze(rows=1)
+        self._retry(lambda: worksheet.freeze(rows=1), operation=f"freeze worksheet {title!r}")
         return len(rows)
 
     def read_tab(self, title: str) -> list[dict[str, str]]:
         worksheet = self._worksheet(title, rows=100, cols=26)
-        values = worksheet.get_all_values() or []
+        values = self._retry(worksheet.get_all_values, operation=f"read worksheet {title!r}") or []
         if not values:
             return []
         header = [str(cell).strip() for cell in values[0]]
@@ -79,9 +111,86 @@ class GoogleSheetClient:
 
     def _worksheet(self, title: str, *, rows: int, cols: int) -> Any:
         try:
-            return self._spreadsheet.worksheet(title)
-        except Exception:
-            return self._spreadsheet.add_worksheet(title=title, rows=rows, cols=cols)
+            return self._retry(
+                lambda: self._spreadsheet.worksheet(title),
+                operation=f"find worksheet {title!r}",
+            )
+        except self._worksheet_not_found:
+            return self._retry(
+                lambda: self._spreadsheet.add_worksheet(title=title, rows=rows, cols=cols),
+                operation=f"create worksheet {title!r}",
+            )
+
+    def _retry(self, call: Callable[[], T], *, operation: str) -> T:
+        return retry_transient_sheet_call(
+            call,
+            operation=operation,
+            attempts=self._retry_attempts,
+            base_delay_seconds=self._retry_base_delay_seconds,
+            max_delay_seconds=self._retry_max_delay_seconds,
+            sleep=self._sleep,
+        )
+
+
+def retry_transient_sheet_call(
+    call: Callable[[], T],
+    *,
+    operation: str,
+    attempts: int = 3,
+    base_delay_seconds: float = 1.0,
+    max_delay_seconds: float = 4.0,
+    sleep: Callable[[float], None] = time.sleep,
+) -> T:
+    """Retry only rate limits, server failures, and transient transport errors."""
+
+    total_attempts = max(int(attempts), 1)
+    for attempt in range(1, total_attempts + 1):
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001 - the predicate narrows retries.
+            if attempt >= total_attempts or not is_transient_sheet_error(exc):
+                raise
+            delay = min(
+                max(float(base_delay_seconds), 0.0) * (2 ** (attempt - 1)),
+                max(float(max_delay_seconds), 0.0),
+            )
+            print(
+                f"Google Sheets transient failure during {operation}; "
+                f"retrying attempt {attempt + 1}/{total_attempts} in {delay:.1f}s: {_safe_sheet_error(exc)}",
+                file=sys.stderr,
+            )
+            sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def is_transient_sheet_error(exc: Exception) -> bool:
+    response = getattr(exc, "response", None)
+    raw_status = getattr(response, "status_code", None)
+    try:
+        status = int(raw_status) if raw_status is not None else None
+    except (TypeError, ValueError):
+        status = None
+    if status in TRANSIENT_SHEETS_STATUS_CODES:
+        return True
+
+    message = str(exc)
+    status_match = re.search(r"(?:\[|status[=: ]+)(429|500|502|503|504)(?:\]|\b)", message, flags=re.IGNORECASE)
+    if status_match:
+        return True
+
+    name = type(exc).__name__.lower()
+    module = type(exc).__module__.lower()
+    return (
+        "timeout" in name
+        or "connectionerror" in name
+        or module.startswith("requests.")
+        or module.startswith("urllib3.")
+    )
+
+
+def _safe_sheet_error(exc: Exception) -> str:
+    message = " ".join(str(exc).split())
+    return message[:240]
 
 
 def bootstrap_sheet(
