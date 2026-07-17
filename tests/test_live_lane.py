@@ -2,6 +2,8 @@ import json
 import sqlite3
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
+
 from kamandal_v2.config import load_control
 from kamandal_v2.cli import _live_submit_requested
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, Playbook, PortfolioState, PreflightResult, UniverseEntry
@@ -14,6 +16,14 @@ from kamandal_v2.planner.engine import run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
+
+
+@pytest.fixture(autouse=True)
+def _isolate_fixture_plans_from_runtime_earnings(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "kamandal_v2.events.earnings.EarningsStore.latest",
+        lambda _self, _symbol, *, source=None: None,
+    )
 
 
 def _live_control() -> dict:
