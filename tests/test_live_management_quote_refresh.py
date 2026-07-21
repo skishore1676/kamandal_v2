@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from kamandal_v2.domain.models import ChainSnapshot, OptionQuote
@@ -45,6 +45,9 @@ class _Broker:
 
 def test_live_quote_refresh_includes_existing_position_expirations(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
     broker = _Broker()
+    position_expiration = (date.today() + timedelta(days=30)).isoformat()
+    listed_expiration = (date.today() + timedelta(days=37)).isoformat()
+    broker.expiration_dates = [listed_expiration]
     store = LocalStore(tmp_path / "kamandal.db")
     groups = [
         {
@@ -53,8 +56,8 @@ def test_live_quote_refresh_includes_existing_position_expirations(tmp_path: Pat
             "candidate": {
                 "underlying": "DELL",
                 "legs": [
-                    {"expiration": "2026-07-17", "option_type": "put", "strike": 95.0},
-                    {"expiration": "2026-07-17", "option_type": "put", "strike": 100.0},
+                    {"expiration": position_expiration, "option_type": "put", "strike": 95.0},
+                    {"expiration": position_expiration, "option_type": "put", "strike": 100.0},
                 ],
             },
         }
@@ -65,4 +68,4 @@ def test_live_quote_refresh_includes_existing_position_expirations(tmp_path: Pat
     refreshed = _refresh_live_group_quotes(config, store, groups)
 
     assert refreshed == {"DELL"}
-    assert broker.calls == [("DELL", ["2026-07-17", "2026-07-24"])]
+    assert broker.calls == [("DELL", [position_expiration, listed_expiration])]
