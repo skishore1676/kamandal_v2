@@ -77,9 +77,14 @@ JOB_SCHEDULES = {
     "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 30))),
     "live-advisory": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 40))),
     "live-approved-orders": JobSchedule(cadence_minutes=5, window_start=time(9, 0), window_end=time(15, 15)),
-    "live-management": JobSchedule(cadence_minutes=15, window_start=time(9, 0), window_end=time(15, 15)),
+    "live-management": JobSchedule(
+        fixed_times=(time(14, 50), time(15, 5)),
+        cadence_minutes=15,
+        window_start=time(9, 0),
+        window_end=time(14, 45),
+    ),
     "live-health-report": JobSchedule(fixed_times=(time(9, 10), time(11, 45), time(14, 45), time(15, 20))),
-    "scheduled-job-health": JobSchedule(cadence_minutes=15, window_start=time(9, 15), window_end=time(15, 30)),
+    "scheduled-job-health": JobSchedule(cadence_minutes=15, window_start=time(9, 15), window_end=time(15, 45)),
     "earnings": JobSchedule(fixed_times=(time(8, 40),)),
     "iv": JobSchedule(fixed_times=(time(8, 45),)),
     "iv-afternoon": JobSchedule(fixed_times=(time(14, 45),)),
@@ -190,10 +195,13 @@ def schedule_label(schedule: JobSchedule) -> str:
     if schedule.weekday is not None and schedule.fixed_times:
         return "Fridays " + ", ".join(_fmt_time(item) for item in schedule.fixed_times) + " CT"
     if schedule.cadence_minutes and schedule.window_start and schedule.window_end:
-        return (
+        label = (
             f"Weekdays every {schedule.cadence_minutes} minutes, "
             f"{_fmt_time(schedule.window_start)}-{_fmt_time(schedule.window_end)} CT"
         )
+        if schedule.fixed_times:
+            label += "; plus " + ", ".join(_fmt_time(item) for item in schedule.fixed_times) + " CT"
+        return label
     if schedule.fixed_times:
         return "Weekdays " + ", ".join(_fmt_time(item) for item in schedule.fixed_times) + " CT"
     return "unscheduled"

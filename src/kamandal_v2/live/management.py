@@ -152,6 +152,7 @@ DEAD_CLOSE_STATUSES = {
     "canceled",
     "expired",
     EXPIRED_EOD_STATUS,
+    "deferred_market_closed",
     "rejected",
     "failed",
     "expired_stale_close_approval",

@@ -18,6 +18,7 @@ from kamandal_v2.live.entry_hygiene import (
 )
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
+from kamandal_v2.live.option_sessions import submission_window
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
@@ -34,7 +35,16 @@ ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
 CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired"}
 EXPIRED_BROKER_MISSING_STATUS = "expired_broker_status_missing"
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
-FAILED_TICKET_STATUSES = {"rejected", "expired", EXPIRED_EOD_STATUS, "failed", "cancelled", "canceled"}
+FAILED_TICKET_STATUSES = {
+    "rejected",
+    "expired",
+    EXPIRED_EOD_STATUS,
+    "failed",
+    "cancelled",
+    "canceled",
+    "deferred_entry_cutoff",
+    "deferred_market_closed",
+}
 
 
 def execute_live_approved(
@@ -127,6 +137,9 @@ def _execute_ticket(
         return _failure(ticket, "ticket_preflight_stale")
     request_payload = dict(ticket.get("submit_payload") or {})
     if submit:
+        window = submission_window(config, ticket, close=close)
+        if not window["allowed"]:
+            return _defer_ticket_for_window(store, ticket, window)
         fresh_preflight = adapter.preflight_ticket(ticket)
         if not fresh_preflight.ok:
             store.record_live_order_attempt(
@@ -139,6 +152,9 @@ def _execute_ticket(
             )
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_failed")
             return _failure(ticket, fresh_preflight.message or "fresh_preflight_failed")
+        window = submission_window(config, ticket, close=close)
+        if not window["allowed"]:
+            return _defer_ticket_for_window(store, ticket, window)
         try:
             response = adapter.place_order_ticket(ticket)
             ok = bool(response.get("orderId"))
@@ -445,8 +461,10 @@ def _expire_live_close_order(adapter: Any, store: LocalStore, config: dict[str, 
 def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
     try:
         _assert_submit_allowed(config, submit=True)
-        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
-        store.record_live_order_status(str(ticket["order_id"]), "CLOSE_REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
+        window = submission_window(config, ticket, close=True)
+        if not window["allowed"]:
+            store.event("live_order_close_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
+            return {"reprice_status": "deferred_market_closed", "submission_window": window}
         new_ticket = _repriced_close_ticket(ticket, config)
         fresh_preflight = adapter.preflight_ticket(new_ticket)
         if not fresh_preflight.ok:
@@ -462,6 +480,12 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
             return {"reprice_status": "blocked_preflight_failed", "reprice_message": fresh_preflight.message}
         new_ticket["preflight"] = fresh_preflight.to_dict()
         new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
+        window = submission_window(config, new_ticket, close=True)
+        if not window["allowed"]:
+            store.event("live_order_close_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
+            return {"reprice_status": "deferred_market_closed", "submission_window": window}
+        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        store.record_live_order_status(str(ticket["order_id"]), "CLOSE_REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
         response = adapter.place_order_ticket(new_ticket)
         ok = bool(response.get("orderId"))
         store.save_live_order_intent(new_ticket, status="submitted" if ok else "submit_failed")
@@ -525,8 +549,10 @@ def _expire_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, 
 def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
     try:
         _assert_submit_allowed(config, submit=True)
-        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
-        store.record_live_order_status(str(ticket["order_id"]), "REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
+        window = submission_window(config, ticket, close=False)
+        if not window["allowed"]:
+            store.event("live_order_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
+            return {"reprice_status": "deferred_entry_cutoff", "submission_window": window}
         new_ticket = _repriced_open_ticket(ticket, config)
         fresh_preflight = adapter.preflight_ticket(new_ticket)
         if not fresh_preflight.ok:
@@ -542,6 +568,12 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
             return {"reprice_status": "blocked_preflight_failed", "reprice_message": fresh_preflight.message}
         new_ticket["preflight"] = _preflight_with_entry_pricing(fresh_preflight.to_dict(), new_ticket)
         new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
+        window = submission_window(config, new_ticket, close=False)
+        if not window["allowed"]:
+            store.event("live_order_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
+            return {"reprice_status": "deferred_entry_cutoff", "submission_window": window}
+        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        store.record_live_order_status(str(ticket["order_id"]), "REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
         response = adapter.place_order_ticket(new_ticket)
         ok = bool(response.get("orderId"))
         store.save_live_order_intent(new_ticket, status="submitted" if ok else "submit_failed")
@@ -1229,6 +1261,36 @@ def _group_id(ticket: dict[str, Any]) -> str:
 
 def _failure(ticket: dict[str, Any], reason: str) -> dict[str, Any]:
     return {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "status": "blocked", "reason": reason}
+
+
+def _defer_ticket_for_window(
+    store: LocalStore,
+    ticket: dict[str, Any],
+    window: dict[str, Any],
+) -> dict[str, Any]:
+    status = "deferred_market_closed" if str(window.get("intent_type")) == "close" else "deferred_entry_cutoff"
+    ticket_hash = str(ticket.get("ticket_hash") or "")
+    store.update_live_order_intent_status_with_payload(
+        ticket_hash,
+        status,
+        {"submission_window": window},
+    )
+    store.event(
+        "live_order_submission_deferred",
+        {
+            "ticket_hash": ticket_hash,
+            "order_id": ticket.get("order_id"),
+            "status": status,
+            "submission_window": window,
+        },
+    )
+    return {
+        "ticket_hash": ticket_hash,
+        "order_id": ticket.get("order_id"),
+        "status": status,
+        "reason": window.get("reason"),
+        "submission_window": window,
+    }
 
 
 def _loads(raw: Any) -> dict[str, Any]:

@@ -77,6 +77,9 @@ def _job_unit(job: Any, schedule_report: dict[str, Any]) -> dict[str, Any]:
         findings.append(str(issue.get("reason") or "scheduled_job_issue"))
         if issue.get("detail"):
             findings.append(str(issue["detail"]))
+    delivery_status = str(last.get("delivery_status") or "")
+    if delivery_status == "failed":
+        findings.append("alert_delivery_failed")
     lifecycle = "stuck" if issue else "armed"
     last_status = str(last.get("status") or "")
     if last_status.lower() == "failed":
@@ -96,6 +99,7 @@ def _job_unit(job: Any, schedule_report: dict[str, Any]) -> dict[str, Any]:
         "last_run_at": last.get("mtime"),
         "observed_at": schedule_report.get("checked_at"),
         "findings": findings,
+        "operator_state": "self_healing" if delivery_status == "failed" and lifecycle == "armed" else None,
         "available_actions": list(job.available_actions),
         "action_requirements": job.action_requirements or {},
         "source_id": "kamandal",

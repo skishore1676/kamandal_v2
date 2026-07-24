@@ -23,6 +23,7 @@ LOCAL_CLOSE_PIPELINE_STATUSES = {"pending_close_approval", APPROVED_CLOSE_PENDIN
 WORKING_CLOSE_STATUSES = {"submitted", "repriced"}
 CLOSED_CLOSE_STATUSES = {"filled", "manual_fill_recorded", "close_filled"}
 NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES = {"expired_stale_close_approval", "retired_stale_close_failure", "rejected_by_operator", "expired_eod"}
+DEFERRED_CLOSE_STATUSES = {"deferred_market_closed"}
 FAILED_CLOSE_STATUSES = {
     "rejected",
     "failed",
@@ -55,6 +56,7 @@ REASON_ORDER = [
     "portfolio_bpr_over_target",
     "close_order_stale",
     "stale_failed_close_order",
+    "deferred_close_order",
     "position_target_reached",
     "working_close_order",
     "exit_pipeline_pending",
@@ -111,6 +113,10 @@ def run_live_health(
     for order in close_orders:
         finding = _close_order_finding(order)
         finding["group_id"] = finding["group_id"] or str(order.get("group_id") or "")
+        latest_ticket = latest_close_ticket_by_group.get(str(finding["group_id"]))
+        if latest_ticket and latest_ticket != str(finding.get("ticket_hash") or ""):
+            finding["reason"] = "superseded_close_order"
+            finding["is_failed_close"] = False
         if finding["reason"] in {"working_close_order", "close_order_stale", "exit_pipeline_pending"}:
             finding["age_minutes"] = _order_age_minutes(order, now=_utc_now())
             if finding["reason"] == "exit_pipeline_pending" and (finding["age_minutes"] or 0.0) > stalled_minutes:
@@ -243,6 +249,18 @@ def run_live_health(
                     "operator_state": "self_healing",
                 },
             )
+            continue
+        if finding["reason"] == "deferred_close_order":
+            events.append(
+                {
+                    "severity": "yellow",
+                    "reason": "deferred_close_order",
+                    "detail": "Close submission was safely deferred after the product cutoff; management will re-evaluate next session.",
+                    "group_id": finding.get("group_id"),
+                    "ticket_hash": finding.get("ticket_hash"),
+                    "operator_state": "self_healing",
+                },
+            )
 
     if risk["severity"]:
         events.append(
@@ -308,6 +326,7 @@ def run_live_health(
             "urgent_close_orders": len([order for order in close_findings if order["reason"] == "urgent_close_order_stale"]),
             "failed_close_orders": len([order for order in close_findings if order["is_failed_close"]]),
             "stale_failed_close_orders": len([order for order in close_findings if order["reason"] == "stale_failed_close_order"]),
+            "deferred_close_orders": len([order for order in close_findings if order["reason"] == "deferred_close_order"]),
             "target_reached_groups": len([mark for mark in group_marks if bool(mark.get("target_reached"))]),
             "loss_watch_groups": len([mark for mark in group_marks if bool(mark.get("loss_watch"))]),
         },
@@ -483,6 +502,8 @@ def _close_order_finding(order: dict[str, Any]) -> dict[str, Any]:
         reason = "close_completed"
     elif status in NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES:
         reason = "close_expired"
+    elif status in DEFERRED_CLOSE_STATUSES:
+        reason = "deferred_close_order"
     elif status in LOCAL_CLOSE_PIPELINE_STATUSES:
         reason = "exit_pipeline_pending"
     elif status in WORKING_CLOSE_STATUSES:
