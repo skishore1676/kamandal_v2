@@ -2,6 +2,7 @@ runtime:
   mode: live                   # shadow | live
   trading_enabled: true
   halt: false
+  market_timezone: America/Chicago
 
 portfolio:
   target_max_bpr_utilization_pct: 55
@@ -77,6 +78,21 @@ live:
   max_close_submits_per_run: 10
   max_new_plans_per_day: 3
   max_live_baskets_per_day: 3
+  option_submission:
+    # The broker-facing guard is authoritative; launchd timing is only a wake-up schedule.
+    enabled: true
+    regular_close_time: "15:00"
+    extended_close_time: "15:15"
+    extended_close_symbols: [SPY]
+    entry_buffer_minutes: 30
+    close_buffer_minutes: 5
+    early_close_dates:
+      "2026-11-27":
+        regular_close_time: "12:00"
+        extended_close_time: "12:15"
+      "2026-12-24":
+        regular_close_time: "12:00"
+        extended_close_time: "12:15"
   basket:
     target_new_bpr_pct: 15
     hard_new_bpr_pct: 30

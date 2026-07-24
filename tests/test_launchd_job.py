@@ -118,6 +118,41 @@ def test_live_health_report_job_sends_red_alert(monkeypatch, capsys) -> None:  #
     assert payload["alert"]["ok"] is True
 
 
+def test_live_health_report_delivery_failure_does_not_fail_domain_job(monkeypatch, capsys) -> None:  # noqa: ANN001
+    args = SimpleNamespace(job="live-health-report", alert_mode="spool", alert_profile="kamandal-northstar")
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(launchd_job, "load_control", lambda: {})
+    monkeypatch.setattr(
+        launchd_job,
+        "LocalStore",
+        lambda: SimpleNamespace(event=lambda name, payload: events.append((name, payload))),
+    )
+    monkeypatch.setattr(
+        launchd_job,
+        "run_live_health",
+        lambda _store, _config: {
+            "overall": "RED",
+            "scale": {"score": 25},
+            "counts": {},
+            "reasons": ["failed_close_order"],
+            "events": [{"severity": "red", "reason": "failed_close_order", "operator_state": "operator_needed"}],
+        },
+    )
+    monkeypatch.setattr(
+        launchd_job,
+        "send_lathi_alert",
+        lambda **_kwargs: AlertResult(attempted=True, ok=False, mode="spool", error="timeout"),
+    )
+
+    code = launchd_job.live_health_report_job(args)
+
+    payload = json.loads(capsys.readouterr().out.split("=", 1)[1])
+    assert code == 0
+    assert payload["status"] == "ok"
+    assert payload["delivery_status"] == "failed"
+    assert events[0][0] == "live_health_alert_delivery_failed"
+
+
 def test_health_attention_suppresses_self_handled_red_state() -> None:
     attention = launchd_job.health_attention(
         {
@@ -232,6 +267,19 @@ def test_expected_job_observation_suppresses_weekend_cadence_job() -> None:
     )
 
     assert expectation == {"status": "not_expected_today", "reason": "non_trading_day"}
+
+
+def test_combined_management_schedule_uses_final_pre_close_run() -> None:
+    schedule = launchd_job.JOB_SCHEDULES["live-management"]
+
+    expectation = launchd_job.expected_job_observation(
+        schedule,
+        now=datetime(2026, 7, 24, 15, 26, tzinfo=launchd_job.CENTRAL),
+        grace_minutes=20,
+    )
+
+    assert expectation["status"] == "due"
+    assert expectation["expected_by"].startswith("2026-07-24T15:05:00")
 
 
 def test_expected_job_observation_suppresses_market_holiday(monkeypatch) -> None:  # noqa: ANN001

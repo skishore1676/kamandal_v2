@@ -73,6 +73,34 @@ def test_launchd_status_outputs_units_without_broker_mutation(tmp_path: Path) ->
     assert youtube["action_requirements"]["retry-job"]["requires_confirmation"] is False
 
 
+def test_launchd_status_keeps_alert_delivery_failure_out_of_stuck_lifecycle(tmp_path: Path) -> None:
+    db = tmp_path / "kamandal.db"
+    repo = tmp_path / "repo"
+    log_dir = repo / "data" / "logs" / "launchd"
+    log_dir.mkdir(parents=True)
+    log_path = log_dir / "com.kamandal.v2.live_health_report.out.log"
+    log_path.write_text(
+        "KAMANDAL_LAUNCHD_JOB="
+        + json.dumps(
+            {
+                "job": "live-health-report",
+                "status": "ok",
+                "health": "RED",
+                "delivery_status": "failed",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = launchd_status.build_status(repo_root=repo, db_path=db, config=_config())
+
+    unit = next(item for item in payload["units"] if item["unit_id"] == "com.kamandal.v2.live_health_report")
+    assert unit["lifecycle"] == "armed"
+    assert unit["findings"] == ["alert_delivery_failed"]
+    assert unit["operator_state"] == "self_healing"
+
+
 def test_launchd_status_marks_prior_day_pending_entries_self_healed(tmp_path: Path) -> None:
     import sqlite3
 

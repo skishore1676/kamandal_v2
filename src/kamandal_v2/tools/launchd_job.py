@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 import hashlib
 import json
 import os
@@ -16,6 +16,7 @@ from kamandal_v2.config import load_control
 from kamandal_v2.live.health import run_live_health
 from kamandal_v2.ops.alerts import AlertResult, default_lathi_bus_profile, send_lathi_alert, tail
 from kamandal_v2.ops.log_rotation import rotate_log_directories
+from kamandal_v2.ops.market_calendar import MARKET_HOLIDAYS, is_non_trading_day
 from kamandal_v2.ops.launchd_registry import (
     ALL_JOBS,
     CENTRAL,
@@ -28,28 +29,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 
 
 RESULT_PREFIX = "KAMANDAL_LAUNCHD_JOB="
-HOLIDAYS = {
-    "2026-01-01",
-    "2026-01-19",
-    "2026-02-16",
-    "2026-04-03",
-    "2026-05-25",
-    "2026-06-19",
-    "2026-07-03",
-    "2026-09-07",
-    "2026-11-26",
-    "2026-12-25",
-    "2027-01-01",
-    "2027-01-18",
-    "2027-02-15",
-    "2027-03-26",
-    "2027-05-31",
-    "2027-06-18",
-    "2027-07-05",
-    "2027-09-06",
-    "2027-11-25",
-    "2027-12-24",
-}
+HOLIDAYS = MARKET_HOLIDAYS
 ACTIONABLE_HEALTH_REASONS = {
     "close_order_stale",
 }
@@ -131,7 +111,7 @@ def live_health_report_job(args: argparse.Namespace) -> int:
     if args.alert_mode == "live":
         attention = dedupe_health_attention(store, attention)
     alert: AlertResult | None = None
-    ok = True
+    delivery_status = "not_requested"
     if attention["notify"]:
         alert = send_lathi_alert(
             title="Kamandal live health",
@@ -140,13 +120,24 @@ def live_health_report_job(args: argparse.Namespace) -> int:
             mode=args.alert_mode,
             profile=args.alert_profile,
         )
-        ok = alert.ok or args.alert_mode == "off"
+        delivery_status = "ok" if alert.ok or args.alert_mode == "off" else "failed"
         if alert.ok and args.alert_mode == "live":
             record_health_attention_open(store, attention)
+        elif delivery_status == "failed":
+            store.event(
+                "live_health_alert_delivery_failed",
+                {
+                    "health": report.get("overall"),
+                    "reasons": report.get("reasons"),
+                    "attention": attention,
+                    "alert": alert.to_dict(),
+                },
+            )
     print_result(
         {
             "job": args.job,
-            "status": "ok" if ok else "failed",
+            "status": "ok",
+            "delivery_status": delivery_status,
             "health": report.get("overall"),
             "counts": report.get("counts"),
             "reasons": report.get("reasons"),
@@ -154,7 +145,7 @@ def live_health_report_job(args: argparse.Namespace) -> int:
             "alert": alert.to_dict() if alert else None,
         }
     )
-    return 0 if ok else 2
+    return 0
 
 
 def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path) -> int:
@@ -188,19 +179,6 @@ def should_skip_for_calendar(_job: str, *, force: bool) -> bool:
     if force:
         return False
     return is_non_trading_day(datetime.now(CENTRAL).date())
-
-
-def is_non_trading_day(day: date) -> bool:
-    """Return whether normal weekday jobs should be idle on ``day``.
-
-    Keep execution and freshness monitoring on the same calendar contract so
-    a correctly idle weekend or market holiday cannot look like a missed run.
-    """
-    if day.weekday() >= 5:
-        return True
-    if os.getenv("KAMANDAL_MARKET_HOLIDAY_CALENDAR", "nyse").lower() == "off":
-        return False
-    return day.isoformat() in HOLIDAYS
 
 
 def run_script(script: str, *, repo_root: Path, force: bool) -> subprocess.CompletedProcess[str]:
@@ -443,6 +421,29 @@ def expected_job_observation(schedule: JobSchedule, *, now: datetime, grace_minu
     if is_non_trading_day(today):
         return {"status": "not_expected_today", "reason": "non_trading_day"}
     grace = timedelta(minutes=grace_minutes)
+    if schedule.fixed_times and schedule.cadence_minutes and schedule.window_start and schedule.window_end:
+        first_fixed = min(datetime.combine(today, value, CENTRAL) for value in schedule.fixed_times)
+        if now < first_fixed:
+            start_dt = datetime.combine(today, schedule.window_start, CENTRAL)
+            end_dt = datetime.combine(today, schedule.window_end, CENTRAL)
+            if now < start_dt + grace:
+                return {"status": "not_due_yet", "expected_after": start_dt.isoformat()}
+            latest_reference = min(now, end_dt)
+            acceptable_after = latest_reference - timedelta(minutes=schedule.cadence_minutes + grace_minutes)
+            return {"status": "due", "acceptable_after": acceptable_after.isoformat(), "expected_by": latest_reference.isoformat()}
+        cadence_due = _cadence_times(
+            today=today,
+            start=schedule.window_start,
+            end=schedule.window_end,
+            step_minutes=schedule.cadence_minutes,
+        )
+        scheduled = sorted(
+            {
+                *cadence_due,
+                *(datetime.combine(today, value, CENTRAL) for value in schedule.fixed_times),
+            }
+        )
+        return _fixed_schedule_expectation(scheduled, now=now, grace=grace)
     if schedule.cadence_minutes and schedule.window_start and schedule.window_end:
         start_dt = datetime.combine(today, schedule.window_start, CENTRAL)
         end_dt = datetime.combine(today, schedule.window_end, CENTRAL)
@@ -452,14 +453,40 @@ def expected_job_observation(schedule: JobSchedule, *, now: datetime, grace_minu
         acceptable_after = latest_reference - timedelta(minutes=schedule.cadence_minutes + grace_minutes)
         return {"status": "due", "acceptable_after": acceptable_after.isoformat(), "expected_by": latest_reference.isoformat()}
 
-    due_times = [datetime.combine(today, scheduled, CENTRAL) for scheduled in schedule.fixed_times if datetime.combine(today, scheduled, CENTRAL) <= now]
+    scheduled = [datetime.combine(today, value, CENTRAL) for value in schedule.fixed_times]
+    return _fixed_schedule_expectation(scheduled, now=now, grace=grace)
+
+
+def _cadence_times(
+    *,
+    today: date,
+    start: time,
+    end: time,
+    step_minutes: int,
+) -> list[datetime]:
+    current = datetime.combine(today, start, CENTRAL)
+    last = datetime.combine(today, end, CENTRAL)
+    values: list[datetime] = []
+    while current <= last:
+        values.append(current)
+        current += timedelta(minutes=step_minutes)
+    return values
+
+
+def _fixed_schedule_expectation(
+    scheduled: list[datetime],
+    *,
+    now: datetime,
+    grace: timedelta,
+) -> dict[str, Any]:
+    due_times = [value for value in scheduled if value <= now]
     if not due_times:
-        next_time = min((datetime.combine(today, scheduled, CENTRAL) for scheduled in schedule.fixed_times), default=None)
+        next_time = min(scheduled, default=None)
         return {"status": "not_due_yet", "expected_after": next_time.isoformat() if next_time else ""}
     latest_due = max(due_times)
     if now < latest_due + grace:
         return {"status": "pending_grace", "expected_by": latest_due.isoformat(), "acceptable_after": latest_due.isoformat()}
-    acceptable_after = latest_due - timedelta(minutes=grace_minutes)
+    acceptable_after = latest_due - grace
     return {"status": "due", "acceptable_after": acceptable_after.isoformat(), "expected_by": latest_due.isoformat()}
 
 
@@ -486,6 +513,7 @@ def read_launchd_observation(log_path: Path, *, plist_path: Path | None = None) 
         "job": str((payload or {}).get("job") or ""),
         "health": (payload or {}).get("health"),
         "reasons": (payload or {}).get("reasons"),
+        "delivery_status": (payload or {}).get("delivery_status"),
         "mtime": mtime.isoformat(),
         "log_path": str(log_path),
         "installed_at": installed_at,
