@@ -148,8 +148,12 @@ def _live_health_lifecycle(live_health: dict[str, Any]) -> str:
     if status == "RED":
         return "stuck"
     events = list(live_health.get("events") or [])
-    if events and all(str(event.get("operator_state") or "") == "self_handled" for event in events):
+    states = {str(event.get("operator_state") or "") for event in events}
+    states.discard("")
+    if states and states <= {"self_handled"}:
         return "idle"
+    if states and states <= {"self_healing", "self_handled"}:
+        return "running"
     return "waiting_you"
 
 
@@ -165,7 +169,7 @@ def _operator_state(events: list[dict[str, Any]], lifecycle: str) -> str:
     if not states:
         return "operator_needed"
     if states <= {"self_healing", "self_handled"}:
-        return "self_handled" if "self_handled" in states else "self_healing"
+        return "self_healing" if "self_healing" in states else "self_handled"
     if "blocked_self_healing" in states:
         return "blocked_self_healing"
     return "operator_needed"

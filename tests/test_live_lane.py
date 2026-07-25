@@ -31,6 +31,16 @@ def _isolate_fixture_plans_from_runtime_earnings(monkeypatch) -> None:
         "kamandal_v2.events.earnings.EarningsStore.latest",
         lambda _self, _symbol, *, source=None: None,
     )
+    monkeypatch.setattr(
+        "kamandal_v2.live.execution.submission_window",
+        lambda _config, ticket, *, close: {
+            "allowed": True,
+            "reason": "test_submission_window",
+            "intent_type": "close" if close else "open",
+            "underlying": str(ticket.get("underlying") or ""),
+            "retryable_next_session": False,
+        },
+    )
 
 
 def _live_control() -> dict:
