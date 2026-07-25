@@ -12,7 +12,16 @@ from kamandal_v2.live.health import entry_health_gate, run_live_health
 from kamandal_v2.stores.sqlite import LocalStore
 
 
-def _make_open_group_with_mark(store: LocalStore, group_id: str, *, loss_watch: bool = False, target_progress: float = 0.0, trigger_progress: float = 100.0) -> None:
+def _make_open_group_with_mark(
+    store: LocalStore,
+    group_id: str,
+    *,
+    loss_watch: bool = False,
+    target_progress: float = 0.0,
+    trigger_progress: float = 100.0,
+    pnl_mid: float | None = None,
+    pnl_natural: float = 0.0,
+) -> None:
     store.save_live_position_group(
         group_id,
         {
@@ -33,7 +42,8 @@ def _make_open_group_with_mark(store: LocalStore, group_id: str, *, loss_watch: 
         {
             "underlying": "AAPL",
             "entry_kind": "credit",
-            "pnl_mid": 12.5,
+            "pnl_mid": target_progress if pnl_mid is None else pnl_mid,
+            "pnl_natural": pnl_natural,
             "target_profit": 100.0,
             "target_progress_pct": target_progress,
             "trigger_progress_pct": trigger_progress,
@@ -57,6 +67,57 @@ def test_live_health_green_for_clean_book(tmp_path: Path) -> None:
     assert report["counts"]["reconciliation_blockers"] == 0
     assert report["counts"]["loss_watch_groups"] == 0
     assert report["reasons"] == []
+
+
+def test_live_health_does_not_page_for_midpoint_only_profit_target(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(
+        store,
+        "group_midpoint_only",
+        target_progress=146.0,
+        trigger_progress=95.0,
+        pnl_natural=-21.0,
+    )
+
+    report = run_live_health(
+        store,
+        {
+            "live": {
+                "exit_approval_mode": "auto_rules",
+                "exit_pricing": {"profit_target_trigger_pct": 95, "min_profit_to_trigger": 5},
+            }
+        },
+    )
+
+    assert report["overall"] == "GREEN"
+    assert report["counts"]["target_reached_groups"] == 0
+    assert "position_target_reached" not in report["reasons"]
+
+
+def test_live_health_reports_executable_profit_target_as_self_healing(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(
+        store,
+        "group_executable_target",
+        target_progress=100.0,
+        trigger_progress=95.0,
+        pnl_natural=6.0,
+    )
+
+    report = run_live_health(
+        store,
+        {
+            "live": {
+                "exit_approval_mode": "auto_rules",
+                "exit_pricing": {"profit_target_trigger_pct": 95, "min_profit_to_trigger": 5},
+            }
+        },
+    )
+
+    assert report["overall"] == "YELLOW"
+    assert report["counts"]["target_reached_groups"] == 1
+    event = next(item for item in report["events"] if item["reason"] == "position_target_reached")
+    assert event["operator_state"] == "self_healing"
 
 
 def test_live_health_red_when_bpr_exceeds_hard_cap(tmp_path: Path) -> None:

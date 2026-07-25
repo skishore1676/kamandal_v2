@@ -164,6 +164,42 @@ def test_launchd_status_marks_cluster_cap_self_handled(tmp_path: Path) -> None:
     assert live_health["finding_details"][0]["operator_state"] == "self_handled"
 
 
+def test_launchd_status_keeps_self_healing_health_off_human_attention(tmp_path: Path) -> None:
+    db = tmp_path / "kamandal.db"
+    repo = tmp_path / "repo"
+    (repo / "data" / "logs" / "launchd").mkdir(parents=True)
+    store = LocalStore(db)
+    store.save_live_position_group("group_target", {"group_id": "group_target", "underlying": "XLF"})
+    store.record_live_position_mark(
+        "group_target",
+        {
+            "underlying": "XLF",
+            "pnl_mid": 24.0,
+            "pnl_natural": 6.0,
+            "target_profit": 23.6,
+            "target_progress_pct": 101.7,
+            "trigger_progress_pct": 95.0,
+            "quote_fresh": True,
+        },
+    )
+
+    payload = launchd_status.build_status(
+        repo_root=repo,
+        db_path=db,
+        config={
+            "live": {
+                "exit_approval_mode": "auto_rules",
+                "exit_pricing": {"profit_target_trigger_pct": 95, "min_profit_to_trigger": 5},
+            }
+        },
+    )
+
+    live_health = next(item for item in payload["units"] if item["unit_id"] == "kamandal:live-health")
+    assert live_health["lifecycle"] == "running"
+    assert live_health["operator_state"] == "self_healing"
+    assert live_health["findings"] == ["position_target_reached"]
+
+
 def test_launchd_control_applies_review_decision_with_fingerprint(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
     db = tmp_path / "kamandal.db"
     store = LocalStore(db)

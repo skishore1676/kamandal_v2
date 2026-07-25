@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from kamandal_v2.live.entry_hygiene import retire_stale_entry_approvals
+from kamandal_v2.live.position_management import profit_target_reached
 from kamandal_v2.live.risk_manager import (
     BREAKER_CONSECUTIVE_LOSSES,
     BREAKER_DAILY_NEW_POSITIONS,
@@ -99,7 +100,7 @@ def run_live_health(
         mark = store.latest_live_position_mark(group_id)
         if not mark:
             continue
-        group_mark = _mark_overview(group_id, mark)
+        group_mark = _mark_overview(group_id, mark, config=config)
         group_marks.append(group_mark)
         _collect_mark_events(group_mark, events, config=config)
 
@@ -431,13 +432,18 @@ def _collect_mark_events(
         )
 
 
-def _mark_overview(group_id: str, mark: dict[str, Any]) -> dict[str, Any]:
+def _mark_overview(
+    group_id: str,
+    mark: dict[str, Any],
+    *,
+    config: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "group_id": group_id,
         "underlying": str(mark.get("underlying") or ""),
         "target_progress_pct": float(mark.get("target_progress_pct") or 0.0),
         "trigger_progress_pct": float(mark.get("trigger_progress_pct") or 0.0),
-        "target_reached": bool(mark.get("target_reached") or _target_reached(mark)),
+        "target_reached": profit_target_reached(mark, config),
         "loss_watch": bool(mark.get("loss_watch") or bool(mark.get("max_loss_watch"))),
         "loss_watch_observations": mark.get("loss_watch_observations") or {},
         "updated_at": str(mark.get("marked_at") or mark.get("updated_at") or mark.get("created_at") or ""),
@@ -668,12 +674,6 @@ def _order_age_minutes(order: dict[str, Any], *, now: datetime) -> float | None:
 
 def _status_has_failed_prefix(status: str) -> bool:
     return any(status.startswith(prefix) for prefix in FAILED_CLOSE_PREFIXES)
-
-
-def _target_reached(mark: dict[str, Any]) -> bool:
-    progress = float(mark.get("target_progress_pct") or 0.0)
-    trigger = float(mark.get("trigger_progress_pct") or 0.0)
-    return trigger > 0.0 and progress >= trigger
 
 
 def _format_mark_summary(group_mark: dict[str, Any]) -> str:

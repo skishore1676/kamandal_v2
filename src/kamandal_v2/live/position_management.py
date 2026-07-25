@@ -195,7 +195,7 @@ def live_exit_decision(
             action = "close"
             reason = "pre_event"
             urgency = "high"
-        elif _profit_target_reached(mark, policy):
+        elif profit_target_reached(mark, config):
             action = "close"
             reason = "profit_target"
             urgency = "normal"
@@ -305,6 +305,11 @@ def earnings_days(mark: dict[str, Any], earnings: EarningsStore) -> int | None:
     except ValueError:
         return None
     return (event_date - date.today()).days
+
+
+def profit_target_reached(mark: dict[str, Any], config: dict[str, Any] | None = None) -> bool:
+    """Return whether the mark can support an executable profit-target exit."""
+    return _profit_target_reached(mark, live_exit_policy(config))
 
 
 def _profit_target_reached(mark: dict[str, Any], policy: LiveExitPolicy) -> bool:
