@@ -12,7 +12,7 @@ from typing import Any
 from kamandal_v2.config import load_control
 from kamandal_v2.live.health import run_live_health
 from kamandal_v2.ops.alerts import default_lathi_bus_profile
-from kamandal_v2.ops.launchd_registry import launchd_jobs
+from kamandal_v2.ops.launchd_registry import CENTRAL, launchd_jobs
 from kamandal_v2.paths import PROJECT_ROOT
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.tools.launchd_job import scheduled_job_health
@@ -27,13 +27,18 @@ def build_status(
     repo_root: str | Path | None = None,
     db_path: str | Path | None = None,
     config: dict[str, Any] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     repo = Path(repo_root).expanduser().resolve() if repo_root else PROJECT_ROOT
     store = LocalStore(db_path or "data/kamandal_v2.db")
     config = config if config is not None else load_control()
-    generated_at = _now()
-    schedule_report = scheduled_job_health(repo_root=repo)
-    live_health = _safe_live_health(store, config)
+    checked_at = now or datetime.now(tz=UTC)
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=UTC)
+    checked_at = checked_at.astimezone(UTC)
+    generated_at = checked_at.isoformat(timespec="seconds").replace("+00:00", "Z")
+    schedule_report = scheduled_job_health(repo_root=repo, now=checked_at.astimezone(CENTRAL))
+    live_health = _safe_live_health(store, config, now=checked_at)
     review_queue = build_review_queue(store=store)
     units = [
         *[_job_unit(job, schedule_report) for job in launchd_jobs()],
@@ -143,10 +148,6 @@ def _live_health_unit(live_health: dict[str, Any]) -> dict[str, Any]:
 
 def _live_health_lifecycle(live_health: dict[str, Any]) -> str:
     status = str(live_health.get("overall") or "NO_DATA").upper()
-    if status == "GREEN":
-        return "idle"
-    if status == "RED":
-        return "stuck"
     events = list(live_health.get("events") or [])
     states = {str(event.get("operator_state") or "") for event in events}
     states.discard("")
@@ -154,6 +155,10 @@ def _live_health_lifecycle(live_health: dict[str, Any]) -> str:
         return "idle"
     if states and states <= {"self_healing", "self_handled"}:
         return "running"
+    if status == "GREEN":
+        return "idle"
+    if status == "RED":
+        return "stuck"
     return "waiting_you"
 
 
@@ -203,9 +208,14 @@ def _review_queue_unit(review_queue: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _safe_live_health(store: LocalStore, config: dict[str, Any]) -> dict[str, Any]:
+def _safe_live_health(
+    store: LocalStore,
+    config: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
     try:
-        return run_live_health(store, config)
+        return run_live_health(store, config, now=now)
     except Exception as exc:  # noqa: BLE001 - status must degrade instead of crashing Control Tower.
         return {
             "checked_at": _now(),

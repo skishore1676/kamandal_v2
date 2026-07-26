@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
+from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.live.operator_review import create_operator_review_request
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.tools import launchd_control, launchd_status, review_queue
@@ -162,6 +164,93 @@ def test_launchd_status_marks_cluster_cap_self_handled(tmp_path: Path) -> None:
     assert live_health["operator_state"] == "self_handled"
     assert live_health["findings"] == ["risk_cluster_at_cap"]
     assert live_health["finding_details"][0]["operator_state"] == "self_handled"
+
+
+def _stale_snapshot_status(
+    tmp_path: Path,
+    *,
+    now: datetime,
+) -> dict:
+    db = tmp_path / f"kamandal-{now:%Y%m%d%H%M}.db"
+    repo = tmp_path / f"repo-{now:%Y%m%d%H%M}"
+    (repo / "data" / "logs" / "launchd").mkdir(parents=True)
+    store = LocalStore(db)
+    store.save_account_snapshot(
+        "run_20260724T194010Z",
+        PortfolioState(
+            account_size=12_000,
+            buying_power=9_000,
+            bpr_used=3_000,
+            positions_count=3,
+        ),
+    )
+    return launchd_status.build_status(
+        repo_root=repo,
+        db_path=db,
+        config={
+            "runtime": {"market_timezone": "America/Chicago"},
+            "risk_manager": {
+                "enabled": True,
+                "max_account_snapshot_age_minutes": 1440,
+            },
+        },
+        now=now,
+    )
+
+
+def test_launchd_status_defers_stale_snapshot_attention_on_non_trading_day(tmp_path: Path) -> None:
+    payload = _stale_snapshot_status(
+        tmp_path,
+        now=datetime(2026, 7, 26, 12, 20, tzinfo=UTC),
+    )
+
+    live_health = next(item for item in payload["units"] if item["unit_id"] == "kamandal:live-health")
+    event = live_health["finding_details"][0]
+    assert payload["live_health"]["overall"] == "RED"
+    assert payload["live_health"]["risk_manager"]["blocked"] is True
+    assert live_health["lifecycle"] == "idle"
+    assert live_health["operator_state"] == "self_handled"
+    assert event["operator_state"] == "self_handled"
+    assert event["attention_deferred_reason"] == "non_trading_day"
+
+
+def test_launchd_status_defers_stale_snapshot_attention_on_market_holiday(tmp_path: Path) -> None:
+    payload = _stale_snapshot_status(
+        tmp_path,
+        now=datetime(2026, 9, 7, 15, 0, tzinfo=UTC),
+    )
+
+    live_health = next(item for item in payload["units"] if item["unit_id"] == "kamandal:live-health")
+    assert live_health["lifecycle"] == "idle"
+    assert live_health["operator_state"] == "self_handled"
+    assert live_health["finding_details"][0]["attention_deferred_reason"] == "non_trading_day"
+
+
+def test_launchd_status_waits_for_first_snapshot_refresh_on_trading_day(tmp_path: Path) -> None:
+    payload = _stale_snapshot_status(
+        tmp_path,
+        now=datetime(2026, 7, 27, 14, 30, tzinfo=UTC),  # 09:30 CT
+    )
+
+    live_health = next(item for item in payload["units"] if item["unit_id"] == "kamandal:live-health")
+    event = live_health["finding_details"][0]
+    assert live_health["lifecycle"] == "running"
+    assert live_health["operator_state"] == "self_healing"
+    assert event["attention_deferred_reason"] == "awaiting_first_account_snapshot_refresh"
+    assert event["attention_actionable_after"] == "2026-07-27T09:45:00-05:00"
+
+
+def test_launchd_status_escalates_stale_snapshot_after_refresh_grace(tmp_path: Path) -> None:
+    payload = _stale_snapshot_status(
+        tmp_path,
+        now=datetime(2026, 7, 27, 14, 46, tzinfo=UTC),  # 09:46 CT
+    )
+
+    live_health = next(item for item in payload["units"] if item["unit_id"] == "kamandal:live-health")
+    event = live_health["finding_details"][0]
+    assert live_health["lifecycle"] == "stuck"
+    assert live_health["operator_state"] == "operator_needed"
+    assert event["operator_state"] == "operator_needed"
 
 
 def test_launchd_status_keeps_self_healing_health_off_human_attention(tmp_path: Path) -> None:

@@ -195,6 +195,9 @@ live:
     loss_watch_window_minutes: 120
   health:
     stale_close_order_minutes: 120
+    # Keep the entry breaker fail-closed, but do not page until the first
+    # 09:25 live-advisory account snapshot has had time to refresh.
+    account_snapshot_refresh_grace_minutes: 20
     exit_pipeline_stalled_minutes: 20
     urgent_close_order_stale_minutes: 30
     block_entries_on_red: true

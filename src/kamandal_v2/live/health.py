@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from kamandal_v2.live.entry_hygiene import retire_stale_entry_approvals
 from kamandal_v2.live.position_management import profit_target_reached
 from kamandal_v2.live.risk_manager import (
+    BREAKER_ACCOUNT_SNAPSHOT_STALE,
     BREAKER_CONSECUTIVE_LOSSES,
     BREAKER_DAILY_NEW_POSITIONS,
     REASON_CLUSTER_AT_CAP,
     evaluate_entry_risk,
 )
+from kamandal_v2.ops.launchd_registry import CENTRAL, JOB_SCHEDULES
+from kamandal_v2.ops.market_calendar import is_non_trading_day
 from kamandal_v2.stores.sqlite import LocalStore
 
 
 DEFAULT_STALE_CLOSE_ORDER_MINUTES = 120
 DEFAULT_EXIT_PIPELINE_STALLED_MINUTES = 20
 DEFAULT_URGENT_CLOSE_ORDER_STALE_MINUTES = 30
+DEFAULT_ACCOUNT_SNAPSHOT_REFRESH_GRACE_MINUTES = 20
 APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
 LOCAL_CLOSE_PIPELINE_STATUSES = {"pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
 WORKING_CLOSE_STATUSES = {"submitted", "repriced"}
@@ -70,8 +74,13 @@ def run_live_health(
     config: dict[str, Any] | None = None,
     *,
     stale_close_order_minutes: int | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     config = config or {}
+    checked_at = now or _utc_now()
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=UTC)
+    checked_at = checked_at.astimezone(UTC)
     configured_stale = _int_value(
         config.get("live", {}).get("health", {}).get("stale_close_order_minutes"),
         default=DEFAULT_STALE_CLOSE_ORDER_MINUTES,
@@ -290,28 +299,26 @@ def run_live_health(
             },
         )
 
-    risk_manager_decision = evaluate_entry_risk(store, config)
+    risk_manager_decision = evaluate_entry_risk(store, config, now=checked_at)
     if risk_manager_decision.enabled:
         store.event("risk_manager_decision", risk_manager_decision.to_dict())
     for reason in risk_manager_decision.reasons:
+        reason_code = str(reason.get("code") or "risk_manager")
+        attention = _risk_reason_attention(reason_code, now=checked_at, config=config)
         events.append(
             {
                 "severity": str(reason.get("severity") or "yellow"),
-                "reason": str(reason.get("code") or "risk_manager"),
+                "reason": reason_code,
                 "detail": str(reason.get("detail") or ""),
-                "operator_state": (
-                    "self_handled"
-                    if str(reason.get("code") or "")
-                    in {REASON_CLUSTER_AT_CAP, BREAKER_CONSECUTIVE_LOSSES, BREAKER_DAILY_NEW_POSITIONS}
-                    else "operator_needed"
-                ),
+                "operator_state": attention["operator_state"],
+                **{key: value for key, value in attention.items() if key != "operator_state"},
                 "self_healing": False,
             },
         )
 
     status = _coerce_status(events)
     return {
-        "checked_at": _utc_now().isoformat(),
+        "checked_at": checked_at.isoformat(),
         "overall": status,
         "risk_manager": risk_manager_decision.to_dict(),
         "scale": _scale(status, events, risk, pending_entry_approvals),
@@ -685,6 +692,50 @@ def _format_mark_summary(group_mark: dict[str, Any]) -> str:
         f"target={target:.1f}/{trigger:.1f}% "
         f"loss_watch={loss_watch_count}"
     )
+
+
+def _risk_reason_attention(
+    reason_code: str,
+    *,
+    now: datetime,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if reason_code in {
+        REASON_CLUSTER_AT_CAP,
+        BREAKER_CONSECUTIVE_LOSSES,
+        BREAKER_DAILY_NEW_POSITIONS,
+    }:
+        return {"operator_state": "self_handled"}
+    if reason_code != BREAKER_ACCOUNT_SNAPSHOT_STALE:
+        return {"operator_state": "operator_needed"}
+
+    local_now = now.astimezone(CENTRAL)
+    if is_non_trading_day(local_now.date()):
+        return {
+            "operator_state": "self_handled",
+            "attention_deferred_reason": "non_trading_day",
+        }
+
+    advisory_times = JOB_SCHEDULES["live-advisory"].fixed_times
+    if not advisory_times:
+        return {"operator_state": "operator_needed"}
+    first_refresh = datetime.combine(local_now.date(), min(advisory_times), CENTRAL)
+    health = (config.get("live") or {}).get("health") or {}
+    grace_minutes = int(
+        _int_value(
+            health.get("account_snapshot_refresh_grace_minutes"),
+            default=DEFAULT_ACCOUNT_SNAPSHOT_REFRESH_GRACE_MINUTES,
+        )
+        or DEFAULT_ACCOUNT_SNAPSHOT_REFRESH_GRACE_MINUTES
+    )
+    actionable_after = first_refresh + timedelta(minutes=grace_minutes)
+    if local_now < actionable_after:
+        return {
+            "operator_state": "self_healing",
+            "attention_deferred_reason": "awaiting_first_account_snapshot_refresh",
+            "attention_actionable_after": actionable_after.isoformat(),
+        }
+    return {"operator_state": "operator_needed"}
 
 
 def _bool_value(raw: Any, *, default: bool) -> bool:
