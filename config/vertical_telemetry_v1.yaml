@@ -1,0 +1,10 @@
+name: vertical_spread_telemetry_v1
+mode: telemetry_only
+orders_submitted: false
+database: data/research/vertical_telemetry_v1.db
+dtes: [1, 3, 7, 14]
+short_delta_target: 0.30
+long_delta_target: 0.15
+max_marks_per_lane: 25
+mark_cadence_minutes: 5
+completion_policy: entry_snapshot_plus_24_future_marks_or_session_boundary
