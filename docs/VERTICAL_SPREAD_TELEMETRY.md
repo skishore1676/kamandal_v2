@@ -22,14 +22,16 @@ live:
   exit_approval_mode: disabled
 ```
 
-A fail-closed assertion checks these values before any chain request. The
-collector writes only to its dedicated SQLite database:
+A fail-closed assertion checks these values before any chain request. Persistent
+telemetry observations are written only to the dedicated research database:
 
 ```text
 data/research/vertical_telemetry_v1.db
 ```
 
-It never writes `data/kamandal_v2.db`.
+It never writes `data/kamandal_v2.db`, a production plan, or a broker order.
+The existing Public adapter may refresh its normal read-only authentication and
+account-ID cache files while obtaining market data.
 
 ## What it captures
 
