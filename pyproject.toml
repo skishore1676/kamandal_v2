@@ -21,6 +21,7 @@ agent-broker = { path = "../agent-broker", editable = true }
 
 [project.scripts]
 kamandal = "kamandal_v2.cli:main"
+kamandal-vertical-telemetry = "kamandal_v2.research.vertical_telemetry:main"
 
 [project.optional-dependencies]
 dev = [
