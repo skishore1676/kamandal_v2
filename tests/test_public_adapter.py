@@ -206,3 +206,11 @@ def test_public_replace_order_uses_atomic_option_cancel_replace_payload(tmp_path
         "quantity": "1",
         "limitPrice": "0.40",
     }
+    assert adapter.supports_atomic_replace(
+        {
+            "submit_payload": {
+                "limitPrice": "-0.40",
+                "legs": [{}, {}],
+            }
+        }
+    ) is False

@@ -263,6 +263,14 @@ class PublicAdapter:
             payload["stopPrice"] = _positive_replace_price(submit_payload["stopPrice"])
         return self._put(f"/userapigateway/trading/{self._account_id()}/order", payload)
 
+    def supports_atomic_replace(self, replacement_ticket: dict[str, Any]) -> bool:
+        """Public's replace endpoint cannot represent signed multileg credits."""
+
+        submit_payload = dict(replacement_ticket.get("submit_payload") or {})
+        legs = list(submit_payload.get("legs") or replacement_ticket.get("legs") or [])
+        limit_price = str(submit_payload.get("limitPrice") or replacement_ticket.get("limit_price") or "")
+        return not (len(legs) > 1 and limit_price.startswith("-"))
+
     def _order_payload(self, candidate: Candidate) -> dict[str, Any]:
         quantity = "1"
         limit_price = candidate_entry_limit_price(candidate, self._config)

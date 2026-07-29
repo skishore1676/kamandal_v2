@@ -32,7 +32,9 @@ APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
 EXPIRED_EOD_STATUS = "expired_eod"
 PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
 ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
-CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired"}
+REPLACE_CANCEL_PENDING = "replace_cancel_pending"
+REPLACE_WAITING_CANCEL = "replace_waiting_cancel"
+CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired", REPLACE_CANCEL_PENDING}
 LEGACY_REPRICE_TRACKING_STATUSES = {"reprice_blocked_preflight_failed"}
 EXPIRED_BROKER_MISSING_STATUS = "expired_broker_status_missing"
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
@@ -245,6 +247,29 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
         intent_type = str(ticket.get("intent_type") or "")
         should_manage_submitted = manage_entries and ledger_status in {"submitted", *LEGACY_REPRICE_TRACKING_STATUSES}
         store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
+        if ledger_status == REPLACE_CANCEL_PENDING:
+            if manage_entries:
+                replacement_result = _advance_staged_replacement(adapter, store, ticket, response)
+                results.append(
+                    {
+                        "ticket_hash": ticket["ticket_hash"],
+                        "order_id": ticket["order_id"],
+                        "status": status,
+                        **replacement_result,
+                    }
+                )
+            else:
+                results.append(
+                    {
+                        "ticket_hash": ticket["ticket_hash"],
+                        "order_id": ticket["order_id"],
+                        "status": status,
+                        "ledger_status": ledger_status,
+                        "cancel_pending": True,
+                        "entry_management_skipped": True,
+                    }
+                )
+            continue
         if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "close" and _close_expire_due(store, ticket, response, config):
             expire_result = _expire_live_close_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **expire_result})
@@ -469,7 +494,9 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
             store.event("live_order_close_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_market_closed", "submission_window": window}
         new_ticket = _repriced_close_ticket(ticket, config)
-        if callable(getattr(adapter, "replace_order", None)):
+        if _staged_replace_required(adapter, new_ticket):
+            return _begin_staged_replacement(adapter, store, ticket, new_ticket, broker_status=broker_status, close=True)
+        if _atomic_replace_supported(adapter, new_ticket):
             return _replace_live_order_atomically(
                 adapter,
                 store,
@@ -574,7 +601,9 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
             store.event("live_order_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_entry_cutoff", "submission_window": window}
         new_ticket = _repriced_open_ticket(ticket, config)
-        if callable(getattr(adapter, "replace_order", None)):
+        if _staged_replace_required(adapter, new_ticket):
+            return _begin_staged_replacement(adapter, store, ticket, new_ticket, broker_status=broker_status, close=False)
+        if _atomic_replace_supported(adapter, new_ticket):
             return _replace_live_order_atomically(
                 adapter,
                 store,
@@ -714,6 +743,226 @@ def _replace_live_order_atomically(
         "reprice_order_id": response_order_id,
         "reprice_request_id": request_id,
         "reprice_limit_price": new_ticket.get("limit_price"),
+    }
+
+
+def _atomic_replace_supported(adapter: Any, replacement_ticket: dict[str, Any]) -> bool:
+    replace = getattr(adapter, "replace_order", None)
+    if not callable(replace):
+        return False
+    supports = getattr(adapter, "supports_atomic_replace", None)
+    return bool(supports(replacement_ticket)) if callable(supports) else True
+
+
+def _staged_replace_required(adapter: Any, replacement_ticket: dict[str, Any]) -> bool:
+    supports = getattr(adapter, "supports_atomic_replace", None)
+    return (
+        callable(getattr(adapter, "replace_order", None))
+        and callable(getattr(adapter, "cancel_order", None))
+        and callable(supports)
+        and not bool(supports(replacement_ticket))
+    )
+
+
+def _begin_staged_replacement(
+    adapter: Any,
+    store: LocalStore,
+    ticket: dict[str, Any],
+    new_ticket: dict[str, Any],
+    *,
+    broker_status: dict[str, Any],
+    close: bool,
+) -> dict[str, Any]:
+    """Persist replacement lineage before requesting cancellation."""
+
+    new_ticket["replace_method"] = "staged_cancel"
+    new_ticket["replaces_order_id"] = str(ticket["order_id"])
+    store.save_live_order_intent(new_ticket, status=REPLACE_WAITING_CANCEL)
+    store.update_live_order_intent_status(str(ticket["ticket_hash"]), REPLACE_CANCEL_PENDING)
+    cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+    store.record_live_order_status(
+        str(ticket["order_id"]),
+        "REPLACE_CANCEL_REQUESTED",
+        cancel_response,
+        ticket_hash=str(ticket["ticket_hash"]),
+    )
+    store.record_live_order_attempt(
+        new_ticket,
+        action="stage_replace_cancel_close" if close else "stage_replace_cancel_open",
+        submit=True,
+        ok=True,
+        request_payload={"orderId": ticket.get("order_id")},
+        response_payload=cancel_response,
+    )
+    store.event(
+        "live_order_replace_cancel_requested",
+        {
+            "from_ticket_hash": ticket.get("ticket_hash"),
+            "to_ticket_hash": new_ticket.get("ticket_hash"),
+            "from_order_id": ticket.get("order_id"),
+            "to_order_id": new_ticket.get("order_id"),
+            "broker_status": broker_status.get("status"),
+            "close": close,
+        },
+    )
+    return {
+        "reprice_status": "cancel_requested",
+        "reprice_method": "staged_cancel",
+        "reprice_ticket_hash": new_ticket.get("ticket_hash"),
+        "reprice_order_id": new_ticket.get("order_id"),
+        "reprice_limit_price": new_ticket.get("limit_price"),
+    }
+
+
+def _advance_staged_replacement(
+    adapter: Any,
+    store: LocalStore,
+    ticket: dict[str, Any],
+    broker_status: dict[str, Any],
+) -> dict[str, Any]:
+    children = [
+        child
+        for child in store.live_order_child_intents(str(ticket.get("ticket_hash") or ""))
+        if str(child.get("_ledger_status") or "") == REPLACE_WAITING_CANCEL
+    ]
+    if not children:
+        return {
+            "reprice_status": "waiting_cancel",
+            "reprice_method": "staged_cancel",
+            "reprice_message": "replacement child missing",
+            "needs_replacement_reconciliation": True,
+        }
+    replacement = max(children, key=lambda child: str(child.get("created_at") or ""))
+    status = str(broker_status.get("status") or "UNKNOWN").upper()
+    close = str(replacement.get("intent_type") or "") == "close"
+    if status in {"FILLED", "PARTIALLY_FILLED"}:
+        parent_status = "close_filled" if close else "filled"
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), parent_status)
+        store.update_live_order_intent_status(str(replacement["ticket_hash"]), "replace_aborted_parent_filled")
+        return {
+            "reprice_status": "aborted_parent_filled",
+            "reprice_method": "staged_cancel",
+            "broker_status": status,
+        }
+
+    position_evidence = _replacement_position_evidence(adapter, replacement) if close else {"intact": True, "reason": "entry_order"}
+    if position_evidence.get("intact") is not True:
+        return {
+            "reprice_status": "waiting_position_reconciliation",
+            "reprice_method": "staged_cancel",
+            "position_evidence": position_evidence,
+        }
+
+    if status in {"NEW", "OPEN", "WORKING", "PENDING", "ACCEPTED"}:
+        try:
+            cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+            store.record_live_order_status(
+                str(ticket["order_id"]),
+                "REPLACE_CANCEL_REQUESTED",
+                cancel_response,
+                ticket_hash=str(ticket["ticket_hash"]),
+            )
+        except Exception as exc:  # noqa: BLE001
+            store.event(
+                "live_order_replace_cancel_retry_failed",
+                {
+                    "ticket_hash": ticket.get("ticket_hash"),
+                    "order_id": ticket.get("order_id"),
+                    "error": _safe_broker_error(exc),
+                },
+            )
+
+    fresh_preflight = adapter.preflight_ticket(replacement)
+    if not fresh_preflight.ok:
+        return {
+            "reprice_status": "waiting_cancel",
+            "reprice_method": "staged_cancel",
+            "position_evidence": position_evidence,
+            "reprice_message": fresh_preflight.message,
+        }
+    replacement["preflight"] = fresh_preflight.to_dict()
+    response = adapter.place_order_ticket(replacement)
+    response_order_id = str(response.get("orderId") or "")
+    if not response_order_id:
+        raise RuntimeError("broker staged replacement response missing orderId")
+    if response_order_id != str(replacement["order_id"]):
+        replacement["replace_request_id"] = str(replacement["order_id"])
+        replacement["order_id"] = response_order_id
+        submit_payload = dict(replacement.get("submit_payload") or {})
+        submit_payload["orderId"] = response_order_id
+        replacement["submit_payload"] = submit_payload
+        replacement["ticket_hash"] = compute_ticket_hash(replacement)
+    replacement["replace_response"] = dict(response)
+    store.save_live_order_intent(replacement, status="submitted")
+    store.update_live_order_intent_status(str(ticket["ticket_hash"]), "repriced")
+    store.record_live_order_attempt(
+        replacement,
+        action="submit_staged_replace_close" if close else "submit_staged_replace_open",
+        submit=True,
+        ok=True,
+        request_payload=dict(replacement.get("submit_payload") or {}),
+        response_payload=response,
+    )
+    store.event(
+        "live_order_staged_replacement_submitted",
+        {
+            "from_ticket_hash": ticket.get("ticket_hash"),
+            "to_ticket_hash": replacement.get("ticket_hash"),
+            "from_order_id": ticket.get("order_id"),
+            "to_order_id": response_order_id,
+            "broker_status": status,
+            "position_evidence": position_evidence,
+        },
+    )
+    return {
+        "reprice_status": "submitted",
+        "reprice_method": "staged_cancel",
+        "reprice_ticket_hash": replacement.get("ticket_hash"),
+        "reprice_order_id": response_order_id,
+        "reprice_limit_price": replacement.get("limit_price"),
+        "position_evidence": position_evidence,
+    }
+
+
+def _replacement_position_evidence(adapter: Any, replacement: dict[str, Any]) -> dict[str, Any]:
+    try:
+        positions = list(adapter.broker_positions())
+    except Exception as exc:  # noqa: BLE001
+        return {"intact": None, "reason": "portfolio_fetch_failed", "error": _safe_broker_error(exc)}
+    legs = list(replacement.get("legs") or [])
+    missing = []
+    for leg in legs:
+        expected_quantity = max(float(leg.get("quantity") or 1), 0.0)
+        side = str(leg.get("side") or "").lower()
+        match = next(
+            (
+                position
+                for position in positions
+                if str(position.get("underlying") or "").upper() == str(replacement.get("underlying") or "").upper()
+                and str(position.get("expiration") or "") == str(leg.get("expiration") or "")
+                and str(position.get("option_type") or "").lower() == str(leg.get("option_type") or "").lower()
+                and abs(float(position.get("strike") or 0.0) - float(leg.get("strike") or 0.0)) < 0.001
+            ),
+            None,
+        )
+        broker_quantity = float((match or {}).get("quantity") or 0.0)
+        available = broker_quantity <= -expected_quantity if side == "buy" else broker_quantity >= expected_quantity
+        if not available:
+            missing.append(
+                {
+                    "expiration": leg.get("expiration"),
+                    "option_type": leg.get("option_type"),
+                    "strike": leg.get("strike"),
+                    "close_side": side,
+                    "expected_quantity": expected_quantity,
+                    "broker_quantity": broker_quantity,
+                }
+            )
+    return {
+        "intact": not missing,
+        "reason": "portfolio_legs_intact" if not missing else "portfolio_quantity_changed",
+        "checked_legs": len(legs),
+        "missing_or_changed_legs": missing,
     }
 
 
@@ -1212,6 +1461,8 @@ def _ticket_progress(store: LocalStore, ticket: dict[str, Any]) -> dict[str, str
         return {"state": "unknown", "status": "missing_intent"}
     if status in COMPLETED_TICKET_STATUSES:
         return {"state": "done", "status": status}
+    if status in {REPLACE_CANCEL_PENDING, REPLACE_WAITING_CANCEL}:
+        return {"state": "active", "status": status}
     if status in LEGACY_REPRICE_TRACKING_STATUSES:
         return {"state": "active", "status": "legacy_reprice_tracking"}
     if status == "repriced":

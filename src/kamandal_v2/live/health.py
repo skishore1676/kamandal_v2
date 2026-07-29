@@ -25,7 +25,13 @@ DEFAULT_URGENT_CLOSE_ORDER_STALE_MINUTES = 30
 DEFAULT_ACCOUNT_SNAPSHOT_REFRESH_GRACE_MINUTES = 20
 APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
 LOCAL_CLOSE_PIPELINE_STATUSES = {"pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
-WORKING_CLOSE_STATUSES = {"submitted", "repriced", "reprice_blocked_preflight_failed"}
+WORKING_CLOSE_STATUSES = {
+    "submitted",
+    "repriced",
+    "reprice_blocked_preflight_failed",
+    "replace_cancel_pending",
+    "replace_waiting_cancel",
+}
 CLOSED_CLOSE_STATUSES = {"filled", "manual_fill_recorded", "close_filled"}
 NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES = {"expired_stale_close_approval", "retired_stale_close_failure", "rejected_by_operator", "expired_eod"}
 DEFERRED_CLOSE_STATUSES = {"deferred_market_closed"}
