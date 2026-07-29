@@ -179,6 +179,10 @@ def _reconcile_broker_close_order(store: LocalStore, adapter: Any, ticket: dict[
     result["broker_status"] = broker_status
     if not dry_run:
         store.record_live_order_status(str(ticket["order_id"]), broker_status, response, ticket_hash=str(ticket["ticket_hash"]))
+    if str(ticket.get("_ledger_status") or "") == "replace_cancel_pending":
+        result["reconciled_status"] = "staged_replace_parent_observed"
+        result["staged_replace_parent_status"] = broker_status
+        return result
     if broker_status in {"FILLED", "PARTIALLY_FILLED"}:
         result["reconciled_status"] = "close_filled"
         if not dry_run:
