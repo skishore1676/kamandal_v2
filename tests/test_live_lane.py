@@ -2340,6 +2340,7 @@ def test_sync_live_orders_stages_signed_multileg_cancel_then_uses_portfolio_and_
     ticket["ticket_hash"] = ticket_hash(ticket)
     store.save_live_order_intent(ticket, status="reprice_blocked_preflight_failed")
     calls = []
+    broker_status = {"value": "NEW"}
 
     class StagedReplaceBroker:
         def __init__(self, _config):
@@ -2347,7 +2348,7 @@ def test_sync_live_orders_stages_signed_multileg_cancel_then_uses_portfolio_and_
 
         def get_order(self, order_id):
             calls.append(("get", order_id))
-            return {"status": "NEW", "createdAt": "2026-05-29T14:00:00Z"}
+            return {"status": broker_status["value"], "createdAt": "2026-05-29T14:00:00Z"}
 
         def supports_atomic_replace(self, _replacement):
             return False
@@ -2412,6 +2413,9 @@ def test_sync_live_orders_stages_signed_multileg_cancel_then_uses_portfolio_and_
     assert child["_ledger_status"] == "replace_waiting_cancel"
     assert not any(call[0] in {"portfolio", "preflight", "place"} for call in calls)
 
+    # Simulate the legacy race where reconciliation consumed the staged parent.
+    store.update_live_order_intent_status(ticket["ticket_hash"], "cancelled")
+    broker_status["value"] = "CANCELLED"
     replaced = sync_live_orders(config, store=store)
 
     assert replaced["orders"][0]["reprice_status"] == "submitted"

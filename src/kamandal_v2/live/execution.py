@@ -192,10 +192,22 @@ def _execute_ticket(
 def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None, manage_entries: bool = True) -> dict[str, Any]:
     store = store or LocalStore()
     adapter = broker_adapter(config)
+    tickets = store.live_order_intents_by_status(
+        {"submitted", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
+    )
+    known_hashes = {str(ticket.get("ticket_hash") or "") for ticket in tickets}
+    for child in store.live_order_intents_by_status({REPLACE_WAITING_CANCEL}):
+        parent_hash = str(child.get("parent_ticket_hash") or "")
+        if not parent_hash or parent_hash in known_hashes:
+            continue
+        parent = store.live_order_intent(parent_hash)
+        if not parent:
+            continue
+        parent["_staged_replacement_recovery"] = True
+        tickets.append(parent)
+        known_hashes.add(parent_hash)
     tickets = sorted(
-        store.live_order_intents_by_status(
-            {"submitted", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
-        ),
+        tickets,
         key=lambda item: (0 if str(item.get("_ledger_status") or "") == "submitted" else 1, str(item.get("created_at") or "")),
     )
     results = []
@@ -247,7 +259,7 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
         intent_type = str(ticket.get("intent_type") or "")
         should_manage_submitted = manage_entries and ledger_status in {"submitted", *LEGACY_REPRICE_TRACKING_STATUSES}
         store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
-        if ledger_status == REPLACE_CANCEL_PENDING:
+        if ledger_status == REPLACE_CANCEL_PENDING or bool(ticket.get("_staged_replacement_recovery")):
             if manage_entries:
                 replacement_result = _advance_staged_replacement(adapter, store, ticket, response)
                 results.append(

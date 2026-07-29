@@ -135,6 +135,22 @@ def test_order_reconciler_updates_terminal_broker_close_status(tmp_path: Path) -
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "rejected"
 
 
+def test_order_reconciler_observes_staged_cancel_without_consuming_parent(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = _close_ticket("ticket-staged-parent")
+    store.save_live_order_intent(ticket, status="replace_cancel_pending")
+
+    class Broker:
+        def get_order(self, _order_id: str) -> dict[str, Any]:
+            return {"status": "CANCELLED"}
+
+    result = reconcile_live_orders(_config(), store=store, adapter=Broker())
+
+    assert result["results"][0]["reconciled_status"] == "staged_replace_parent_observed"
+    assert result["results"][0]["staged_replace_parent_status"] == "CANCELLED"
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "replace_cancel_pending"
+
+
 def test_position_reconciliation_runs_order_reconciliation(tmp_path: Path, monkeypatch: Any) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     ticket = _close_ticket()
