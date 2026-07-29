@@ -535,8 +535,9 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
             "reprice_limit_price": new_ticket.get("limit_price"),
         }
     except Exception as exc:  # noqa: BLE001
-        store.event("live_order_close_reprice_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": str(exc)})
-        return {"reprice_status": "failed", "reprice_message": str(exc)}
+        error = _safe_broker_error(exc)
+        store.event("live_order_close_reprice_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": error})
+        return {"reprice_status": "failed", "reprice_message": error}
 
 
 def _expire_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
@@ -639,8 +640,9 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
             "reprice_limit_price": new_ticket.get("limit_price"),
         }
     except Exception as exc:  # noqa: BLE001
-        store.event("live_order_reprice_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": str(exc)})
-        return {"reprice_status": "failed", "reprice_message": str(exc)}
+        error = _safe_broker_error(exc)
+        store.event("live_order_reprice_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": error})
+        return {"reprice_status": "failed", "reprice_message": error}
 
 
 def _replace_live_order_atomically(

@@ -204,5 +204,5 @@ def test_public_replace_order_uses_atomic_option_cancel_replace_payload(tmp_path
         "orderType": "LIMIT",
         "expiration": {"timeInForce": "DAY"},
         "quantity": "1",
-        "limitPrice": "-0.40",
+        "limitPrice": "0.40",
     }

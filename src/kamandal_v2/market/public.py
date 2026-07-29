@@ -258,9 +258,9 @@ class PublicAdapter:
             "quantity": str(submit_payload.get("quantity") or replacement_ticket.get("quantity") or "1"),
         }
         if submit_payload.get("limitPrice") not in (None, ""):
-            payload["limitPrice"] = str(submit_payload["limitPrice"])
+            payload["limitPrice"] = _positive_replace_price(submit_payload["limitPrice"])
         if submit_payload.get("stopPrice") not in (None, ""):
-            payload["stopPrice"] = str(submit_payload["stopPrice"])
+            payload["stopPrice"] = _positive_replace_price(submit_payload["stopPrice"])
         return self._put(f"/userapigateway/trading/{self._account_id()}/order", payload)
 
     def _order_payload(self, candidate: Candidate) -> dict[str, Any]:
@@ -572,6 +572,13 @@ def _normalise_order_payload(payload: dict[str, Any], *, multileg: bool) -> dict
     if "quantity" in payload:
         payload["quantity"] = str(payload["quantity"])
     return payload
+
+
+def _positive_replace_price(value: Any) -> str:
+    """Public replace requests carry direction from the original option order."""
+
+    price = abs(Decimal(str(value)))
+    return f"{price.quantize(Decimal('0.01'))}"
 
 
 def _safe_public_error(exc: Exception) -> str:
