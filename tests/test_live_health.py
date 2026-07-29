@@ -243,6 +243,49 @@ def test_live_health_yellow_for_working_close_order(tmp_path: Path) -> None:
     assert any(event["reason"] == "working_close_order" for event in report["events"])
 
 
+def test_live_health_follows_replacement_child_when_cancelled_parent_updated_later(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_replaced", target_progress=20.0, trigger_progress=100.0)
+    parent = {
+        "ticket_hash": "close-parent",
+        "order_id": "order-close-parent",
+        "plan_id": "plan-replaced",
+        "candidate_id": "cand-replaced",
+        "idea_id": "idea-replaced",
+        "group_id": "group_replaced",
+        "intent_type": "close",
+        "underlying": "AAPL",
+    }
+    child = {
+        **parent,
+        "ticket_hash": "close-child",
+        "order_id": "order-close-child",
+        "parent_ticket_hash": "close-parent",
+        "replace_method": "staged_cancel",
+    }
+    store.save_live_order_intent(parent, status="cancelled")
+    store.save_live_order_intent(child, status="submitted")
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "UPDATE live_order_intents SET updated_at = ? WHERE ticket_hash = ?",
+            ("2026-07-29 16:35:06", "close-parent"),
+        )
+        conn.execute(
+            "UPDATE live_order_intents SET updated_at = ? WHERE ticket_hash = ?",
+            ("2026-07-29 16:35:02", "close-child"),
+        )
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "YELLOW"
+    assert report["counts"]["failed_close_orders"] == 0
+    assert report["counts"]["working_close_orders"] == 1
+    parent_finding = next(item for item in report["close_orders"] if item["ticket_hash"] == "close-parent")
+    child_finding = next(item for item in report["close_orders"] if item["ticket_hash"] == "close-child")
+    assert parent_finding["reason"] == "superseded_close_order"
+    assert child_finding["reason"] == "working_close_order"
+
+
 def test_live_health_red_for_stale_urgent_close_order(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     _make_open_group_with_mark(store, "group_urgent", target_progress=20.0, trigger_progress=100.0)

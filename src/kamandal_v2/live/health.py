@@ -465,13 +465,19 @@ def _mark_overview(
 
 def _latest_close_ticket_by_group(close_orders: list[dict[str, Any]]) -> dict[str, str]:
     latest: dict[str, tuple[str, str]] = {}
+    replaced_parent_hashes = {
+        str(order.get("parent_ticket_hash") or "")
+        for order in close_orders
+        if str(order.get("parent_ticket_hash") or "")
+    }
     for order in close_orders:
         group_id = str(order.get("group_id") or "")
-        if not group_id:
+        ticket_hash = str(order.get("ticket_hash") or "")
+        if not group_id or ticket_hash in replaced_parent_hashes:
             continue
         stamp = _order_timestamp(order)
         if group_id not in latest or stamp >= latest[group_id][0]:
-            latest[group_id] = (stamp, str(order.get("ticket_hash") or ""))
+            latest[group_id] = (stamp, ticket_hash)
     return {group_id: ticket_hash for group_id, (_, ticket_hash) in latest.items()}
 
 
