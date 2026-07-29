@@ -21,8 +21,10 @@ class _Response:
 class _FakeSession:
     def __init__(self, payload: dict) -> None:
         self.payload = payload
+        self.requests = []
 
-    def request(self, method: str, url: str, **kwargs):  # noqa: ANN001, ARG002
+    def request(self, method: str, url: str, **kwargs):  # noqa: ANN001
+        self.requests.append({"method": method, "url": url, **kwargs})
         return _Response(self.payload)
 
     def post(self, url: str, **kwargs):  # noqa: ANN001, ARG002
@@ -157,3 +159,50 @@ def test_public_broker_positions_preserve_cost_basis_and_strategy_ids(tmp_path) 
     assert positions[0]["cost_basis"] == -2500.0
     assert positions[0]["current_value"] == -2500.0
     assert positions[0]["strategy_ids"] == ["strategy-1"]
+
+
+def test_public_replace_order_uses_atomic_option_cancel_replace_payload(tmp_path) -> None:
+    adapter = PublicAdapter(
+        {
+            "broker": {
+                "public": {
+                    "secret_token": "secret",
+                    "account_id": "acct",
+                    "session_file": str(tmp_path / "session.json"),
+                    "account_cache_file": str(tmp_path / "account.json"),
+                }
+            }
+        }
+    )
+    adapter._access_token = "token"
+    adapter._expires_at = 10**12
+    adapter._session = _FakeSession({"orderId": "replacement-order"})
+
+    response = adapter.replace_order(
+        "original-order",
+        {
+            "order_id": "replacement-order",
+            "quantity": 1,
+            "submit_payload": {
+                "orderId": "replacement-order",
+                "quantity": "1",
+                "type": "LIMIT",
+                "limitPrice": "-0.40",
+                "expiration": {"timeInForce": "DAY"},
+                "legs": [{"instrument": {"symbol": "XLF260814P00056000", "type": "OPTION"}}],
+            },
+        },
+    )
+
+    assert response == {"orderId": "replacement-order"}
+    request = adapter._session.requests[0]
+    assert request["method"] == "PUT"
+    assert request["url"].endswith("/userapigateway/trading/acct/order")
+    assert request["json"] == {
+        "orderId": "original-order",
+        "requestId": "replacement-order",
+        "orderType": "LIMIT",
+        "expiration": {"timeInForce": "DAY"},
+        "quantity": "1",
+        "limitPrice": "-0.40",
+    }

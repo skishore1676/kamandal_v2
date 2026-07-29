@@ -33,6 +33,7 @@ EXPIRED_EOD_STATUS = "expired_eod"
 PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
 ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
 CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired"}
+LEGACY_REPRICE_TRACKING_STATUSES = {"reprice_blocked_preflight_failed"}
 EXPIRED_BROKER_MISSING_STATUS = "expired_broker_status_missing"
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
 FAILED_TICKET_STATUSES = {
@@ -190,7 +191,9 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
     store = store or LocalStore()
     adapter = broker_adapter(config)
     tickets = sorted(
-        store.live_order_intents_by_status({"submitted", *CANCEL_PENDING_TICKET_STATUSES}),
+        store.live_order_intents_by_status(
+            {"submitted", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
+        ),
         key=lambda item: (0 if str(item.get("_ledger_status") or "") == "submitted" else 1, str(item.get("created_at") or "")),
     )
     results = []
@@ -240,7 +243,7 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
             continue
         status = str(response.get("status") or "UNKNOWN").upper()
         intent_type = str(ticket.get("intent_type") or "")
-        should_manage_submitted = manage_entries and ledger_status == "submitted"
+        should_manage_submitted = manage_entries and ledger_status in {"submitted", *LEGACY_REPRICE_TRACKING_STATUSES}
         store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
         if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "close" and _close_expire_due(store, ticket, response, config):
             expire_result = _expire_live_close_order(adapter, store, config, ticket, response)
@@ -466,6 +469,15 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
             store.event("live_order_close_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_market_closed", "submission_window": window}
         new_ticket = _repriced_close_ticket(ticket, config)
+        if callable(getattr(adapter, "replace_order", None)):
+            return _replace_live_order_atomically(
+                adapter,
+                store,
+                ticket,
+                new_ticket,
+                broker_status=broker_status,
+                close=True,
+            )
         fresh_preflight = adapter.preflight_ticket(new_ticket)
         if not fresh_preflight.ok:
             store.record_live_order_attempt(
@@ -476,8 +488,15 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
                 request_payload=dict((fresh_preflight.raw or {}).get("request") or new_ticket.get("submit_payload") or {}),
                 response_payload=fresh_preflight.to_dict(),
             )
-            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "reprice_blocked_preflight_failed")
-            return {"reprice_status": "blocked_preflight_failed", "reprice_message": fresh_preflight.message}
+            store.event(
+                "live_order_close_reprice_preflight_deferred",
+                {
+                    "ticket_hash": ticket.get("ticket_hash"),
+                    "order_id": ticket.get("order_id"),
+                    "message": fresh_preflight.message,
+                },
+            )
+            return {"reprice_status": "deferred_preflight_failed", "reprice_message": fresh_preflight.message}
         new_ticket["preflight"] = fresh_preflight.to_dict()
         new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
         window = submission_window(config, new_ticket, close=True)
@@ -554,6 +573,15 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
             store.event("live_order_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_entry_cutoff", "submission_window": window}
         new_ticket = _repriced_open_ticket(ticket, config)
+        if callable(getattr(adapter, "replace_order", None)):
+            return _replace_live_order_atomically(
+                adapter,
+                store,
+                ticket,
+                new_ticket,
+                broker_status=broker_status,
+                close=False,
+            )
         fresh_preflight = adapter.preflight_ticket(new_ticket)
         if not fresh_preflight.ok:
             store.record_live_order_attempt(
@@ -564,8 +592,15 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
                 request_payload=dict((fresh_preflight.raw or {}).get("request") or new_ticket.get("submit_payload") or {}),
                 response_payload=fresh_preflight.to_dict(),
             )
-            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "reprice_blocked_preflight_failed")
-            return {"reprice_status": "blocked_preflight_failed", "reprice_message": fresh_preflight.message}
+            store.event(
+                "live_order_reprice_preflight_deferred",
+                {
+                    "ticket_hash": ticket.get("ticket_hash"),
+                    "order_id": ticket.get("order_id"),
+                    "message": fresh_preflight.message,
+                },
+            )
+            return {"reprice_status": "deferred_preflight_failed", "reprice_message": fresh_preflight.message}
         new_ticket["preflight"] = _preflight_with_entry_pricing(fresh_preflight.to_dict(), new_ticket)
         new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
         window = submission_window(config, new_ticket, close=False)
@@ -606,6 +641,78 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
     except Exception as exc:  # noqa: BLE001
         store.event("live_order_reprice_failed", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "error": str(exc)})
         return {"reprice_status": "failed", "reprice_message": str(exc)}
+
+
+def _replace_live_order_atomically(
+    adapter: Any,
+    store: LocalStore,
+    ticket: dict[str, Any],
+    new_ticket: dict[str, Any],
+    *,
+    broker_status: dict[str, Any],
+    close: bool,
+) -> dict[str, Any]:
+    """Use the broker's atomic cancel-replace operation when available.
+
+    The replacement request id is deterministic, so retrying the same state
+    after an indeterminate network response remains idempotent.
+    """
+
+    response = adapter.replace_order(str(ticket["order_id"]), new_ticket)
+    response_order_id = str(response.get("orderId") or "")
+    if not response_order_id:
+        raise RuntimeError("broker atomic replace response missing orderId")
+    request_id = str(new_ticket["order_id"])
+    if response_order_id != request_id:
+        new_ticket["replace_request_id"] = request_id
+        new_ticket["order_id"] = response_order_id
+        submit_payload = dict(new_ticket.get("submit_payload") or {})
+        submit_payload["orderId"] = response_order_id
+        new_ticket["submit_payload"] = submit_payload
+        new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
+    new_ticket["replace_method"] = "broker_atomic"
+    new_ticket["replaces_order_id"] = str(ticket["order_id"])
+    new_ticket["replace_response"] = dict(response)
+    store.save_live_order_intent(new_ticket, status="submitted")
+    store.record_live_order_attempt(
+        new_ticket,
+        action="atomic_replace_close" if close else "atomic_replace_open",
+        submit=True,
+        ok=True,
+        request_payload={
+            "orderId": ticket.get("order_id"),
+            "requestId": request_id,
+            "quantity": new_ticket.get("quantity"),
+            "limitPrice": new_ticket.get("limit_price"),
+        },
+        response_payload=response,
+    )
+    store.update_live_order_intent_status(str(ticket["ticket_hash"]), "repriced")
+    event_name = "live_order_close_repriced" if close else "live_order_repriced"
+    store.event(
+        event_name,
+        {
+            "from_ticket_hash": ticket.get("ticket_hash"),
+            "to_ticket_hash": new_ticket.get("ticket_hash"),
+            "from_order_id": ticket.get("order_id"),
+            "to_order_id": response_order_id,
+            "replace_request_id": request_id,
+            "from_limit_price": ticket.get("limit_price"),
+            "to_limit_price": new_ticket.get("limit_price"),
+            "broker_status": broker_status.get("status"),
+            "attempt": new_ticket.get("reprice_attempt"),
+            "method": "broker_atomic",
+            "ok": True,
+        },
+    )
+    return {
+        "reprice_status": "submitted",
+        "reprice_method": "broker_atomic",
+        "reprice_ticket_hash": new_ticket.get("ticket_hash"),
+        "reprice_order_id": response_order_id,
+        "reprice_request_id": request_id,
+        "reprice_limit_price": new_ticket.get("limit_price"),
+    }
 
 
 def _entry_expire_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
@@ -1103,6 +1210,8 @@ def _ticket_progress(store: LocalStore, ticket: dict[str, Any]) -> dict[str, str
         return {"state": "unknown", "status": "missing_intent"}
     if status in COMPLETED_TICKET_STATUSES:
         return {"state": "done", "status": status}
+    if status in LEGACY_REPRICE_TRACKING_STATUSES:
+        return {"state": "active", "status": "legacy_reprice_tracking"}
     if status == "repriced":
         children = store.live_order_child_intents(ticket_hash)
         child_states = [_ticket_progress(store, child) for child in children]

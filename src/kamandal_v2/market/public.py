@@ -236,6 +236,33 @@ class PublicAdapter:
         self._require_available()
         return self._delete(f"/userapigateway/trading/{self._account_id()}/order/{order_id}")
 
+    def replace_order(self, order_id: str, replacement_ticket: dict[str, Any]) -> dict[str, Any]:
+        """Atomically cancel-replace an active option order.
+
+        Public's replacement endpoint owns the cancellation race.  In
+        particular, callers must not preflight a second close while the
+        original order still reserves the position quantity.
+        """
+
+        self._require_available()
+        submit_payload = dict(replacement_ticket.get("submit_payload") or {})
+        request_id = str(replacement_ticket.get("order_id") or submit_payload.get("orderId") or "")
+        if not request_id:
+            raise ValueError("replacement ticket missing order_id")
+        order_type = str(submit_payload.get("orderType") or submit_payload.get("type") or "LIMIT").upper()
+        payload = {
+            "orderId": str(order_id),
+            "requestId": request_id,
+            "orderType": order_type,
+            "expiration": dict(submit_payload.get("expiration") or {"timeInForce": "DAY"}),
+            "quantity": str(submit_payload.get("quantity") or replacement_ticket.get("quantity") or "1"),
+        }
+        if submit_payload.get("limitPrice") not in (None, ""):
+            payload["limitPrice"] = str(submit_payload["limitPrice"])
+        if submit_payload.get("stopPrice") not in (None, ""):
+            payload["stopPrice"] = str(submit_payload["stopPrice"])
+        return self._put(f"/userapigateway/trading/{self._account_id()}/order", payload)
+
     def _order_payload(self, candidate: Candidate) -> dict[str, Any]:
         quantity = "1"
         limit_price = candidate_entry_limit_price(candidate, self._config)
@@ -384,6 +411,9 @@ class PublicAdapter:
 
     def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", endpoint, json_data=payload)
+
+    def _put(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PUT", endpoint, json_data=payload)
 
     def _delete(self, endpoint: str) -> dict[str, Any]:
         return self._request("DELETE", endpoint)

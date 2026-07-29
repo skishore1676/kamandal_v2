@@ -299,6 +299,31 @@ def test_live_health_distinguishes_pending_close_pipeline_from_working_broker_or
     assert "exit_pipeline_pending" in report["reasons"]
 
 
+def test_live_health_treats_legacy_reprice_failure_as_broker_working(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_legacy_reprice", target_progress=100.0, trigger_progress=95.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "close-ticket-legacy-reprice",
+            "order_id": "order-close-legacy-reprice",
+            "plan_id": "plan-legacy-reprice",
+            "candidate_id": "cand-legacy-reprice",
+            "idea_id": "idea-legacy-reprice",
+            "group_id": "group_legacy_reprice",
+            "intent_type": "close",
+            "underlying": "XLF",
+        },
+        status="reprice_blocked_preflight_failed",
+    )
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "YELLOW"
+    assert report["counts"]["working_close_orders"] == 1
+    assert report["counts"]["failed_close_orders"] == 0
+    assert "working_close_order" in report["reasons"]
+
+
 def test_live_health_red_for_stalled_ledger_close_pipeline(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     _make_open_group_with_mark(store, "group_stalled_close", target_progress=100.0, trigger_progress=95.0)
