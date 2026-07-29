@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+import kamandal_v2.live.execution as live_execution
 from kamandal_v2.config import load_control
 from kamandal_v2.cli import _live_submit_requested
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, Playbook, PortfolioState, PreflightResult, UniverseEntry
@@ -1863,6 +1864,23 @@ def test_cleanup_live_approvals_clears_close_filled_ticket_status(tmp_path, monk
     assert written["rows"][0]["operator_action"] == ""
     assert written["rows"][0]["plan_status"] == "filled"
     assert "auto-cleared stale APPROVE_LIVE_CLOSE" in written["rows"][0]["operator_notes"]
+
+
+def test_sync_live_orders_serializes_cross_job_broker_mutation(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    lock_calls = []
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: object())
+    monkeypatch.setattr(
+        "kamandal_v2.live.execution.fcntl.flock",
+        lambda file_descriptor, operation: lock_calls.append((file_descriptor, operation)),
+    )
+
+    result = sync_live_orders(_live_control(), store=store)
+
+    assert result == {"synced": 0, "manage_entries": True, "orders": []}
+    assert [operation for _, operation in lock_calls] == [live_execution.fcntl.LOCK_EX, live_execution.fcntl.LOCK_UN]
+    assert (tmp_path / "runlocks" / "live_order_sync.lock").exists()
 
 
 def test_sync_live_orders_marks_cancelled_intent_terminal(tmp_path, monkeypatch) -> None:
