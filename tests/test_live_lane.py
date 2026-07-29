@@ -2291,6 +2291,140 @@ def test_sync_live_orders_keeps_original_working_when_atomic_replace_is_indeterm
     assert store.live_order_child_intents(ticket["ticket_hash"]) == []
 
 
+def test_sync_live_orders_stages_signed_multileg_cancel_then_uses_portfolio_and_preflight(tmp_path, monkeypatch) -> None:
+    from kamandal_v2.live.orders import ticket_hash
+
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "order_id": "xlf-close-old",
+        "plan_id": "close-plan",
+        "candidate_id": "close-candidate",
+        "idea_id": "close-idea",
+        "group_id": "xlf-group",
+        "intent_type": "close",
+        "underlying": "XLF",
+        "structure": "put_calendar",
+        "quantity": 1,
+        "limit_price": "-0.45",
+        "time_in_force": "DAY",
+        "created_at": "2026-05-29T14:00:00Z",
+        "exit_reason": "half_time",
+        "exit_natural_limit_price": "-0.40",
+        "legs": [
+            {
+                "role": "short_near",
+                "side": "buy",
+                "option_type": "put",
+                "strike": 56,
+                "expiration": "2026-08-14",
+                "quantity": 1,
+            },
+            {
+                "role": "long_far",
+                "side": "sell",
+                "option_type": "put",
+                "strike": 56,
+                "expiration": "2026-09-18",
+                "quantity": 1,
+            },
+        ],
+        "submit_payload": {
+            "orderId": "xlf-close-old",
+            "quantity": "1",
+            "type": "LIMIT",
+            "limitPrice": "-0.45",
+            "expiration": {"timeInForce": "DAY"},
+            "legs": [],
+        },
+    }
+    ticket["ticket_hash"] = ticket_hash(ticket)
+    store.save_live_order_intent(ticket, status="reprice_blocked_preflight_failed")
+    calls = []
+
+    class StagedReplaceBroker:
+        def __init__(self, _config):
+            pass
+
+        def get_order(self, order_id):
+            calls.append(("get", order_id))
+            return {"status": "NEW", "createdAt": "2026-05-29T14:00:00Z"}
+
+        def supports_atomic_replace(self, _replacement):
+            return False
+
+        def replace_order(self, _order_id, _replacement):
+            raise AssertionError("signed multileg must not use atomic replace")
+
+        def cancel_order(self, order_id):
+            calls.append(("cancel", order_id))
+            return {"orderId": order_id, "status": "CANCEL_REQUESTED"}
+
+        def broker_positions(self):
+            calls.append(("portfolio",))
+            return [
+                {
+                    "underlying": "XLF",
+                    "expiration": "2026-08-14",
+                    "option_type": "put",
+                    "strike": 56,
+                    "quantity": -1,
+                },
+                {
+                    "underlying": "XLF",
+                    "expiration": "2026-09-18",
+                    "option_type": "put",
+                    "strike": 56,
+                    "quantity": 1,
+                },
+            ]
+
+        def preflight_ticket(self, replacement):
+            calls.append(("preflight", replacement["limit_price"]))
+            return PreflightResult(ok=True, bpr=0, message="ok", raw={"request": replacement["submit_payload"]})
+
+        def place_order_ticket(self, replacement):
+            calls.append(("place", replacement["order_id"], replacement["limit_price"]))
+            return {"orderId": replacement["order_id"]}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", StagedReplaceBroker)
+    monkeypatch.setattr(
+        "kamandal_v2.live.execution.datetime",
+        type("FrozenDateTime", (datetime,), {"now": classmethod(lambda cls, tz=None: datetime(2026, 5, 29, 14, 12, tzinfo=UTC))}),
+    )
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+    config = _live_control()
+    config["runtime"]["mode"] = "live"
+    config["runtime"]["trading_enabled"] = True
+    config["live"]["exit_reprice"] = {
+        "enabled": True,
+        "after_minutes": 10,
+        "max_reprices": 1,
+        "step_multiplier": 1.0,
+        "expire_after_minutes": 390,
+    }
+
+    staged = sync_live_orders(config, store=store)
+
+    assert staged["orders"][0]["reprice_status"] == "cancel_requested"
+    assert staged["orders"][0]["reprice_method"] == "staged_cancel"
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "replace_cancel_pending"
+    child = store.live_order_child_intents(ticket["ticket_hash"])[0]
+    assert child["_ledger_status"] == "replace_waiting_cancel"
+    assert not any(call[0] in {"portfolio", "preflight", "place"} for call in calls)
+
+    replaced = sync_live_orders(config, store=store)
+
+    assert replaced["orders"][0]["reprice_status"] == "submitted"
+    assert replaced["orders"][0]["reprice_method"] == "staged_cancel"
+    assert replaced["orders"][0]["position_evidence"]["intact"] is True
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "repriced"
+    submitted_child = store.live_order_intent(replaced["orders"][0]["reprice_ticket_hash"])
+    assert submitted_child["_ledger_status"] == "submitted"
+    assert ("portfolio",) in calls
+    assert ("preflight", "-0.40") in calls
+    assert any(call[0] == "place" for call in calls)
+
+
 def test_sync_live_orders_profit_target_reprice_respects_floor(tmp_path, monkeypatch) -> None:
     from kamandal_v2.live.orders import ticket_hash
 

@@ -24,7 +24,13 @@ from kamandal_v2.stores.sqlite import LocalStore
 APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
 EXPIRED_EOD_STATUS = "expired_eod"
 LOCAL_CLOSE_PIPELINE_STATUSES = {"pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
-BROKER_WORKING_CLOSE_STATUSES = {"submitted", "repriced", "reprice_blocked_preflight_failed"}
+BROKER_WORKING_CLOSE_STATUSES = {
+    "submitted",
+    "repriced",
+    "reprice_blocked_preflight_failed",
+    "replace_cancel_pending",
+    "replace_waiting_cancel",
+}
 NONTERMINAL_CLOSE_STATUSES = {*LOCAL_CLOSE_PIPELINE_STATUSES, *BROKER_WORKING_CLOSE_STATUSES}
 
 

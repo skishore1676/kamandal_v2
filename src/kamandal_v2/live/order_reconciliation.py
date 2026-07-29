@@ -18,7 +18,12 @@ from kamandal_v2.stores.sqlite import LocalStore
 DEFAULT_STALE_CLOSE_APPROVAL_MINUTES = 120
 APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
 LOCAL_ONLY_CLOSE_STATUSES = {"pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT}
-BROKER_OBSERVED_STATUSES = {"submitted", "repriced", "reprice_blocked_preflight_failed"}
+BROKER_OBSERVED_STATUSES = {
+    "submitted",
+    "repriced",
+    "reprice_blocked_preflight_failed",
+    "replace_cancel_pending",
+}
 WORKING_BROKER_STATUSES = {"NEW", "OPEN", "WORKING", "PENDING", "ACCEPTED"}
 
 

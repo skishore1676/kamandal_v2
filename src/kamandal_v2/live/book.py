@@ -13,7 +13,15 @@ from kamandal_v2.schemas import LIVE_BOOK_HEADER
 from kamandal_v2.stores.sqlite import LocalStore
 
 
-WORKING_OPEN_STATUSES = {"pending_approval", "dry_run", "submitted", "repriced", "reprice_blocked_preflight_failed"}
+WORKING_OPEN_STATUSES = {
+    "pending_approval",
+    "dry_run",
+    "submitted",
+    "repriced",
+    "reprice_blocked_preflight_failed",
+    "replace_cancel_pending",
+    "replace_waiting_cancel",
+}
 NONTERMINAL_CLOSE_STATUSES = {
     "pending_close_approval",
     "approved_close_pending_submit",
@@ -21,6 +29,8 @@ NONTERMINAL_CLOSE_STATUSES = {
     "submitted",
     "repriced",
     "reprice_blocked_preflight_failed",
+    "replace_cancel_pending",
+    "replace_waiting_cancel",
 }
 HEALTH_ROW_SYMBOL = "_HEALTH_"
 
