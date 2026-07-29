@@ -73,6 +73,83 @@ def test_launchd_status_outputs_units_without_broker_mutation(tmp_path: Path) ->
     assert youtube["available_actions"] == ["retry-job"]
     assert youtube["action_requirements"]["retry-job"]["command_args"] == ["--job", "youtube"]
     assert youtube["action_requirements"]["retry-job"]["requires_confirmation"] is False
+    shadow = payload["shadow_evidence"]
+    assert shadow["schema"] == "kamandal.shadow_evidence_status.v1"
+    assert shadow["collector"]["state"] == "retired"
+    assert shadow["evidence_state"] == "empty"
+    assert shadow["alpha_eligible"] is False
+    assert shadow["protected_effects"] == {
+        "database_write": False,
+        "broker_call": False,
+        "order_submit": False,
+        "schedule_change": False,
+    }
+
+
+def test_launchd_status_reports_retired_shadow_history_without_reclassifying_it(
+    tmp_path: Path,
+) -> None:
+    import sqlite3
+
+    db = tmp_path / "kamandal.db"
+    repo = tmp_path / "repo"
+    (repo / "data" / "logs" / "launchd").mkdir(parents=True)
+    eod = repo / "data" / "reports" / "eod" / "2026-05-22_shadow_eod.json"
+    eod.parent.mkdir(parents=True)
+    eod.write_text("{}\n", encoding="utf-8")
+    LocalStore(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            INSERT INTO shadow_fills
+            (id, plan_run_id, plan_id, candidate_id, underlying, structure,
+             status, opened_at, payload)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "fill-1",
+                "run-1",
+                "plan-1",
+                "candidate-1",
+                "SPY",
+                "put_spread",
+                "open",
+                "2026-06-12 03:25:11",
+                "{}",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO shadow_marks
+            (id, marked_at, position_count, mid_pnl, natural_pnl, payload)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("mark-1", "2026-06-12T14:30:00Z", 1, 0, 0, "{}"),
+        )
+
+    payload = launchd_status.build_status(
+        repo_root=repo,
+        db_path=db,
+        config=_config(),
+        now=datetime(2026, 7, 28, 20, tzinfo=UTC),
+    )
+
+    shadow = payload["shadow_evidence"]
+    assert shadow["observed_at"] == "2026-07-28T20:00:00+00:00"
+    assert shadow["collector"]["state"] == "retired"
+    assert shadow["evidence_state"] == "historical_only"
+    assert shadow["history"]["status_counts"] == {"open": 1}
+    assert shadow["history"]["open_fills"] == 1
+    assert shadow["history"]["last_fill_activity_at"] == "2026-06-12T03:25:11+00:00"
+    assert shadow["history"]["last_mark_at"] == "2026-06-12T14:30:00+00:00"
+    assert shadow["alpha_eligible"] is False
+    assert shadow["findings"] == [
+        "shadow_collection_retired",
+        "historical_shadow_evidence_only",
+        "legacy_open_shadow_fills_unmanaged",
+    ]
+    assert shadow["collector_hash"].startswith("sha256:")
+    assert shadow["history_hash"].startswith("sha256:")
 
 
 def test_launchd_status_keeps_alert_delivery_failure_out_of_stuck_lifecycle(tmp_path: Path) -> None:

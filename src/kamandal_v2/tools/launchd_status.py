@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime
+import hashlib
 import json
 import socket
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from kamandal_v2.config import load_control
@@ -40,6 +42,11 @@ def build_status(
     schedule_report = scheduled_job_health(repo_root=repo, now=checked_at.astimezone(CENTRAL))
     live_health = _safe_live_health(store, config, now=checked_at)
     review_queue = build_review_queue(store=store)
+    shadow_evidence = _shadow_evidence_status(
+        repo=repo,
+        db_path=Path(store.sqlite_path),
+        observed_at=checked_at,
+    )
     units = [
         *[_job_unit(job, schedule_report) for job in launchd_jobs()],
         _live_health_unit(live_health),
@@ -55,6 +62,7 @@ def build_status(
         "units": units,
         "jobs": [unit for unit in units if unit["kind"] == "external_launchd_job"],
         "live_health": live_health,
+        "shadow_evidence": shadow_evidence,
         "scheduled_job_health": schedule_report,
         "review_queue": {
             "schema": review_queue.get("schema"),
@@ -70,6 +78,150 @@ def build_status(
             "live_health_reasons": len(live_health.get("reasons") or []),
         },
     }
+
+
+def _shadow_evidence_status(
+    *,
+    repo: Path,
+    db_path: Path,
+    observed_at: datetime,
+) -> dict[str, Any]:
+    """Describe the shadow lane without reviving or mutating retired jobs."""
+    active_shadow_jobs = sorted(
+        job.job
+        for job in launchd_jobs()
+        if "shadow" in job.job
+    )
+    collector = {
+        "state": "active" if active_shadow_jobs else "retired",
+        "basis": (
+            "active_shadow_jobs_in_launchd_registry"
+            if active_shadow_jobs
+            else "no_shadow_job_in_active_launchd_registry"
+        ),
+        "active_jobs": active_shadow_jobs,
+        "retired_legacy_jobs": ["market-shadow", "shadow-eod-report"],
+    }
+    history: dict[str, Any] = {
+        "status_counts": {},
+        "total_fills": 0,
+        "open_fills": 0,
+        "last_fill_activity_at": None,
+        "last_mark_at": None,
+        "last_eod_at": None,
+    }
+    findings: list[str] = []
+    try:
+        with _read_only_connection(db_path) as conn:
+            if _table_exists(conn, "shadow_fills"):
+                history["status_counts"] = {
+                    str(status): int(count)
+                    for status, count in conn.execute(
+                        "SELECT COALESCE(status, 'unknown'), COUNT(*) "
+                        "FROM shadow_fills GROUP BY status ORDER BY status"
+                    ).fetchall()
+                }
+                history["total_fills"] = sum(history["status_counts"].values())
+                history["open_fills"] = int(history["status_counts"].get("open", 0))
+                raw_fill_time = conn.execute(
+                    "SELECT MAX(COALESCE(closed_at, opened_at)) FROM shadow_fills"
+                ).fetchone()[0]
+                history["last_fill_activity_at"] = _sqlite_timestamp(raw_fill_time)
+            if _table_exists(conn, "shadow_marks"):
+                raw_mark_time = conn.execute(
+                    "SELECT MAX(marked_at) FROM shadow_marks"
+                ).fetchone()[0]
+                history["last_mark_at"] = _sqlite_timestamp(raw_mark_time)
+    except (OSError, sqlite3.Error) as exc:
+        findings.append(f"shadow_history_unreadable:{type(exc).__name__}")
+
+    eod_root = repo / "data" / "reports" / "eod"
+    eod_files = sorted(
+        (path for path in eod_root.glob("*_shadow_eod.json") if path.is_file()),
+        key=lambda path: (path.stat().st_mtime, path.name),
+    ) if eod_root.is_dir() else []
+    if eod_files:
+        history["last_eod_at"] = datetime.fromtimestamp(
+            eod_files[-1].stat().st_mtime,
+            tz=UTC,
+        ).isoformat()
+
+    has_history = bool(
+        history["total_fills"]
+        or history["last_mark_at"]
+        or history["last_eod_at"]
+    )
+    evidence_state = (
+        "collecting"
+        if collector["state"] == "active"
+        else "historical_only"
+        if has_history
+        else "empty"
+    )
+    if collector["state"] == "retired":
+        findings.append("shadow_collection_retired")
+    if evidence_state == "historical_only":
+        findings.append("historical_shadow_evidence_only")
+    if collector["state"] == "retired" and history["open_fills"]:
+        findings.append("legacy_open_shadow_fills_unmanaged")
+
+    collector_hash = _semantic_hash(collector)
+    history_hash = _semantic_hash(history)
+    semantic = {
+        "collector": collector,
+        "history": history,
+        "evidence_state": evidence_state,
+        "alpha_eligible": False,
+        "findings": findings,
+    }
+    return {
+        "schema": "kamandal.shadow_evidence_status.v1",
+        "observed_at": observed_at.astimezone(UTC).isoformat(),
+        **semantic,
+        "collector_hash": collector_hash,
+        "history_hash": history_hash,
+        "semantic_hash": _semantic_hash(semantic),
+        "protected_effects": {
+            "database_write": False,
+            "broker_call": False,
+            "order_submit": False,
+            "schedule_change": False,
+        },
+    }
+
+
+def _read_only_connection(db_path: Path) -> sqlite3.Connection:
+    uri = f"file:{db_path.expanduser().resolve()}?mode=ro"
+    return sqlite3.connect(uri, uri=True, timeout=8)
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone() is not None
+
+
+def _sqlite_timestamp(value: Any) -> str | None:
+    if value is None or not str(value).strip():
+        return None
+    text = str(value).strip().replace(" ", "T").replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
+
+
+def _semantic_hash(payload: Any) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _job_unit(job: Any, schedule_report: dict[str, Any]) -> dict[str, Any]:

@@ -59,6 +59,26 @@ All times are oldmac local time, expected to be America/Chicago.
 There is no `RunAtLoad` for live trading jobs. Manual smoke tests should use
 `--force` and `--alert-mode spool`.
 
+### Shadow evidence status
+
+The legacy `market-shadow` and `shadow-eod-report` labels are intentionally not
+part of the active launchd registry. Their existing database rows and EOD files
+are historical evidence, not proof that a shadow collector is currently
+running.
+
+`python -m kamandal_v2.tools.launchd_status --json` therefore exposes
+`shadow_evidence` with:
+
+- a current collector state derived from the app-owned launchd registry;
+- aggregate historical fill counts and last fill, mark, and EOD timestamps;
+- stable semantic hashes that exclude the observation timestamp;
+- `alpha_eligible=false`; and
+- an all-false protected-effects receipt.
+
+This lets TradeLab distinguish “retired collector with historical data” from a
+broken or stale active feed. Re-enabling shadow collection is a separate
+operator decision and must add an app-owned job back to the registry.
+
 ## Runner Contract
 
 The launchd runner is:
