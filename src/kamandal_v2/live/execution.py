@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -190,7 +191,20 @@ def _execute_ticket(
 
 
 def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None, manage_entries: bool = True) -> dict[str, Any]:
+    """Serialize broker order reconciliation across Kamandal launchd jobs."""
+
     store = store or LocalStore()
+    lock_path = store.sqlite_path.parent / "runlocks" / "live_order_sync.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        try:
+            return _sync_live_orders_locked(config, store=store, manage_entries=manage_entries)
+        finally:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+
+
+def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manage_entries: bool) -> dict[str, Any]:
     adapter = broker_adapter(config)
     tickets = store.live_order_intents_by_status(
         {"submitted", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
