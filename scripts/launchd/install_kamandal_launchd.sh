@@ -15,6 +15,7 @@ write_plists() {
   python3 - "$REPO_ROOT" "$LAUNCHD_DIR" "$LOG_DIR" "$LABEL_PREFIX" <<'PY'
 import plistlib
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 repo = Path(sys.argv[1])
@@ -22,54 +23,49 @@ launchd_dir = Path(sys.argv[2])
 log_dir = Path(sys.argv[3])
 label_prefix = sys.argv[4]
 runner = repo / "scripts" / "launchd" / "run_kamandal_job.sh"
+sys.path.insert(0, str(repo / "src"))
+
+from kamandal_v2.ops.launchd_registry import JOB_LABEL_SUFFIXES, JOB_SCHEDULES  # noqa: E402
 
 
-def weekdays(hour, minute):
-    return [{"Weekday": day, "Hour": hour, "Minute": minute} for day in range(1, 6)]
-
-
-def weekly(weekday, hour, minute):
-    return [{"Weekday": weekday, "Hour": hour, "Minute": minute}]
-
-
-def every_minutes(start_hour, start_minute, end_hour, end_minute, step):
+def calendar_entries(schedule):
     entries = []
-    hour, minute = start_hour, start_minute
-    while (hour, minute) <= (end_hour, end_minute):
-        entries.extend(weekdays(hour, minute))
-        minute += step
-        while minute >= 60:
-            hour += 1
-            minute -= 60
+    weekdays = [schedule.weekday + 1] if schedule.weekday is not None else range(1, 6)
+    for fixed in schedule.fixed_times:
+        entries.extend(
+            {"Weekday": day, "Hour": fixed.hour, "Minute": fixed.minute}
+            for day in weekdays
+        )
+    if (
+        schedule.cadence_minutes is not None
+        and schedule.window_start is not None
+        and schedule.window_end is not None
+    ):
+        current = schedule.window_start
+        while current <= schedule.window_end:
+            entries.extend(
+                {"Weekday": day, "Hour": current.hour, "Minute": current.minute}
+                for day in weekdays
+            )
+            stepped = (
+                timedelta(hours=current.hour, minutes=current.minute)
+                + timedelta(minutes=schedule.cadence_minutes)
+            )
+            total_minutes = int(stepped.total_seconds() // 60)
+            current = current.replace(
+                hour=(total_minutes // 60) % 24,
+                minute=total_minutes % 60,
+            )
     return entries
 
 
-jobs = [
-    ("x_bookmarks", "x-bookmarks", weekdays(8, 55)),
-    ("youtube", "youtube", weekdays(9, 15) + weekdays(11, 45) + weekdays(14, 30)),
-    ("my_ideas", "my-ideas", weekdays(8, 5) + weekdays(9, 20)),
-    ("live_reconciliation", "live-reconciliation", weekdays(8, 35) + weekdays(10, 30) + weekdays(12, 30) + weekdays(14, 30)),
-    ("live_advisory", "live-advisory", weekdays(9, 25) + weekdays(11, 55) + weekdays(14, 15)),
-    ("live_approved_orders", "live-approved-orders", every_minutes(9, 0, 15, 15, 5)),
-    (
-        "live_management",
-        "live-management",
-        every_minutes(9, 0, 14, 45, 15) + weekdays(14, 50) + weekdays(15, 5),
-    ),
-    ("live_health_report", "live-health-report", weekdays(9, 10) + weekdays(11, 45) + weekdays(14, 45) + weekdays(15, 20)),
-    ("scheduled_job_health", "scheduled-job-health", every_minutes(9, 15, 15, 45, 15)),
-    ("earnings", "earnings", weekdays(8, 40)),
-    ("iv", "iv", weekdays(8, 45)),
-    ("iv_afternoon", "iv-afternoon", weekdays(14, 45)),
-    ("weekly_reviewer", "weekly-reviewer", weekly(5, 10, 0)),
-]
-
-for suffix, job, schedule in jobs:
+for job, schedule in JOB_SCHEDULES.items():
+    suffix = JOB_LABEL_SUFFIXES[job]
     label = f"{label_prefix}.{suffix}"
     plist = {
         "Label": label,
         "ProgramArguments": ["/bin/bash", str(runner), job],
-        "StartCalendarInterval": schedule,
+        "StartCalendarInterval": calendar_entries(schedule),
         "WorkingDirectory": str(repo),
         "StandardOutPath": str(log_dir / f"{label}.out.log"),
         "StandardErrorPath": str(log_dir / f"{label}.err.log"),
@@ -82,24 +78,17 @@ PY
 }
 
 labels() {
-  python3 - "$LABEL_PREFIX" <<'PY'
+  python3 - "$REPO_ROOT" "$LABEL_PREFIX" <<'PY'
 import sys
-prefix = sys.argv[1]
-for suffix in [
-    "x_bookmarks",
-    "youtube",
-    "my_ideas",
-    "live_reconciliation",
-    "live_advisory",
-    "live_approved_orders",
-    "live_management",
-    "live_health_report",
-    "scheduled_job_health",
-    "earnings",
-    "iv",
-    "iv_afternoon",
-    "weekly_reviewer",
-]:
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+prefix = sys.argv[2]
+sys.path.insert(0, str(repo / "src"))
+
+from kamandal_v2.ops.launchd_registry import JOB_LABEL_SUFFIXES  # noqa: E402
+
+for suffix in JOB_LABEL_SUFFIXES.values():
     print(f"{prefix}.{suffix}")
 PY
 }
@@ -129,6 +118,9 @@ remove_kamandal_cron_block() {
 }
 
 case "$ACTION" in
+  render)
+    write_plists
+    ;;
   install|"")
     chmod +x "$REPO_ROOT/scripts/launchd/run_kamandal_job.sh"
     write_plists
@@ -160,7 +152,7 @@ case "$ACTION" in
     remove_kamandal_cron_block
     ;;
   *)
-    echo "usage: $0 [install|uninstall|uninstall-cron]" >&2
+    echo "usage: $0 [render|install|uninstall|uninstall-cron]" >&2
     exit 2
     ;;
 esac

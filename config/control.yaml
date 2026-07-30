@@ -89,7 +89,9 @@ live:
     regular_close_time: "15:00"
     extended_close_time: "15:15"
     extended_close_symbols: [SPY]
-    entry_buffer_minutes: 30
+    # The final 14:30 advisory is consumed by the 14:35 executor; stop new
+    # regular-session entries at 14:40, leaving 20 minutes before the close.
+    entry_buffer_minutes: 20
     close_buffer_minutes: 5
     early_close_dates:
       "2026-11-27":
@@ -107,8 +109,8 @@ live:
   max_bpr_per_order_pct: 25
   max_bpr_per_order_by_structure:
     default: 500
-    put_spread: 500
-    call_spread: 500
+    put_spread: 750
+    call_spread: 750
     iron_condor: 500
     jade_lizard: 500
     call_calendar: 1200
