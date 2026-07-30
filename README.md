@@ -50,7 +50,8 @@ The `data/` folder stores all persistent state:
 
 The system is designed as a series of short scheduled jobs rather than a long-running daemon:
 - **X Extraction:** Weekdays morning (8:55 AM).
-- **YouTube Extraction:** Intraday sweeps (9:15, 11:45, 14:30).
+- **YouTube Extraction:** Intraday sweeps (9:15, 11:45, 14:00) so the final
+  intelligence batch is available to the 14:30 live advisory.
 - **Live Reconciliation:** Intraday broker/local ledger checks before advisory and management cycles.
 - **Live Advisory:** Three intraday planning passes.
 - **Live Approved Orders:** Every 5 minutes during the live market window.

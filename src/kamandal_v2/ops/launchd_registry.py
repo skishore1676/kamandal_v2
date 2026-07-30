@@ -72,10 +72,10 @@ JOB_LABEL_SUFFIXES = {
 
 JOB_SCHEDULES = {
     "x-bookmarks": JobSchedule(fixed_times=(time(8, 55),)),
-    "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 30))),
+    "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 0))),
     "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
-    "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 30))),
-    "live-advisory": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 15))),
+    "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 20))),
+    "live-advisory": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 30))),
     "live-approved-orders": JobSchedule(cadence_minutes=5, window_start=time(9, 0), window_end=time(15, 15)),
     "live-management": JobSchedule(
         fixed_times=(time(14, 50), time(15, 5)),
@@ -87,7 +87,7 @@ JOB_SCHEDULES = {
     "scheduled-job-health": JobSchedule(cadence_minutes=15, window_start=time(9, 15), window_end=time(15, 45)),
     "earnings": JobSchedule(fixed_times=(time(8, 40),)),
     "iv": JobSchedule(fixed_times=(time(8, 45),)),
-    "iv-afternoon": JobSchedule(fixed_times=(time(14, 45),)),
+    "iv-afternoon": JobSchedule(fixed_times=(time(13, 45),)),
     "weekly-reviewer": JobSchedule(fixed_times=(time(10, 0),), weekday=4),
 }
 

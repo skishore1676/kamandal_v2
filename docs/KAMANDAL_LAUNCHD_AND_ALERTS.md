@@ -43,21 +43,28 @@ All times are oldmac local time, expected to be America/Chicago.
 | Label suffix | Job | Schedule |
 | --- | --- | --- |
 | `x_bookmarks` | `x-bookmarks` | Weekdays 08:55 |
-| `youtube` | `youtube` | Weekdays 09:15, 11:45, 14:30 |
+| `youtube` | `youtube` | Weekdays 09:15, 11:45, 14:00 |
 | `my_ideas` | `my-ideas` | Weekdays 08:05, 09:20 |
-| `live_reconciliation` | `live-reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:30 |
-| `live_advisory` | `live-advisory` | Weekdays 09:25, 11:55, 14:15 |
+| `live_reconciliation` | `live-reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:20 |
+| `live_advisory` | `live-advisory` | Weekdays 09:25, 11:55, 14:30 |
 | `live_approved_orders` | `live-approved-orders` | Weekdays every 5 minutes, 09:00-15:15 |
-| `live_management` | `live-management` | Weekdays every 15 minutes, 09:00-15:15 |
+| `live_management` | `live-management` | Weekdays every 15 minutes, 09:00-14:45; plus 14:50 and 15:05 |
 | `live_health_report` | `live-health-report` | Weekdays 09:10, 11:45, 14:45, 15:20 |
-| `scheduled_job_health` | `scheduled-job-health` | Weekdays every 15 minutes, 09:15-15:30 |
+| `scheduled_job_health` | `scheduled-job-health` | Weekdays every 15 minutes, 09:15-15:45 |
 | `earnings` | `earnings` | Weekdays 08:40 |
 | `iv` | `iv` | Weekdays 08:45 |
-| `iv_afternoon` | `iv-afternoon` | Weekdays 14:45 |
+| `iv_afternoon` | `iv-afternoon` | Weekdays 13:45 |
 | `weekly_reviewer` | `weekly-reviewer` | Fridays 10:00 |
 
 There is no `RunAtLoad` for live trading jobs. Manual smoke tests should use
 `--force` and `--alert-mode spool`.
+
+The late-day dependency chain is deliberate: afternoon IV at 13:45, final
+YouTube intelligence at 14:00, reconciliation at 14:20, advisory at 14:30,
+and the first post-advisory executor pass at 14:35. Regular-session opening
+orders stop at 14:40, preserving a 20-minute buffer before the 15:00 close.
+The 14:45 and 14:50 management passes remain entry-independent and preserve
+the final pre-close exit evaluation.
 
 ### Shadow evidence status
 

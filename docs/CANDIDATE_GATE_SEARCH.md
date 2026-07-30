@@ -40,8 +40,9 @@ faster than the short loses premium), so a 7.5-wide often clears a gate the
 ### The binding interaction: BPR caps bound the search
 
 Widening costs buying power: BPR ≈ `width × (1 − ratio) × 100` per contract.
-With `live.max_bpr_per_order_by_structure.put_spread = 500` and ratio 0.28,
-max width ≈ 500 / 72 ≈ **6.9 points**. The width search MUST respect the
+With the current
+`live.max_bpr_per_order_by_structure.put_spread = 750` and ratio 0.28,
+max width ≈ 750 / 72 ≈ **10.4 points**. The width search MUST respect the
 per-structure BPR cap — a construction that clears the credit gate but blows
 the BPR cap is not a candidate. This is why "just use 10-wides" is wrong.
 
@@ -141,7 +142,8 @@ drift.
 5. **Tests** (`tests/test_strategy_builders.py` pattern, synthetic chains):
    - 5-wide yields ratio 0.16, 7.5-wide yields 0.29 → candidate emitted at
      7.5, passes gate.
-   - 10-wide clears gate but exceeds $500 BPR cap → not emitted; 7.5 chosen.
+   - Use an isolated $500 test cap: 10-wide clears the gate but exceeds that
+     fixture cap → not emitted; 7.5 chosen.
    - Nothing clears gate at any width → single best-ratio candidate emitted
      and rejected with existing reason string; `vertical_gate_unmet`
      incremented.
