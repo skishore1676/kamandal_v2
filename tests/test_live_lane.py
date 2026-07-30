@@ -302,6 +302,43 @@ def test_live_policy_blocks_cluster_capped_candidate_before_staging(tmp_path) ->
     assert candidate.rejection_reason == "live_risk_cluster_cap:semis"
 
 
+def test_live_policy_blocks_same_underlying_at_cap_before_staging(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    store.save_live_position_group("group_baba_1", {"group_id": "group_baba_1", "underlying": "BABA"})
+    store.save_live_position_group("group_baba_2", {"group_id": "group_baba_2", "underlying": "BABA"})
+    legs = [
+        OptionLeg("long_put", "buy", "put", 95, "2026-08-21", 1, 1.0, 0.95, 1.05, -0.10, 0.0, -0.01, 0.1, 100),
+        OptionLeg("short_put", "sell", "put", 100, "2026-08-21", 1, 2.0, 1.95, 2.05, -0.20, 0.0, -0.01, 0.1, 100),
+    ]
+    candidate = Candidate(
+        candidate_id="cand",
+        idea_id="idea_baba",
+        underlying="BABA",
+        playbook_id="put_spread_default",
+        structure="put_spread",
+        legs=legs,
+        net_credit=1.0,
+        estimated_bpr=400,
+        greeks=Greeks(theta=0.01),
+        liquidity_score=1.0,
+        score=1.0,
+        preflight=PreflightResult(ok=True, bpr=400, message="ok"),
+    )
+
+    _live_candidate_policy(
+        [candidate],
+        store,
+        {
+            "live": {"min_entry_legs": 2, "max_bpr_per_order": 2500},
+            "execution": {"max_contracts_per_order": 1},
+            "risk_manager": {"enabled": True, "max_positions_per_underlying": 2},
+        },
+        PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=2),
+    )
+
+    assert candidate.rejection_reason == "live_risk_underlying_cap:BABA"
+
+
 def test_live_can_warn_on_quality_filters_without_permissive_matching(tmp_path, monkeypatch) -> None:
     universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_cap", allowed_playbooks=["call_spread"])]
     playbooks = [

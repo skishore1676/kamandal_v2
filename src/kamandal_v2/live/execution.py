@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -49,6 +50,7 @@ FAILED_TICKET_STATUSES = {
     "deferred_entry_cutoff",
     "deferred_market_closed",
 }
+SELECTED_ENTRY_ATTENTION_STATE_EVENT = "live_selected_entry_attention_state"
 
 
 def execute_live_approved(
@@ -76,6 +78,7 @@ def execute_live_approved(
         return {"action": action, "submit": submit, "processed": 0, "results": []}
     _assert_submit_allowed(config, submit=submit)
     cluster_capped: dict[str, str] = {}
+    underlying_capped: dict[str, int] = {}
     if submit and not close:
         gate = entry_health_gate(store, config)
         risk_manager = gate.get("risk_manager") or {}
@@ -93,6 +96,10 @@ def execute_live_approved(
         for cluster, symbols in ((gate.get("risk_manager") or {}).get("clusters_at_cap") or {}).items():
             for symbol in symbols:
                 cluster_capped[str(symbol).upper()] = str(cluster)
+        underlying_capped = {
+            str(symbol).upper(): int(count)
+            for symbol, count in ((gate.get("risk_manager") or {}).get("underlyings_at_cap") or {}).items()
+        }
     adapter = broker_adapter(config)
     results = []
     for row in rows[:1]:
@@ -104,6 +111,25 @@ def execute_live_approved(
             results.append({"status": "blocked", "reason": "max_live_baskets_per_day_reached", "trade_bundle": row.get("trade_bundle")})
             continue
         for ticket in tickets:
+            capped_underlying = underlying_capped.get(str(ticket.get("underlying") or "").upper())
+            if capped_underlying and submit and not close:
+                store.event(
+                    "live_entry_blocked_by_underlying_cap",
+                    {
+                        "ticket_hash": ticket.get("ticket_hash"),
+                        "underlying": ticket.get("underlying"),
+                        "open_positions": capped_underlying,
+                    },
+                )
+                results.append(
+                    {
+                        "status": "blocked",
+                        "reason": "blocked_risk_underlying_cap",
+                        "underlying": ticket.get("underlying"),
+                        "ticket_hash": ticket.get("ticket_hash"),
+                    }
+                )
+                continue
             capped_cluster = cluster_capped.get(str(ticket.get("underlying") or "").upper())
             if capped_cluster and submit and not close:
                 store.event("live_entry_blocked_by_cluster_cap", {"ticket_hash": ticket.get("ticket_hash"), "underlying": ticket.get("underlying"), "cluster": capped_cluster})
@@ -111,6 +137,119 @@ def execute_live_approved(
                 continue
             results.append(_execute_ticket(config, adapter, store, ticket, submit=submit, close=close))
     return {"action": action, "submit": submit, "processed": len(results), "results": results}
+
+
+def execute_live_approved_with_recovery(
+    config: dict[str, Any],
+    *,
+    submit: bool = False,
+    recovery_idea_paths: list[str | os.PathLike[str]] | None = None,
+    config_source: str = "sheet",
+    provider: str = "public",
+    store: LocalStore | None = None,
+) -> dict[str, Any]:
+    """Execute one selected entry, rebuilding a stale ticket at most once."""
+
+    store = store or LocalStore()
+    initial = execute_live_approved(config, submit=submit, store=store)
+    final = initial
+    recovery: dict[str, Any] = {"attempted": False}
+    policy = ((config.get("live") or {}).get("stale_entry_recovery") or {})
+    stale = _stale_selected_entry_failure(initial)
+    recovery_enabled = _as_bool(policy.get("enabled"), True)
+    max_rebuilds = max(int(policy.get("max_rebuilds_per_execution") or 1), 0)
+
+    if submit and stale and recovery_enabled and max_rebuilds > 0:
+        from kamandal_v2.live.advisory import run_live_advisory_plan
+
+        store.event(
+            "live_stale_selected_entry_rebuild_started",
+            {
+                "ticket_hash": stale.get("ticket_hash"),
+                "underlying": stale.get("underlying"),
+                "max_rebuilds": min(max_rebuilds, 1),
+            },
+        )
+        try:
+            advisory = run_live_advisory_plan(
+                config,
+                idea_paths=list(recovery_idea_paths or []),
+                config_source=config_source,
+                provider=provider,
+                write_sheet=True,
+                persist_order_intents=True,
+                notify_unplaced_selected=False,
+                store=store,
+            )
+            recovery = {
+                "attempted": True,
+                "rebuilds": 1,
+                "plan_run_id": advisory.plan_run_id,
+                "plans": len(advisory.plans),
+                "candidates": len(advisory.candidates),
+            }
+        except Exception as exc:  # noqa: BLE001
+            recovery = {
+                "attempted": True,
+                "rebuilds": 1,
+                "outcome": "stale_rebuild_failed",
+                "error": _safe_broker_error(exc),
+            }
+            final = {
+                "action": APPROVE_LIVE,
+                "submit": submit,
+                "processed": 1,
+                "results": [
+                    {
+                        "status": "blocked",
+                        "reason": "stale_rebuild_failed",
+                        "failure_code": "stale_rebuild_failed",
+                        "ticket_hash": stale.get("ticket_hash"),
+                        "underlying": stale.get("underlying"),
+                    }
+                ],
+            }
+        else:
+            if advisory.daily_plan_rows:
+                final = execute_live_approved(config, submit=submit, store=store)
+            else:
+                final = {
+                    "action": APPROVE_LIVE,
+                    "submit": submit,
+                    "processed": 1,
+                    "results": [
+                        {
+                            "status": "blocked",
+                            "reason": "stale_rebuild_no_eligible_current_rank1",
+                            "failure_code": "stale_rebuild_no_eligible_current_rank1",
+                            "ticket_hash": stale.get("ticket_hash"),
+                            "underlying": stale.get("underlying"),
+                        }
+                    ],
+                }
+            recovery["outcome"] = _execution_outcome(final)
+        store.event(
+            "live_stale_selected_entry_rebuild_completed",
+            {
+                **recovery,
+                "original_ticket_hash": stale.get("ticket_hash"),
+                "original_underlying": stale.get("underlying"),
+            },
+        )
+
+    notification = _notify_selected_entry_failure(
+        config,
+        store,
+        final,
+        recovery=recovery,
+        submit=submit,
+    )
+    return {
+        **final,
+        "initial_execution": initial,
+        "recovery": recovery,
+        "operator_notification": notification,
+    }
 
 
 def _execute_ticket(
@@ -138,7 +277,7 @@ def _execute_ticket(
         return _failure(ticket, "same_day_live_exit_blocked")
     if submit and not _ticket_fresh(config, ticket):
         store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_stale")
-        return _failure(ticket, "ticket_preflight_stale")
+        return _failure(ticket, "ticket_preflight_stale", failure_code="ticket_preflight_stale")
     request_payload = dict(ticket.get("submit_payload") or {})
     if submit:
         window = submission_window(config, ticket, close=close)
@@ -155,7 +294,11 @@ def _execute_ticket(
                 response_payload=fresh_preflight.to_dict(),
             )
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_failed")
-            return _failure(ticket, fresh_preflight.message or "fresh_preflight_failed")
+            return _failure(
+                ticket,
+                fresh_preflight.message or "fresh_preflight_failed",
+                failure_code="fresh_preflight_failed",
+            )
         window = submission_window(config, ticket, close=close)
         if not window["allowed"]:
             return _defer_ticket_for_window(store, ticket, window)
@@ -164,7 +307,7 @@ def _execute_ticket(
             ok = bool(response.get("orderId"))
             status = "submitted" if ok else "submit_failed"
         except Exception as exc:  # noqa: BLE001
-            response = {"error": str(exc)}
+            response = {"error": _safe_broker_error(exc)}
             ok = False
             status = "submit_failed"
     else:
@@ -187,7 +330,16 @@ def _execute_ticket(
         "close": close,
         "status": status,
     })
-    return {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "status": status, "response": response}
+    result = {
+        "ticket_hash": ticket.get("ticket_hash"),
+        "order_id": ticket.get("order_id"),
+        "underlying": ticket.get("underlying"),
+        "status": status,
+        "response": response,
+    }
+    if status == "submit_failed":
+        result["failure_code"] = "submit_failed"
+    return result
 
 
 def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None, manage_entries: bool = True) -> dict[str, Any]:
@@ -1647,8 +1799,185 @@ def _group_id(ticket: dict[str, Any]) -> str:
     return f"live_group_{ticket.get('ticket_hash')}"
 
 
-def _failure(ticket: dict[str, Any], reason: str) -> dict[str, Any]:
-    return {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "status": "blocked", "reason": reason}
+def _failure(
+    ticket: dict[str, Any],
+    reason: str,
+    *,
+    failure_code: str | None = None,
+) -> dict[str, Any]:
+    result = {
+        "ticket_hash": ticket.get("ticket_hash"),
+        "order_id": ticket.get("order_id"),
+        "underlying": ticket.get("underlying"),
+        "status": "blocked",
+        "reason": reason,
+    }
+    if failure_code:
+        result["failure_code"] = failure_code
+    return result
+
+
+def _stale_selected_entry_failure(execution: dict[str, Any]) -> dict[str, Any] | None:
+    for result in execution.get("results") or []:
+        reason = str(result.get("failure_code") or result.get("reason") or "")
+        if reason == "ticket_preflight_stale" or reason.endswith(":blocked_preflight_stale"):
+            return result
+    return None
+
+
+def _execution_outcome(execution: dict[str, Any]) -> str:
+    results = execution.get("results") or []
+    if any(str(result.get("status") or "") == "submitted" for result in results):
+        return "submitted"
+    if not results:
+        return "no_selected_entry"
+    return str(results[0].get("failure_code") or results[0].get("reason") or results[0].get("status") or "blocked")
+
+
+def _selected_entry_failure(execution: dict[str, Any], *, submit: bool) -> dict[str, Any] | None:
+    if not submit:
+        return None
+    results = execution.get("results") or []
+    if not results:
+        return None
+    for result in results:
+        status = str(result.get("status") or "")
+        reason = str(result.get("reason") or "")
+        if status == "submitted":
+            continue
+        if status == "dry_run":
+            continue
+        if reason.startswith("basket_ticket_active:"):
+            continue
+        if reason == "basket_complete_or_no_pending_tickets":
+            continue
+        return result
+    return None
+
+
+def notify_live_advisory_risk_block(
+    config: dict[str, Any],
+    store: LocalStore,
+    candidates: list[Any],
+) -> dict[str, Any]:
+    """Notify when auto-selection produced no ticket because its risk gate blocked."""
+
+    blocked = [
+        candidate
+        for candidate in candidates
+        if str(getattr(candidate, "rejection_reason", "") or "").startswith("live_risk_")
+    ]
+    if not blocked:
+        return {"needed": False, "attempted": False, "reason": "no_advisory_risk_block"}
+    candidate = max(blocked, key=lambda item: float(getattr(item, "score", 0.0) or 0.0))
+    result = {
+        "status": "blocked",
+        "reason": str(candidate.rejection_reason),
+        "failure_code": str(candidate.rejection_reason),
+        "underlying": str(candidate.underlying),
+        "structure": str(candidate.structure),
+        "ticket_hash": f"candidate:{candidate.candidate_id}",
+    }
+    return _notify_selected_entry_failure(
+        config,
+        store,
+        {"processed": 1, "results": [result]},
+        recovery={"attempted": False},
+        submit=True,
+    )
+
+
+def _notify_selected_entry_failure(
+    config: dict[str, Any],
+    store: LocalStore,
+    execution: dict[str, Any],
+    *,
+    recovery: dict[str, Any],
+    submit: bool,
+) -> dict[str, Any]:
+    result = _selected_entry_failure(execution, submit=submit)
+    previous = store.latest_event(SELECTED_ENTRY_ATTENTION_STATE_EVENT) or {}
+    if result is None:
+        if previous.get("status") == "open":
+            store.event(
+                SELECTED_ENTRY_ATTENTION_STATE_EVENT,
+                {
+                    "status": "cleared",
+                    "fingerprint": previous.get("fingerprint") or "",
+                    "reason": previous.get("reason") or "",
+                },
+            )
+        return {"needed": False, "attempted": False, "reason": "no_selected_entry_failure"}
+
+    ticket_hash = str(result.get("ticket_hash") or "")
+    ticket = store.live_order_intent(ticket_hash) if ticket_hash else None
+    underlying = str(result.get("underlying") or (ticket or {}).get("underlying") or "entry").upper()
+    structure = str(result.get("structure") or (ticket or {}).get("structure") or "options entry").replace("_", " ")
+    reason = str(result.get("failure_code") or result.get("reason") or result.get("status") or "placement_failed")
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "ticket_hash": ticket_hash,
+                "underlying": underlying,
+                "reason": reason,
+                "recovery_attempted": bool(recovery.get("attempted")),
+                "recovery_outcome": str(recovery.get("outcome") or ""),
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if previous.get("status") == "open" and previous.get("fingerprint") == fingerprint:
+        return {
+            "needed": True,
+            "attempted": False,
+            "reason": "unchanged_selected_entry_failure",
+            "fingerprint": fingerprint,
+        }
+
+    recovery_line = (
+        f"One fresh rank-1 rebuild was attempted; outcome: {recovery.get('outcome')}."
+        if recovery.get("attempted")
+        else "No stale-ticket rebuild applied to this failure."
+    )
+    body = "\n".join(
+        [
+            f"Selected entry: {underlying} {structure}.",
+            f"Placement stopped at: {reason}.",
+            recovery_line,
+            "No new position was opened. Review is needed only if you want to override or investigate this failed entry.",
+        ]
+    )
+    raw_mode = str(
+        (((config.get("live") or {}).get("stale_entry_recovery") or {}).get("notification_mode") or "live")
+    ).strip().lower()
+    mode = raw_mode if raw_mode in {"off", "spool", "live"} else "live"
+    alert = send_lathi_alert(
+        title=f"Kamandal selected entry not placed: {underlying}",
+        body=body,
+        level="error",
+        mode=mode,
+        profile=default_lathi_bus_profile(),
+    )
+    store.event(
+        SELECTED_ENTRY_ATTENTION_STATE_EVENT,
+        {
+            "status": "open",
+            "fingerprint": fingerprint,
+            "reason": reason,
+            "ticket_hash": ticket_hash,
+            "underlying": underlying,
+            "notification_ok": alert.ok,
+            "notification_mode": alert.mode,
+        },
+    )
+    return {
+        "needed": True,
+        "attempted": alert.attempted,
+        "ok": alert.ok,
+        "mode": alert.mode,
+        "reason": reason,
+        "fingerprint": fingerprint,
+    }
 
 
 def _defer_ticket_for_window(

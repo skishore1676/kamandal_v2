@@ -46,7 +46,7 @@ All times are oldmac local time, expected to be America/Chicago.
 | `youtube` | `youtube` | Weekdays 09:15, 11:45, 14:30 |
 | `my_ideas` | `my-ideas` | Weekdays 08:05, 09:20 |
 | `live_reconciliation` | `live-reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:30 |
-| `live_advisory` | `live-advisory` | Weekdays 09:25, 11:55, 14:40 |
+| `live_advisory` | `live-advisory` | Weekdays 09:25, 11:55, 14:15 |
 | `live_approved_orders` | `live-approved-orders` | Weekdays every 5 minutes, 09:00-15:15 |
 | `live_management` | `live-management` | Weekdays every 15 minutes, 09:00-15:15 |
 | `live_health_report` | `live-health-report` | Weekdays 09:10, 11:45, 14:45, 15:20 |
@@ -229,6 +229,14 @@ KAMANDAL_SHEETS_RETRY_MAX_DELAY_SECONDS=4
   `KAMANDAL_ENTRY_TERMINAL_RECEIPT_ENABLED=false` disables it, and
   `KAMANDAL_ENTRY_TERMINAL_RECEIPT_MODE=spool` exercises the projection without
   a network send.
+- A selected opening ticket that has aged past its preflight window gets one
+  bounded recovery attempt. Kamandal rebuilds the current rank-1 plan from
+  current-day ideas and fresh market/account data, reruns health and risk
+  gates, performs a fresh broker preflight, and submits at most once. A
+  successful rebuild stays silent. If rebuilding or placement still fails,
+  Kamandal sends one deduplicated attention alert and records that no position
+  opened. A risk cap that merely exists remains self-handled; a cap that blocks
+  the auto-selected entry uses this same attention path.
 - Live health performs bounded self-healing for stale local entry approvals
   before it scores the book. A prior-market-day `pending_approval` entry ticket
   is retired locally as `retired_stale_entry_approval`; it is not a broker

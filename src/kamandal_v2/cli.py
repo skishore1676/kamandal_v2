@@ -26,7 +26,13 @@ from kamandal_v2.live.approval import (
 from kamandal_v2.live.advisory import run_live_advisory_plan
 from kamandal_v2.live.book import format_live_book, live_book_sheet_rows, run_live_book
 from kamandal_v2.live.health import format_live_health, run_live_health
-from kamandal_v2.live.execution import cleanup_live_approvals, execute_live_approved, record_manual_live_fill, sync_live_orders
+from kamandal_v2.live.execution import (
+    cleanup_live_approvals,
+    execute_live_approved,
+    execute_live_approved_with_recovery,
+    record_manual_live_fill,
+    sync_live_orders,
+)
 from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.operator_review import (
     OperatorReviewError,
@@ -77,6 +83,14 @@ def main() -> None:
     live_execute_parser = subparsers.add_parser("execute-live-approved", help="Execute sheet-approved live opening orders")
     live_execute_parser.add_argument("--submit", action="store_true", help="Submit real orders; default is dry-run")
     live_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_entries are enabled")
+    live_execute_parser.add_argument(
+        "--recover-stale-selected",
+        action="store_true",
+        help="Rebuild a stale selected entry once with current ideas, quotes, health, risk, and broker preflight",
+    )
+    live_execute_parser.add_argument("--recovery-ideas", nargs="+", default=["data/ideas/active"])
+    live_execute_parser.add_argument("--recovery-config-source", choices=["sheet", "seed"], default="sheet")
+    live_execute_parser.add_argument("--recovery-provider", choices=["fixture", "public"], default="public")
     live_close_execute_parser = subparsers.add_parser("execute-live-approved-closes", help="Execute sheet-approved live close orders")
     live_close_execute_parser.add_argument("--submit", action="store_true", help="Submit real close orders; default is dry-run")
     live_close_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_exits are enabled")
@@ -335,7 +349,18 @@ def main() -> None:
         print(_plan_result_json(result))
         return
     if args.command == "execute-live-approved":
-        print(json.dumps(execute_live_approved(config, submit=_live_submit_requested(config, args, close=False)), indent=2))
+        submit = _live_submit_requested(config, args, close=False)
+        if args.recover_stale_selected:
+            result = execute_live_approved_with_recovery(
+                config,
+                submit=submit,
+                recovery_idea_paths=_expand_paths(args.recovery_ideas),
+                config_source=args.recovery_config_source,
+                provider=args.recovery_provider,
+            )
+        else:
+            result = execute_live_approved(config, submit=submit)
+        print(json.dumps(result, indent=2))
         return
     if args.command == "execute-live-approved-closes":
         print(json.dumps(execute_live_approved(config, submit=_live_submit_requested(config, args, close=True), close=True), indent=2))
