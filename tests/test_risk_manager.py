@@ -13,8 +13,10 @@ from kamandal_v2.live.risk_manager import (
     BREAKER_DAILY_NEW_POSITIONS,
     BREAKER_WEEKLY_DRAWDOWN,
     REASON_CLUSTER_AT_CAP,
+    REASON_UNDERLYING_AT_CAP,
     cluster_capped_symbols,
     evaluate_entry_risk,
+    underlying_capped_symbols,
 )
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -201,6 +203,62 @@ def test_cluster_cap_reports_without_global_block(tmp_path: Path) -> None:
     assert gate["risk_manager"]["clusters_at_cap"] == {"semis": ["AMD", "MRVL", "NVDA"]}
 
 
+def test_per_cluster_limits_override_legacy_fallback(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _open_group(store, "group_nvda", underlying="NVDA")
+    _open_group(store, "group_amd", underlying="AMD")
+    _open_group(store, "group_aapl", underlying="AAPL")
+    _open_group(store, "group_msft", underlying="MSFT")
+    _open_group(store, "group_meta", underlying="META")
+
+    config = _enabled_config(
+        max_new_positions_per_day=10,
+        max_positions_per_cluster=1,
+        max_positions_by_cluster={"semis": 3, "megacap_tech": 4},
+        correlation_clusters={
+            "semis": ["NVDA", "AMD", "MRVL"],
+            "megacap_tech": ["AAPL", "MSFT", "META", "GOOGL"],
+        },
+    )
+    decision = evaluate_entry_risk(store, config, now=datetime.now(UTC))
+
+    assert decision.clusters_at_cap == {}
+    _open_group(store, "group_mrvl", underlying="MRVL")
+    _open_group(store, "group_googl", underlying="GOOGL")
+    decision = evaluate_entry_risk(store, config, now=datetime.now(UTC))
+
+    assert decision.clusters_at_cap == {
+        "megacap_tech": ["AAPL", "GOOGL", "META", "MSFT"],
+        "semis": ["AMD", "MRVL", "NVDA"],
+    }
+    reasons = [item for item in decision.reasons if item["code"] == REASON_CLUSTER_AT_CAP]
+    assert {item["cluster"]: item["max_positions"] for item in reasons} == {
+        "megacap_tech": 4,
+        "semis": 3,
+    }
+
+
+def test_underlying_cap_blocks_only_that_symbol_without_global_block(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _open_group(store, "group_baba_1", underlying="BABA")
+    _open_group(store, "group_baba_2", underlying="BABA")
+
+    config = _enabled_config(
+        max_new_positions_per_day=10,
+        max_positions_per_underlying=2,
+        max_positions_per_cluster=None,
+    )
+    decision = evaluate_entry_risk(store, config, now=datetime.now(UTC))
+
+    assert decision.blocked is False
+    assert REASON_UNDERLYING_AT_CAP in decision.reason_codes()
+    assert decision.underlyings_at_cap == {"BABA": 2}
+    assert underlying_capped_symbols(decision) == {"BABA"}
+    gate = entry_health_gate(store, config)
+    assert gate["blocked"] is False
+    assert gate["risk_manager"]["underlyings_at_cap"] == {"BABA": 2}
+
+
 def test_breaker_blocks_through_entry_health_gate(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     now = datetime.now(UTC)
@@ -222,6 +280,7 @@ def test_env_overrides_wire_risk_manager(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_RISK_MAX_WEEKLY_DRAWDOWN_PCT", "7.5")
     monkeypatch.setenv("KAMANDAL_RISK_CONSECUTIVE_LOSS_LIMIT", "4")
     monkeypatch.setenv("KAMANDAL_RISK_MAX_NEW_POSITIONS_PER_DAY", "4")
+    monkeypatch.setenv("KAMANDAL_RISK_MAX_POSITIONS_PER_UNDERLYING", "2")
 
     config = load_control()
 
@@ -229,5 +288,20 @@ def test_env_overrides_wire_risk_manager(tmp_path: Path, monkeypatch) -> None:
     assert config["risk_manager"]["max_weekly_drawdown_pct"] == 7.5
     assert config["risk_manager"]["consecutive_loss_limit"] == 4
     assert config["risk_manager"]["max_account_snapshot_age_minutes"] == 90
+    assert config["risk_manager"]["max_positions_per_underlying"] == 2
     # yaml defaults still present for knobs without env overrides
     assert config["risk_manager"]["max_new_positions_per_day"] == 4
+
+
+def test_control_defaults_keep_global_bpr_and_define_entry_concentration_caps() -> None:
+    config = load_control()
+
+    assert config["portfolio"]["target_max_bpr_utilization_pct"] == 55
+    assert config["portfolio"]["hard_max_bpr_utilization_pct"] == 55
+    assert config["risk_manager"]["max_positions_per_underlying"] == 2
+    assert config["risk_manager"]["max_positions_by_cluster"] == {
+        "megacap_tech": 4,
+        "semis": 3,
+        "broad_index": 2,
+        "crypto_adjacent": 2,
+    }

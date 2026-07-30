@@ -103,6 +103,7 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "risk_manager.cooldown_days": _env_int("KAMANDAL_RISK_COOLDOWN_DAYS"),
         "risk_manager.max_new_positions_per_day": _env_int("KAMANDAL_RISK_MAX_NEW_POSITIONS_PER_DAY"),
         "risk_manager.max_positions_per_cluster": _env_int("KAMANDAL_RISK_MAX_POSITIONS_PER_CLUSTER"),
+        "risk_manager.max_positions_per_underlying": _env_int("KAMANDAL_RISK_MAX_POSITIONS_PER_UNDERLYING"),
         "shadow.account_size_override": _env_float("KAMANDAL_SHADOW_ACCOUNT_SIZE"),
         "shadow.buying_power_override": _env_float("KAMANDAL_SHADOW_BUYING_POWER"),
         "shadow.bpr_used_override": _env_float("KAMANDAL_SHADOW_BPR_USED"),

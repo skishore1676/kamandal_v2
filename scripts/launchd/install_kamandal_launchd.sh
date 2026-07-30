@@ -49,7 +49,7 @@ jobs = [
     ("youtube", "youtube", weekdays(9, 15) + weekdays(11, 45) + weekdays(14, 30)),
     ("my_ideas", "my-ideas", weekdays(8, 5) + weekdays(9, 20)),
     ("live_reconciliation", "live-reconciliation", weekdays(8, 35) + weekdays(10, 30) + weekdays(12, 30) + weekdays(14, 30)),
-    ("live_advisory", "live-advisory", weekdays(9, 25) + weekdays(11, 55) + weekdays(14, 40)),
+    ("live_advisory", "live-advisory", weekdays(9, 25) + weekdays(11, 55) + weekdays(14, 15)),
     ("live_approved_orders", "live-approved-orders", every_minutes(9, 0, 15, 15, 5)),
     (
         "live_management",

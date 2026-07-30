@@ -4,6 +4,7 @@ import json
 import sqlite3
 import sys
 import types
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -265,14 +266,16 @@ def test_live_health_follows_replacement_child_when_cancelled_parent_updated_lat
     }
     store.save_live_order_intent(parent, status="cancelled")
     store.save_live_order_intent(child, status="submitted")
+    child_updated_at = datetime.now(UTC).replace(tzinfo=None, microsecond=0)
+    parent_updated_at = child_updated_at + timedelta(seconds=4)
     with sqlite3.connect(store.sqlite_path) as conn:
         conn.execute(
             "UPDATE live_order_intents SET updated_at = ? WHERE ticket_hash = ?",
-            ("2026-07-29 16:35:06", "close-parent"),
+            (parent_updated_at.isoformat(sep=" "), "close-parent"),
         )
         conn.execute(
             "UPDATE live_order_intents SET updated_at = ? WHERE ticket_hash = ?",
-            ("2026-07-29 16:35:02", "close-child"),
+            (child_updated_at.isoformat(sep=" "), "close-child"),
         )
 
     report = run_live_health(store)

@@ -91,7 +91,7 @@ Kamandal already owns the active launchd schedule on oldmac.
 | `com.kamandal.v2.youtube` | Weekdays 09:15, 11:45, 14:30 CT | Import YouTube/transcript intelligence. |
 | `com.kamandal.v2.my_ideas` | Weekdays 08:05, 09:20 CT | Import operator ideas. |
 | `com.kamandal.v2.live_reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:30 CT | Reconcile local live groups against Public broker state. |
-| `com.kamandal.v2.live_advisory` | Weekdays 09:25, 11:55, 14:40 CT | Build live advisory rows when health gates allow entries. |
+| `com.kamandal.v2.live_advisory` | Weekdays 09:25, 11:55, 14:15 CT | Build live advisory rows when health gates allow entries. |
 | `com.kamandal.v2.live_approved_orders` | Weekdays every 5 minutes, 09:00-15:15 CT | Submit approved live entry intents. |
 | `com.kamandal.v2.live_management` | Weekdays every 15 minutes, 09:00-15:15 CT | Evaluate exit policy and submit close intents. |
 | `com.kamandal.v2.live_health_report` | Weekdays 09:10, 11:45, 14:45, 15:20 CT | Summarize live health and notify only when attention is needed. |

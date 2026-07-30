@@ -28,6 +28,7 @@ BREAKER_CONSECUTIVE_LOSSES = "risk_consecutive_loss_cooldown"
 BREAKER_DAILY_NEW_POSITIONS = "risk_daily_new_position_cap"
 BREAKER_ACCOUNT_SNAPSHOT_STALE = "risk_account_snapshot_stale"
 REASON_CLUSTER_AT_CAP = "risk_cluster_at_cap"
+REASON_UNDERLYING_AT_CAP = "risk_underlying_at_cap"
 
 _SNAPSHOT_ID_RE = re.compile(r"(\d{8}T\d{6})Z?$")
 
@@ -38,6 +39,7 @@ class RiskDecision:
     blocked: bool = False
     reasons: list[dict[str, Any]] = field(default_factory=list)
     clusters_at_cap: dict[str, list[str]] = field(default_factory=dict)
+    underlyings_at_cap: dict[str, int] = field(default_factory=dict)
     checked_at: str = ""
 
     def reason_codes(self) -> list[str]:
@@ -49,6 +51,7 @@ class RiskDecision:
             "blocked": self.blocked,
             "reasons": self.reasons,
             "clusters_at_cap": self.clusters_at_cap,
+            "underlyings_at_cap": self.underlyings_at_cap,
             "checked_at": self.checked_at,
         }
 
@@ -118,7 +121,13 @@ def evaluate_entry_risk(
         store,
         decision,
         clusters=settings.get("correlation_clusters") or {},
+        max_by_cluster=settings.get("max_positions_by_cluster") or {},
         max_per_cluster=_int_value(settings.get("max_positions_per_cluster")),
+    )
+    _check_underlying_concentration(
+        store,
+        decision,
+        max_per_underlying=_int_value(settings.get("max_positions_per_underlying")),
     )
     return decision
 
@@ -138,6 +147,12 @@ def cluster_for_symbol(config: dict[str, Any] | None, symbol: str) -> str:
         if wanted in {str(member).strip().upper() for member in (members or [])}:
             return str(name)
     return ""
+
+
+def underlying_capped_symbols(decision: RiskDecision) -> set[str]:
+    """Symbols blocked because the same underlying already meets its group cap."""
+
+    return set(decision.underlyings_at_cap)
 
 
 def _check_snapshot_freshness(
@@ -320,10 +335,11 @@ def _check_cluster_concentration(
     decision: RiskDecision,
     *,
     clusters: dict[str, Any],
+    max_by_cluster: dict[str, Any],
     max_per_cluster: int | None,
 ) -> None:
     """Clusters at cap do not block globally; execution blocks per-symbol."""
-    if not clusters or not max_per_cluster or max_per_cluster <= 0:
+    if not clusters:
         return
     membership: dict[str, str] = {}
     for name, members in clusters.items():
@@ -336,7 +352,11 @@ def _check_cluster_concentration(
         if cluster:
             counts[cluster] = counts.get(cluster, 0) + 1
     for name, count in sorted(counts.items()):
-        if count >= max_per_cluster:
+        configured = _int_value(max_by_cluster.get(name))
+        cap = configured if configured and configured > 0 else max_per_cluster
+        if not cap or cap <= 0:
+            continue
+        if count >= cap:
             decision.clusters_at_cap[name] = sorted(
                 symbol for symbol, cluster in membership.items() if cluster == name
             )
@@ -344,11 +364,44 @@ def _check_cluster_concentration(
                 {
                     "code": REASON_CLUSTER_AT_CAP,
                     "severity": "yellow",
-                    "detail": f"cluster {name} holds {count} open positions (cap {max_per_cluster}); new {name} entries blocked",
+                    "detail": f"cluster {name} holds {count} open positions (cap {cap}); new {name} entries blocked",
                     "cluster": name,
                     "open_positions": count,
+                    "max_positions": cap,
                 },
             )
+
+
+def _check_underlying_concentration(
+    store: LocalStore,
+    decision: RiskDecision,
+    *,
+    max_per_underlying: int | None,
+) -> None:
+    if not max_per_underlying or max_per_underlying <= 0:
+        return
+    counts: dict[str, int] = {}
+    for group in store.open_live_position_groups():
+        symbol = _group_underlying(group)
+        if symbol:
+            counts[symbol] = counts.get(symbol, 0) + 1
+    for symbol, count in sorted(counts.items()):
+        if count < max_per_underlying:
+            continue
+        decision.underlyings_at_cap[symbol] = count
+        decision.reasons.append(
+            {
+                "code": REASON_UNDERLYING_AT_CAP,
+                "severity": "yellow",
+                "detail": (
+                    f"underlying {symbol} holds {count} open positions "
+                    f"(cap {max_per_underlying}); new {symbol} entries blocked"
+                ),
+                "underlying": symbol,
+                "open_positions": count,
+                "max_positions": max_per_underlying,
+            }
+        )
 
 
 def _closed_group_pnl(store: LocalStore, group: dict[str, Any]) -> float | None:

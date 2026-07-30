@@ -14,7 +14,12 @@ from kamandal_v2.domain.models import Candidate, PortfolioState
 from kamandal_v2.live.approval import create_live_approval_request
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket
 from kamandal_v2.live.reconciliation import reconciliation_blockers_for_group
-from kamandal_v2.live.risk_manager import cluster_capped_symbols, cluster_for_symbol, evaluate_entry_risk
+from kamandal_v2.live.risk_manager import (
+    cluster_capped_symbols,
+    cluster_for_symbol,
+    evaluate_entry_risk,
+    underlying_capped_symbols,
+)
 from kamandal_v2.planner.bpr import structure_bpr_cap
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.engine import PlanRunResult, run_plan
@@ -45,6 +50,7 @@ def run_live_advisory_plan(
     provider: str = "public",
     write_sheet: bool = False,
     persist_order_intents: bool = True,
+    notify_unplaced_selected: bool = True,
     store: LocalStore | None = None,
     audit: AuditWriter | None = None,
 ) -> PlanRunResult:
@@ -71,6 +77,10 @@ def run_live_advisory_plan(
     elif write_sheet:
         store.event("live_daily_plan_write_skipped", {"plan_run_id": result.plan_run_id, "reason": "no_eligible_live_plans"})
         audit.event("live_daily_plan_write_skipped", {"plan_run_id": result.plan_run_id, "reason": "no_eligible_live_plans"})
+        if notify_unplaced_selected and _entry_approval_mode(config) == "auto_top_plan":
+            from kamandal_v2.live.execution import notify_live_advisory_risk_block
+
+            notify_live_advisory_risk_block(config, store, result.candidates)
     audit.write_json("latest_live_advisory", {
         **result.to_dict(),
         "daily_plan_rows": rows,
@@ -151,16 +161,20 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
     risk_decision = evaluate_entry_risk(store, config)
     risk_block_reason = ""
     cluster_capped = set[str]()
+    underlying_capped = set[str]()
     if risk_decision.enabled:
         if risk_decision.blocked:
             risk_block_reason = "live_risk_manager_blocked:" + ",".join(risk_decision.reason_codes())
         cluster_capped = cluster_capped_symbols(risk_decision)
+        underlying_capped = underlying_capped_symbols(risk_decision)
     for candidate in candidates:
         if not candidate.eligible:
             continue
         max_bpr = _candidate_bpr_cap(candidate, portfolio, live_cfg)
         if risk_block_reason:
             candidate.rejection_reason = risk_block_reason
+        elif candidate.underlying.upper() in underlying_capped:
+            candidate.rejection_reason = f"live_risk_underlying_cap:{candidate.underlying.upper()}"
         elif candidate.underlying.upper() in cluster_capped:
             cluster = cluster_for_symbol(config, candidate.underlying) or "unknown"
             candidate.rejection_reason = f"live_risk_cluster_cap:{cluster}"

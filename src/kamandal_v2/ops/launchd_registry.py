@@ -75,7 +75,7 @@ JOB_SCHEDULES = {
     "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 30))),
     "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
     "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 30))),
-    "live-advisory": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 40))),
+    "live-advisory": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 15))),
     "live-approved-orders": JobSchedule(cadence_minutes=5, window_start=time(9, 0), window_end=time(15, 15)),
     "live-management": JobSchedule(
         fixed_times=(time(14, 50), time(15, 5)),

@@ -12,6 +12,7 @@ from kamandal_v2.live.risk_manager import (
     BREAKER_CONSECUTIVE_LOSSES,
     BREAKER_DAILY_NEW_POSITIONS,
     REASON_CLUSTER_AT_CAP,
+    REASON_UNDERLYING_AT_CAP,
     evaluate_entry_risk,
 )
 from kamandal_v2.ops.launchd_registry import CENTRAL, JOB_SCHEDULES
@@ -714,6 +715,7 @@ def _risk_reason_attention(
 ) -> dict[str, Any]:
     if reason_code in {
         REASON_CLUSTER_AT_CAP,
+        REASON_UNDERLYING_AT_CAP,
         BREAKER_CONSECUTIVE_LOSSES,
         BREAKER_DAILY_NEW_POSITIONS,
     }:

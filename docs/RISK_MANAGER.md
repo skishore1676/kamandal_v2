@@ -22,12 +22,26 @@ Current checks:
 - weekly account drawdown breaker;
 - consecutive losing close cooldown;
 - max new position groups per day;
-- static correlation cluster caps.
+- per-cluster correlation caps;
+- same-underlying position-group cap;
 - account snapshot freshness breaker.
 
 Cluster caps are deliberately narrower than full risk blocking: a capped
 cluster blocks new entries in that cluster, but does not block unrelated
 symbols and never blocks exits.
+
+The live defaults are:
+
+- megacap tech: 4 open position groups;
+- semiconductors: 3;
+- broad indexes: 2;
+- crypto-adjacent: 2;
+- any single underlying: 2.
+
+Existing positions above a cap are never force-closed. The cap only rejects a
+new entry. If the auto-selected entry is the one rejected, Kamandal sends one
+deduplicated attention alert; merely having a cluster or underlying at cap
+does not page by itself.
 
 ## Why it stays off for now
 
@@ -79,6 +93,12 @@ Risk-manager signals should be read as entry-side protection:
 - `risk_cluster_at_cap`: new entries in those symbols should be blocked, but
   unrelated entries and all exits remain allowed. This is self-handled by
   Kamandal and should not page the operator by itself.
+- `risk_underlying_at_cap`: new entries for that same symbol are blocked, but
+  unrelated entries and all exits remain allowed. It also does not page by
+  itself.
+- A cap becomes operator-relevant only when it prevents the auto-selected
+  entry from being staged or submitted. That failed selected entry sends one
+  deduplicated alert.
 - drawdown or loss-cooldown reasons: new entries should be blocked until the
   cooldown or operator reset condition is met.
 
