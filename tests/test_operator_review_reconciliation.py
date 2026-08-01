@@ -509,6 +509,215 @@ def test_reconcile_does_not_auto_retire_duplicate_group_without_filled_close(tmp
     assert {decision["reason"] for decision in decisions} == {"quantity_mismatch_requires_review"}
 
 
+def _entry_ticket(ticket_hash: str, *, parent_ticket_hash: str = "") -> dict:
+    ticket = {
+        "ticket_hash": ticket_hash,
+        "order_id": "shared-broker-order",
+        "plan_id": "plan-lineage",
+        "candidate_id": "candidate-lineage",
+        "idea_id": "idea-lineage",
+        "intent_type": "open",
+        "underlying": "MRVL",
+        "structure": "put_spread",
+        "quantity": 1,
+        "limit_price": "2.50",
+        "created_at": "2026-07-31T14:40:00Z",
+        "legs": [],
+        "submit_payload": {"orderId": "shared-broker-order", "quantity": "1", "legs": []},
+    }
+    if parent_ticket_hash:
+        ticket["parent_ticket_hash"] = parent_ticket_hash
+        ticket["replaces_order_id"] = "shared-broker-order"
+    return ticket
+
+
+def test_reconcile_repairs_historical_duplicate_replacement_projection(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    parent = _entry_ticket("ticket-parent")
+    child = _entry_ticket("ticket-child", parent_ticket_hash="ticket-parent")
+    store.save_live_order_intent(parent, status="filled")
+    store.save_live_order_intent(child, status="filled")
+
+    root_group = _put_group("live_group_ticket-parent", long_strike=240, short_strike=250)
+    child_group = _put_group("live_group_ticket-child", long_strike=240, short_strike=250)
+    root_group.update({"order_id": "shared-broker-order", "entry_snapshot": {"source_ticket_hash": "ticket-parent"}})
+    child_group.update({"order_id": "shared-broker-order", "entry_snapshot": {"source_ticket_hash": "ticket-child", "fill_price": 2.55}})
+    for group in (root_group, child_group):
+        store.save_live_position_group(group["group_id"], group, status="open")
+        store.save_live_position(group["group_id"], group["group_id"], group, status="open")
+
+    issue = {
+        "issue_id": "recon_duplicate_short_leg",
+        "issue_type": "quantity_mismatch",
+        "subject_id": "MRVL260717P00250000",
+        "group_id": "live_group_ticket-parent",
+        "underlying": "MRVL",
+        "status": "open",
+    }
+    store.save_live_reconciliation_issue(issue)
+    store.save_operator_review_request(
+        {
+            "request_id": "or_recon_duplicate_short_leg",
+            "request_type": "live_reconciliation",
+            "subject_id": "recon_duplicate_short_leg",
+            "title": "Old duplicate review",
+            "summary": "Should close after deterministic repair.",
+            "allowed_actions": ["hold", "dismiss"],
+            "payload": {"issue_id": "recon_duplicate_short_leg"},
+            "status": "sent",
+            "created_at": "2099-01-01T00:00:00Z",
+            "expires_at": "2099-01-01T00:30:00Z",
+        }
+    )
+
+    class Broker:
+        def broker_positions(self):
+            return [
+                {"asset_type": "option", "occ_symbol": "MRVL260717P00240000", "underlying": "MRVL", "quantity": 1.0},
+                {"asset_type": "option", "occ_symbol": "MRVL260717P00250000", "underlying": "MRVL", "quantity": -1.0},
+            ]
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store, send_review=True)
+
+    assert result["issues"] == []
+    assert result["projection_repairs"] == [
+        {
+            "status": "applied",
+            "reason": "duplicate_entry_lineage_projection",
+            "lineage_id": "ticket-parent",
+            "canonical_group_id": "live_group_ticket-parent",
+            "canonical_ticket_hash": "ticket-child",
+            "broker_order_id": "shared-broker-order",
+            "retired_group_ids": ["live_group_ticket-child"],
+            "affected_symbols": ["MRVL260717P00240000", "MRVL260717P00250000"],
+        }
+    ]
+    groups = store.open_live_position_groups()
+    assert {group["group_id"] for group in groups} == {"live_group_ticket-parent"}
+    assert groups[0]["entry_snapshot"]["source_ticket_hash"] == "ticket-child"
+    assert groups[0]["execution_lineage"]["projection_repaired"] is True
+    assert store.live_order_intent("ticket-parent")["_ledger_status"] == "filled_via_replacement"
+    assert store.live_order_intent("ticket-child")["_ledger_status"] == "filled"
+    assert store.live_reconciliation_issue("recon_duplicate_short_leg")["status"] == "resolved"
+    assert store.operator_review_request("or_recon_duplicate_short_leg")["_ledger_status"] == "expired"
+
+
+def test_reconcile_duplicate_lineage_repair_is_dry_run_safe(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    parent = _entry_ticket("ticket-parent")
+    child = _entry_ticket("ticket-child", parent_ticket_hash="ticket-parent")
+    store.save_live_order_intent(parent, status="filled")
+    store.save_live_order_intent(child, status="filled")
+    for ticket_hash in ("ticket-parent", "ticket-child"):
+        group = _put_group(f"live_group_{ticket_hash}", long_strike=240, short_strike=250)
+        group["order_id"] = "shared-broker-order"
+        group["entry_snapshot"] = {"source_ticket_hash": ticket_hash}
+        store.save_live_position_group(group["group_id"], group, status="open")
+        store.save_live_position(group["group_id"], group["group_id"], group, status="open")
+
+    class Broker:
+        def broker_positions(self):
+            return [
+                {"asset_type": "option", "occ_symbol": "MRVL260717P00240000", "underlying": "MRVL", "quantity": 1.0},
+                {"asset_type": "option", "occ_symbol": "MRVL260717P00250000", "underlying": "MRVL", "quantity": -1.0},
+            ]
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store, dry_run=True)
+
+    assert result["projection_repairs"][0]["status"] == "dry_run"
+    assert {group["group_id"] for group in store.open_live_position_groups()} == {
+        "live_group_ticket-parent",
+        "live_group_ticket-child",
+    }
+    assert store.live_order_intent("ticket-parent")["_ledger_status"] == "filled"
+
+
+def test_reconcile_migrates_lone_noncanonical_replacement_group(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    parent = _entry_ticket("ticket-parent")
+    child = _entry_ticket("ticket-child", parent_ticket_hash="ticket-parent")
+    store.save_live_order_intent(parent, status="filled_via_replacement")
+    store.save_live_order_intent(child, status="filled")
+    child_group = _put_group("live_group_ticket-child", long_strike=240, short_strike=250)
+    child_group.update(
+        {
+            "order_id": "shared-broker-order",
+            "entry_snapshot": {"source_ticket_hash": "ticket-child", "fill_price": 2.55},
+        }
+    )
+    store.save_live_position_group(child_group["group_id"], child_group, status="open")
+    store.save_live_position(child_group["group_id"], child_group["group_id"], child_group, status="open")
+
+    class Broker:
+        def broker_positions(self):
+            return [
+                {"asset_type": "option", "occ_symbol": "MRVL260717P00240000", "underlying": "MRVL", "quantity": 1.0},
+                {"asset_type": "option", "occ_symbol": "MRVL260717P00250000", "underlying": "MRVL", "quantity": -1.0},
+            ]
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store)
+
+    assert result["issues"] == []
+    assert result["projection_repairs"][0]["retired_group_ids"] == ["live_group_ticket-child"]
+    groups = store.open_live_position_groups()
+    assert {group["group_id"] for group in groups} == {"live_group_ticket-parent"}
+    assert groups[0]["entry_snapshot"]["source_ticket_hash"] == "ticket-child"
+
+
+def test_recent_filled_entry_waits_for_portfolio_endpoint_grace(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    group = _group()
+    group["entry_snapshot"] = {"source_ticket_hash": "amzn"}
+    store.save_live_position_group("live_group_amzn", group, status="open")
+    store.save_live_position("live_group_amzn", "live_group_amzn", group, status="open")
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "amzn",
+            "order_id": "broker-amzn",
+            "plan_id": "plan-amzn",
+            "candidate_id": "cand",
+            "idea_id": "idea",
+            "intent_type": "open",
+            "underlying": "AMZN",
+            "structure": "call_spread",
+            "quantity": 1,
+            "limit_price": "1.00",
+            "legs": [],
+            "submit_payload": {"orderId": "broker-amzn", "legs": []},
+        },
+        status="filled",
+    )
+
+    class Broker:
+        def broker_positions(self):
+            return []
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+    config = _config()
+    config["live"]["reconciliation"]["broker_flat_confirmations_required"] = 1
+    config["live"]["reconciliation"]["post_fill_position_grace_minutes"] = 20
+
+    first = reconcile_live_positions(config, store=store)
+    second = reconcile_live_positions(config, store=store)
+
+    assert first["issues"] == []
+    assert second["issues"] == []
+    assert store.open_live_position_groups()
+    issue = store.open_live_reconciliation_issues(group_id="live_group_amzn")[0]
+    assert issue["decision"]["reason"] == "entry_fill_waiting_for_broker_position_confirmation"
+
+    with store._connect() as conn:
+        conn.execute("UPDATE live_position_groups SET opened_at = '2000-01-01 00:00:00' WHERE group_id = 'live_group_amzn'")
+    reconcile_live_positions(config, store=store)
+    assert store.open_live_position_groups() == []
+
+
 def test_live_portfolio_state_exposes_group_count_and_underlying_bpr(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     first = _put_group("live_group_mrvl_1", long_strike=240, short_strike=250, net_credit=2.5)

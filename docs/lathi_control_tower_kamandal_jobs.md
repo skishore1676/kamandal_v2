@@ -255,7 +255,10 @@ sequenceDiagram
 During live reconciliation, Kamandal decides whether an issue is auto-repairable
 or ambiguous.
 
-- Auto-repairable issues are handled inside Kamandal without asking Suman.
+- Auto-repairable issues are handled inside Kamandal without asking Suman. This
+  includes deterministic replacement-lineage duplicates, cumulative partial
+  fills, post-fill position lag, and confirmed local ghosts. The exact proof
+  boundary is defined in `docs/LIVE_RECONCILIATION.md`.
 - Ambiguous issues become rows in Kamandal SQLite `operator_review_requests`.
 - The request includes a stable `request_id`, `request_type`, `subject_id`,
   summary, allowed actions, payload, creation time, and expiry time.

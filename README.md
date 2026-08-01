@@ -112,9 +112,10 @@ The system self-heals everything it can; a status only persists when it genuinel
   `KAMANDAL_LIVE_HEALTH_EXIT_PIPELINE_STALLED_MINUTES`. Action: check the
   launchd log for `live_approved_orders`; the broker may not have received any
   order yet.
-- `reconciliation_blocker` — local book and broker disagree about what you own. Action: compare
-  the position row against the Public app; the reconciler auto-retires confirmed ghosts after
-  `broker_flat_confirmations_required` cycles, so usually wait one cycle, intervene only if it sticks.
+- `reconciliation_blocker` — local book and broker disagree about what you own. Known order
+  replacement lineages, transient post-fill lag, and confirmed ghosts are repaired automatically.
+  Action is required only if the bounded review says ownership or structure is genuinely ambiguous;
+  see [the reconciliation contract](docs/LIVE_RECONCILIATION.md).
 - `loss_watch` — a position crossed its max-loss multiple; an auto-close fires after the
   confirmation mark. No action needed unless its close then fails (which turns into the case above).
 

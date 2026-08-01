@@ -179,6 +179,7 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "live.liquidity_policy.absurd_bid_ask_pct": _env_float("KAMANDAL_LIVE_ABSURD_BID_ASK_PCT"),
         "live.reconciliation.enabled": _env_bool("KAMANDAL_LIVE_RECONCILIATION_ENABLED"),
         "live.reconciliation.broker_flat_confirmations_required": _env_int("KAMANDAL_LIVE_RECONCILIATION_FLAT_CONFIRMATIONS_REQUIRED"),
+        "live.reconciliation.post_fill_position_grace_minutes": _env_int("KAMANDAL_LIVE_RECONCILIATION_POST_FILL_GRACE_MINUTES"),
         "live.reconciliation.auto_retire_ghost_after_confirmations": _env_bool("KAMANDAL_LIVE_RECONCILIATION_AUTO_RETIRE_GHOST"),
         "live.reconciliation.auto_local_repair_enabled": _env_bool("KAMANDAL_LIVE_RECONCILIATION_AUTO_LOCAL_REPAIR"),
         "live.reconciliation.block_management_on_open_issues": _env_bool("KAMANDAL_LIVE_RECONCILIATION_BLOCK_MANAGEMENT"),

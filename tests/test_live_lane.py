@@ -123,6 +123,7 @@ def test_live_approval_env_overrides(monkeypatch) -> None:
     monkeypatch.setenv("KAMANDAL_LIVE_BASKET_HARD_NEW_BPR_PCT", "9")
     monkeypatch.setenv("KAMANDAL_LIVE_BASKET_MIN_MARGINAL_SCORE", "4")
     monkeypatch.setenv("KAMANDAL_ENTRY_REPRICE_EXPIRE_AFTER_MINUTES", "45")
+    monkeypatch.setenv("KAMANDAL_LIVE_RECONCILIATION_POST_FILL_GRACE_MINUTES", "15")
     monkeypatch.setenv("KAMANDAL_TELEGRAM_APPROVAL_TARGET", "123")
     monkeypatch.setenv("KAMANDAL_TELEGRAM_APPROVAL_EXPIRY_MINUTES", "7")
 
@@ -139,6 +140,7 @@ def test_live_approval_env_overrides(monkeypatch) -> None:
     assert control["live"]["basket"]["hard_new_bpr_pct"] == 9
     assert control["live"]["basket"]["min_marginal_score"] == 4
     assert control["live"]["entry_reprice"]["expire_after_minutes"] == 45
+    assert control["live"]["reconciliation"]["post_fill_position_grace_minutes"] == 15
     assert control["live"]["telegram_approval"]["target"] == "123"
     assert control["live"]["telegram_approval"]["expiry_minutes"] == 7
 
@@ -1950,6 +1952,214 @@ def test_sync_live_orders_marks_cancelled_intent_terminal(tmp_path, monkeypatch)
     assert synced["synced"] == 1
     assert synced["orders"][0]["status"] == "CANCELLED"
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "cancelled"
+
+
+def _replacement_entry_ticket(
+    ticket_hash: str,
+    *,
+    order_id: str,
+    parent_ticket_hash: str = "",
+    quantity: int = 1,
+) -> dict:
+    ticket = {
+        "ticket_hash": ticket_hash,
+        "order_id": order_id,
+        "plan_id": "plan-lineage",
+        "candidate_id": "candidate-lineage",
+        "idea_id": "idea-lineage",
+        "intent_type": "open",
+        "underlying": "AMZN",
+        "playbook_id": "put_calendar_low_iv",
+        "structure": "put_calendar",
+        "quantity": quantity,
+        "limit_price": "5.45",
+        "created_at": "2026-07-31T14:40:04Z",
+        "legs": [
+            {"role": "short_near", "side": "sell", "option_type": "put", "strike": 270, "expiration": "2026-08-28", "quantity": 1},
+            {"role": "long_far", "side": "buy", "option_type": "put", "strike": 270, "expiration": "2026-10-16", "quantity": 1},
+        ],
+        "submit_payload": {"orderId": order_id, "quantity": str(quantity), "type": "LIMIT", "limitPrice": "5.45", "legs": []},
+    }
+    if parent_ticket_hash:
+        ticket["parent_ticket_hash"] = parent_ticket_hash
+        ticket["replaces_order_id"] = order_id
+    return ticket
+
+
+def test_sync_atomic_replace_projects_one_position_per_lineage(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    parent = _replacement_entry_ticket("ticket-parent", order_id="broker-order")
+    child = _replacement_entry_ticket("ticket-child", order_id="broker-order", parent_ticket_hash="ticket-parent")
+    store.save_live_order_intent(parent, status="repriced")
+    store.save_live_order_intent(child, status="submitted")
+
+    class FilledBroker:
+        def get_order(self, _order_id):
+            return {"status": "FILLED", "filledQuantity": "1", "averagePrice": "5.45"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: FilledBroker())
+
+    first = sync_live_orders(_live_control(), store=store)
+    second = sync_live_orders(_live_control(), store=store)
+
+    assert first["synced"] == 2
+    assert second["synced"] == 0
+    groups = store.open_live_position_groups()
+    assert len(groups) == 1
+    assert groups[0]["group_id"] == "live_group_ticket-parent"
+    assert groups[0]["execution_lineage"]["canonical_ticket_hash"] == "ticket-child"
+    assert groups[0]["entry_snapshot"]["source_ticket_hash"] == "ticket-child"
+    assert store.live_order_intent("ticket-parent")["_ledger_status"] == "filled_via_replacement"
+    assert store.live_order_intent("ticket-child")["_ledger_status"] == "filled"
+
+
+def test_sync_staged_replace_keeps_root_identity_when_child_order_fills(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    parent = _replacement_entry_ticket("ticket-parent", order_id="broker-parent")
+    child = _replacement_entry_ticket("ticket-child", order_id="broker-child", parent_ticket_hash="ticket-parent")
+    child["replaces_order_id"] = "broker-parent"
+    store.save_live_order_intent(parent, status="repriced")
+    store.save_live_order_intent(child, status="submitted")
+
+    class Broker:
+        def get_order(self, order_id):
+            if order_id == "broker-child":
+                return {"status": "FILLED", "filledQuantity": "1", "averagePrice": "5.45"}
+            return {"status": "CANCELLED", "filledQuantity": "0"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: Broker())
+
+    result = sync_live_orders(_live_control(), store=store)
+
+    assert result["synced"] == 2
+    assert {group["group_id"] for group in store.open_live_position_groups()} == {"live_group_ticket-parent"}
+    assert store.live_order_intent("ticket-parent")["_ledger_status"] == "filled_via_replacement"
+    assert store.live_order_intent("ticket-child")["_ledger_status"] == "filled"
+
+
+def test_sync_sums_partial_parent_and_child_fills_across_staged_replacement(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    parent = _replacement_entry_ticket("ticket-parent", order_id="broker-parent", quantity=2)
+    child = _replacement_entry_ticket(
+        "ticket-child",
+        order_id="broker-child",
+        parent_ticket_hash="ticket-parent",
+        quantity=1,
+    )
+    child["replaces_order_id"] = "broker-parent"
+    store.save_live_order_intent(parent, status="submitted")
+    store.save_live_order_intent(child, status="submitted")
+    calls = {"broker-parent": 0, "broker-child": 0}
+
+    class Broker:
+        def get_order(self, order_id):
+            calls[order_id] += 1
+            if order_id == "broker-parent":
+                if calls[order_id] == 1:
+                    return {"status": "PARTIALLY_FILLED", "filledQuantity": "1", "averagePrice": "5.40"}
+                return {"status": "CANCELLED", "filledQuantity": "1", "averagePrice": "5.40"}
+            if calls[order_id] == 1:
+                return {"status": "WORKING", "filledQuantity": "0"}
+            return {"status": "FILLED", "filledQuantity": "1", "averagePrice": "5.50"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: Broker())
+
+    sync_live_orders(_live_control(), store=store, manage_entries=False)
+    opened_at = store.open_live_position_groups()[0]["opened_at"]
+    sync_live_orders(_live_control(), store=store, manage_entries=False)
+
+    group = store.open_live_position_groups()[0]
+    assert group["opened_at"] == opened_at
+    assert group["group_id"] == "live_group_ticket-parent"
+    assert group["entry_snapshot"]["fill_quantity"] == 2.0
+    assert group["entry_snapshot"]["entry_net_credit"] == -5.45
+    assert {fill["order_id"] for fill in group["entry_snapshot"]["execution_fills"]} == {
+        "broker-parent",
+        "broker-child",
+    }
+    assert {leg["quantity"] for leg in group["candidate"]["legs"]} == {2.0}
+
+
+def test_sync_preserves_terminal_partial_fill_as_one_open_position(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = _replacement_entry_ticket("ticket-partial", order_id="broker-partial", quantity=2)
+    store.save_live_order_intent(ticket, status="submitted")
+    responses = iter(
+        [
+            {"status": "PARTIALLY_FILLED", "filledQuantity": "1", "averagePrice": "5.40"},
+            {"status": "CANCELLED", "filledQuantity": "1", "averagePrice": "5.40"},
+        ]
+    )
+
+    class Broker:
+        def get_order(self, _order_id):
+            return next(responses)
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: Broker())
+
+    first = sync_live_orders(_live_control(), store=store)
+    second = sync_live_orders(_live_control(), store=store)
+
+    assert first["orders"][0]["position_projection"]["status"] == "partially_filled"
+    assert second["orders"][0]["partial_fill_preserved"] is True
+    group = store.open_live_position_groups()[0]
+    assert group["entry_snapshot"]["fill_quantity"] == 1.0
+    assert {leg["quantity"] for leg in group["candidate"]["legs"]} == {1.0}
+    assert store.live_order_intent("ticket-partial")["_ledger_status"] == "partially_filled_terminal"
+
+
+def test_sync_refuses_ambiguous_replacement_siblings(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    parent = _replacement_entry_ticket("ticket-parent", order_id="broker-order")
+    first_child = _replacement_entry_ticket("ticket-child-a", order_id="broker-order", parent_ticket_hash="ticket-parent")
+    second_child = _replacement_entry_ticket("ticket-child-b", order_id="broker-order", parent_ticket_hash="ticket-parent")
+    store.save_live_order_intent(parent, status="repriced")
+    store.save_live_order_intent(first_child, status="submitted")
+    store.save_live_order_intent(second_child, status="submitted")
+
+    class FilledBroker:
+        def get_order(self, _order_id):
+            return {"status": "FILLED", "filledQuantity": "1", "averagePrice": "5.45"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: FilledBroker())
+
+    result = sync_live_orders(_live_control(), store=store)
+
+    assert result["synced"] == 3
+    assert store.open_live_position_groups() == []
+    assert {item["position_projection"]["reason"] for item in result["orders"]} == {"multiple_terminal_replacement_tickets"}
+
+
+@pytest.mark.parametrize("lineage_kind", ["missing_parent", "cycle"])
+def test_sync_refuses_broken_replacement_lineage(tmp_path, monkeypatch, lineage_kind) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    first = _replacement_entry_ticket("ticket-first", order_id="broker-first")
+    if lineage_kind == "missing_parent":
+        first["parent_ticket_hash"] = "ticket-missing"
+        tickets = [first]
+        expected_reason = "replacement_parent_missing"
+    else:
+        second = _replacement_entry_ticket(
+            "ticket-second",
+            order_id="broker-second",
+            parent_ticket_hash="ticket-first",
+        )
+        first["parent_ticket_hash"] = "ticket-second"
+        tickets = [first, second]
+        expected_reason = "replacement_lineage_cycle"
+    for ticket in tickets:
+        store.save_live_order_intent(ticket, status="submitted")
+
+    class FilledBroker:
+        def get_order(self, _order_id):
+            return {"status": "FILLED", "filledQuantity": "1", "averagePrice": "5.45"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: FilledBroker())
+
+    result = sync_live_orders(_live_control(), store=store)
+
+    assert store.open_live_position_groups() == []
+    assert {item["position_projection"]["reason"] for item in result["orders"]} == {expected_reason}
 
 
 def test_sync_live_orders_polls_cancel_pending_repriced_intent(tmp_path, monkeypatch) -> None:
