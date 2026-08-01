@@ -744,13 +744,49 @@ class LocalStore:
                 (ticket_hash, order_id, status, json.dumps(payload, sort_keys=True)),
             )
 
+    def live_order_status_history(self, order_ids: set[str]) -> list[dict[str, Any]]:
+        """Return persisted broker observations for a bounded set of orders."""
+
+        normalized = sorted(str(order_id) for order_id in order_ids if str(order_id))
+        if not normalized:
+            return []
+        placeholders = ", ".join("?" for _ in normalized)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, created_at, ticket_hash, order_id, status, payload
+                FROM live_order_status
+                WHERE order_id IN ({placeholders})
+                ORDER BY id ASC
+                """,
+                normalized,
+            ).fetchall()
+        history = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            payload.update(
+                {
+                    "_status_id": int(row["id"]),
+                    "_observed_at": row["created_at"],
+                    "_ticket_hash": row["ticket_hash"],
+                    "_order_id": row["order_id"],
+                    "_broker_status": row["status"],
+                }
+            )
+            history.append(payload)
+        return history
+
     def save_live_position_group(self, group_id: str, payload: dict[str, Any], *, status: str = "open") -> None:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO live_position_groups
+                INSERT INTO live_position_groups
                 (group_id, status, payload)
                 VALUES (?, ?, ?)
+                ON CONFLICT(group_id) DO UPDATE SET
+                    status = excluded.status,
+                    payload = excluded.payload,
+                    closed_at = CASE WHEN excluded.status = 'open' THEN NULL ELSE live_position_groups.closed_at END
                 """,
                 (group_id, status, json.dumps(payload, sort_keys=True)),
             )
@@ -759,9 +795,21 @@ class LocalStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO live_positions
+                INSERT INTO live_positions
                 (id, group_id, order_id, plan_id, candidate_id, idea_id, underlying, playbook_id, structure, status, payload)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    group_id = excluded.group_id,
+                    order_id = excluded.order_id,
+                    plan_id = excluded.plan_id,
+                    candidate_id = excluded.candidate_id,
+                    idea_id = excluded.idea_id,
+                    underlying = excluded.underlying,
+                    playbook_id = excluded.playbook_id,
+                    structure = excluded.structure,
+                    status = excluded.status,
+                    payload = excluded.payload,
+                    closed_at = CASE WHEN excluded.status = 'open' THEN NULL ELSE live_positions.closed_at END
                 """,
                 (
                     position_id,

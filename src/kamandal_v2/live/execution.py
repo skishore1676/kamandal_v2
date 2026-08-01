@@ -18,6 +18,7 @@ from kamandal_v2.live.entry_hygiene import (
     retire_stale_entry_approvals,
     stale_entry_approval_minutes,
 )
+from kamandal_v2.live.lineage import EntryLineage, resolve_entry_lineage
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
@@ -29,11 +30,17 @@ from kamandal_v2.stores.sqlite import LocalStore
 
 
 TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED"}
-COMPLETED_TICKET_STATUSES = {"filled", "close_filled", "manual_fill_recorded"}
+COMPLETED_TICKET_STATUSES = {
+    "filled",
+    "filled_via_replacement",
+    "partially_filled_terminal",
+    "close_filled",
+    "manual_fill_recorded",
+}
 APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
 EXPIRED_EOD_STATUS = "expired_eod"
 PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
-ACTIVE_TICKET_STATUSES = {"submitted", "repriced"}
+ACTIVE_TICKET_STATUSES = {"submitted", "repriced", "partially_filled"}
 REPLACE_CANCEL_PENDING = "replace_cancel_pending"
 REPLACE_WAITING_CANCEL = "replace_waiting_cancel"
 CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired", REPLACE_CANCEL_PENDING}
@@ -359,7 +366,7 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
 def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manage_entries: bool) -> dict[str, Any]:
     adapter = broker_adapter(config)
     tickets = store.live_order_intents_by_status(
-        {"submitted", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
+        {"submitted", "partially_filled", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
     )
     known_hashes = {str(ticket.get("ticket_hash") or "") for ticket in tickets}
     for child in store.live_order_intents_by_status({REPLACE_WAITING_CANCEL}):
@@ -464,11 +471,52 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
             reprice_result = _reprice_live_entry_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **reprice_result})
             continue
+        position_projection = None
         if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "open":
-            _save_live_position_from_ticket(store, ticket, status=status.lower(), order_status=response)
+            position_projection = _save_live_position_from_ticket(store, ticket, status=status.lower(), order_status=response)
         if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "close":
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "close_filled")
         activity_receipt = None
+        terminal_fill_quantity = _filled_quantity(response)
+        filled_descendant = _filled_replacement_descendant(store, ticket) if intent_type == "open" else None
+        if status in TERMINAL_UNFILLED_ORDER_STATUSES and filled_descendant is not None:
+            store.update_live_order_intent_status_with_payload(
+                str(ticket["ticket_hash"]),
+                "filled_via_replacement",
+                {
+                    "filled_by_ticket_hash": filled_descendant.get("ticket_hash"),
+                    "position_group_id": f"live_group_{_lineage_root_hash(store, ticket)}",
+                },
+            )
+            results.append(
+                {
+                    "ticket_hash": ticket["ticket_hash"],
+                    "order_id": ticket["order_id"],
+                    "status": status,
+                    "ledger_status": ledger_status,
+                    "reconciled_status": "filled_via_replacement",
+                    "filled_by_ticket_hash": filled_descendant.get("ticket_hash"),
+                }
+            )
+            continue
+        if status in TERMINAL_UNFILLED_ORDER_STATUSES and intent_type == "open" and terminal_fill_quantity > 0:
+            position_projection = _save_live_position_from_ticket(
+                store,
+                ticket,
+                status="partially_filled_terminal",
+                order_status=response,
+            )
+            result = {
+                "ticket_hash": ticket["ticket_hash"],
+                "order_id": ticket["order_id"],
+                "status": status,
+                "ledger_status": ledger_status,
+                "partial_fill_preserved": True,
+                "filled_quantity": terminal_fill_quantity,
+                "position_projection": position_projection,
+            }
+            results.append(result)
+            continue
         if status in TERMINAL_UNFILLED_ORDER_STATUSES:
             normalized_status = status.lower().replace("canceled", "cancelled")
             transitioned = store.transition_live_order_intent_status(
@@ -484,6 +532,8 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
                     broker_status=status,
                 )
         result = {"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, "ledger_status": ledger_status}
+        if position_projection is not None:
+            result["position_projection"] = position_projection
         if activity_receipt is not None:
             result["activity_receipt"] = activity_receipt
         if ledger_status in CANCEL_PENDING_TICKET_STATUSES and status in {"NEW", "OPEN", "WORKING"}:
@@ -1536,9 +1586,13 @@ def record_manual_live_fill(ticket_hash: str, *, store: LocalStore | None = None
     ticket = store.live_order_intent(ticket_hash)
     if not ticket:
         raise RuntimeError(f"live order intent not found: {ticket_hash}")
-    _save_live_position_from_ticket(store, ticket, status="open", order_status={"manual": True})
+    projection = _save_live_position_from_ticket(store, ticket, status="open", order_status={"manual": True})
     store.update_live_order_intent_status(ticket_hash, "manual_fill_recorded")
-    return {"ticket_hash": ticket_hash, "group_id": _group_id(ticket), "status": "manual_fill_recorded"}
+    return {
+        "ticket_hash": ticket_hash,
+        "group_id": projection.get("group_id") or _group_id(ticket),
+        "status": "manual_fill_recorded",
+    }
 
 
 def _approved_rows(config: dict[str, Any], *, close: bool) -> list[dict[str, str]]:
@@ -1735,29 +1789,137 @@ def _parse_db_timestamp(value: str) -> datetime:
     return parsed
 
 
-def _save_live_position_from_ticket(store: LocalStore, ticket: dict[str, Any], *, status: str, order_status: dict[str, Any]) -> None:
-    group_id = _group_id(ticket)
+def _save_live_position_from_ticket(
+    store: LocalStore,
+    ticket: dict[str, Any],
+    *,
+    status: str,
+    order_status: dict[str, Any],
+) -> dict[str, Any]:
+    lineage = resolve_entry_lineage(store, ticket, broker_order_id=str(ticket.get("order_id") or ""))
+    if lineage.ambiguous or not lineage.canonical_ticket:
+        blocked = {
+            "saved": False,
+            "reason": lineage.reason or "ambiguous_entry_lineage",
+            "ticket_hash": ticket.get("ticket_hash"),
+            "order_id": ticket.get("order_id"),
+            "lineage_id": lineage.lineage_id,
+        }
+        store.event("live_position_projection_blocked", blocked)
+        return blocked
+
+    canonical = lineage.canonical_ticket
+    group_id = lineage.group_id
+    execution_fills = _lineage_execution_fills(store, lineage, ticket, order_status)
+    fill_quantity = sum(float(fill.get("filled_quantity") or 0.0) for fill in execution_fills)
+    if fill_quantity <= 0 and status in {"filled", "open"}:
+        fill_quantity = float(canonical.get("quantity") or 1.0)
+        execution_fills = [
+            _execution_fill(canonical, order_status, fill_quantity=fill_quantity, source="fallback")
+        ]
+    if fill_quantity <= 0:
+        blocked = {
+            "saved": False,
+            "reason": "filled_quantity_missing",
+            "ticket_hash": canonical.get("ticket_hash"),
+            "order_id": canonical.get("order_id"),
+            "lineage_id": lineage.lineage_id,
+        }
+        store.event("live_position_projection_blocked", blocked)
+        return blocked
+
+    candidate = _candidate_from_ticket(canonical, fill_quantity=fill_quantity)
     payload = {
         "group_id": group_id,
-        "order_id": ticket.get("order_id"),
-        "plan_id": ticket.get("plan_id"),
-        "candidate_id": ticket.get("candidate_id"),
-        "idea_id": ticket.get("idea_id"),
-        "underlying": ticket.get("underlying"),
-        "playbook_id": ticket.get("playbook_id"),
-        "structure": ticket.get("structure"),
-        "candidate": _candidate_from_ticket(ticket),
-        "execution_quality": ticket.get("execution_quality") or {},
-        "entry_snapshot": _entry_snapshot_from_ticket(ticket, order_status),
+        "order_id": canonical.get("order_id"),
+        "plan_id": canonical.get("plan_id"),
+        "candidate_id": canonical.get("candidate_id"),
+        "idea_id": canonical.get("idea_id"),
+        "underlying": canonical.get("underlying"),
+        "playbook_id": canonical.get("playbook_id"),
+        "structure": canonical.get("structure"),
+        "candidate": candidate,
+        "execution_quality": canonical.get("execution_quality") or {},
+        "entry_snapshot": _entry_snapshot_from_lineage(
+            canonical,
+            order_status,
+            execution_fills=execution_fills,
+            fill_quantity=fill_quantity,
+        ),
+        "execution_lineage": {
+            "lineage_id": lineage.lineage_id,
+            "root_ticket_hash": lineage.root_ticket_hash,
+            "canonical_ticket_hash": canonical.get("ticket_hash"),
+            "broker_order_id": canonical.get("order_id"),
+            "ticket_hashes": sorted(str(member.get("ticket_hash") or "") for member in lineage.members),
+            "broker_order_ids": sorted(
+                {str(fill.get("order_id") or "") for fill in execution_fills if str(fill.get("order_id") or "")}
+            ),
+        },
         "order_status": order_status,
     }
     store.save_live_position_group(group_id, payload, status="open")
-    store.save_live_position(group_id, group_id, payload, status="open" if status in {"open", "filled"} else status)
-    store.update_live_order_intent_status(str(ticket["ticket_hash"]), "filled")
+    store.save_live_position(group_id, group_id, payload, status="open")
+    canonical_status = "partially_filled" if status == "partially_filled" else "filled"
+    if status == "partially_filled_terminal":
+        canonical_status = "partially_filled_terminal"
+    store.update_live_order_intent_status_with_payload(
+        str(canonical["ticket_hash"]),
+        canonical_status,
+        {
+            "execution_lineage": payload["execution_lineage"],
+            "position_group_id": group_id,
+            "filled_quantity": fill_quantity,
+        },
+    )
+    if canonical_status == "filled":
+        for member in lineage.members:
+            member_hash = str(member.get("ticket_hash") or "")
+            if member_hash == str(canonical.get("ticket_hash") or ""):
+                continue
+            if str(member.get("order_id") or "") != str(canonical.get("order_id") or ""):
+                continue
+            member_status = str(member.get("_ledger_status") or member.get("status") or "")
+            if member_status in COMPLETED_TICKET_STATUSES:
+                continue
+            store.update_live_order_intent_status_with_payload(
+                member_hash,
+                "filled_via_replacement",
+                {
+                    "execution_lineage": payload["execution_lineage"],
+                    "position_group_id": group_id,
+                    "filled_by_ticket_hash": canonical.get("ticket_hash"),
+                },
+            )
+    store.event(
+        "live_position_projection_saved",
+        {
+            "group_id": group_id,
+            "lineage_id": lineage.lineage_id,
+            "canonical_ticket_hash": canonical.get("ticket_hash"),
+            "broker_order_id": canonical.get("order_id"),
+            "filled_quantity": fill_quantity,
+            "execution_fill_count": len(execution_fills),
+            "status": canonical_status,
+        },
+    )
+    return {
+        "saved": True,
+        "group_id": group_id,
+        "lineage_id": lineage.lineage_id,
+        "canonical_ticket_hash": canonical.get("ticket_hash"),
+        "filled_quantity": fill_quantity,
+        "execution_fill_count": len(execution_fills),
+        "status": canonical_status,
+    }
 
 
-def _candidate_from_ticket(ticket: dict[str, Any]) -> dict[str, Any]:
-    legs = list(ticket.get("legs") or [])
+def _candidate_from_ticket(ticket: dict[str, Any], *, fill_quantity: float = 1.0) -> dict[str, Any]:
+    legs = []
+    for raw_leg in ticket.get("legs") or []:
+        leg = dict(raw_leg)
+        leg["quantity"] = abs(float(leg.get("quantity") or 1.0)) * fill_quantity
+        legs.append(leg)
     return {
         "candidate_id": ticket.get("candidate_id"),
         "idea_id": ticket.get("idea_id"),
@@ -1775,28 +1937,161 @@ def _net_credit_from_ticket(ticket: dict[str, Any]) -> float:
     return abs(limit_price) if limit_price < 0 else -abs(limit_price)
 
 
-def _entry_snapshot_from_ticket(ticket: dict[str, Any], order_status: dict[str, Any]) -> dict[str, Any]:
-    net_credit = _net_credit_from_ticket(ticket)
-    if len(ticket.get("legs") or []) == 1 and order_status.get("averagePrice") not in (None, ""):
-        fill_price = float(order_status.get("averagePrice") or abs(net_credit))
-        side = str(order_status.get("side") or "").upper()
-        net_credit = fill_price if side == "SELL" else -fill_price
-    entry_net_cashflow = round(net_credit * 100.0, 2)
+def _entry_snapshot_from_lineage(
+    ticket: dict[str, Any],
+    order_status: dict[str, Any],
+    *,
+    execution_fills: list[dict[str, Any]],
+    fill_quantity: float = 1.0,
+) -> dict[str, Any]:
+    entry_net_cashflow = round(
+        sum(
+            float(fill.get("net_credit") or 0.0)
+            * 100.0
+            * float(fill.get("filled_quantity") or 0.0)
+            for fill in execution_fills
+        ),
+        2,
+    )
+    net_credit = entry_net_cashflow / (100.0 * fill_quantity) if fill_quantity else _net_credit_from_ticket(ticket)
     return {
         "entry_kind": "credit" if entry_net_cashflow > 0 else "debit",
         "entry_net_credit": round(net_credit, 4),
         "entry_net_cashflow": entry_net_cashflow,
         "entry_value": abs(entry_net_cashflow),
         "fill_price": order_status.get("averagePrice"),
-        "fill_quantity": order_status.get("filledQuantity"),
+        "fill_quantity": fill_quantity,
         "source_order_id": ticket.get("order_id"),
         "source_ticket_hash": ticket.get("ticket_hash"),
+        "execution_fills": execution_fills,
         "execution_quality": ticket.get("execution_quality") or {},
     }
 
 
 def _group_id(ticket: dict[str, Any]) -> str:
     return f"live_group_{ticket.get('ticket_hash')}"
+
+
+def _filled_quantity(order_status: dict[str, Any]) -> float:
+    raw = order_status.get("filledQuantity")
+    if raw in (None, ""):
+        return 0.0
+    try:
+        return max(float(raw), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _lineage_execution_fills(
+    store: LocalStore,
+    lineage: EntryLineage,
+    current_ticket: dict[str, Any],
+    current_status: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Aggregate cumulative fills once per broker order in an entry lineage."""
+
+    members_by_hash = {str(member.get("ticket_hash") or ""): member for member in lineage.members}
+    members_by_order: dict[str, list[dict[str, Any]]] = {}
+    for member in lineage.members:
+        order_id = str(member.get("order_id") or "")
+        if order_id:
+            members_by_order.setdefault(order_id, []).append(member)
+    observations = store.live_order_status_history(set(members_by_order))
+    current_order_id = str(current_ticket.get("order_id") or "")
+    if current_order_id and not any(
+        str(item.get("_order_id") or "") == current_order_id for item in observations
+    ):
+        observations.append(
+            {
+                **current_status,
+                "_order_id": current_order_id,
+                "_ticket_hash": current_ticket.get("ticket_hash"),
+                "_broker_status": current_status.get("status"),
+                "_status_id": 0,
+            }
+        )
+
+    best_by_order: dict[str, dict[str, Any]] = {}
+    for observation in observations:
+        order_id = str(observation.get("_order_id") or "")
+        quantity = _filled_quantity(observation)
+        if not order_id or quantity <= 0:
+            continue
+        previous = best_by_order.get(order_id)
+        previous_quantity = _filled_quantity(previous or {})
+        if previous is None or quantity > previous_quantity or (
+            quantity == previous_quantity
+            and int(observation.get("_status_id") or 0) > int(previous.get("_status_id") or 0)
+        ):
+            best_by_order[order_id] = observation
+
+    fills = []
+    for order_id, observation in sorted(best_by_order.items()):
+        observed_ticket = members_by_hash.get(str(observation.get("_ticket_hash") or ""))
+        ticket_for_order = observed_ticket or max(
+            members_by_order.get(order_id) or [current_ticket],
+            key=lambda member: str(member.get("created_at") or ""),
+        )
+        fills.append(
+            _execution_fill(
+                ticket_for_order,
+                observation,
+                fill_quantity=_filled_quantity(observation),
+                source="broker_status_history",
+            )
+        )
+    return fills
+
+
+def _execution_fill(
+    ticket: dict[str, Any],
+    order_status: dict[str, Any],
+    *,
+    fill_quantity: float,
+    source: str,
+) -> dict[str, Any]:
+    net_credit = _net_credit_from_ticket(ticket)
+    average_price = order_status.get("averagePrice")
+    if average_price not in (None, ""):
+        observed_price = abs(float(average_price))
+        side = str(order_status.get("side") or "").upper()
+        if len(ticket.get("legs") or []) == 1 and side:
+            net_credit = observed_price if side == "SELL" else -observed_price
+        elif net_credit:
+            net_credit = observed_price if net_credit > 0 else -observed_price
+    return {
+        "order_id": str(order_status.get("_order_id") or ticket.get("order_id") or ""),
+        "ticket_hash": str(order_status.get("_ticket_hash") or ticket.get("ticket_hash") or ""),
+        "filled_quantity": fill_quantity,
+        "average_price": average_price,
+        "net_credit": round(net_credit, 4),
+        "broker_status": str(order_status.get("_broker_status") or order_status.get("status") or ""),
+        "observed_at": order_status.get("_observed_at"),
+        "source": source,
+    }
+
+
+def _filled_replacement_descendant(store: LocalStore, ticket: dict[str, Any]) -> dict[str, Any] | None:
+    resolution = resolve_entry_lineage(store, ticket, broker_order_id=str(ticket.get("order_id") or ""))
+    ticket_hash = str(ticket.get("ticket_hash") or "")
+    completed = [
+        member
+        for member in resolution.members
+        if str(member.get("ticket_hash") or "") != ticket_hash
+        and str(member.get("_ledger_status") or member.get("status") or "")
+        in {"filled", "manual_fill_recorded", "partially_filled_terminal"}
+    ]
+    if not completed:
+        return None
+    return max(
+        completed,
+        key=lambda member: (str(member.get("created_at") or ""), str(member.get("ticket_hash") or "")),
+    )
+
+
+def _lineage_root_hash(store: LocalStore, ticket: dict[str, Any]) -> str:
+    resolution = resolve_entry_lineage(store, ticket, broker_order_id=str(ticket.get("order_id") or ""))
+    return resolution.root_ticket_hash or str(ticket.get("ticket_hash") or "")
 
 
 def _failure(

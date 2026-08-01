@@ -226,12 +226,19 @@ def test_live_management_write_sheet_refreshes_live_book(tmp_path: Path, monkeyp
 def test_reconciliation_write_sheet_refreshes_live_book(tmp_path: Path, monkeypatch: Any) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     calls: list[dict[str, Any]] = []
+    daily_plan_calls: list[dict[str, Any]] = []
 
     class Broker:
         def broker_positions(self) -> list[dict[str, Any]]:
             return []
 
     monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+    monkeypatch.setattr(
+        "kamandal_v2.live.reconciliation.write_daily_plan",
+        lambda config, rows, header, *, replace_lanes: daily_plan_calls.append(
+            {"config": config, "rows": rows, "header": header, "replace_lanes": replace_lanes}
+        ),
+    )
     monkeypatch.setattr(
         "kamandal_v2.live.reconciliation.write_live_book",
         lambda config, header, rows: calls.append({"config": config, "header": header, "rows": rows}) or len(rows),
@@ -245,3 +252,6 @@ def test_reconciliation_write_sheet_refreshes_live_book(tmp_path: Path, monkeypa
     assert calls[0]["header"] == LIVE_BOOK_HEADER
     assert len(calls[0]["rows"]) == 1
     assert calls[0]["rows"][0][LIVE_BOOK_HEADER.index("symbol")] == "_HEALTH_"
+    assert len(daily_plan_calls) == 1
+    assert daily_plan_calls[0]["rows"] == []
+    assert daily_plan_calls[0]["replace_lanes"] == {"live_reconciliation"}

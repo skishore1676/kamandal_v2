@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
+from kamandal_v2.live.lineage import resolve_entry_lineage, source_ticket_hash
 from kamandal_v2.live.operator_review import OperatorReviewError, create_operator_review_request, expire_stale_operator_review_requests
 from kamandal_v2.live.order_reconciliation import reconcile_live_orders
 from kamandal_v2.market.broker import broker_adapter
@@ -35,9 +36,14 @@ def reconcile_live_positions(
     if not hasattr(adapter, "broker_positions"):
         raise RuntimeError(f"configured broker adapter {type(adapter).__name__} does not expose broker_positions")
     broker_positions = [position for position in adapter.broker_positions() if str(position.get("asset_type")) == "option"]
+    broker_index = _broker_position_index(broker_positions)
+    projection_repairs = _repair_duplicate_entry_lineage_projections(
+        store,
+        broker_index,
+        dry_run=dry_run,
+    )
     local_groups = store.open_live_position_groups()
     local_index = _local_leg_index(local_groups)
-    broker_index = _broker_position_index(broker_positions)
     decision_context = _decision_context(store, local_groups, broker_index)
 
     issues = []
@@ -109,7 +115,7 @@ def reconcile_live_positions(
     order_reconciliation = reconcile_live_orders(config, dry_run=dry_run, store=store, adapter=adapter)
     rows = [_daily_plan_row(index, issue) for index, issue in enumerate(issues, start=1)]
     live_book_rows_written = 0
-    if write_sheet and rows:
+    if write_sheet:
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_reconciliation"})
     if write_sheet:
         live_book_report = run_live_book(store, config)
@@ -119,6 +125,7 @@ def reconcile_live_positions(
         "broker_option_positions": len(broker_positions),
         "local_open_groups": len(local_groups),
         "issues": issues,
+        "projection_repairs": projection_repairs,
         "order_reconciliation": order_reconciliation,
         "daily_plan_rows": rows,
         "live_book_rows_written": live_book_rows_written,
@@ -241,6 +248,9 @@ def _reconciliation_decision(config: dict[str, Any], issue: dict[str, Any], cont
         )
     if issue_type == "ghost_local_position":
         pending_close = _filled_close_ghost_pending_candidate(issue, context)
+        pending_entry = _filled_entry_ghost_pending_candidate(config, issue, context)
+        if pending_entry:
+            return pending_entry
         if _should_wait_for_ghost_confirmation(config, issue):
             return pending_close or _decision(
                 "pending_confirmation",
@@ -341,12 +351,207 @@ def _filled_close_ghost_pending_candidate(issue: dict[str, Any], context: dict[s
     )
 
 
+def _filled_entry_ghost_pending_candidate(
+    config: dict[str, Any],
+    issue: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, Any] | None:
+    group_id = str(issue.get("group_id") or "")
+    group = context.get("groups_by_id", {}).get(group_id) or {}
+    ticket_hash = source_ticket_hash(group)
+    ticket = context.get("entry_tickets_by_hash", {}).get(ticket_hash) or {}
+    status = str(ticket.get("_ledger_status") or ticket.get("status") or "")
+    if status not in {"filled", "filled_via_replacement", "manual_fill_recorded", "partially_filled_terminal"}:
+        return None
+    opened_at = _parse_timestamp(str(group.get("opened_at") or ""))
+    if opened_at is None:
+        return None
+    recon = ((config.get("live") or {}).get("reconciliation") or {})
+    configured_grace = recon.get("post_fill_position_grace_minutes")
+    grace_minutes = max(int(20 if configured_grace is None else configured_grace), 0)
+    age_minutes = max((datetime.now(UTC) - opened_at).total_seconds() / 60.0, 0.0)
+    if age_minutes >= grace_minutes:
+        return None
+    return _decision(
+        "pending_confirmation",
+        "hold",
+        "high",
+        False,
+        "entry_fill_waiting_for_broker_position_confirmation",
+        group_id=group_id,
+        evidence={
+            "group_id": group_id,
+            "ticket_hash": ticket_hash,
+            "order_id": ticket.get("order_id"),
+            "age_minutes": round(age_minutes, 2),
+            "grace_minutes": grace_minutes,
+        },
+    )
+
+
 def _aggregate_matches_after_removing_group(affected_symbols: set[str], group_legs: list[dict[str, Any]], context: dict[str, Any]) -> bool:
     for symbol in affected_symbols:
         broker_qty = float((context["broker_index"].get(symbol) or {}).get("quantity") or 0.0)
         local_qty = float((context["local_index"].get(symbol) or {}).get("quantity") or 0.0)
         group_qty = sum(float(leg.get("quantity") or 0.0) for leg in group_legs if str(leg.get("occ_symbol") or "") == symbol)
         if abs(broker_qty - (local_qty - group_qty)) > 0.001:
+            return False
+    return True
+
+
+def _repair_duplicate_entry_lineage_projections(
+    store: LocalStore,
+    broker_index: dict[str, dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    """Retire duplicate local groups only when lineage and broker math prove it.
+
+    This is intentionally narrower than generic quantity repair.  Every group
+    must resolve to the same replacement lineage, have the same economic legs,
+    and removing all but the stable lineage group must make the complete local
+    OCC aggregate equal the broker snapshot.  Otherwise no state is changed.
+    """
+
+    groups = store.open_live_position_groups()
+    local_index = _local_leg_index(groups)
+    by_lineage: dict[str, list[dict[str, Any]]] = {}
+    resolutions: dict[str, Any] = {}
+    for group in groups:
+        ticket_hash = source_ticket_hash(group)
+        ticket = store.live_order_intent(ticket_hash) if ticket_hash else None
+        if not ticket or str(ticket.get("intent_type") or "") != "open":
+            continue
+        resolution = resolve_entry_lineage(store, ticket, broker_order_id=str(ticket.get("order_id") or ""))
+        if resolution.ambiguous or not resolution.canonical_ticket or not resolution.lineage_id:
+            continue
+        by_lineage.setdefault(resolution.lineage_id, []).append(group)
+        resolutions[resolution.lineage_id] = resolution
+
+    repairs = []
+    for lineage_id, lineage_groups in sorted(by_lineage.items()):
+        resolution = resolutions[lineage_id]
+        canonical_group_id = resolution.group_id
+        if len(lineage_groups) == 1 and str(lineage_groups[0].get("group_id") or "") == canonical_group_id:
+            continue
+        signatures = {_group_leg_signature(group) for group in lineage_groups}
+        if len(signatures) != 1 or not next(iter(signatures), ()):  # Different legs are real ambiguity.
+            continue
+
+        canonical_ticket_hash = str(resolution.canonical_ticket.get("ticket_hash") or "")
+        source_group = next(
+            (group for group in lineage_groups if source_ticket_hash(group) == canonical_ticket_hash),
+            next((group for group in lineage_groups if str(group.get("group_id") or "") == canonical_group_id), None),
+        )
+        if source_group is None:
+            continue
+        duplicate_groups = [
+            group for group in lineage_groups if str(group.get("group_id") or "") != canonical_group_id
+        ]
+        affected_symbols = {str(leg.get("occ_symbol") or "") for group in lineage_groups for leg in _group_leg_symbols(group)}
+        affected_symbols.discard("")
+        if not _aggregate_matches_after_replacing_groups(
+            affected_symbols,
+            lineage_groups,
+            source_group,
+            local_index,
+            broker_index,
+        ):
+            continue
+
+        repair = {
+            "status": "dry_run" if dry_run else "applied",
+            "reason": "duplicate_entry_lineage_projection",
+            "lineage_id": lineage_id,
+            "canonical_group_id": canonical_group_id,
+            "canonical_ticket_hash": canonical_ticket_hash,
+            "broker_order_id": resolution.canonical_ticket.get("order_id"),
+            "retired_group_ids": sorted(str(group.get("group_id") or "") for group in duplicate_groups),
+            "affected_symbols": sorted(affected_symbols),
+        }
+        repairs.append(repair)
+        if dry_run:
+            continue
+
+        canonical_payload = {key: value for key, value in source_group.items() if key not in {"positions", "opened_at"}}
+        canonical_payload["group_id"] = canonical_group_id
+        canonical_payload["execution_lineage"] = {
+            "lineage_id": lineage_id,
+            "root_ticket_hash": resolution.root_ticket_hash,
+            "canonical_ticket_hash": canonical_ticket_hash,
+            "broker_order_id": resolution.canonical_ticket.get("order_id"),
+            "ticket_hashes": sorted(str(member.get("ticket_hash") or "") for member in resolution.members),
+            "projection_repaired": True,
+        }
+        entry_snapshot = dict(canonical_payload.get("entry_snapshot") or {})
+        entry_snapshot["source_ticket_hash"] = canonical_ticket_hash
+        canonical_payload["entry_snapshot"] = entry_snapshot
+        store.save_live_position_group(canonical_group_id, canonical_payload, status="open")
+        store.save_live_position(canonical_group_id, canonical_group_id, canonical_payload, status="open")
+
+        for group in duplicate_groups:
+            group_id = str(group.get("group_id") or "")
+            if group_id == canonical_group_id:
+                continue
+            store.close_live_position_group(
+                group_id,
+                status="reconciled_retired",
+                reason="duplicate_entry_lineage_projection",
+                payload={**group, "execution_lineage_repair": repair},
+            )
+        for member in resolution.members:
+            member_hash = str(member.get("ticket_hash") or "")
+            if member_hash == canonical_ticket_hash:
+                continue
+            if str(member.get("order_id") or "") != str(resolution.canonical_ticket.get("order_id") or ""):
+                continue
+            if str(member.get("_ledger_status") or "") != "filled":
+                continue
+            store.update_live_order_intent_status_with_payload(
+                member_hash,
+                "filled_via_replacement",
+                {
+                    "position_group_id": canonical_group_id,
+                    "filled_by_ticket_hash": canonical_ticket_hash,
+                    "execution_lineage": canonical_payload["execution_lineage"],
+                },
+            )
+        store.event("live_entry_lineage_projection_repaired", repair)
+    return repairs
+
+
+def _group_leg_signature(group: dict[str, Any]) -> tuple[tuple[str, float], ...]:
+    return tuple(
+        sorted(
+            (str(leg.get("occ_symbol") or ""), round(float(leg.get("quantity") or 0.0), 8))
+            for leg in _group_leg_symbols(group)
+            if str(leg.get("occ_symbol") or "")
+        ),
+    )
+
+
+def _aggregate_matches_after_replacing_groups(
+    affected_symbols: set[str],
+    lineage_groups: list[dict[str, Any]],
+    canonical_source: dict[str, Any],
+    local_index: dict[str, dict[str, Any]],
+    broker_index: dict[str, dict[str, Any]],
+) -> bool:
+    lineage_by_symbol: dict[str, float] = {}
+    for group in lineage_groups:
+        for leg in _group_leg_symbols(group):
+            symbol = str(leg.get("occ_symbol") or "")
+            lineage_by_symbol[symbol] = lineage_by_symbol.get(symbol, 0.0) + float(leg.get("quantity") or 0.0)
+    canonical_by_symbol: dict[str, float] = {}
+    for leg in _group_leg_symbols(canonical_source):
+        symbol = str(leg.get("occ_symbol") or "")
+        if symbol:
+            canonical_by_symbol[symbol] = canonical_by_symbol.get(symbol, 0.0) + float(leg.get("quantity") or 0.0)
+    for symbol in affected_symbols:
+        broker_qty = float((broker_index.get(symbol) or {}).get("quantity") or 0.0)
+        local_qty = float((local_index.get(symbol) or {}).get("quantity") or 0.0)
+        repaired_qty = local_qty - lineage_by_symbol.get(symbol, 0.0) + canonical_by_symbol.get(symbol, 0.0)
+        if abs(broker_qty - repaired_qty) > 0.001:
             return False
     return True
 
@@ -367,6 +572,12 @@ def _decision_context(store: LocalStore, local_groups: list[dict[str, Any]], bro
         "local_index": _local_leg_index(local_groups),
         "legs_by_group": legs_by_group,
         "close_tickets_by_group": close_tickets_by_group,
+        "groups_by_id": {str(group.get("group_id") or ""): group for group in local_groups},
+        "entry_tickets_by_hash": {
+            str(ticket.get("ticket_hash") or ""): ticket
+            for ticket in store.live_order_intents_by_type("open")
+            if str(ticket.get("ticket_hash") or "")
+        },
     }
 
 
@@ -549,6 +760,7 @@ def _resolve_unobserved_issues(store: LocalStore, observed_issue_ids: set[str], 
             "resolved",
             {"resolution": "not_observed_on_latest_reconciliation", "resolved_at": _now()},
         )
+        _expire_related_operator_review_request(store, issue_id, "not_observed_on_latest_reconciliation")
 
 
 def _request_review(config: dict[str, Any], store: LocalStore, issue: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
@@ -724,6 +936,8 @@ def _issue_summary(issue: dict[str, Any]) -> str:
 def _should_auto_retire(config: dict[str, Any], issue: dict[str, Any]) -> bool:
     if str(issue.get("issue_type") or "") != "ghost_local_position":
         return False
+    if str((issue.get("decision") or {}).get("reason") or "") == "entry_fill_waiting_for_broker_position_confirmation":
+        return False
     recon = ((config.get("live") or {}).get("reconciliation") or {})
     if not _as_bool(recon.get("auto_retire_ghost_after_confirmations"), True):
         return False
@@ -753,6 +967,18 @@ def _leg_proxy(payload: dict[str, Any]) -> Any:
     for key, value in payload.items():
         setattr(proxy, key, value)
     return proxy
+
+
+def _parse_timestamp(raw: str) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _now() -> str:

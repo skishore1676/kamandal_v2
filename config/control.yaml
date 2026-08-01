@@ -171,6 +171,7 @@ live:
   reconciliation:
     enabled: true
     broker_flat_confirmations_required: 2
+    post_fill_position_grace_minutes: 20
     auto_retire_ghost_after_confirmations: true
     auto_local_repair_enabled: true
     block_management_on_open_issues: true
