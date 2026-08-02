@@ -12,6 +12,7 @@ from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState, PreflightResult
 from kamandal_v2.events.earnings import EarningsStore, capture_earnings_snapshots, earnings_event_status
 from kamandal_v2.intelligence.chart_seeds import import_chart_seed_evaluation
+from kamandal_v2.intelligence.correspondent_activation import activate_correspondent_sources
 from kamandal_v2.intelligence.correspondent_signals import import_correspondent_signals
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
@@ -220,6 +221,15 @@ def main() -> None:
     correspondent_parser.add_argument("--config-source", choices=["sheet", "seed"], default="seed")
     correspondent_parser.add_argument("--output-dir", default="data/research/correspondent_signals")
 
+    activate_correspondent_parser = subparsers.add_parser(
+        "activate-correspondent-signals",
+        help="Publish configured correspondent signals into the active planner idea lane",
+    )
+    activate_correspondent_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    activate_correspondent_parser.add_argument("--active-ideas-dir", default="")
+    activate_correspondent_parser.add_argument("--output-dir", default="")
+    activate_correspondent_parser.add_argument("--trial-root", default="")
+
     cycle_parser = subparsers.add_parser("run-intelligence-cycle", help="Import transcripts, build Public/fixture plan, and optionally write daily_plan")
     cycle_parser.add_argument("--source-dir", default="data/transcripts/archive/youtube")
     cycle_parser.add_argument("--digest-dir", default="data/digest")
@@ -324,6 +334,23 @@ def main() -> None:
             universe_symbols=[entry.symbol for entry in universe if entry.enabled],
             chart_evaluation_paths=args.chart_evaluation,
             output_dir=args.output_dir,
+        )
+        print(json.dumps(result.to_dict(), indent=2))
+        return
+
+    if args.command == "activate-correspondent-signals":
+        correspondent_config = load_control()
+        settings = dict(((correspondent_config.get("source_intelligence") or {}).get("correspondents") or {}))
+        if args.active_ideas_dir:
+            settings["active_ideas_dir"] = args.active_ideas_dir
+        if args.output_dir:
+            settings["output_dir"] = args.output_dir
+        if args.trial_root:
+            settings["trial_root"] = args.trial_root
+        universe, _playbooks = load_planner_config(correspondent_config, source=args.config_source)
+        result = activate_correspondent_sources(
+            settings,
+            universe_symbols=[entry.symbol for entry in universe if entry.enabled],
         )
         print(json.dumps(result.to_dict(), indent=2))
         return

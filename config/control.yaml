@@ -298,6 +298,19 @@ llm:
   codex_timeout_seconds: 300
 
 source_intelligence:
+  correspondents:
+    enabled: true
+    mode: active_planner
+    trial_root: ~/Documents/birdclaw
+    output_dir: data/research/correspondent_signals
+    active_ideas_dir: data/ideas/active
+    since_hours: 336
+    limit: 200
+    profiles:
+      - profile_id: greg_harmon
+        source_profile_id: greg_harmon
+        profile_path: config/correspondents/greg_harmon.yaml
+        enabled: true
   x_digest:
     latest_state_file: ~/.openclaw/workspace-main/state/x_daily_digest/latest.json
     trial_root: ~/Documents/birdclaw

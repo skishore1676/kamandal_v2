@@ -50,10 +50,28 @@ kamandal import-correspondent-signals \
   --output-dir data/research/correspondent_signals
 ```
 
-The command writes immutable record snapshots, a batch translation, review Markdown,
-a lifecycle projection, receipt, and `planner-ideas.yaml`. It does not run the planner.
-To evaluate that artifact deliberately, pass its exact path to the ordinary `kamandal
-plan` command without `--write-sheet`.
+The import command writes immutable record snapshots, a batch translation, review
+Markdown, a lifecycle projection, receipt, and `planner-ideas.yaml`. It does not run
+the planner by itself.
+
+Production activation is profile-driven through
+`source_intelligence.correspondents` in `config/control.yaml`:
+
+```bash
+kamandal activate-correspondent-signals --config-source sheet
+```
+
+The scheduled X-intelligence job runs this command before its ordinary LLM extraction.
+It exports each enabled profile from Birdclaw, translates it against the current Sheet
+universe, and atomically replaces `data/ideas/active/correspondent_<profile>.yaml`.
+Eligible ideas therefore participate in the existing planner and live-advisory flow.
+The activation does not itself run the planner, write a Sheet, call a broker, admit a
+live order, or place an order; all existing downstream gates remain authoritative.
+
+An empty translation replaces the active file with an empty idea list. Any acquisition
+or translation failure fails the scheduled job and also clears every configured
+correspondent active file before returning an error. A prior signal can therefore not
+linger merely because the newest refresh failed.
 
 The upstream sequence is:
 
@@ -72,9 +90,10 @@ kamandal import-correspondent-signals \
   --config-source seed
 ```
 
-These commands are intentionally separate operational receipts. Acquisition can fail
-without fabricating a clean packet, and translation can succeed without automatically
-running the planner or promoting a plan.
+These commands remain separate operational receipts. Acquisition can fail without
+fabricating a clean packet, translation can succeed without automatically running the
+planner, and production activation is independently visible in
+`data/research/correspondent_signals/activation/latest.json`.
 
 ## Add another correspondent
 
@@ -94,5 +113,7 @@ an author-specific branch.
 ## Safety boundary
 
 The import and fixture replay perform no broker call, order, Sheet write, external send,
-shadow admission, or live admission. Nothing is deployed or scheduled by these tools.
-The emitted prices in fixture replays are `DEMO DATA`.
+shadow admission, or live admission. Production activation publishes only eligible
+`Idea` records to the existing active-idea directory; it does not bypass planner,
+portfolio, health, risk, preflight, ranking, live-approval, or execution gates. The
+emitted prices in fixture replays are `DEMO DATA`.
