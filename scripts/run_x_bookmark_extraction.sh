@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 run_x_bookmark_extraction() {
   require_trading_day
 
-  local today source_root digest_dir ideas_dir limit import_json source_doc_dir source_doc
+  local today source_root digest_dir ideas_dir limit import_json source_doc_dir source_doc activation_json
   today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
   source_root="${KAMANDAL_X_SOURCE_DOC_DIR:-data/source_docs/x_digest}"
   digest_dir="${KAMANDAL_X_BOOKMARK_DIGEST_DIR:-data/digest/x_bookmarks/$today}"
@@ -41,6 +41,14 @@ run_x_bookmark_extraction() {
     log "$import_json"
     source_doc="$("$REPO_ROOT/.venv/bin/python" -c 'import json,sys; print(json.load(sys.stdin)["source_doc_path"])' <<< "$import_json")"
     source_doc_dir="$(dirname "$source_doc")"
+  fi
+
+  if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then
+    log "Activating configured correspondent signals for the planner."
+    activation_json="$("$KAMANDAL_BIN" activate-correspondent-signals \
+      --config-source sheet \
+      --active-ideas-dir "$ideas_dir")"
+    log "$activation_json"
   fi
 
   if [[ -z "$source_doc_dir" || ! -d "$source_doc_dir" ]]; then
