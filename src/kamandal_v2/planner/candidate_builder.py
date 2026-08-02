@@ -309,6 +309,10 @@ def _match_rejections(
         reasons.append(f"profile_mismatch:{entry.profile}")
     if entry.allowed_playbooks and not {playbook.playbook_id, playbook.structure, playbook.strategy_family}.intersection(entry.allowed_playbooks):
         reasons.append("universe_playbook_not_allowed")
+    if idea.allowed_structures:
+        allowed = set().union(*(_strategy_aliases(value) for value in idea.allowed_structures))
+        if not allowed.intersection({playbook.playbook_id, playbook.structure, playbook.strategy_family}):
+            reasons.append("idea_structure_not_allowed")
     if idea.strategy_hint and not _strategy_aliases(idea.strategy_hint).intersection({playbook.playbook_id, playbook.structure, playbook.strategy_family}):
         reasons.append(f"strategy_hint_mismatch:{idea.strategy_hint}")
     if playbook.applicable_direction and idea.direction not in playbook.applicable_direction:

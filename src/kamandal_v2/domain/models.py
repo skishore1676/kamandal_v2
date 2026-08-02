@@ -82,6 +82,7 @@ class Idea:
     direction: str
     strategy_hint: str = ""
     mentioned_strategy: str = ""
+    allowed_structures: list[str] = field(default_factory=list)
     thesis_tags: list[str] = field(default_factory=list)
     horizon_days: int = 45
     catalyst_horizon_days: int | None = None
@@ -112,6 +113,7 @@ class Idea:
             direction=str(payload.get("direction") or "neutral").lower(),
             strategy_hint=str(payload.get("strategy_hint") or "").strip(),
             mentioned_strategy=str(payload.get("mentioned_strategy") or "").strip(),
+            allowed_structures=_as_list(payload.get("allowed_structures")),
             thesis_tags=list(tags),
             horizon_days=int(payload.get("horizon_days") or 45),
             catalyst_horizon_days=_optional_int(payload.get("catalyst_horizon_days")),

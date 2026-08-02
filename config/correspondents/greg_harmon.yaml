@@ -1,0 +1,82 @@
+schema: kamandal.correspondent_profile.v1
+profile_id: greg_harmon
+version: "1"
+source_profile_id: greg_harmon
+
+families:
+  weekly_ideas:
+    mode: chart_watch
+    direction: bullish
+    max_age_hours: 240
+    planner:
+      supported: true
+      allowed_structures: [call_spread, call_diagonal]
+      thesis_tags: [correspondent_weekly, breakout, momentum]
+      horizon_days: 30
+
+  earnings_idea:
+    mode: numbered_template
+    max_age_hours: 36
+    idea_number_map:
+      "1":
+        strategy_family: put_ratio_1x2
+        direction: bearish
+        planner_supported: false
+        allowed_structures: []
+      "2":
+        strategy_family: bull_call_spread_with_short_put
+        direction: bullish
+        planner_supported: false
+        allowed_structures: []
+      "3":
+        strategy_family: call_calendar_with_short_put
+        direction: bullish
+        planner_supported: false
+        allowed_structures: []
+      "4":
+        strategy_family: short_strangle
+        direction: neutral
+        planner_supported: true
+        allowed_structures: [short_strangle]
+    planner:
+      thesis_tags: [correspondent_earnings, earnings, volatility]
+      horizon_days: 7
+
+  trade_journal:
+    mode: trade_journal
+    max_age_hours: 24
+    planner:
+      supported: true
+      thesis_tags: [correspondent_journal, source_trade]
+      horizon_days: 30
+
+strategy_rules:
+  - {id: iron_condor, regex: "\\biron condor\\b", strategy_family: iron_condor, direction: neutral, allowed_structures: [iron_condor]}
+  - {id: call_calendar, regex: "\\bcall calendar\\b|\\bcalendar call\\b", strategy_family: call_calendar, direction: bullish, allowed_structures: [call_calendar]}
+  - {id: put_calendar, regex: "\\bput calendar\\b|\\bcalendar put\\b", strategy_family: put_calendar, direction: bearish, allowed_structures: [put_calendar]}
+  - {id: call_diagonal, regex: "\\bcall diagonal\\b|\\bdiagonal call\\b", strategy_family: call_diagonal, direction: bullish, allowed_structures: [call_diagonal]}
+  - {id: put_diagonal, regex: "\\bput diagonal\\b|\\bdiagonal put\\b", strategy_family: put_diagonal, direction: bearish, allowed_structures: [put_diagonal]}
+  - {id: short_strangle, regex: "\\bstrangle\\b", strategy_family: short_strangle, direction: neutral, allowed_structures: [short_strangle]}
+  - id: call_spread
+    regex: "\\bcall (?:vertical|spread)\\b"
+    strategy_family: call_spread
+    direction: bullish
+    allowed_structures: [call_spread]
+    direction_rules:
+      - {id: bought_call_spread, regex: "\\b(?:bought|buying|long)\\b", direction: bullish}
+      - {id: sold_call_spread, regex: "\\b(?:sold|selling|short)\\b", direction: bearish}
+  - id: put_spread
+    regex: "\\bput (?:vertical|spread)\\b"
+    strategy_family: put_spread
+    direction: bearish
+    allowed_structures: [put_spread]
+    direction_rules:
+      - {id: bought_put_spread, regex: "\\b(?:bought|buying|long)\\b", direction: bearish}
+      - {id: sold_put_spread, regex: "\\b(?:sold|selling|short)\\b", direction: bullish}
+  - {id: long_call, regex: "\\bb(?:uy|ought|uying) (?:the )?(?:[A-Z]+ )?.*\\bcall(?:s)?\\b", strategy_family: long_call, direction: bullish, allowed_structures: [long_call]}
+  - {id: long_put, regex: "\\bb(?:uy|ought|uying) (?:the )?(?:[A-Z]+ )?.*\\bput(?:s)?\\b", strategy_family: long_put, direction: bearish, allowed_structures: [long_put]}
+
+journal_actions:
+  - {action: close, regex: "\\b(?:closed|covered|took off|exited|sold (?:the )?remaining|all out)\\b"}
+  - {action: adjust, regex: "\\b(?:rolled|adjusted|added|trimmed|reduced|sold half|took half|half off)\\b"}
+  - {action: open, regex: "\\b(?:bought|sold|buying|selling|entered|opened|took)\\b"}
