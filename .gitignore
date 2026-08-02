@@ -19,3 +19,4 @@ config/public_account.json
 config/tastytrade_session.json
 config/tastytrade_account.json
 .DS_Store
+.super-goal/

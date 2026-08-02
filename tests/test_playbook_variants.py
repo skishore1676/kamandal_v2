@@ -469,6 +469,47 @@ def test_mentioned_strategy_can_satisfy_tag_gate_without_strategy_hint() -> None
     assert any(candidate.structure == "jade_lizard" for candidate in candidates)
 
 
+def test_idea_allowed_structures_constrain_playbook_matching() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "profile_constrained_tsla",
+        "source": "correspondent:test",
+        "underlying": "TSLA",
+        "direction": "bullish",
+        "allowed_structures": ["call_spread"],
+        "thesis_tags": ["breakout"],
+        "horizon_days": 30,
+    })
+    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    call_spread = _playbook(
+        playbook_id="call_spread_breakout",
+        strategy_family="call_spread",
+        structure="call_spread",
+        variant="breakout",
+        applicable_direction=["bullish"],
+        applicable_thesis_tags=["breakout"],
+    )
+    long_call = _playbook(
+        playbook_id="long_call_breakout",
+        strategy_family="long_call",
+        structure="long_call",
+        variant="breakout",
+        leg_count=1,
+        applicable_direction=["bullish"],
+        applicable_thesis_tags=["breakout"],
+    )
+
+    diagnostic = diagnose_idea_matches(
+        [idea],
+        universe,
+        [call_spread, long_call],
+        FixtureMarketDataProvider(),
+    )[0]
+
+    assert diagnostic["matched_playbooks"] == ["call_spread_breakout"]
+    long_call_row = next(row for row in diagnostic["playbooks"] if row["playbook_id"] == "long_call_breakout")
+    assert "idea_structure_not_allowed" in long_call_row["reasons"]
+
+
 def test_match_diagnostics_explain_zero_playbook_match() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_too_short",

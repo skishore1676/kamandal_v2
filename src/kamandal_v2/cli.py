@@ -11,6 +11,8 @@ from typing import Any
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState, PreflightResult
 from kamandal_v2.events.earnings import EarningsStore, capture_earnings_snapshots, earnings_event_status
+from kamandal_v2.intelligence.chart_seeds import import_chart_seed_evaluation
+from kamandal_v2.intelligence.correspondent_signals import import_correspondent_signals
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
 from kamandal_v2.intelligence.transcripts import fetch_youtube_channel_videos, fetch_youtube_transcript, import_transcripts, scrape_youtube_smoke
@@ -196,6 +198,28 @@ def main() -> None:
     x_digest_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     x_digest_parser.add_argument("--filter-universe", action="store_true", help="Report configured universe symbol hits")
 
+    chart_seed_parser = subparsers.add_parser(
+        "import-chart-seeds",
+        help="Import Market Cartographer seed evidence into a research-only review packet",
+    )
+    chart_seed_parser.add_argument("--input", required=True, help="Market Cartographer seed-evaluation JSON")
+    chart_seed_parser.add_argument("--output-dir", default="data/research/chart_seeds")
+
+    correspondent_parser = subparsers.add_parser(
+        "import-correspondent-signals",
+        help="Translate a Birdclaw correspondent packet into durable signals and eligible planner ideas",
+    )
+    correspondent_parser.add_argument("--input", required=True, help="Birdclaw correspondent-signals JSON")
+    correspondent_parser.add_argument("--profile", required=True, help="Kamandal correspondent profile YAML")
+    correspondent_parser.add_argument(
+        "--chart-evaluation",
+        action="append",
+        default=[],
+        help="Optional Market Cartographer seed-evaluation JSON; repeat for multiple weekly posts",
+    )
+    correspondent_parser.add_argument("--config-source", choices=["sheet", "seed"], default="seed")
+    correspondent_parser.add_argument("--output-dir", default="data/research/correspondent_signals")
+
     cycle_parser = subparsers.add_parser("run-intelligence-cycle", help="Import transcripts, build Public/fixture plan, and optionally write daily_plan")
     cycle_parser.add_argument("--source-dir", default="data/transcripts/archive/youtube")
     cycle_parser.add_argument("--digest-dir", default="data/digest")
@@ -285,6 +309,24 @@ def main() -> None:
     list_youtube_parser.add_argument("--output", default="", help="Optional file to write one video ID per line")
 
     args = parser.parse_args()
+
+    if args.command == "import-chart-seeds":
+        result = import_chart_seed_evaluation(args.input, output_dir=args.output_dir)
+        print(json.dumps(result.to_dict(), indent=2))
+        return
+
+    if args.command == "import-correspondent-signals":
+        correspondent_config = load_control()
+        universe, _playbooks = load_planner_config(correspondent_config, source=args.config_source)
+        result = import_correspondent_signals(
+            args.input,
+            profile_path=args.profile,
+            universe_symbols=[entry.symbol for entry in universe if entry.enabled],
+            chart_evaluation_paths=args.chart_evaluation,
+            output_dir=args.output_dir,
+        )
+        print(json.dumps(result.to_dict(), indent=2))
+        return
 
     config = load_control()
     seeds = build_seed_tables(config)

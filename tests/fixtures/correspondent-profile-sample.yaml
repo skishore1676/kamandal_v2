@@ -1,0 +1,23 @@
+schema: kamandal.correspondent_profile.v1
+profile_id: sample_person
+version: "1"
+source_profile_id: sample_person
+
+families:
+  swing_entry:
+    mode: trade_journal
+    max_age_hours: 24
+    planner:
+      supported: true
+      thesis_tags: [sample_swing]
+      horizon_days: 21
+
+strategy_rules:
+  - id: call_spread
+    regex: "\\bcall spread\\b"
+    strategy_family: call_spread
+    direction: bullish
+    allowed_structures: [call_spread]
+
+journal_actions:
+  - {action: open, regex: "\\b(?:bought|entered)\\b"}
