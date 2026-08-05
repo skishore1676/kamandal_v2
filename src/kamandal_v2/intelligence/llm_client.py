@@ -214,26 +214,48 @@ def _extract_codex_message(stdout: str) -> str:
 
 
 def _clean_json_string(s: str) -> str:
-    """Sanitize raw LLM JSON output to fix unescaped newlines/control chars inside string values."""
+    """Sanitize raw LLM JSON output to fix unescaped newlines/control chars inside string values,
+    and close truncated strings/containers if cut off mid-stream."""
     import re
     in_string = False
     escaped = False
     result = []
+    stack = []
     for char in s:
         if char == '"' and not escaped:
             in_string = not in_string
             result.append(char)
-        elif in_string and char == "\n":
-            result.append("\\n")
-        elif in_string and char == "\r":
-            result.append("\\r")
-        elif in_string and char == "\t":
-            result.append("\\t")
+        elif in_string:
+            if char == "\n":
+                result.append("\\n")
+            elif char == "\r":
+                result.append("\\r")
+            elif char == "\t":
+                result.append("\\t")
+            else:
+                result.append(char)
         else:
+            if char in ("{", "["):
+                stack.append(char)
+            elif char in ("}", "]"):
+                if stack:
+                    stack.pop()
             result.append(char)
         escaped = (char == "\\" and not escaped)
+
+    if in_string:
+        result.append('"')
+
     cleaned = "".join(result)
     cleaned = re.sub(r",\s*([\}\]])", r"\1", cleaned)
+    cleaned = re.sub(r",\s*$", "", cleaned)
+
+    for container in reversed(stack):
+        if container == "{":
+            cleaned += "}"
+        elif container == "[":
+            cleaned += "]"
+
     return cleaned
 
 
@@ -258,9 +280,22 @@ def _extract_json_object(text: str) -> dict[str, Any]:
                 raise
             substring = stripped[start : end + 1]
             try:
-                payload = json.loads(substring)
-            except json.JSONDecodeError:
                 payload = json.loads(_clean_json_string(substring))
+            except json.JSONDecodeError:
+                import re
+                matches = re.findall(r"\{[^{}]*\}", substring)
+                ideas = []
+                for m in matches:
+                    try:
+                        d = json.loads(_clean_json_string(m))
+                        if isinstance(d, dict):
+                            ideas.append(d)
+                    except Exception:
+                        pass
+                if ideas:
+                    payload = {"schema": "kamandal.ideas.v1", "ideas": ideas}
+                else:
+                    raise
     if not isinstance(payload, dict):
         raise ValueError("LLM response must be a JSON object")
     return payload
