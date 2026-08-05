@@ -29,11 +29,6 @@ class JsonLlmClient(Protocol):
 
 class BrokerJsonClient:
     """Hire a JSON turn through Agent Broker, bound to a kamandal actor/brain.
-
-    Falls back to a legacy client (the read-only Codex CLI) on ANY broker failure
-    — bad policy/brains, auth, all providers down — so extraction/review never
-    breaks. Review finding: the import-guarded promise must cover runtime errors,
-    not just a missing package.
     """
 
     def __init__(
@@ -52,10 +47,7 @@ class BrokerJsonClient:
         try:
             return self._chat_json_broker(system_prompt, user_prompt)
         except Exception:
-            if self._fallback is None:
-                raise
-            LOGGER.warning("agent_broker_json_failed_using_fallback actor=%s", self.actor)
-            return self._fallback.chat_json(system_prompt, user_prompt)
+            raise
 
     def _chat_json_broker(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         from agent_broker import (  # noqa: PLC0415 - optional dependency
@@ -171,11 +163,7 @@ def build_llm_client(config: dict[str, Any], *, actor: str = "agent") -> JsonLlm
         )
 
     if provider == "agent_broker" and _agent_broker_available():
-        try:
-            fallback: JsonLlmClient | None = _legacy()
-        except Exception:
-            fallback = None  # codex unavailable here -> broker-only
-        return BrokerJsonClient(actor=actor, timeout_seconds=timeout, fallback=fallback)
+        return BrokerJsonClient(actor=actor, timeout_seconds=timeout)
     # Explicit legacy path (llm.provider: codex_cli) or broker unavailable.
     return _legacy()
 
