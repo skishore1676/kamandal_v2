@@ -213,6 +213,30 @@ def _extract_codex_message(stdout: str) -> str:
     return message
 
 
+def _clean_json_string(s: str) -> str:
+    """Sanitize raw LLM JSON output to fix unescaped newlines/control chars inside string values."""
+    import re
+    in_string = False
+    escaped = False
+    result = []
+    for char in s:
+        if char == '"' and not escaped:
+            in_string = not in_string
+            result.append(char)
+        elif in_string and char == "\n":
+            result.append("\\n")
+        elif in_string and char == "\r":
+            result.append("\\r")
+        elif in_string and char == "\t":
+            result.append("\\t")
+        else:
+            result.append(char)
+        escaped = (char == "\\" and not escaped)
+    cleaned = "".join(result)
+    cleaned = re.sub(r",\s*([\}\]])", r"\1", cleaned)
+    return cleaned
+
+
 def _extract_json_object(text: str) -> dict[str, Any]:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -225,11 +249,18 @@ def _extract_json_object(text: str) -> dict[str, Any]:
     try:
         payload = json.loads(stripped)
     except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            raise
-        payload = json.loads(stripped[start : end + 1])
+        try:
+            payload = json.loads(_clean_json_string(stripped))
+        except json.JSONDecodeError:
+            start = stripped.find("{")
+            end = stripped.rfind("}")
+            if start < 0 or end <= start:
+                raise
+            substring = stripped[start : end + 1]
+            try:
+                payload = json.loads(substring)
+            except json.JSONDecodeError:
+                payload = json.loads(_clean_json_string(substring))
     if not isinstance(payload, dict):
         raise ValueError("LLM response must be a JSON object")
     return payload
