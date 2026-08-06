@@ -44,20 +44,46 @@ run_x_bookmark_extraction() {
   fi
 
   if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then
-    # Market Cartographer enrichment for correspondent weekly_ideas (best-effort, does not block activation).
+    # Market Cartographer enrichment for correspondent weekly_ideas — autonomous.
+    # Generates a seed request from the latest correspondent translation's pending
+    # weekly_ideas (chart_evaluation_missing), then evaluates it. No human input.
+    # Control surface remains Google Sheet / Telegram / Obsidian via Lathi on failure.
     if [[ "${KAMANDAL_CHART_SEED_ENABLED:-0}" == "1" ]]; then
-      chart_request="${KAMANDAL_CHART_SEED_REQUEST:-}"
       chart_output="${KAMANDAL_CHART_SEED_OUTPUT:-data/research/chart_seeds}"
-      chart_provider="${KAMANDAL_CHART_SEED_PROVIDER:-fixture}"
+      chart_provider="${KAMANDAL_CHART_SEED_PROVIDER:-mala}"
+      chart_request="${KAMANDAL_CHART_SEED_REQUEST:-}"
+      # Autonomously generate request if not provided explicitly
+      if [[ -z "$chart_request" || ! -f "$chart_request" ]]; then
+        generated_request="$("$KAMANDAL_PYTHON" -c "
+from kamandal_v2.tools.chart_seed_request import latest_translation_path, build_seed_request_from_translation
+from pathlib import Path
+import os
+output_root = os.environ.get('KAMANDAL_CHART_SEED_OUTPUT', 'data/research/chart_seeds')
+request_dir = os.environ.get('KAMANDAL_CHART_SEED_REQUEST_DIR', 'data/research/chart_seeds/requests')
+translation = latest_translation_path('data/research/correspondent_signals')
+if translation:
+    req = build_seed_request_from_translation(translation, output_dir=request_dir, max_symbols=8)
+    print(str(req) if req else '')
+else:
+    print('')
+" 2>&1)"
+        if [[ -n "$generated_request" && -f "$generated_request" ]]; then
+          chart_request="$generated_request"
+          log "Auto-generated chart seed request: $chart_request"
+        else
+          log "No pending weekly_ideas requiring chart evaluation; skipping cartographer."
+          chart_request=""
+        fi
+      fi
       if [[ -n "$chart_request" && -f "$chart_request" ]] && command -v market-cartographer >/dev/null 2>&1; then
-        log "Running Market Cartographer seed evaluation: $chart_request -> $chart_output"
+        log "Running Market Cartographer seed evaluation: $chart_request -> $chart_output (provider=$chart_provider)"
         if market-cartographer evaluate-seeds --input "$chart_request" --provider "$chart_provider" --output "$chart_output" 2>&1 | while IFS= read -r line; do log "chart: $line"; done; then
           log "Chart seed evaluation succeeded."
         else
-          log "Chart seed evaluation failed (non-fatal, continuing)."
+          log "Chart seed evaluation failed (non-fatal, Lathi will surface via health)."
         fi
-      elif command -v market-cartographer >/dev/null 2>&1; then
-        log "Chart seed enrichment enabled but no request file at KAMANDAL_CHART_SEED_REQUEST; skipping."
+      elif [[ -n "$chart_request" ]]; then
+        log "Chart request ready at $chart_request but market-cartographer not on PATH; evaluation will be picked up by activation's chart_seeds.enabled scan on next cycle."
       fi
     fi
     log "Activating configured correspondent signals for the planner."

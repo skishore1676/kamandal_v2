@@ -52,6 +52,7 @@ SCRIPT_JOBS = {
     "iv": "run_iv_capture.sh",
     "iv-afternoon": "run_iv_capture.sh",
     "weekly-reviewer": "run_weekly_reviewer.sh",
+    "universe-proposer": "run_universe_proposer.sh",
 }
 
 JOB_LABEL_SUFFIXES = {
@@ -68,6 +69,7 @@ JOB_LABEL_SUFFIXES = {
     "iv": "iv",
     "iv-afternoon": "iv_afternoon",
     "weekly-reviewer": "weekly_reviewer",
+    "universe-proposer": "universe_proposer",
 }
 
 JOB_SCHEDULES = {
@@ -89,6 +91,7 @@ JOB_SCHEDULES = {
     "iv": JobSchedule(fixed_times=(time(8, 45),)),
     "iv-afternoon": JobSchedule(fixed_times=(time(13, 45),)),
     "weekly-reviewer": JobSchedule(fixed_times=(time(10, 0),), weekday=4),
+    "universe-proposer": JobSchedule(fixed_times=(time(8, 50),)),
 }
 
 JOB_PURPOSES = {
@@ -105,6 +108,7 @@ JOB_PURPOSES = {
     "iv": "Refresh IV data.",
     "iv-afternoon": "Refresh afternoon IV data.",
     "weekly-reviewer": "Review rejected candidates and propose playbook tuning.",
+    "universe-proposer": "Propose up to 5 new universe symbols from recent out-of-universe plan diagnostics (tier=proposed).",
 }
 
 JOB_RISK_CLASSES = {

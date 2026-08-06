@@ -307,9 +307,13 @@ source_intelligence:
     since_hours: 336
     limit: 200
     chart_seeds:
-      enabled: false
+      enabled: true
       evaluation_dir: data/research/chart_seeds
       patterns: ["*.json", "**/*.json"]
+      auto_generate_request: true
+      request_dir: data/research/chart_seeds/requests
+      provider: mala
+      max_symbols_per_request: 8
     profiles:
       - profile_id: greg_harmon
         source_profile_id: greg_harmon
