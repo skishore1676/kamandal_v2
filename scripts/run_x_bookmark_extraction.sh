@@ -44,6 +44,22 @@ run_x_bookmark_extraction() {
   fi
 
   if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then
+    # Market Cartographer enrichment for correspondent weekly_ideas (best-effort, does not block activation).
+    if [[ "${KAMANDAL_CHART_SEED_ENABLED:-0}" == "1" ]]; then
+      chart_request="${KAMANDAL_CHART_SEED_REQUEST:-}"
+      chart_output="${KAMANDAL_CHART_SEED_OUTPUT:-data/research/chart_seeds}"
+      chart_provider="${KAMANDAL_CHART_SEED_PROVIDER:-fixture}"
+      if [[ -n "$chart_request" && -f "$chart_request" ]] && command -v market-cartographer >/dev/null 2>&1; then
+        log "Running Market Cartographer seed evaluation: $chart_request -> $chart_output"
+        if market-cartographer evaluate-seeds --input "$chart_request" --provider "$chart_provider" --output "$chart_output" 2>&1 | while IFS= read -r line; do log "chart: $line"; done; then
+          log "Chart seed evaluation succeeded."
+        else
+          log "Chart seed evaluation failed (non-fatal, continuing)."
+        fi
+      elif command -v market-cartographer >/dev/null 2>&1; then
+        log "Chart seed enrichment enabled but no request file at KAMANDAL_CHART_SEED_REQUEST; skipping."
+      fi
+    fi
     log "Activating configured correspondent signals for the planner."
     activation_json="$("$KAMANDAL_BIN" activate-correspondent-signals \
       --config-source sheet \

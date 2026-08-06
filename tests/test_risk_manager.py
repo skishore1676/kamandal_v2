@@ -298,10 +298,10 @@ def test_control_defaults_keep_global_bpr_and_define_entry_concentration_caps() 
 
     assert config["portfolio"]["target_max_bpr_utilization_pct"] == 55
     assert config["portfolio"]["hard_max_bpr_utilization_pct"] == 55
-    assert config["risk_manager"]["max_positions_per_underlying"] == 2
+    assert config["risk_manager"]["max_positions_per_underlying"] == 3
     assert config["risk_manager"]["max_positions_by_cluster"] == {
-        "megacap_tech": 4,
-        "semis": 3,
-        "broad_index": 2,
-        "crypto_adjacent": 2,
+        "megacap_tech": 5,
+        "semis": 4,
+        "broad_index": 3,
+        "crypto_adjacent": 3,
     }

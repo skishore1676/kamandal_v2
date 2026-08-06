@@ -206,6 +206,16 @@ def main() -> None:
     chart_seed_parser.add_argument("--input", required=True, help="Market Cartographer seed-evaluation JSON")
     chart_seed_parser.add_argument("--output-dir", default="data/research/chart_seeds")
 
+    propose_parser = subparsers.add_parser(
+        "propose-universe-symbols",
+        help="Propose up to 5 new universe rows from recent out-of-universe plan diagnostics (max 5/day, last N days)",
+    )
+    propose_parser.add_argument("--limit", type=int, default=5, help="Max proposals per day (cap 5)")
+    propose_parser.add_argument("--lookback-days", type=int, default=3, help="Lookback window for recent plan rejections")
+    propose_parser.add_argument("--write-sheet", action="store_true", help="Append proposals to the universe sheet (enabled=FALSE, tier=proposed)")
+    propose_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    propose_parser.add_argument("--dry-run", action="store_true", help="Print proposals without writing sheet")
+
     correspondent_parser = subparsers.add_parser(
         "import-correspondent-signals",
         help="Translate a Birdclaw correspondent packet into durable signals and eligible planner ideas",
@@ -323,6 +333,29 @@ def main() -> None:
     if args.command == "import-chart-seeds":
         result = import_chart_seed_evaluation(args.input, output_dir=args.output_dir)
         print(json.dumps(result.to_dict(), indent=2))
+        return
+
+    if args.command == "propose-universe-symbols":
+        from kamandal_v2.tools.universe_proposer import collect_out_of_universe_symbols, proposals_to_universe_rows
+
+        store = LocalStore()
+        proposals = collect_out_of_universe_symbols(store, lookback_days=args.lookback_days, limit=args.limit)
+        rows = proposals_to_universe_rows(proposals)
+        print(json.dumps({"proposals": proposals, "rows": rows, "count": len(rows), "write_sheet": bool(args.write_sheet and not args.dry_run)}, indent=2))
+        if args.write_sheet and not args.dry_run and rows:
+            from kamandal_v2.sheets import pull_sheet_tables, write_universe_proposals
+
+            # Guard: do not exceed 5/day — check today's existing proposed tier
+            existing = pull_sheet_tables(load_control()).get("universe") or []
+            today = __import__("datetime").datetime.now(__import__("datetime").UTC).date().isoformat()
+            proposed_today = sum(1 for row in existing if str(row.get("proposal_date") or "").strip() == today and str(row.get("tier") or "").strip().lower() == "proposed")
+            remaining = max(0, 5 - proposed_today)
+            if remaining <= 0:
+                print(json.dumps({"status": "skipped", "reason": "daily_proposal_cap_reached", "proposed_today": proposed_today}, indent=2))
+                return
+            trimmed = rows[:remaining]
+            written = write_universe_proposals(load_control(), trimmed)
+            print(json.dumps({"status": "written", "written": written, "remaining": remaining}, indent=2))
         return
 
     if args.command == "import-correspondent-signals":

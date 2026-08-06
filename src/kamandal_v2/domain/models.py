@@ -144,6 +144,10 @@ class UniverseEntry:
     event_avoid_days_before: int = 7
     event_avoid_days_after: int = 1
     allowed_playbooks: list[str] = field(default_factory=list)
+    tier: str = "primary"
+    proposal_source: str = ""
+    proposal_reason: str = ""
+    proposal_date: str = ""
     notes: str = ""
 
     @classmethod
@@ -160,6 +164,10 @@ class UniverseEntry:
             event_avoid_days_before=int(_as_float(row.get("event_avoid_days_before"), 7.0)),
             event_avoid_days_after=int(_as_float(row.get("event_avoid_days_after"), 1.0)),
             allowed_playbooks=_as_list(row.get("allowed_playbooks")),
+            tier=str(row.get("tier") or "primary").strip().lower() or "primary",
+            proposal_source=str(row.get("proposal_source") or "").strip(),
+            proposal_reason=str(row.get("proposal_reason") or "").strip(),
+            proposal_date=str(row.get("proposal_date") or "").strip(),
             notes=str(row.get("notes") or ""),
         )
 

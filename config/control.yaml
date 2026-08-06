@@ -39,12 +39,12 @@ risk_manager:
   consecutive_loss_limit: 4          # N losing closes in a row pauses entries...
   cooldown_days: 2                   # ...for this many days after the last losing close
   max_new_positions_per_day: 4       # position groups opened per configured market day
-  max_positions_per_underlying: 2    # repeated same-symbol groups; existing excess is not force-closed
+  max_positions_per_underlying: 3    # repeated same-symbol groups; existing excess is not force-closed
   max_positions_by_cluster:          # new-entry caps; exits are never blocked
-    megacap_tech: 4
-    semis: 3
-    broad_index: 2
-    crypto_adjacent: 2
+    megacap_tech: 5
+    semis: 4
+    broad_index: 3
+    crypto_adjacent: 3
   correlation_clusters:
     semis: [NVDA, AMD, MRVL, AVGO, MU, TSM, SMCI, DELL, INTC, QCOM]
     megacap_tech: [AAPL, MSFT, GOOGL, AMZN, META, NFLX, TSLA, CRM, NOW, ORCL, PLTR]
@@ -306,6 +306,10 @@ source_intelligence:
     active_ideas_dir: data/ideas/active
     since_hours: 336
     limit: 200
+    chart_seeds:
+      enabled: false
+      evaluation_dir: data/research/chart_seeds
+      patterns: ["*.json", "**/*.json"]
     profiles:
       - profile_id: greg_harmon
         source_profile_id: greg_harmon

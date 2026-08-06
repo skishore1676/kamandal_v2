@@ -79,6 +79,7 @@ def activate_correspondent_sources(
     limit = max(1, int(settings.get("limit") or 200))
     runner = command_runner or _run_command
     universe = {str(symbol).strip().upper() for symbol in universe_symbols if str(symbol).strip()}
+    chart_evaluation_paths = _chart_evaluation_paths(settings)
     activated_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     output_root.mkdir(parents=True, exist_ok=True)
@@ -118,6 +119,7 @@ def activate_correspondent_sources(
                 packet_path,
                 profile_path=profile["profile_path"],
                 universe_symbols=universe,
+                chart_evaluation_paths=chart_evaluation_paths,
                 output_dir=output_root,
             )
             planner_text = imported.planner_ideas_path.read_text(encoding="utf-8")
@@ -231,6 +233,43 @@ def _run_command(args: list[str], cwd: Path) -> str:
         timeout=120,
     )
     return completed.stdout
+
+
+def _chart_evaluation_paths(settings: dict[str, Any]) -> list[Path]:
+    chart_config = settings.get("chart_seeds") or {}
+    if not isinstance(chart_config, dict):
+        return []
+    if chart_config.get("enabled") is not True:
+        return []
+    raw_dir = chart_config.get("evaluation_dir") or chart_config.get("output_dir") or "data/research/chart_seeds"
+    evaluation_dir = resolve_path(raw_dir)
+    if not evaluation_dir.is_dir():
+        return []
+    patterns = chart_config.get("patterns") or ["*.json", "**/*.json"]
+    paths: list[Path] = []
+    for pattern in patterns:  # type: ignore[arg-type]
+        try:
+            paths.extend(evaluation_dir.glob(str(pattern)))
+        except Exception:
+            continue
+    # Also accept explicit list
+    explicit = chart_config.get("evaluation_paths") or []
+    for raw in explicit:  # type: ignore[arg-type]
+        try:
+            candidate = resolve_path(raw)
+            if candidate.is_file():
+                paths.append(candidate)
+        except Exception:
+            continue
+    # De-duplicate, sorted
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for path in sorted(paths):
+        key = str(path)
+        if key not in seen and path.is_file():
+            seen.add(key)
+            unique.append(path)
+    return unique
 
 
 def _empty_planner_payload(profile_id: str, *, status: str) -> str:

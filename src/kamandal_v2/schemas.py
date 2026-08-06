@@ -14,6 +14,10 @@ UNIVERSE_HEADER = [
     "event_avoid_days_before",
     "event_avoid_days_after",
     "allowed_playbooks",
+    "tier",
+    "proposal_source",
+    "proposal_reason",
+    "proposal_date",
     "notes",
 ]
 

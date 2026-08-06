@@ -262,6 +262,37 @@ def write_live_book(config: dict[str, Any], header: list[str], rows: list[list[A
     )
 
 
+def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, str]]) -> int:
+    """Append up to 5/day tier=proposed rows to the existing universe tab.
+
+    Does not clear the tab; reads existing rows, appends new proposal rows,
+    and replaces the tab atomically. Caller must enforce the 5/day cap.
+    """
+    if not proposals:
+        return 0
+    client = GoogleSheetClient.from_config(config)
+    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    title = str(tab_names.get("universe") or "universe")
+    existing = client.read_tab(title)
+    # Build header from existing tab if it has proposal columns, else canonical
+    from kamandal_v2.schemas import UNIVERSE_HEADER
+
+    header = UNIVERSE_HEADER
+    # Preserve existing header order if tab already has proposal columns
+    if existing:
+        existing_headers = list(existing[0].keys()) if existing and isinstance(existing[0], dict) else []
+        # If existing has proposal columns, keep its header; otherwise use canonical
+        if all(col in existing_headers for col in ("tier", "proposal_source", "proposal_reason")):
+            header = existing_headers
+
+    rows: list[list[Any]] = []
+    for row in existing:
+        rows.append([row.get(col, "") for col in header])
+    for proposal in proposals:
+        rows.append([proposal.get(col, "") for col in header])
+    return client.replace_tab(title, header=header, rows=rows)
+
+
 def _cell(value: Any) -> Any:
     if value is None:
         return ""
