@@ -603,7 +603,18 @@ def evaluate_job_observation(job: str, expectation: dict[str, Any], observation:
     if observed_at < acceptable_after:
         return {"job": job, "reason": "stale_last_run", "detail": f"last={observed_at.isoformat()} expected_after={acceptable_after.isoformat()}"}
     if str(observation["status"]).lower() == "failed":
-        return {"job": job, "reason": "last_run_failed", "detail": observation.get("log_path")}
+        # Surface Agent Broker exhaustion distinctly from generic script failure
+        detail = observation.get("log_path") or ""
+        # Try to extract last broker chain from log tail if present
+        try:
+            import json as _j
+            tail = (observation.get("stderr_tail") or observation.get("stdout_tail") or "")[-1200:]
+            if "Agent Broker" in tail:
+                # Keep it short for Tower findings (Blackboard truncates)
+                short = tail.split("Agent Broker")[-1].strip()[:180]
+                detail = f"Agent Broker: {short} | log: {detail}"
+        except: pass
+        return {"job": job, "reason": "last_run_failed", "detail": detail}
     return None
 
 

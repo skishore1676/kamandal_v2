@@ -46,8 +46,13 @@ class BrokerJsonClient:
     def chat_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         try:
             return self._chat_json_broker(system_prompt, user_prompt)
-        except Exception:
-            raise
+        except Exception as e:
+            if self._fallback is not None:
+                try:
+                    return self._fallback.chat_json(system_prompt, user_prompt)
+                except Exception as fe:
+                    raise RuntimeError(f"Agent Broker failed -- chain exhausted; last broker error: {e}; fallback Codex CLI also failed: {fe}. Next retry at next scheduled slot.") from e
+            raise RuntimeError(f"Agent Broker failed -- {e}. Will retry at next scheduled youtube slot; not a trading block.") from e
 
     def _chat_json_broker(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         from agent_broker import (  # noqa: PLC0415 - optional dependency
@@ -71,10 +76,9 @@ class BrokerJsonClient:
         receipt = broker.run(spec, task).receipt
         text = (receipt.output_text or "").strip()
         if receipt.status != "succeeded" or not text:
-            raise RuntimeError(
-                f"agent-broker failed ({receipt.failure_summary or 'no output'}); "
-                f"chain={list(receipt.provider_chain)}"
-            )
+            chain = list(receipt.provider_chain) if receipt.provider_chain else ["unknown"]
+            summary = receipt.failure_summary or "empty output after timeout"
+            raise RuntimeError(f"Agent Broker chain {chain} exhausted -- {summary} (E2B 240s -> free 180s -> Codex). Check Agent Broker ledger.")
         return _extract_json_object(text)
 
 
@@ -163,7 +167,7 @@ def build_llm_client(config: dict[str, Any], *, actor: str = "agent") -> JsonLlm
         )
 
     if provider == "agent_broker" and _agent_broker_available():
-        return BrokerJsonClient(actor=actor, timeout_seconds=timeout)
+        return BrokerJsonClient(actor=actor, timeout_seconds=timeout, fallback=_legacy())
     # Explicit legacy path (llm.provider: codex_cli) or broker unavailable.
     return _legacy()
 

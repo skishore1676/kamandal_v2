@@ -295,7 +295,7 @@ llm:
   model: ""
   codex_binary: ""
   codex_workdir: ""
-  codex_timeout_seconds: 300
+  codex_timeout_seconds: 450
 
 source_intelligence:
   correspondents:
