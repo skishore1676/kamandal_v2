@@ -425,30 +425,42 @@ def render_daily_report_ryg_markdown(report: dict[str, Any]) -> str:
 
 
 def render_daily_report_ryg_telegram_html(report: dict[str, Any]) -> str:
+    """Telegram HTML — mobile-friendly, no <pre> tables.
+
+    Telegram mobile wraps ~40 monospace chars (openclaw#36323); the old
+    fixed-width <pre> table at 60 chars wrapped and truncated values.
+    Per https://core.telegram.org/bots/api#html-style (allowed tags
+    <b><i><code><pre><a> etc., no nesting), we use inline formatting:
+      🟢 <b>Metric</b>: <code>value</code> — <i>why</i>
+    so lines wrap naturally and parse_mode HTML (template=status) renders
+    bold/code/italic correctly via lathi-bus _render_html_message.
+    The outer title is supplied via send_lathi_alert(title=...), so the
+    body does NOT repeat the day header.
+    """
+
+    from html import escape
+
     tables = _build_ryg_tables(report)
-    day = report.get("trading_date") or ""
-    parts: list[str] = [f"<b>Kamandal RYG — {day}</b>"]
-    for title, key in [("APP", "app"), ("LIVE", "live"), ("SHADOW", "shadow")]:
-        parts.append(f"<b>{title}</b>")
-        parts.append("<pre>")
-        # Fixed-width columns: Metric(18) Value(14) St(2) Why
-        parts.append(f"{'Metric':<18} {'Value':<14} {'St':<2} Why")
-        parts.append("-" * 60)
+    lines: list[str] = []
+    for section, key in [("APP", "app"), ("LIVE", "live"), ("SHADOW", "shadow")]:
+        lines.append(f"<b>{section}</b>")
         for metric, value, status, why in tables[key]:
-            # Truncate for telegram <4096
-            m = metric[:18]
-            v = value[:14]
-            # Status emoji is 1-2 chars, keep short
-            s = status
-            w = why[:30]
-            parts.append(f"{m:<18} {v:<14} {s:<2} {w}")
-        parts.append("</pre>")
-    # Append health reasons line
+            # Keep full values (no truncation) — Telegram limit is 4096, not 60.
+            metric_html = escape(metric)
+            value_html = escape(value) if value else "—"
+            why_html = escape(why) if why else ""
+            # status is an emoji (🟢/🟡/🔴/⚪), not HTML; keep as-is.
+            row = f"{status} <b>{metric_html}</b>: <code>{value_html}</code>"
+            if why_html:
+                row += f" — <i>{why_html}</i>"
+            lines.append(row)
+        lines.append("")  # blank line between sections
+    # Footer: health reasons are already in LIVE rows; keep one-line hint only if useful.
     health = report.get("live_health") or {}
-    if health.get("reasons"):
-        parts.append(f"<i>health: {','.join(health['reasons'][:3])}</i>")
-    parts.append(f"<i>report: kamandal_daily_report_{day}.md</i>")
-    return "\n".join(parts)
+    reasons = [escape(r) for r in (health.get("reasons") or [])[:3] if r]
+    if reasons:
+        lines.append(f"<i>health: {','.join(reasons)}</i>")
+    return "\n".join(lines).strip() + "\n"
 
 
 def render_daily_report_ryg_telegram_text(report: dict[str, Any]) -> str:
