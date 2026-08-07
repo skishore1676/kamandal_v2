@@ -738,7 +738,6 @@ def main() -> None:
             render_daily_report_ryg_telegram_html,
             write_daily_report,
         )
-        from kamandal_v2.paths import resolve_path
 
         result = write_daily_report(
             resolve_path("data/kamandal_v2.db"),
