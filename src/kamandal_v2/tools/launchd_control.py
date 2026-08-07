@@ -121,13 +121,16 @@ def _daily_report_now(args: argparse.Namespace, config: dict[str, Any], store: L
     result = write_daily_report(resolve_path("data/kamandal_v2.db"), output_dir=resolve_path("data/reports"), config=config)
     html = render_daily_report_ryg_telegram_html(result.report)
     level = "info" if result.report.get("status", {}).get("level") in ("GREEN", "YELLOW") else "error"
+    # Tower button should relay live by default (scheduled launchd_job already does);
+    # treat default `off` as `live` for this action so Control Tower taps actually notify.
+    mode = "live" if args.alert_mode == "off" else args.alert_mode
     alert = None
-    if args.alert_mode != "off":
+    if mode != "off":
         alert = send_lathi_alert(
             title=f"Kamandal daily report — {result.report.get('trading_date')}",
             body=html,
             level=level,
-            mode=args.alert_mode,
+            mode=mode,
             profile=args.alert_profile,
         )
     ok = True if alert is None else bool(alert.ok)
