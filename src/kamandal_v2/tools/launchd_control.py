@@ -38,6 +38,7 @@ CONTROL_ACTIONS = {
     "live-status",
     "scheduled-job-health-now",
     "live-health-report-now",
+    "daily-report-now",
     "retry-job",
     "send-pending-review-requests",
     "apply-review-decision",
@@ -59,6 +60,8 @@ def run_control_action(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 result = _scheduled_job_health_now(args, action_id)
             elif args.command == "live-health-report-now":
                 result = _live_health_report_now(args, config, store, action_id)
+            elif args.command == "daily-report-now":
+                result = _daily_report_now(args, config, store, action_id)
             elif args.command == "retry-job":
                 result = _retry_job(args, action_id)
             elif args.command == "send-pending-review-requests":
@@ -105,6 +108,42 @@ def _scheduled_job_health_now(args: argparse.Namespace, action_id: str) -> dict[
         status="succeeded",
         result_status="degraded" if issues else "ok",
         payload=report,
+    )
+
+
+def _daily_report_now(args: argparse.Namespace, config: dict[str, Any], store: LocalStore, action_id: str) -> dict[str, Any]:
+    from kamandal_v2.ops.daily_report import (
+        render_daily_report_ryg_telegram_html,
+        write_daily_report,
+    )
+    from kamandal_v2.paths import resolve_path
+
+    result = write_daily_report(resolve_path("data/kamandal_v2.db"), output_dir=resolve_path("data/reports"), config=config)
+    html = render_daily_report_ryg_telegram_html(result.report)
+    level = "info" if result.report.get("status", {}).get("level") in ("GREEN", "YELLOW") else "error"
+    alert = None
+    if args.alert_mode != "off":
+        alert = send_lathi_alert(
+            title=f"Kamandal daily report — {result.report.get('trading_date')}",
+            body=html,
+            level=level,
+            mode=args.alert_mode,
+            profile=args.alert_profile,
+        )
+    ok = True if alert is None else bool(alert.ok)
+    return _base(
+        "daily-report-now",
+        action_id,
+        ok=ok,
+        status="succeeded" if ok else "failed",
+        result_status=str(result.report.get("status", {}).get("level", "unknown")).lower(),
+        payload={
+            "report": result.report,
+            "json_path": str(result.json_path),
+            "markdown_path": str(result.markdown_path),
+            "ryg_path": str(result.ryg_markdown_path),
+            "alert": alert.to_dict() if alert else None,
+        },
     )
 
 
