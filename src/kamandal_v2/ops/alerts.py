@@ -49,6 +49,9 @@ def send_lathi_alert(
     level: str = "error",
     mode: AlertMode = "live",
     profile: str | None = None,
+    template: str | None = None,
+    fields: dict[str, Any] | list[tuple[str, Any]] | None = None,
+    link_preview: str | None = None,
     command: list[str] | None = None,
     cwd: str | Path | None = None,
     timeout_seconds: float | None = None,
@@ -75,6 +78,12 @@ def send_lathi_alert(
         "--level",
         level,
     ]
+    if template:
+        args.extend(["--template", template])
+    for field in _format_fields(fields):
+        args.extend(["--field", field])
+    if link_preview:
+        args.extend(["--link-preview", link_preview])
     if mode == "live":
         args.append("--live")
 
@@ -212,6 +221,23 @@ def redact(text: str) -> str:
     text = _URL_SECRET_RE.sub(lambda match: f"{match.group(1)}=<redacted>", text)
     text = _BEARER_RE.sub("Bearer <redacted>", text)
     return _TOKEN_FIELD_RE.sub(lambda match: f"{match.group(1)}=<redacted>", text)
+
+
+def _format_fields(fields: dict[str, Any] | list[tuple[str, Any]] | None) -> list[str]:
+    if not fields:
+        return []
+    items: list[tuple[str, Any]]
+    if isinstance(fields, dict):
+        items = list(fields.items())
+    else:
+        items = list(fields)
+    out: list[str] = []
+    for key, value in items:
+        k = str(key).strip()
+        v = str(value).strip()
+        if k:
+            out.append(f"{k}={v}")
+    return out
 
 
 def tail(text: str, *, max_lines: int = 40, max_chars: int | None = None) -> str:

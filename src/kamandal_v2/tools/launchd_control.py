@@ -132,6 +132,8 @@ def _daily_report_now(args: argparse.Namespace, config: dict[str, Any], store: L
             level=level,
             mode=mode,
             profile=args.alert_profile,
+            template="status",
+            link_preview="disabled",
         )
     ok = True if alert is None else bool(alert.ok)
     return _base(

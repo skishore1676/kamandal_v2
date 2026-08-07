@@ -164,13 +164,15 @@ def daily_report_job(args: argparse.Namespace) -> int:
     result = write_daily_report(store_path, output_dir=output_dir, config=config)
     html = render_daily_report_ryg_telegram_html(result.report)
     level = "info" if result.report.get("status", {}).get("level") in ("GREEN", "YELLOW") else "error"
-    # Always send via Lathi Bus (BHIKsha parity: 3 intraday reports)
+    # Always send via Lathi Bus (BHIKsha parity: 3 intraday reports) — template status = HTML <b><pre>
     alert = send_lathi_alert(
         title=f"Kamandal daily report — {result.report.get('trading_date')}",
         body=html,
         level=level,
         mode=args.alert_mode,
         profile=args.alert_profile,
+        template="status",
+        link_preview="disabled",
     )
     # Also project full markdown to Obsidian via Lathi Bus passive shelf if configured
     # (graceful no-op when bus unreachable)
