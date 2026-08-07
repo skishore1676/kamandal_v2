@@ -65,6 +65,7 @@ JOB_LABEL_SUFFIXES = {
     "live-management": "live_management",
     "live-health-report": "live_health_report",
     "scheduled-job-health": "scheduled_job_health",
+    "daily-report": "daily_report",
     "earnings": "earnings",
     "iv": "iv",
     "iv-afternoon": "iv_afternoon",
@@ -87,6 +88,7 @@ JOB_SCHEDULES = {
     ),
     "live-health-report": JobSchedule(fixed_times=(time(9, 10), time(11, 45), time(14, 45), time(15, 20))),
     "scheduled-job-health": JobSchedule(cadence_minutes=15, window_start=time(9, 15), window_end=time(15, 45)),
+    "daily-report": JobSchedule(fixed_times=(time(9, 10), time(11, 45), time(14, 45))),
     "earnings": JobSchedule(fixed_times=(time(8, 40),)),
     "iv": JobSchedule(fixed_times=(time(8, 45),)),
     "iv-afternoon": JobSchedule(fixed_times=(time(13, 45),)),
@@ -109,6 +111,7 @@ JOB_PURPOSES = {
     "iv-afternoon": "Refresh afternoon IV data.",
     "weekly-reviewer": "Review rejected candidates and propose playbook tuning.",
     "universe-proposer": "Propose up to 5 new universe symbols from recent out-of-universe plan diagnostics (tier=proposed).",
+    "daily-report": "Intraday Kamandal daily report (BHIKsha parity: JSON/Markdown/RYG via Lathi Bus).",
 }
 
 JOB_RISK_CLASSES = {
@@ -125,6 +128,7 @@ JOB_AVAILABLE_ACTIONS = {
     "youtube": ("retry-job",),
     "live-health-report": ("live-health-report-now",),
     "scheduled-job-health": ("scheduled-job-health-now",),
+    "daily-report": ("daily-report-now",),
 }
 
 JOB_ACTION_REQUIREMENTS = {
@@ -171,7 +175,7 @@ MONITORED_JOBS = [
     "weekly-reviewer",
 ]
 
-ALL_JOBS = sorted([*SCRIPT_JOBS, "live-health-report", "scheduled-job-health"])
+ALL_JOBS = sorted([*SCRIPT_JOBS, "live-health-report", "scheduled-job-health", "daily-report"])
 
 
 def launchd_jobs() -> list[LaunchdJob]:

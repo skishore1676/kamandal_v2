@@ -77,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
             return live_health_report_job(args)
         if args.job == "scheduled-job-health":
             return scheduled_job_health_report_job(args, repo_root=repo_root)
+        if args.job == "daily-report":
+            return daily_report_job(args)
         return script_job(args, repo_root=repo_root)
     except Exception as exc:  # noqa: BLE001 - scheduled jobs must alert and fail closed.
         alert = failure_alert(args, title=f"Kamandal launchd job failed: {args.job}", detail=str(exc))
@@ -146,6 +148,52 @@ def live_health_report_job(args: argparse.Namespace) -> int:
         }
     )
     return 0
+
+
+def daily_report_job(args: argparse.Namespace) -> int:
+    from kamandal_v2.ops.daily_report import (
+        render_daily_report_ryg_telegram_html,
+        write_daily_report,
+    )
+    from kamandal_v2.paths import resolve_path
+
+    config = load_control()
+    # Best-effort live probes for RYG APP block (mirrors Bhiksha pattern)
+    store_path = resolve_path("data/kamandal_v2.db")
+    output_dir = resolve_path("data/reports")
+    result = write_daily_report(store_path, output_dir=output_dir, config=config)
+    html = render_daily_report_ryg_telegram_html(result.report)
+    level = "info" if result.report.get("status", {}).get("level") in ("GREEN", "YELLOW") else "error"
+    # Always send via Lathi Bus (BHIKsha parity: 3 intraday reports)
+    alert = send_lathi_alert(
+        title=f"Kamandal daily report — {result.report.get('trading_date')}",
+        body=html,
+        level=level,
+        mode=args.alert_mode,
+        profile=args.alert_profile,
+    )
+    # Also project full markdown to Obsidian via Lathi Bus passive shelf if configured
+    # (graceful no-op when bus unreachable)
+    try:
+        from kamandal_v2.ops.alerts import send_lathi_bus_obsidian  # type: ignore
+
+        send_lathi_bus_obsidian(result.markdown_path, result.report)  # type: ignore
+    except Exception:
+        pass
+    print_result(
+        {
+            "job": args.job,
+            "status": "ok" if alert.ok or args.alert_mode in ("off", "spool") else "failed",
+            "report_date": result.report.get("trading_date"),
+            "report_status": result.report.get("status", {}).get("level"),
+            "json_path": str(result.json_path),
+            "markdown_path": str(result.markdown_path),
+            "ryg_path": str(result.ryg_markdown_path),
+            "alert": alert.to_dict(),
+            "level": level,
+        }
+    )
+    return 0 if alert.ok or args.alert_mode in ("off", "spool") else 2
 
 
 def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path) -> int:

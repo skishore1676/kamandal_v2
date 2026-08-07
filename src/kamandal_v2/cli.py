@@ -303,6 +303,12 @@ def main() -> None:
     audit_parser.add_argument("--db", default="data/kamandal_v2.db")
     audit_parser.add_argument("--output-dir", default="data/reports/go_live_audit")
 
+    daily_parser = subparsers.add_parser("daily-report", help="Build intraday Kamandal daily report (09:10/11:45/14:45 CT parity with Bhiksha)")
+    daily_parser.add_argument("--trading-date", default=None, help="Report date YYYY-MM-DD; defaults to today UTC")
+    daily_parser.add_argument("--output-dir", default="data/reports", help="Directory for JSON/Markdown/RYG artifacts")
+    daily_parser.add_argument("--telegram-summary", action="store_true", help="Print RYG HTML summary for Lathi Bus")
+    daily_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON to stdout")
+
     youtube_parser = subparsers.add_parser("scrape-youtube-smoke", help="Fetch captions for one YouTube video and archive locally")
     youtube_parser.add_argument("--video-id", required=True)
     youtube_parser.add_argument("--transcript-dir", default="data/transcripts")
@@ -726,6 +732,30 @@ def main() -> None:
             until=args.until or None,
         )
         print(json.dumps(result.to_dict(), indent=2))
+        return
+    if args.command == "daily-report":
+        from kamandal_v2.ops.daily_report import (
+            render_daily_report_ryg_telegram_html,
+            write_daily_report,
+        )
+        from kamandal_v2.paths import resolve_path
+
+        result = write_daily_report(
+            resolve_path("data/kamandal_v2.db"),
+            output_dir=resolve_path(args.output_dir),
+            trading_date=args.trading_date,
+        )
+        if args.json:
+            print(json.dumps(result.report, indent=2))
+        else:
+            print(f"DAILY_REPORT_JSON={result.json_path}")
+            print(f"DAILY_REPORT_MARKDOWN={result.markdown_path}")
+            print(f"DAILY_REPORT_RYG={result.ryg_markdown_path}")
+            print(f"DAILY_REPORT_STATUS={result.report.get('status',{}).get('level','UNKNOWN')}")
+        if args.telegram_summary:
+            print("DAILY_REPORT_TELEGRAM_SUMMARY_BEGIN")
+            print(render_daily_report_ryg_telegram_html(result.report))
+            print("DAILY_REPORT_TELEGRAM_SUMMARY_END")
         return
     if args.command == "scrape-youtube-smoke":
         transcript = scrape_youtube_smoke(
