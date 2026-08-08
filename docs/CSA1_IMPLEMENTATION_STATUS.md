@@ -97,7 +97,7 @@ primitives only where a golden equivalence test proves non-interference.
 
 ## Release Candidate Evidence
 
-- Full repository suite: 486 tests pass.
+- Full repository suite: 487 tests pass.
 - Golden baseline: pre-CSA and current normalized planner payloads are both
   57,701 bytes with SHA-256
   `a563b90f52b5f1760dac2a95640c8084cdbc03a8a5c84c77e500fff724bac259`.

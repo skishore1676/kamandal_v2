@@ -217,6 +217,28 @@ def test_existing_builders_create_all_four_csa_lane_entries() -> None:
     assert all(any(reason.startswith("csa_policy_hash=") for reason in item.reasons) for item in (*strangle_candidates, *vertical_candidates, *diagonal_candidates, *calendar_candidates))
 
 
+def test_diagonal_blank_sheet_width_is_derived_from_the_quote_grid() -> None:
+    row = _row("call_diagonal")
+    row["spread_width"] = ""
+    policy = compile_csa_policy(row, source="google_sheet", read_at=NOW)
+    assert policy is not None
+    candidates = build_lane_candidates(
+        _opportunity(policy),
+        policy,
+        _chain(
+            [
+                _quote("call", 103, 30, 0.25, 1.5, 1.6),
+                _quote("call", 100, 75, 0.6, 8.0, 8.2),
+                _quote("call", 97, 75, 0.7, 10.0, 10.2),
+            ]
+        ),
+    )
+
+    assert candidates
+    assert any(reason == "csa_width_source=strike_grid" for reason in candidates[0].reasons)
+    assert any(reason == "csa_actual_width=3" for reason in candidates[0].reasons)
+
+
 def test_earnings_builder_fails_closed_without_known_event() -> None:
     policy = _policy("call_calendar")
     candidates = build_lane_candidates(

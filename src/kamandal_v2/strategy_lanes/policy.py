@@ -123,7 +123,6 @@ _LANE_REQUIRED_FIELDS = {
         "profit_target_pct",
         "max_loss_multiple",
         "exit_dte_min",
-        "spread_width",
         "live_max_bpr_per_order",
     ),
     LaneId.EARNINGS_CALENDAR: (

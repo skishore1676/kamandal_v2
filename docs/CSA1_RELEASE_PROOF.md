@@ -15,7 +15,7 @@ stale, incompatible, or invalid policy fails closed.
 
 | Proof | Result |
 |---|---|
-| Full repository suite | 486 passed |
+| Full repository suite | 487 passed |
 | Python compilation | passed |
 | Shell syntax | passed for installer and all CSA runners |
 | Git whitespace check | passed |
@@ -56,6 +56,9 @@ portfolio, diagnostic, rejection, and metric payloads remained part of the hash.
     evidence; overlap or working intent selects `block` and creates no new ticket.
 11. CSA launchd install/enable/disable actions target only the three CSA labels;
     baseline jobs are not reloaded during rollout or rollback.
+12. Blank diagonal `spread_width` is not replaced by a repository constant; CSA
+    derives the interval from the current option strike grid and records the
+    source and actual selected width in candidate evidence.
 
 ## Strategy Sources Used For Operator Defaults
 
