@@ -92,3 +92,29 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
         payload = plistlib.loads((launchd_dir / f"com.kamandal.v2.{suffix}.plist").read_bytes())
         assert payload["Disabled"] is True
     assert DISABLED_BY_DEFAULT == {"csa-shadow-scan", "csa-shadow-management", "csa-shadow-scorecard"}
+
+
+def test_installer_can_render_only_csa_without_touching_baseline_plists(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "LaunchAgents"
+    env = {
+        **os.environ,
+        "KAMANDAL_REPO_ROOT": str(REPO_ROOT),
+        "KAMANDAL_LAUNCHD_DIR": str(launchd_dir),
+        "KAMANDAL_LAUNCHD_LOG_DIR": str(tmp_path / "logs"),
+    }
+
+    subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts/launchd/install_kamandal_launchd.sh"), "render-csa-shadow"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    rendered = {path.name for path in launchd_dir.glob("*.plist")}
+    assert rendered == {
+        "com.kamandal.v2.csa_shadow_scan.plist",
+        "com.kamandal.v2.csa_shadow_management.plist",
+        "com.kamandal.v2.csa_shadow_scorecard.plist",
+    }

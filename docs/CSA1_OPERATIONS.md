@@ -69,6 +69,8 @@ records one migration identity, and requires `PRAGMA integrity_check=ok`.
   are blocked before a ticket is created.
 - CSA launchd definitions are rendered disabled by default. Enabling them is a
   protected deployment action.
+- `install-csa-shadow`, `enable-csa-shadow`, and `disable-csa-shadow` operate on
+  only the three CSA labels; they do not reload baseline Kamandal jobs.
 
 ## Daily Truth
 

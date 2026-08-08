@@ -12,7 +12,8 @@ END_MARKER="# END KAMANDAL_V2"
 mkdir -p "$LAUNCHD_DIR" "$LOG_DIR"
 
 write_plists() {
-  python3 - "$REPO_ROOT" "$LAUNCHD_DIR" "$LOG_DIR" "$LABEL_PREFIX" <<'PY'
+  local scope="${1:-all}"
+  python3 - "$REPO_ROOT" "$LAUNCHD_DIR" "$LOG_DIR" "$LABEL_PREFIX" "$scope" <<'PY'
 import plistlib
 import sys
 from datetime import timedelta
@@ -22,6 +23,7 @@ repo = Path(sys.argv[1])
 launchd_dir = Path(sys.argv[2])
 log_dir = Path(sys.argv[3])
 label_prefix = sys.argv[4]
+scope = sys.argv[5]
 runner = repo / "scripts" / "launchd" / "run_kamandal_job.sh"
 sys.path.insert(0, str(repo / "src"))
 
@@ -60,6 +62,8 @@ def calendar_entries(schedule):
 
 
 for job, schedule in JOB_SCHEDULES.items():
+    if scope == "csa" and job not in DISABLED_BY_DEFAULT:
+        continue
     suffix = JOB_LABEL_SUFFIXES[job]
     label = f"{label_prefix}.{suffix}"
     plist = {
@@ -75,6 +79,22 @@ for job, schedule in JOB_SCHEDULES.items():
     path.write_bytes(plistlib.dumps(plist, sort_keys=True))
     path.chmod(0o600)
     print(label)
+PY
+}
+
+csa_labels() {
+  python3 - "$REPO_ROOT" "$LABEL_PREFIX" <<'PY'
+import sys
+from pathlib import Path
+
+repo = Path(sys.argv[1])
+prefix = sys.argv[2]
+sys.path.insert(0, str(repo / "src"))
+
+from kamandal_v2.ops.launchd_registry import DISABLED_BY_DEFAULT, JOB_LABEL_SUFFIXES  # noqa: E402
+
+for job in sorted(DISABLED_BY_DEFAULT):
+    print(f"{prefix}.{JOB_LABEL_SUFFIXES[job]}")
 PY
 }
 
@@ -122,6 +142,45 @@ case "$ACTION" in
   render)
     write_plists
     ;;
+  render-csa-shadow)
+    write_plists csa
+    ;;
+  install-csa-shadow)
+    chmod +x "$REPO_ROOT/scripts/launchd/run_kamandal_job.sh"
+    write_plists csa
+    uid="$(id -u)"
+    while IFS= read -r label; do
+      plist="$LAUNCHD_DIR/$label.plist"
+      launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+      launchctl disable "gui/$uid/$label"
+      launchctl bootstrap "gui/$uid" "$plist" || true
+      echo "LOADED-DISABLED $label"
+    done < <(csa_labels)
+    ;;
+  enable-csa-shadow)
+    uid="$(id -u)"
+    while IFS= read -r label; do
+      plist="$LAUNCHD_DIR/$label.plist"
+      [[ -f "$plist" ]] || { echo "missing plist: $plist" >&2; exit 1; }
+      /usr/libexec/PlistBuddy -c 'Set :Disabled false' "$plist"
+      launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+      launchctl enable "gui/$uid/$label"
+      launchctl bootstrap "gui/$uid" "$plist"
+      echo "ENABLED $label"
+    done < <(csa_labels)
+    ;;
+  disable-csa-shadow)
+    uid="$(id -u)"
+    while IFS= read -r label; do
+      plist="$LAUNCHD_DIR/$label.plist"
+      if [[ -f "$plist" ]]; then
+        /usr/libexec/PlistBuddy -c 'Set :Disabled true' "$plist"
+      fi
+      launchctl disable "gui/$uid/$label"
+      launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+      echo "DISABLED $label"
+    done < <(csa_labels)
+    ;;
   install|"")
     chmod +x "$REPO_ROOT/scripts/launchd/run_kamandal_job.sh"
     write_plists
@@ -159,7 +218,7 @@ case "$ACTION" in
     remove_kamandal_cron_block
     ;;
   *)
-    echo "usage: $0 [render|install|uninstall|uninstall-cron]" >&2
+    echo "usage: $0 [render|render-csa-shadow|install|install-csa-shadow|enable-csa-shadow|disable-csa-shadow|uninstall|uninstall-cron]" >&2
     exit 2
     ;;
 esac

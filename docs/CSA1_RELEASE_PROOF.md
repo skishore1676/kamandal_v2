@@ -15,7 +15,7 @@ stale, incompatible, or invalid policy fails closed.
 
 | Proof | Result |
 |---|---|
-| Full repository suite | 485 passed |
+| Full repository suite | 486 passed |
 | Python compilation | passed |
 | Shell syntax | passed for installer and all CSA runners |
 | Git whitespace check | passed |
@@ -54,6 +54,8 @@ portfolio, diagnostic, rejection, and metric payloads remained part of the hash.
    compilation rather than later in a runtime cycle.
 10. Every management cycle re-checks read-only live contract and active-order
     evidence; overlap or working intent selects `block` and creates no new ticket.
+11. CSA launchd install/enable/disable actions target only the three CSA labels;
+    baseline jobs are not reloaded during rollout or rollback.
 
 ## Strategy Sources Used For Operator Defaults
 

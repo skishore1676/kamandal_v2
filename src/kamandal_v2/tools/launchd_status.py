@@ -6,6 +6,7 @@ import argparse
 from datetime import UTC, datetime
 import hashlib
 import json
+import plistlib
 import socket
 from pathlib import Path
 import sqlite3
@@ -94,8 +95,11 @@ def _shadow_evidence_status(
         for job in launchd_jobs()
         if "shadow" in job.job
     )
-    active_shadow_jobs = [job for job in registered_shadow_jobs if job not in DISABLED_BY_DEFAULT]
-    staged_shadow_jobs = [job for job in registered_shadow_jobs if job in DISABLED_BY_DEFAULT]
+    plist_enabled = _csa_plist_enabled_jobs()
+    active_shadow_jobs = [
+        job for job in registered_shadow_jobs if job not in DISABLED_BY_DEFAULT or job in plist_enabled
+    ]
+    staged_shadow_jobs = [job for job in registered_shadow_jobs if job not in active_shadow_jobs]
     state = "active" if active_shadow_jobs else "staged_disabled" if staged_shadow_jobs else "retired"
     collector = {
         "state": state,
@@ -198,6 +202,24 @@ def _shadow_evidence_status(
             "schedule_change": False,
         },
     }
+
+
+def _csa_plist_enabled_jobs() -> set[str]:
+    from kamandal_v2.ops.launchd_registry import DISABLED_BY_DEFAULT, JOB_LABEL_SUFFIXES
+
+    enabled: set[str] = set()
+    root = Path.home() / "Library" / "LaunchAgents"
+    for job in DISABLED_BY_DEFAULT:
+        path = root / f"com.kamandal.v2.{JOB_LABEL_SUFFIXES[job]}.plist"
+        if not path.exists():
+            continue
+        try:
+            payload = plistlib.loads(path.read_bytes())
+        except (OSError, plistlib.InvalidFileException):
+            continue
+        if payload.get("Disabled") is False:
+            enabled.add(job)
+    return enabled
 
 
 def _read_only_connection(db_path: Path) -> sqlite3.Connection:
