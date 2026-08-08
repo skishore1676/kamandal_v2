@@ -77,6 +77,9 @@ def build_daily_report(
 
     event_counts = Counter(e["event_type"] for e in events)
     live_health = _safe_live_health(path, config, now=now)
+    from kamandal_v2.strategy_lanes.reports import build_csa_scorecard
+
+    csa_shadow = build_csa_scorecard(path, trading_date=day)
 
     # Idea freshness from DB + filesystem (best-effort)
     idea_freshness = _idea_freshness(path)
@@ -122,6 +125,7 @@ def build_daily_report(
         "recon_issues": recon_issues[:10],
         "idea_freshness": idea_freshness,
         "sheet_freshness": sheet_freshness,
+        "csa_shadow": csa_shadow,
         "status": _report_status(live_health, recon_issues, idea_freshness),
     }
 
@@ -139,6 +143,8 @@ def _coerce_day(value: date | str | None) -> date:
 
 
 def _empty_report(day: date) -> dict[str, Any]:
+    from kamandal_v2.strategy_lanes.reports import build_csa_scorecard
+
     return {
         "trading_date": day.isoformat(),
         "db_path": "",
@@ -154,6 +160,7 @@ def _empty_report(day: date) -> dict[str, Any]:
         "recon_issues": [],
         "idea_freshness": {},
         "sheet_freshness": {},
+        "csa_shadow": build_csa_scorecard("", trading_date=day),
         "status": {"level": "NO_DATA", "reason": "db_missing"},
     }
 

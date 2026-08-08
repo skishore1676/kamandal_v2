@@ -25,7 +25,7 @@ label_prefix = sys.argv[4]
 runner = repo / "scripts" / "launchd" / "run_kamandal_job.sh"
 sys.path.insert(0, str(repo / "src"))
 
-from kamandal_v2.ops.launchd_registry import JOB_LABEL_SUFFIXES, JOB_SCHEDULES  # noqa: E402
+from kamandal_v2.ops.launchd_registry import DISABLED_BY_DEFAULT, JOB_LABEL_SUFFIXES, JOB_SCHEDULES  # noqa: E402
 
 
 def calendar_entries(schedule):
@@ -69,6 +69,7 @@ for job, schedule in JOB_SCHEDULES.items():
         "WorkingDirectory": str(repo),
         "StandardOutPath": str(log_dir / f"{label}.out.log"),
         "StandardErrorPath": str(log_dir / f"{label}.err.log"),
+        "Disabled": job in DISABLED_BY_DEFAULT,
     }
     path = launchd_dir / f"{label}.plist"
     path.write_bytes(plistlib.dumps(plist, sort_keys=True))
@@ -132,9 +133,15 @@ case "$ACTION" in
     while IFS= read -r label; do
       plist="$LAUNCHD_DIR/$label.plist"
       launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
-      launchctl bootstrap "gui/$uid" "$plist"
-      launchctl enable "gui/$uid/$label"
-      echo "LOADED $label"
+      if /usr/libexec/PlistBuddy -c 'Print :Disabled' "$plist" 2>/dev/null | grep -qi true; then
+        launchctl disable "gui/$uid/$label"
+        launchctl bootstrap "gui/$uid" "$plist" || true
+        echo "LOADED-DISABLED $label"
+      else
+        launchctl bootstrap "gui/$uid" "$plist"
+        launchctl enable "gui/$uid/$label"
+        echo "LOADED $label"
+      fi
     done < <(labels)
     remove_kamandal_cron_block
     launchctl list | grep "$LABEL_PREFIX" || true

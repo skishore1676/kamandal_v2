@@ -87,19 +87,27 @@ def _shadow_evidence_status(
     observed_at: datetime,
 ) -> dict[str, Any]:
     """Describe the shadow lane without reviving or mutating retired jobs."""
-    active_shadow_jobs = sorted(
+    from kamandal_v2.ops.launchd_registry import DISABLED_BY_DEFAULT
+
+    registered_shadow_jobs = sorted(
         job.job
         for job in launchd_jobs()
         if "shadow" in job.job
     )
+    active_shadow_jobs = [job for job in registered_shadow_jobs if job not in DISABLED_BY_DEFAULT]
+    staged_shadow_jobs = [job for job in registered_shadow_jobs if job in DISABLED_BY_DEFAULT]
+    state = "active" if active_shadow_jobs else "staged_disabled" if staged_shadow_jobs else "retired"
     collector = {
-        "state": "active" if active_shadow_jobs else "retired",
+        "state": state,
         "basis": (
             "active_shadow_jobs_in_launchd_registry"
             if active_shadow_jobs
+            else "shadow_jobs_registered_disabled_by_default"
+            if staged_shadow_jobs
             else "no_shadow_job_in_active_launchd_registry"
         ),
         "active_jobs": active_shadow_jobs,
+        "staged_disabled_jobs": staged_shadow_jobs,
         "retired_legacy_jobs": ["market-shadow", "shadow-eod-report"],
     }
     history: dict[str, Any] = {
@@ -160,9 +168,11 @@ def _shadow_evidence_status(
     )
     if collector["state"] == "retired":
         findings.append("shadow_collection_retired")
+    if collector["state"] == "staged_disabled":
+        findings.append("shadow_collection_staged_disabled")
     if evidence_state == "historical_only":
         findings.append("historical_shadow_evidence_only")
-    if collector["state"] == "retired" and history["open_fills"]:
+    if collector["state"] != "active" and history["open_fills"]:
         findings.append("legacy_open_shadow_fills_unmanaged")
 
     collector_hash = _semantic_hash(collector)

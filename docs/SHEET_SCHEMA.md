@@ -90,6 +90,9 @@ avoid_earnings
 universe_expansion_enabled
 underlying_price_min
 underlying_price_max
+csa_stage
+source_mode
+management_policy_json
 notes
 ```
 
@@ -124,6 +127,16 @@ Notes:
 - `underlying_price_min/max`: required Sheet-owned bounds when universe expansion
   is enabled. The same row's `iv_rank_min/max` are also required. Missing values
   fail closed; the repository provides no fallback range.
+- `csa_stage` (column BA): blank or `baseline` keeps the row on the existing
+  path. `shadow`, `pilot_live`, and `live` are explicit CSA stages. The CSA-1
+  release runs only `shadow`; later stages do not grant broker authority.
+- `source_mode` (column BB): `idea`, `market_scan`, or `portfolio_hedge`. The
+  value must be compatible with the row's structure and fails closed otherwise.
+- `management_policy_json` (column BC): operator-visible CSA lifecycle policy
+  that is not already represented by a normal playbook column. It must contain a
+  non-empty `lifecycle` object. The existing `score_weight_credit/pop/liquidity/spread`
+  columns remain canonical for scoring; duplicating `score_weights` inside JSON
+  fails closed. CSA does not supply repository numeric fallbacks for missing values.
 - `iv_abs_min/max`: optional absolute ATM IV gate, useful for avoiding
   low-volatility false positives.
 - `half_time_exit`: true/false. If true, the engine can recommend exit around
