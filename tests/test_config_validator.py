@@ -122,3 +122,41 @@ def test_validate_config_accepts_enabled_playbook_live_bpr_cap() -> None:
 
     assert result.ok
     assert "enabled_playbook_missing_live_bpr_cap:put_spread_default" not in result.warnings
+
+
+def test_validate_config_requires_all_sheet_values_for_universe_expansion() -> None:
+    result = validate_config(
+        [UniverseEntry(symbol="TLT", enabled=True, profile="rates_etf", allowed_playbooks=["put_spread"])],
+        [
+            _playbook(
+                "short_strangle_sheet",
+                strategy_family="short_strangle",
+                structure="short_strangle",
+                universe_expansion_enabled=True,
+            )
+        ],
+    )
+
+    assert not result.ok
+    assert "universe_expansion_missing_sheet_value:short_strangle_sheet:underlying_price_min" in result.errors
+    assert "universe_expansion_missing_sheet_value:short_strangle_sheet:iv_rank_min" in result.errors
+
+
+def test_validate_config_accepts_complete_sheet_owned_universe_expansion() -> None:
+    result = validate_config(
+        [UniverseEntry(symbol="TLT", enabled=True, profile="rates_etf", allowed_playbooks=["put_spread"])],
+        [
+            _playbook(
+                "short_strangle_sheet",
+                strategy_family="short_strangle",
+                structure="short_strangle",
+                universe_expansion_enabled=True,
+                underlying_price_min=60,
+                underlying_price_max=180,
+                iv_rank_min=40,
+                iv_rank_max=90,
+            )
+        ],
+    )
+
+    assert result.ok

@@ -51,6 +51,7 @@ OPERATOR_ACTIONS = {
     "loss_watch": "Review the loss-watch position and choose close or hold; automatic loss action is not enabled.",
 }
 LIVE_HEALTH_ATTENTION_STATE_EVENT = "live_health_attention_state"
+SCHEDULED_HEALTH_ATTENTION_STATE_EVENT = "scheduled_health_attention_state"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -201,6 +202,9 @@ def daily_report_job(args: argparse.Namespace) -> int:
 def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path) -> int:
     report = scheduled_job_health(repo_root=repo_root)
     attention = {"notify": bool(report["issues"]), "level": "error" if report["issues"] else "info", "reason": "scheduled_job_failure" if report["issues"] else "all_scheduled_jobs_healthy"}
+    store = LocalStore()
+    if args.alert_mode == "live":
+        attention = dedupe_scheduled_health_attention(store, attention, report["issues"])
     alert: AlertResult | None = None
     ok = True
     if attention["notify"]:
@@ -212,6 +216,8 @@ def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path
             profile=args.alert_profile,
         )
         ok = alert.ok or args.alert_mode == "off"
+        if alert.ok and args.alert_mode == "live":
+            record_scheduled_health_attention_open(store, attention)
     print_result(
         {
             "job": args.job,
@@ -368,6 +374,60 @@ def record_health_attention_open(store: LocalStore, attention: dict[str, Any]) -
             "status": "open",
             "fingerprint": attention.get("fingerprint") or attention_fingerprint(attention),
             "reason": attention.get("reason") or "",
+        },
+    )
+
+
+def scheduled_attention_fingerprint(issues: list[dict[str, Any]]) -> str:
+    identities = [
+        {
+            "job": str(issue.get("job") or ""),
+            "reason": str(issue.get("reason") or ""),
+            "detail": str(issue.get("detail") or ""),
+        }
+        for issue in issues
+    ]
+    return hashlib.sha256(
+        json.dumps(sorted(identities, key=lambda item: json.dumps(item, sort_keys=True)), sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def dedupe_scheduled_health_attention(
+    store: LocalStore,
+    attention: dict[str, Any],
+    issues: list[dict[str, Any]],
+) -> dict[str, Any]:
+    previous = store.latest_event(SCHEDULED_HEALTH_ATTENTION_STATE_EVENT) or {}
+    if not attention.get("notify"):
+        if previous.get("status") == "open":
+            store.event(
+                SCHEDULED_HEALTH_ATTENTION_STATE_EVENT,
+                {
+                    "status": "cleared",
+                    "fingerprint": previous.get("fingerprint") or "",
+                    "reason": previous.get("reason") or "",
+                },
+            )
+        return attention
+    fingerprint = scheduled_attention_fingerprint(issues)
+    if previous.get("status") == "open" and previous.get("fingerprint") == fingerprint:
+        return {
+            **attention,
+            "notify": False,
+            "reason": "unchanged_scheduled_job_failure",
+            "attention_reason": attention.get("reason") or "",
+            "fingerprint": fingerprint,
+        }
+    return {**attention, "fingerprint": fingerprint}
+
+
+def record_scheduled_health_attention_open(store: LocalStore, attention: dict[str, Any]) -> None:
+    store.event(
+        SCHEDULED_HEALTH_ATTENTION_STATE_EVENT,
+        {
+            "status": "open",
+            "fingerprint": attention.get("fingerprint") or "",
+            "reason": attention.get("reason") or "scheduled_job_failure",
         },
     )
 

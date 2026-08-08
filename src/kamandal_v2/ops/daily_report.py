@@ -65,7 +65,7 @@ def build_daily_report(
         except Exception:
             config = {}
 
-    with closing(sqlite3.connect(path)) as conn:
+    with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as conn:
         conn.row_factory = sqlite3.Row
         events = _load_day_events(conn, day)
         live_intents = _load_live_intents(conn, day)
@@ -95,6 +95,7 @@ def build_daily_report(
         "live_open_groups": len([g for g in groups if g["status"] in ("open", "pending")]),
         "total_groups": len(groups),
         "live_positions": len(positions),
+        "historical_group_rows": len(groups),
         "shadow_open": len([f for f in shadow_fills if f["status"] == "open"]),
         "shadow_closed_today": len([f for f in shadow_fills if f["status"] == "closed"]),
         "intents_today": len(live_intents),
@@ -213,7 +214,10 @@ def _load_live_status(conn: sqlite3.Connection, day: date) -> list[dict[str, Any
 
 def _load_live_positions(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     try:
-        cur = conn.execute("SELECT group_id, underlying, status, payload FROM live_positions ORDER BY group_id")
+        cur = conn.execute(
+            "SELECT group_id, underlying, status, payload FROM live_positions "
+            "WHERE lower(status) IN ('open','pending') ORDER BY group_id"
+        )
     except sqlite3.OperationalError:
         return []
     out = []
@@ -264,8 +268,12 @@ def _safe_live_health(db_path: Path, config: dict[str, Any], now: datetime | Non
     try:
         from kamandal_v2.stores.sqlite import LocalStore
 
-        store = LocalStore(sqlite_path=db_path)
-        report = run_live_health(store, config, now=now) if now else run_live_health(store, config)
+        store = LocalStore(sqlite_path=db_path, read_only=True)
+        report = (
+            run_live_health(store, config, now=now, allow_mutation=False)
+            if now
+            else run_live_health(store, config, allow_mutation=False)
+        )
         return report
     except Exception as exc:
         return {"overall": "NO_DATA", "reasons": ["live_health_failed"], "error": str(exc), "counts": {}}
@@ -294,8 +302,14 @@ def _sheet_freshness() -> dict[str, Any]:
             import time
 
             age_hours = (datetime.now().timestamp() - cache.stat().st_mtime) / 3600
-            return {"exists": True, "age_hours": round(age_hours, 1), "path": str(cache)}
-        return {"exists": False}
+            return {
+                "exists": True,
+                "age_hours": round(age_hours, 1),
+                "path": str(cache),
+                "role": "manual_export_cache",
+                "health_authoritative": False,
+            }
+        return {"exists": False, "role": "manual_export_cache", "health_authoritative": False}
     except Exception:
         return {"exists": False}
 
@@ -310,15 +324,27 @@ def _advisory_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
     return {"runs": len(advisory), "last": last}
 
 
-def _report_status(live_health: dict[str, Any], recon_issues: list[dict[str, Any]], idea_freshness: dict[str, Any]) -> dict[str, str]:
+def _report_status(live_health: dict[str, Any], recon_issues: list[dict[str, Any]], idea_freshness: dict[str, Any]) -> dict[str, Any]:
     overall = str(live_health.get("overall", "UNKNOWN")).upper()
-    if overall in ("RED",):
-        return {"level": "RED", "reason": ",".join(live_health.get("reasons", [])[:2]) or "red_health"}
-    if overall == "YELLOW":
-        return {"level": "YELLOW", "reason": ",".join(live_health.get("reasons", [])[:2]) or "yellow_health"}
-    if overall == "GREEN":
-        return {"level": "GREEN", "reason": "ok"}
-    return {"level": overall, "reason": "health_" + overall.lower()}
+    recon_open = [item for item in recon_issues if item.get("status") not in ("retired", "resolved")]
+    idea_count = int(idea_freshness.get("active_files") or 0)
+    components = {
+        "live": overall,
+        "reconciliation": "RED" if recon_open else "GREEN",
+        "ideas": "GREEN" if idea_count > 0 else "YELLOW",
+    }
+    order = {"NO_DATA": 4, "RED": 3, "YELLOW": 2, "UNKNOWN": 1, "GREEN": 0}
+    level = max(components.values(), key=lambda item: order.get(item, 1))
+    reasons: list[str] = []
+    if overall not in {"GREEN", ""}:
+        reasons.extend(str(reason) for reason in live_health.get("reasons", [])[:2])
+        if not reasons:
+            reasons.append("health_" + overall.lower())
+    if recon_open:
+        reasons.append("open_reconciliation_issues")
+    if idea_count == 0:
+        reasons.append("no_active_idea_files")
+    return {"level": level, "reason": ",".join(reasons) or "ok", "components": components}
 
 
 # -- Rendering ---------------------------------------------------------------
@@ -386,8 +412,12 @@ def _build_ryg_tables(report: dict[str, Any]) -> dict[str, list[tuple[str, str, 
     # APP: scheduler + sheet + ideas freshness
     app_rows: list[tuple[str, str, str, str]] = []
     sheet_age = sheet.get("age_hours")
-    sheet_status = "🟢" if sheet.get("exists") and (sheet_age is None or sheet_age < 24) else "🟡" if sheet.get("exists") else "🔴"
-    app_rows.append(("Sheet cache", f"{'exists' if sheet.get('exists') else 'missing'} {f'({sheet_age}h ago)' if sheet_age is not None else ''}", sheet_status, "pull_sheet freshness"))
+    app_rows.append((
+        "Manual Sheet export",
+        f"{'exists' if sheet.get('exists') else 'missing'} {f'({sheet_age}h ago)' if sheet_age is not None else ''}",
+        "⚪",
+        "informational cache; not runtime Sheet health",
+    ))
     app_rows.append(("Ideas active", str(freshness.get("active_files",0)), "🟢" if freshness.get("active_files",0) > 0 else "🟡", "intelligence pipeline"))
     app_rows.append(("Events today", str(report.get("total_events",0)), "🟢", "db events"))
     app_rows.append(("Health probe", health_level, ryg_for_level(health_level), ",".join(health.get("reasons",[])[:2])))

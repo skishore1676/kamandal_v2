@@ -87,6 +87,9 @@ max_loss_multiple
 exit_dte_min
 half_time_exit
 avoid_earnings
+universe_expansion_enabled
+underlying_price_min
+underlying_price_max
 notes
 ```
 
@@ -114,6 +117,13 @@ Notes:
   or `KAMANDAL_EXIT_LOSS_WATCH_WINDOW_MINUTES` in the runtime environment.
 - `iv_percentile_min/max`: optional distribution percentile gate.
 - `iv_rank_min/max`: optional min/max-rank gate against the local lookback.
+- `universe_expansion_enabled`: optional operator switch. For a short-strangle
+  row, `TRUE` allows already-enabled universe symbols outside the row's normal
+  profile/allowlist routing to be considered. It does not add symbols or bypass
+  any other gate.
+- `underlying_price_min/max`: required Sheet-owned bounds when universe expansion
+  is enabled. The same row's `iv_rank_min/max` are also required. Missing values
+  fail closed; the repository provides no fallback range.
 - `iv_abs_min/max`: optional absolute ATM IV gate, useful for avoiding
   low-volatility false positives.
 - `half_time_exit`: true/false. If true, the engine can recommend exit around

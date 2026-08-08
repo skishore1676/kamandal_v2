@@ -1,4 +1,4 @@
-from kamandal_v2.domain.models import Idea, Playbook, UniverseEntry
+from kamandal_v2.domain.models import Idea, Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflightClient
 from kamandal_v2.planner.candidate_builder import build_candidates
 
@@ -62,6 +62,100 @@ def test_short_strangle_builder_supports_strangle_alias() -> None:
     assert eligible[0].structure == "short_strangle"
     assert {leg.option_type for leg in eligible[0].legs} == {"put", "call"}
     assert all(leg.side == "sell" for leg in eligible[0].legs)
+
+
+def test_short_strangle_uses_broker_preflight_bpr_instead_of_local_formula() -> None:
+    class BrokerPreflight:
+        def preflight(self, _candidate):  # noqa: ANN001
+            return PreflightResult(
+                ok=True,
+                bpr=1_250.0,
+                message="broker ok",
+                raw={"response": {"buyingPowerRequirement": "1250.00"}},
+            )
+
+    candidates = build_candidates(
+        [_idea(strategy_hint="strangle")],
+        [UniverseEntry(symbol="NVDA", enabled=True, profile="large_stocks")],
+        [_playbook("short_strangle")],
+        FixtureMarketDataProvider(),
+        BrokerPreflight(),
+    )
+
+    candidate = next(candidate for candidate in candidates if candidate.eligible)
+    assert candidate.estimated_bpr == 1_250.0
+    assert "bpr_source=broker_preflight" in candidate.reasons
+    assert any(reason.startswith("local_bpr_fallback=") for reason in candidate.reasons)
+
+
+def test_strangle_price_iv_overlay_expands_only_enabled_sheet_universe() -> None:
+    playbook = _playbook(
+        "short_strangle",
+        profiles=["large_stocks"],
+        universe_expansion_enabled=True,
+        underlying_price_min=61,
+        underlying_price_max=181,
+        iv_rank_min=41,
+        iv_rank_max=91,
+    )
+    entry = UniverseEntry(symbol="TLT", enabled=True, profile="rates_etf", allowed_playbooks=["put_spread"])
+    idea = _idea(underlying="TLT", strategy_hint="strangle")
+
+    candidates = build_candidates(
+        [idea],
+        [entry],
+        [playbook],
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+    )
+
+    candidate = next(candidate for candidate in candidates if candidate.eligible)
+    assert "strangle_eligibility=sheet_playbook_overlay" in candidate.reasons
+
+    disabled = UniverseEntry(symbol="TLT", enabled=False, profile="rates_etf", allowed_playbooks=["put_spread"])
+    assert build_candidates(
+        [idea],
+        [disabled],
+        [playbook],
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+    ) == []
+
+
+def test_strangle_universe_expansion_fails_closed_without_sheet_ranges() -> None:
+    playbook = _playbook("short_strangle", profiles=["large_stocks"], universe_expansion_enabled=True)
+    entry = UniverseEntry(symbol="TLT", enabled=True, profile="rates_etf", allowed_playbooks=["put_spread"])
+
+    assert build_candidates(
+        [_idea(underlying="TLT", strategy_hint="strangle")],
+        [entry],
+        [playbook],
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+    ) == []
+
+
+def test_playbook_parses_universe_expansion_policy_from_sheet_row() -> None:
+    playbook = Playbook.from_row(
+        {
+            "playbook_id": "short_strangle_sheet",
+            "enabled": "TRUE",
+            "strategy_family": "short_strangle",
+            "structure": "short_strangle",
+            "leg_count": "2",
+            "universe_expansion_enabled": "TRUE",
+            "underlying_price_min": "60",
+            "underlying_price_max": "180",
+            "iv_rank_min": "40",
+            "iv_rank_max": "90",
+        }
+    )
+
+    assert playbook.universe_expansion_enabled is True
+    assert playbook.underlying_price_min == 60.0
+    assert playbook.underlying_price_max == 180.0
+    assert playbook.iv_rank_min == 40.0
+    assert playbook.iv_rank_max == 90.0
 
 
 def test_jade_lizard_builder_creates_short_put_and_call_spread() -> None:

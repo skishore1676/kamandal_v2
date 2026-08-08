@@ -68,3 +68,15 @@ def test_seed_playbook_rows_match_header_length() -> None:
     header_len = len(seed_headers()["playbooks"])
 
     assert all(len(row) == header_len for row in tables["playbooks"])
+
+
+def test_seed_does_not_set_universe_expansion_policy() -> None:
+    tables = build_seed_tables(load_control())
+    headers = seed_headers()["playbooks"]
+    enabled_index = headers.index("universe_expansion_enabled")
+    price_min_index = headers.index("underlying_price_min")
+    price_max_index = headers.index("underlying_price_max")
+
+    assert all(row[enabled_index] == "" for row in tables["playbooks"])
+    assert all(row[price_min_index] == "" for row in tables["playbooks"])
+    assert all(row[price_max_index] == "" for row in tables["playbooks"])
