@@ -71,6 +71,9 @@ PLAYBOOKS_HEADER = [
     "priority",
     "rationale",
     "notes",
+    "universe_expansion_enabled",
+    "underlying_price_min",
+    "underlying_price_max",
 ]
 
 DAILY_PLAN_HEADER = [

@@ -12,13 +12,23 @@ from kamandal_v2.paths import resolve_path
 
 
 class LocalStore:
-    def __init__(self, sqlite_path: str | Path = "data/kamandal_v2.db") -> None:
+    def __init__(
+        self,
+        sqlite_path: str | Path = "data/kamandal_v2.db",
+        *,
+        read_only: bool = False,
+    ) -> None:
         self.sqlite_path = resolve_path(sqlite_path)
-        self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
-        self._ensure_schema()
+        self.read_only = read_only
+        if not read_only:
+            self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.sqlite_path)
+        if self.read_only:
+            conn = sqlite3.connect(f"file:{self.sqlite_path}?mode=ro", uri=True)
+        else:
+            conn = sqlite3.connect(self.sqlite_path)
         conn.row_factory = sqlite3.Row
         return conn
 

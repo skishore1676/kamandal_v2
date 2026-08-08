@@ -225,6 +225,35 @@ def test_health_attention_deduplicates_one_open_incident_until_clear(tmp_path) -
     assert reopened["notify"] is True
 
 
+def test_scheduled_health_deduplicates_same_failure_until_clear(tmp_path) -> None:
+    store = launchd_job.LocalStore(tmp_path / "kamandal.db")
+    issues = [{"job": "youtube", "reason": "last_run_failed", "detail": "/tmp/youtube.log"}]
+    attention = {"notify": True, "level": "error", "reason": "scheduled_job_failure"}
+
+    first = launchd_job.dedupe_scheduled_health_attention(store, attention, issues)
+    assert first["notify"] is True
+    launchd_job.record_scheduled_health_attention_open(store, first)
+
+    repeated = launchd_job.dedupe_scheduled_health_attention(store, attention, issues)
+    assert repeated["notify"] is False
+    assert repeated["reason"] == "unchanged_scheduled_job_failure"
+
+    launchd_job.dedupe_scheduled_health_attention(
+        store,
+        {"notify": False, "level": "info", "reason": "all_scheduled_jobs_healthy"},
+        [],
+    )
+    assert store.latest_event(launchd_job.SCHEDULED_HEALTH_ATTENTION_STATE_EVENT)["status"] == "cleared"
+
+    reopened = launchd_job.dedupe_scheduled_health_attention(store, attention, issues)
+    assert reopened["notify"] is True
+
+
+def test_watchdog_includes_new_report_and_universe_jobs() -> None:
+    assert "daily-report" in launchd_job.MONITORED_JOBS
+    assert "universe-proposer" in launchd_job.MONITORED_JOBS
+
+
 def test_scheduled_job_health_detects_stale_frequent_job(tmp_path) -> None:
     log_dir = tmp_path / "logs"
     log_dir.mkdir()

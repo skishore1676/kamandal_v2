@@ -345,14 +345,24 @@ def main() -> None:
         from kamandal_v2.tools.universe_proposer import collect_out_of_universe_symbols, proposals_to_universe_rows
 
         store = LocalStore()
-        proposals = collect_out_of_universe_symbols(store, lookback_days=args.lookback_days, limit=args.limit)
+        existing = []
+        if args.write_sheet and not args.dry_run:
+            from kamandal_v2.sheets import pull_sheet_tables
+
+            existing = pull_sheet_tables(load_control()).get("universe") or []
+        existing_symbols = {str(row.get("symbol") or "").upper() for row in existing}
+        proposals = collect_out_of_universe_symbols(
+            store,
+            lookback_days=args.lookback_days,
+            limit=args.limit,
+            existing_symbols=existing_symbols,
+        )
         rows = proposals_to_universe_rows(proposals)
         print(json.dumps({"proposals": proposals, "rows": rows, "count": len(rows), "write_sheet": bool(args.write_sheet and not args.dry_run)}, indent=2))
         if args.write_sheet and not args.dry_run and rows:
-            from kamandal_v2.sheets import pull_sheet_tables, write_universe_proposals
+            from kamandal_v2.sheets import write_universe_proposals
 
             # Guard: do not exceed 5/day — check today's existing proposed tier
-            existing = pull_sheet_tables(load_control()).get("universe") or []
             today = __import__("datetime").datetime.now(__import__("datetime").UTC).date().isoformat()
             proposed_today = sum(1 for row in existing if str(row.get("proposal_date") or "").strip() == today and str(row.get("tier") or "").strip().lower() == "proposed")
             remaining = max(0, 5 - proposed_today)

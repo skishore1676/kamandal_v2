@@ -82,6 +82,7 @@ def run_live_health(
     *,
     stale_close_order_minutes: int | None = None,
     now: datetime | None = None,
+    allow_mutation: bool = True,
 ) -> dict[str, Any]:
     config = config or {}
     checked_at = now or _utc_now()
@@ -103,7 +104,7 @@ def run_live_health(
         for issue in store.open_live_reconciliation_issues()
         if not _is_pending_confirmation_issue(issue)
     ]
-    pending_entry_self_heal = retire_stale_entry_approvals(config, store)
+    pending_entry_self_heal = retire_stale_entry_approvals(config, store) if allow_mutation else []
     pending_entry_approvals = store.live_order_intents_by_type("open", statuses={"pending_approval"})
     risk = _risk_overview(store, config)
 
@@ -146,7 +147,7 @@ def run_live_health(
                 finding["reason"] = "urgent_close_order_stale"
             elif finding["reason"] in {"working_close_order", "close_order_stale"} and (finding["age_minutes"] or 0.0) > stale_minutes:
                 finding["reason"] = "close_order_stale"
-        if finding["is_failed_close"]:
+        if finding["is_failed_close"] and allow_mutation:
             _demote_stale_failed_close(store, finding, order, latest_close_ticket_by_group)
         close_findings.append(finding)
 
@@ -307,7 +308,7 @@ def run_live_health(
         )
 
     risk_manager_decision = evaluate_entry_risk(store, config, now=checked_at)
-    if risk_manager_decision.enabled:
+    if risk_manager_decision.enabled and allow_mutation:
         store.event("risk_manager_decision", risk_manager_decision.to_dict())
     for reason in risk_manager_decision.reasons:
         reason_code = str(reason.get("code") or "risk_manager")

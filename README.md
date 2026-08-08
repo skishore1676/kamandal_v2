@@ -1,6 +1,6 @@
 # Kamandal V2
 
-Local-first multileg options portfolio planning and management cockpit. Kamandal V2 is an automated "shadow" trading and intelligence extraction system that fuses LLM-driven idea generation with strict deterministic execution.
+Local-first live multileg options portfolio planning, execution, and management cockpit. Kamandal V2 fuses LLM-assisted idea extraction with deterministic construction, Public-broker preflight, portfolio/risk gates, live execution, reconciliation, and exit management. Historical shadow evidence remains available but the active operating lane is live.
 
 ## Architecture & Workflow
 
@@ -11,7 +11,7 @@ Kamandal operates through a strictly bounded pipeline designed to keep the AI cr
    - Raw texts are stored in `data/transcripts/` or staged in `data/digest/`.
 
 2. **LLM Extraction**
-   - The Codex LLM reads the raw text and extracts abstract trading ideas (e.g., "Bullish SPY, 7 days, mean-revert thesis"). 
+   - Agent Broker routes the configured LLM to extract abstract trading ideas (e.g., "Bullish SPY, 7 days, mean-revert thesis").
    - The LLM **never** picks options legs or sees the option chain or your strategy templates. 
    - Extracted ideas are output as structured YAML files into the `data/ideas/` directory.
 
@@ -22,18 +22,28 @@ Kamandal operates through a strictly bounded pipeline designed to keep the AI cr
 
 4. **Portfolio Optimization**
    - Candidates are evaluated and grouped into "Plans". A beam-search portfolio optimizer selects the best combination of trades that maximize the overall score while strictly respecting your Buying Power Reduction (BPR) limits and max position caps.
-   - The top plan is written out to `daily_plan` and auto-approved for shadow execution. 
+   - In the live lane, `auto_top_plan` makes only the rank-1 eligible plan available to the guarded submission path.
 
 5. **Reporting & Review**
-   - **End-of-Day (EOD):** A deterministic script marks the shadow portfolio to market and calculates P&L.
+   - **Intraday:** Three RYG reports summarize app, live-book, and retained shadow evidence through Lathi Bus.
+   - **Historical shadow:** Legacy EOD artifacts remain evidence; the active shadow collector is retired.
    - **Weekly Review:** Every Friday, the LLM analyzes all *rejected* candidates from the week (e.g., rejected by the planner due to low IV or poor liquidity) and outputs suggestions to help you tune your Playbooks.
 
 ## Configuration & Control
 
 - **Playbooks & Universe:** Strategy parameters and tracked tickers are securely managed remotely in a Google Sheet (`universe`, `playbooks`, `daily_plan`).
 - **Runtime Rules:** Controlled locally via `config/control.yaml` and environment variables.
-  - Live broker submission defaults to Tastytrade but is strictly gated (`trading_enabled: false`, `mode: shadow` by default).
-  - Configures BPR caps, max positions, and shadow auto-approval modes.
+  - The active broker is Public; Tastytrade supplies selected market metrics.
+  - The checked-in posture is live and trading-enabled. Oldmac environment overrides remain part of runtime truth.
+  - Configures BPR caps, concentration limits, live approval/submission, and retained shadow behavior.
+
+For undefined-risk short strangles, broker preflight BPR is authoritative. The
+local formula is retained only as a labeled fallback when the broker omits BPR.
+Additional symbols already enabled in the operator universe may reach the
+short-strangle playbook only when that playbook's Sheet-owned expansion switch,
+underlying-price bounds, and IV-rank bounds allow it. Existing explicit permissions
+remain valid outside that overlay. The repository supplies no fallback policy values. See
+[docs/STRANGLE_BPR_AND_ELIGIBILITY.md](docs/STRANGLE_BPR_AND_ELIGIBILITY.md).
 
 ## Local Data Architecture
 
@@ -50,6 +60,7 @@ The `data/` folder stores all persistent state:
 
 The system is designed as a series of short scheduled jobs rather than a long-running daemon:
 - **X Extraction:** Weekdays morning (8:55 AM).
+- **Universe Proposer:** Weekdays 8:50 AM; appends at most five disabled, evidence-backed proposal rows.
 - **YouTube Extraction:** Intraday sweeps (9:15, 11:45, 14:00) so the final
   intelligence batch is available to the 14:30 live advisory.
 - **Live Reconciliation:** Intraday broker/local ledger checks before advisory and management cycles.
@@ -57,6 +68,7 @@ The system is designed as a series of short scheduled jobs rather than a long-ru
 - **Live Approved Orders:** Every 5 minutes during the live market window.
 - **Live Management:** Every 15 minutes during the live market window.
 - **Live Health Report:** Morning, midday, afternoon, and close readbacks through Lathi Bus when operator attention is needed.
+- **Daily Report:** 9:10, 11:45, and 14:45 CT RYG operational readbacks through Lathi Bus.
 - **Scheduled Job Health:** Every 15 minutes during the live market window; watches launchd logs for stale, missing, or failed Kamandal jobs.
 - **Weekly Reviewer:** Fridays at 10:00 AM.
 

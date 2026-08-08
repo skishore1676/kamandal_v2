@@ -43,6 +43,7 @@ All times are oldmac local time, expected to be America/Chicago.
 | Label suffix | Job | Schedule |
 | --- | --- | --- |
 | `x_bookmarks` | `x-bookmarks` | Weekdays 08:55 |
+| `universe_proposer` | `universe-proposer` | Weekdays 08:50 |
 | `youtube` | `youtube` | Weekdays 09:15, 11:45, 14:00 |
 | `my_ideas` | `my-ideas` | Weekdays 08:05, 09:20 |
 | `live_reconciliation` | `live-reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:20 |
@@ -51,6 +52,7 @@ All times are oldmac local time, expected to be America/Chicago.
 | `live_management` | `live-management` | Weekdays every 15 minutes, 09:00-14:45; plus 14:50 and 15:05 |
 | `live_health_report` | `live-health-report` | Weekdays 09:10, 11:45, 14:45, 15:20 |
 | `scheduled_job_health` | `scheduled-job-health` | Weekdays every 15 minutes, 09:15-15:45 |
+| `daily_report` | `daily-report` | Weekdays 09:10, 11:45, 14:45 |
 | `earnings` | `earnings` | Weekdays 08:40 |
 | `iv` | `iv` | Weekdays 08:45 |
 | `iv_afternoon` | `iv-afternoon` | Weekdays 13:45 |
@@ -102,7 +104,8 @@ KAMANDAL_LAUNCHD_JOB={...}
 
 The runner skips non-trading days unless `--force` is passed, captures stdout and
 stderr tails, sends a Lathi failure alert when a scheduled job fails, and returns
-nonzero on failure.
+nonzero on failure. Scheduled-job health fingerprints an open failure, sends it
+once while unchanged, and clears that incident after recovery.
 
 The YouTube job treats "no usable transcripts available" as a clean no-op by
 default. It still discovers videos and attempts transcript fetches, but a
@@ -132,6 +135,7 @@ Kamandal currently supports these non-broker operational actions:
 | `live-status` | Read current live-health state. |
 | `scheduled-job-health-now` | Run scheduled-job health immediately. |
 | `live-health-report-now` | Run the live-health report immediately. |
+| `daily-report-now` | Build and deliver the current RYG daily report. |
 | `send-pending-review-requests` | Re-send pending bounded review cards. |
 | `apply-review-decision` | Apply a bounded reconciliation decision after Kamandal revalidates it. |
 | `retry-job` | Re-run a safe intelligence job. |

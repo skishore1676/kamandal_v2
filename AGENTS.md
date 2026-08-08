@@ -1,9 +1,14 @@
 # kamandal_v2 — bootstrap contract
 
-**Identity:** kamandal_v2 is the **multileg options cockpit** of Suman's trading
-family — LLM idea extraction, review workflows, and shadow trading. It retains full
-ownership of: multileg cockpit behavior, review semantics, shadow-trading runtime,
-and its own launchd jobs. It is NOT the live-money executor (that is bhiksha).
+**Identity:** kamandal_v2 is the **live multileg options cockpit and executor** of
+Suman's trading family — LLM idea extraction, deterministic portfolio planning,
+review workflows, Public-broker entry/exit execution, reconciliation, and retained
+historical shadow evidence. It owns its multileg money path and its own launchd jobs.
+Bhiksha owns its separate execution lane; it is not the executor for Kamandal plans.
+
+Kamandal has operated live for roughly a month as of 2026-08-08. The operator
+confirmed that the live lane is intentional and profitable. Current P&L still needs
+runtime receipts before an agent may quote a number or make an alpha claim.
 
 ## Where runtime truth lives
 
@@ -16,8 +21,9 @@ and its own launchd jobs. It is NOT the live-money executor (that is bhiksha).
 
 ## Money / deploy gates
 
-- Shadow trading may relax evidence gates, **never safety gates**; nothing here may
-  promote itself to live-money behavior without the operator's explicit gate.
+- Shadow/research work may relax evidence gates, **never safety gates**. Changes to
+  live BPR, concentration, eligibility, approval, submission, or exit behavior still
+  require an explicit operator gate.
 - Deploys and launchd changes are operator-gated, done at a session boundary with
   readback against the runtime checkout.
 

@@ -2,9 +2,10 @@
 
 ## Purpose
 
-Local-first options planning/execution cockpit: LLM idea extraction (bounded,
-never sees option chains) -> deterministic Playbook planner -> Tastytrade
-execution. Runs unattended via launchd on oldmac (uid 501).
+Live multileg options planning/execution cockpit: bounded LLM idea extraction
+(never chooses legs) -> deterministic Playbook planner -> Public preflight and
+execution. Tastytrade supplies selected market metrics. Runs unattended via
+launchd on oldmac (uid 501).
 
 ## launchd jobs + restart commands
 
@@ -12,12 +13,10 @@ Restart: `launchctl kickstart -k gui/501/<label>` (`-k` kills+re-runs; omit
 `-k` to trigger without killing an in-flight run). Non-live jobs are safe to
 kickstart; **live_* jobs are trading actions**.
 
-12 jobs, label prefix `com.kamandal.v2.`: earnings, iv, iv_afternoon,
+15 jobs, label prefix `com.kamandal.v2.`: daily_report, earnings, iv, iv_afternoon,
 live_advisory, **live_approved_orders** (LIVE), live_health_report,
 **live_management** (LIVE), **live_reconciliation** (LIVE), my_ideas,
-scheduled_job_health (Mon/Tue 09:15 CT — also runs **log rotation**, see
-below; Tower shows effective_enabled=false even though launchd runs it fine),
-weekly_reviewer, x_bookmarks, youtube.
+scheduled_job_health, universe_proposer, weekly_reviewer, x_bookmarks, youtube.
 
 Bridge (Lathi Control Tower):
 - Status: `.venv/bin/python -m kamandal_v2.tools.launchd_status --json`
@@ -56,13 +55,13 @@ PYTHONPATH=src .venv/bin/python -m pytest -q
 
 ## DANGER ZONES (verbatim from audit)
 
-- **Live trading**: Tastytrade session/account (`config/tastytrade_session.json`,
-  `config/tastytrade_account.json`); `live_approved_orders`/`live_management`/
+- **Live trading**: Public session/account (`config/public_session.json`,
+  `config/public_account.json`); `live_approved_orders`/`live_management`/
   `live_reconciliation` touch real orders. Never kickstart live_* jobs or
   touch config/.
-- **KAM-07 disabled**: `scheduled_job_health` is `declared_enabled=true` but
-  `effective_enabled=false` in the Tower's own view — a watch-the-watchman
-  gap. Don't assume Tower green means the health job ran; don't guess-fix the
-  effective_enabled flag.
+- **Scheduled health is the watchman**: verify its own launchd row and latest
+  artifact before trusting a green summary. Identical incident alerts are
+  deduplicated until recovery; a quiet Telegram channel is therefore not proof
+  that the job stopped running.
 - **Never touch**: `src/kamandal_v2/live/{orders,execution,approval}.py`,
   the `live_approved_orders` job, or any `config/*session*.json`.

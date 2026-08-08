@@ -9,8 +9,25 @@ How we drive changes (established with the exit-pipeline rework, 2026-07-02):
 3. **Review** — independent audit of the implementation against the doc's
    review checklist plus a production readback after the flag flips.
 
-Every change ships dark behind a flag; flips happen in oldmac `.env` during a
-watched session; rollback is flipping the flag back.
+Money-path and eligibility changes ship behind an explicit configuration gate;
+flips happen at an oldmac session boundary after tests and readback. Pure
+reporting/observability fixes may ship without a behavior flag when their rollback
+is the prior commit and they cannot submit or alter orders.
+
+## Local implementation awaiting deployment (2026-08-08)
+
+| Item | Operator decision | Local status |
+|---|---|---|
+| Live identity and docs | Kamandal is intentionally live; Bhiksha owns a separate lane | aligned locally |
+| Concentration caps | +1 expansion was operator-directed to grow BPR utilization | rationale recorded; values unchanged |
+| Short-strangle BPR | broker preflight authoritative; local estimate fallback only | implemented and tested |
+| Short-strangle eligibility | preserve existing permissions; drive enabled-universe expansion and all ranges from the Google Sheet playbook row | implemented and tested locally; Sheet values not written by this change |
+| Daily report truth | aggregate live/reconciliation/ideas; read-only probe; correct active counts | implemented and tested |
+| Universe proposer | real diagnostics + sourced liquidity facts; fail closed | implemented and tested |
+| Scheduler alerting | one page per unchanged incident, clear on recovery | implemented and tested |
+
+None of the 2026-08-08 local changes are deployed merely because they appear in
+this table. Oldmac synchronization remains an explicit operator-gated step.
 
 ## Queue (2026-07-08)
 
@@ -24,11 +41,12 @@ watched session; rollback is flipping the flag back.
 
 ## Ops actions (no code)
 
-- **Keep the risk manager off as global live authority** until
-  [RISK_MANAGER.md](RISK_MANAGER.md)'s readiness checklist is done. The code is
-  useful as advisory health/cluster-cap plumbing, but drawdown freshness,
-  realized close economics, market-session windows, and decision-ledger
-  durability are not yet strong enough for always-on autonomous blocking.
+- **Keep the enabled risk manager and operator-directed +1 concentration-cap
+  increments.** These are the intended live posture for gradually increasing
+  buying-power use. Do not silently tighten or relax them. Any further cap
+  change still requires an operator decision and a fresh account snapshot;
+  [RISK_MANAGER.md](RISK_MANAGER.md)'s readiness items remain useful hardening
+  work, not evidence that the current live setting is accidental.
 - **Watch the first live close** through the new ledger/ladder path end to
   end (floor annotation fixed in code but unproven in production).
 

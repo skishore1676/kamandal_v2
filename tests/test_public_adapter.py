@@ -1,4 +1,4 @@
-from kamandal_v2.domain.models import OptionLeg
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
 from kamandal_v2.market.public import PublicAdapter, occ_symbol, parse_occ_symbol
 from kamandal_v2.planner.engine import _preflight_client
 
@@ -214,3 +214,45 @@ def test_public_replace_order_uses_atomic_option_cancel_replace_payload(tmp_path
             }
         }
     ) is False
+
+
+def test_public_strangle_preflight_uses_broker_buying_power_requirement(tmp_path) -> None:
+    adapter = PublicAdapter(
+        {
+            "broker": {
+                "public": {
+                    "secret_token": "secret",
+                    "account_id": "acct",
+                    "session_file": str(tmp_path / "session.json"),
+                    "account_cache_file": str(tmp_path / "account.json"),
+                }
+            }
+        }
+    )
+    adapter._access_token = "token"
+    adapter._expires_at = 10**12
+    adapter._session = _FakeSession({"buyingPowerRequirement": "1275.50"})
+    legs = [
+        OptionLeg("short_put", "sell", "put", 90, "2026-09-18", 1, 1.0, 0.9, 1.1, -0.16, 0.01, -0.02, 0.03, 500),
+        OptionLeg("short_call", "sell", "call", 110, "2026-09-18", 1, 1.0, 0.9, 1.1, 0.16, 0.01, -0.02, 0.03, 500),
+    ]
+    candidate = Candidate(
+        candidate_id="strangle-1",
+        idea_id="idea-1",
+        underlying="XYZ",
+        playbook_id="short_strangle",
+        structure="short_strangle",
+        legs=legs,
+        net_credit=2.0,
+        estimated_bpr=2_200.0,
+        greeks=Greeks(),
+        liquidity_score=1.0,
+        score=0.0,
+    )
+
+    result = adapter.preflight(candidate)
+
+    assert result.ok is True
+    assert result.bpr == 1_275.50
+    assert result.raw["broker_bpr_provided"] is True
+    assert result.raw["bpr_source"] == "broker_preflight"

@@ -316,6 +316,9 @@ def _playbook_rows() -> list[list[Any]]:
                 "",
                 "",
                 str(cache.get("name") or yaml_template.get("name") or playbook_id),
+                "",
+                "",
+                "",
             ]
         )
     return rows
@@ -437,6 +440,9 @@ def _narrative_row(
         50,
         rationale,
         "Requires structural_break:pass annotation from Mala feed.",
+        "",
+        "",
+        "",
     ]
 
 

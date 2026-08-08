@@ -173,6 +173,8 @@ MONITORED_JOBS = [
     "iv",
     "iv-afternoon",
     "weekly-reviewer",
+    "universe-proposer",
+    "daily-report",
 ]
 
 ALL_JOBS = sorted([*SCRIPT_JOBS, "live-health-report", "scheduled-job-health", "daily-report"])

@@ -224,6 +224,9 @@ class Playbook:
     priority: float = 0.0
     rationale: str = ""
     notes: str = ""
+    universe_expansion_enabled: bool = False
+    underlying_price_min: float | None = None
+    underlying_price_max: float | None = None
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "Playbook":
@@ -278,6 +281,9 @@ class Playbook:
             priority=_as_float(row.get("priority"), 0.0),
             rationale=str(row.get("rationale") or ""),
             notes=str(row.get("notes") or ""),
+            universe_expansion_enabled=_as_bool(row.get("universe_expansion_enabled"), default=False),
+            underlying_price_min=_optional_float(row.get("underlying_price_min")),
+            underlying_price_max=_optional_float(row.get("underlying_price_max")),
         )
 
     def to_dict(self) -> dict[str, Any]:

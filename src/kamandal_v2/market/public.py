@@ -39,10 +39,16 @@ def parse_occ_symbol(symbol: str) -> dict[str, Any]:
     }
 
 
-def _candidate_risk_bpr(candidate: Candidate, public_bpr: float) -> float:
-    """Use Public preflight as a ceiling signal, not as a credit-spread shrinker."""
+def _candidate_risk_bpr(candidate: Candidate, public_bpr: float | None) -> float:
+    """Prefer broker margin for undefined-risk structures; otherwise keep the safety floor."""
 
-    return round(max(abs(float(public_bpr or 0.0)), float(candidate.estimated_bpr or 0.0)), 2)
+    fallback = abs(float(candidate.estimated_bpr or 0.0))
+    if public_bpr is None or not abs(float(public_bpr)):
+        return round(fallback, 2)
+    broker_bpr = abs(float(public_bpr))
+    if candidate.structure in {"short_strangle", "strangle"}:
+        return round(broker_bpr, 2)
+    return round(max(broker_bpr, fallback), 2)
 
 
 class PublicAdapter:
@@ -151,7 +157,7 @@ class PublicAdapter:
                 f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
                 payload,
             )
-            raw_bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
+            raw_bpr = _find_optional_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"))
             bpr = _candidate_risk_bpr(candidate, raw_bpr)
             return PreflightResult(
                 ok=True,
@@ -162,6 +168,8 @@ class PublicAdapter:
                     "response": response,
                     "entry_pricing": entry_price_metadata(candidate, self._config),
                     "public_bpr_raw": raw_bpr,
+                    "broker_bpr_provided": raw_bpr is not None and abs(raw_bpr) > 0,
+                    "bpr_source": "broker_preflight" if raw_bpr is not None and abs(raw_bpr) > 0 else "local_fallback",
                 },
             )
         except Exception as exc:  # noqa: BLE001
@@ -173,7 +181,7 @@ class PublicAdapter:
                         f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
                         retry_payload,
                     )
-                    raw_bpr = _find_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"), default=candidate.estimated_bpr)
+                    raw_bpr = _find_optional_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"))
                     bpr = _candidate_risk_bpr(candidate, raw_bpr)
                     return PreflightResult(
                         ok=True,
@@ -185,6 +193,8 @@ class PublicAdapter:
                             "retry_reason": str(exc),
                             "entry_pricing": entry_price_metadata(candidate, self._config),
                             "public_bpr_raw": raw_bpr,
+                            "broker_bpr_provided": raw_bpr is not None and abs(raw_bpr) > 0,
+                            "bpr_source": "broker_preflight" if raw_bpr is not None and abs(raw_bpr) > 0 else "local_fallback",
                         },
                     )
                 except Exception as retry_exc:  # noqa: BLE001

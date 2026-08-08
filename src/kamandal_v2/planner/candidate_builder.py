@@ -108,7 +108,17 @@ def build_candidates(
         built_for_idea: list[Candidate] = []
         rejected_for_idea: list[Candidate] = []
         for playbook in playbooks:
-            if not _matches(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status, match_gate_mode=match_gate_mode):
+            if not _matches(
+                idea,
+                entry,
+                playbook,
+                iv_pct,
+                iv_rank,
+                iv_abs,
+                event_status,
+                underlying_price=chain.underlying_price,
+                match_gate_mode=match_gate_mode,
+            ):
                 continue
             raw_candidates = _build_for_playbook(idea, playbook, chain.underlying_price, chain.quotes, config=config)
             for candidate in raw_candidates:
@@ -148,11 +158,10 @@ def build_candidates(
                     candidate.rejection_reason = pf.message or "preflight_failed"
                     rejected_for_idea.append(candidate)
                     continue
-                preflight_bpr = float(pf.bpr or 0.0)
-                estimated_bpr = float(candidate.estimated_bpr or 0.0)
-                candidate.estimated_bpr = round(max(estimated_bpr, preflight_bpr), 2)
-                if candidate.estimated_bpr > preflight_bpr:
-                    candidate.reasons.append(f"preflight_bpr_floored:{preflight_bpr}->{candidate.estimated_bpr}")
+                _apply_preflight_bpr(candidate, pf)
+                if _strangle_expansion_allows(entry, playbook, iv_rank, chain.underlying_price):
+                    candidate.reasons.append("strangle_eligibility=sheet_playbook_overlay")
+                    candidate.reasons.append(f"strangle_underlying_price={chain.underlying_price}")
                 thesis_fit = _thesis_fit_score(idea, candidate)
                 candidate.score = _candidate_score(candidate, thesis_fit=thesis_fit)
                 candidate.reasons.append(f"thesis_fit={thesis_fit}")
@@ -161,7 +170,16 @@ def build_candidates(
                 candidate.reasons.append(f"iv_abs={iv_abs}")
                 candidate.reasons.append(f"event_status={event_status}")
                 if match_gate_mode == "permissive":
-                    ignored = _ignored_match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+                    ignored = _ignored_match_rejections(
+                        idea,
+                        entry,
+                        playbook,
+                        iv_pct,
+                        iv_rank,
+                        iv_abs,
+                        event_status,
+                        underlying_price=chain.underlying_price,
+                    )
                     if ignored:
                         candidate.reasons.append("match_gate_warning=" + ",".join(ignored))
                 built_for_idea.append(candidate)
@@ -202,8 +220,22 @@ def diagnose_idea_matches(
         reason_counts: dict[str, int] = {}
         matched: list[str] = []
         matched_playbooks: list[Playbook] = []
+        chain = None
+        try:
+            chain = market.chain_snapshot(idea.underlying)
+        except Exception:
+            pass
         for playbook in playbooks:
-            raw_reasons = _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+            raw_reasons = _match_rejections(
+                idea,
+                entry,
+                playbook,
+                iv_pct,
+                iv_rank,
+                iv_abs,
+                event_status,
+                underlying_price=chain.underlying_price if chain is not None else None,
+            )
             reasons = _apply_match_gate_mode(raw_reasons, match_gate_mode)
             if reasons:
                 for reason in reasons:
@@ -222,7 +254,7 @@ def diagnose_idea_matches(
         zero_candidate_diagnostics: list[dict[str, object]] = []
         if matched_playbooks:
             try:
-                chain = market.chain_snapshot(idea.underlying)
+                chain = chain or market.chain_snapshot(idea.underlying)
                 for playbook in matched_playbooks:
                     raw_candidates = _build_for_playbook(idea, playbook, chain.underlying_price, chain.quotes, config=config)
                     raw_count = len(raw_candidates)
@@ -281,10 +313,20 @@ def _matches(
     iv_abs: float | None,
     event_status: str,
     *,
+    underlying_price: float | None = None,
     match_gate_mode: str = "strict",
 ) -> bool:
     return not _apply_match_gate_mode(
-        _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status),
+        _match_rejections(
+            idea,
+            entry,
+            playbook,
+            iv_pct,
+            iv_rank,
+            iv_abs,
+            event_status,
+            underlying_price=underlying_price,
+        ),
         match_gate_mode,
     )
 
@@ -297,6 +339,8 @@ def _match_rejections(
     iv_rank: float | None,
     iv_abs: float | None,
     event_status: str,
+    *,
+    underlying_price: float | None = None,
 ) -> list[str]:
     reasons: list[str] = []
     if not playbook.enabled or playbook.structure not in SUPPORTED_STRUCTURES:
@@ -309,6 +353,12 @@ def _match_rejections(
         reasons.append(f"profile_mismatch:{entry.profile}")
     if entry.allowed_playbooks and not {playbook.playbook_id, playbook.structure, playbook.strategy_family}.intersection(entry.allowed_playbooks):
         reasons.append("universe_playbook_not_allowed")
+    if _strangle_expansion_allows(entry, playbook, iv_rank, underlying_price):
+        reasons = [
+            reason
+            for reason in reasons
+            if not reason.startswith("profile_mismatch:") and reason != "universe_playbook_not_allowed"
+        ]
     if idea.allowed_structures:
         allowed = set().union(*(_strategy_aliases(value) for value in idea.allowed_structures))
         if not allowed.intersection({playbook.playbook_id, playbook.structure, playbook.strategy_family}):
@@ -357,8 +407,19 @@ def _ignored_match_rejections(
     iv_rank: float | None,
     iv_abs: float | None,
     event_status: str,
+    *,
+    underlying_price: float | None = None,
 ) -> list[str]:
-    raw_reasons = _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+    raw_reasons = _match_rejections(
+        idea,
+        entry,
+        playbook,
+        iv_pct,
+        iv_rank,
+        iv_abs,
+        event_status,
+        underlying_price=underlying_price,
+    )
     strict_reasons = _apply_match_gate_mode(raw_reasons, "permissive")
     return [reason for reason in raw_reasons if reason not in strict_reasons]
 
@@ -370,6 +431,70 @@ def _apply_match_gate_mode(reasons: list[str], match_gate_mode: str) -> list[str
         reason for reason in reasons
         if not any(reason.startswith(prefix) for prefix in PERMISSIVE_MATCH_GATE_PREFIXES)
     ]
+
+
+def _strangle_expansion_allows(
+    entry: UniverseEntry,
+    playbook: Playbook,
+    iv_rank: float | None,
+    underlying_price: float | None,
+) -> bool:
+    if not playbook.universe_expansion_enabled or not entry.enabled or playbook.structure != "short_strangle":
+        return False
+    if any(
+        value is None
+        for value in (
+            iv_rank,
+            underlying_price,
+            playbook.iv_rank_min,
+            playbook.iv_rank_max,
+            playbook.underlying_price_min,
+            playbook.underlying_price_max,
+        )
+    ):
+        return False
+    return (
+        float(playbook.underlying_price_min) <= float(underlying_price) <= float(playbook.underlying_price_max)
+        and float(playbook.iv_rank_min) <= float(iv_rank) <= float(playbook.iv_rank_max)
+    )
+
+
+def _apply_preflight_bpr(candidate: Candidate, preflight: PreflightResult) -> None:
+    broker_bpr = abs(float(preflight.bpr or 0.0))
+    fallback_bpr = abs(float(candidate.estimated_bpr or 0.0))
+    raw = preflight.raw if isinstance(preflight.raw, dict) else {}
+    broker_provided = bool(raw.get("broker_bpr_provided")) or _raw_contains_broker_bpr(raw.get("response"))
+    if candidate.structure in {"short_strangle", "strangle"}:
+        if broker_provided and broker_bpr > 0:
+            candidate.estimated_bpr = round(broker_bpr, 2)
+            candidate.reasons.append("bpr_source=broker_preflight")
+            candidate.reasons.append(f"local_bpr_fallback={round(fallback_bpr, 2)}")
+            return
+        candidate.estimated_bpr = round(max(fallback_bpr, broker_bpr), 2)
+        candidate.reasons.append("bpr_source=local_fallback")
+        candidate.reasons.append("broker_bpr_missing=true")
+        return
+    candidate.estimated_bpr = round(max(fallback_bpr, broker_bpr), 2)
+    if candidate.estimated_bpr > broker_bpr:
+        candidate.reasons.append(f"preflight_bpr_floored:{broker_bpr}->{candidate.estimated_bpr}")
+
+
+def _raw_contains_broker_bpr(value: object) -> bool:
+    keys = {"buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"}
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key in keys:
+                if key in item:
+                    try:
+                        return abs(float(item[key])) > 0
+                    except (TypeError, ValueError):
+                        pass
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return False
 
 
 def _diagnostic_summary(

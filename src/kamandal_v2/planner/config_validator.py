@@ -37,6 +37,7 @@ def validate_config(universe: list[UniverseEntry], playbooks: list[Playbook]) ->
     _validate_support(enabled_playbooks, errors)
     _validate_enabled_playbook_reachability(universe, enabled_playbooks, errors)
     _validate_thesis_tags(enabled_playbooks, errors)
+    _validate_universe_expansion(enabled_playbooks, errors)
     _validate_universe_allowlists(universe, playbooks, warnings)
     _validate_variant_overlap(enabled_playbooks, warnings)
     _validate_live_bpr_caps(enabled_playbooks, warnings)
@@ -74,11 +75,37 @@ def _validate_enabled_playbook_reachability(universe: list[UniverseEntry], playb
 
 
 def _entry_can_route_playbook(entry: UniverseEntry, playbook: Playbook) -> bool:
+    if playbook.universe_expansion_enabled and playbook.structure == "short_strangle":
+        return True
     if playbook.profiles and entry.profile not in playbook.profiles:
         return False
     if not entry.allowed_playbooks:
         return True
     return bool({playbook.playbook_id, playbook.structure, playbook.strategy_family}.intersection(entry.allowed_playbooks))
+
+
+def _validate_universe_expansion(playbooks: list[Playbook], errors: list[str]) -> None:
+    for playbook in playbooks:
+        if not playbook.universe_expansion_enabled:
+            continue
+        if playbook.structure != "short_strangle":
+            errors.append(f"universe_expansion_unsupported_structure:{playbook.playbook_id}:{playbook.structure}")
+            continue
+        required = {
+            "underlying_price_min": playbook.underlying_price_min,
+            "underlying_price_max": playbook.underlying_price_max,
+            "iv_rank_min": playbook.iv_rank_min,
+            "iv_rank_max": playbook.iv_rank_max,
+        }
+        for field_name, value in required.items():
+            if value is None:
+                errors.append(f"universe_expansion_missing_sheet_value:{playbook.playbook_id}:{field_name}")
+        if playbook.underlying_price_min is not None and playbook.underlying_price_max is not None:
+            if playbook.underlying_price_min > playbook.underlying_price_max:
+                errors.append(f"universe_expansion_invalid_price_range:{playbook.playbook_id}")
+        if playbook.iv_rank_min is not None and playbook.iv_rank_max is not None:
+            if playbook.iv_rank_min > playbook.iv_rank_max:
+                errors.append(f"universe_expansion_invalid_iv_rank_range:{playbook.playbook_id}")
 
 
 def _validate_thesis_tags(playbooks: list[Playbook], errors: list[str]) -> None:
