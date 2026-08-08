@@ -75,7 +75,13 @@ def test_launchd_status_outputs_units_without_broker_mutation(tmp_path: Path) ->
     assert youtube["action_requirements"]["retry-job"]["requires_confirmation"] is False
     shadow = payload["shadow_evidence"]
     assert shadow["schema"] == "kamandal.shadow_evidence_status.v1"
-    assert shadow["collector"]["state"] == "retired"
+    assert shadow["collector"]["state"] == "staged_disabled"
+    assert shadow["collector"]["active_jobs"] == []
+    assert shadow["collector"]["staged_disabled_jobs"] == [
+        "csa-shadow-management",
+        "csa-shadow-scan",
+        "csa-shadow-scorecard",
+    ]
     assert shadow["evidence_state"] == "empty"
     assert shadow["alpha_eligible"] is False
     assert shadow["protected_effects"] == {
@@ -136,7 +142,7 @@ def test_launchd_status_reports_retired_shadow_history_without_reclassifying_it(
 
     shadow = payload["shadow_evidence"]
     assert shadow["observed_at"] == "2026-07-28T20:00:00+00:00"
-    assert shadow["collector"]["state"] == "retired"
+    assert shadow["collector"]["state"] == "staged_disabled"
     assert shadow["evidence_state"] == "historical_only"
     assert shadow["history"]["status_counts"] == {"open": 1}
     assert shadow["history"]["open_fills"] == 1
@@ -144,7 +150,7 @@ def test_launchd_status_reports_retired_shadow_history_without_reclassifying_it(
     assert shadow["history"]["last_mark_at"] == "2026-06-12T14:30:00+00:00"
     assert shadow["alpha_eligible"] is False
     assert shadow["findings"] == [
-        "shadow_collection_retired",
+        "shadow_collection_staged_disabled",
         "historical_shadow_evidence_only",
         "legacy_open_shadow_fills_unmanaged",
     ]

@@ -57,9 +57,16 @@ All times are oldmac local time, expected to be America/Chicago.
 | `iv` | `iv` | Weekdays 08:45 |
 | `iv_afternoon` | `iv-afternoon` | Weekdays 13:45 |
 | `weekly_reviewer` | `weekly-reviewer` | Fridays 10:00 |
+| `csa_shadow_scan` | `csa-shadow-scan` | Weekdays 09:35, 12:05, 14:35; disabled by default |
+| `csa_shadow_management` | `csa-shadow-management` | Weekdays every 15 minutes, 09:45-14:45; disabled by default |
+| `csa_shadow_scorecard` | `csa-shadow-scorecard` | Weekdays 15:25; disabled by default |
 
 There is no `RunAtLoad` for live trading jobs. Manual smoke tests should use
 `--force` and `--alert-mode spool`.
+
+CSA shadow plists are rendered with `Disabled=true` and the installer preserves
+that disabled state. Enabling the three sidecars is a separate protected
+deployment action after Sheet policy and database migration readback.
 
 The late-day dependency chain is deliberate: afternoon IV at 13:45, final
 YouTube intelligence at 14:00, reconciliation at 14:20, advisory at 14:30,
@@ -78,7 +85,8 @@ running.
 `python -m kamandal_v2.tools.launchd_status --json` therefore exposes
 `shadow_evidence` with:
 
-- a current collector state derived from the app-owned launchd registry;
+- a current collector state derived from the app-owned launchd registry
+  (`staged_disabled` for the new CSA jobs until the protected enable step);
 - aggregate historical fill counts and last fill, mark, and EOD timestamps;
 - stable semantic hashes that exclude the observation timestamp;
 - `alpha_eligible=false`; and

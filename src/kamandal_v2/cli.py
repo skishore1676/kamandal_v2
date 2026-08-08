@@ -72,6 +72,22 @@ def main() -> None:
     subparsers.add_parser("pull-sheet", help="Read configured Google Sheet tabs and cache the row payload")
     validate_parser = subparsers.add_parser("validate-config", help="Validate universe and playbook configuration")
     validate_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    subparsers.add_parser("csa-validate-policy", help="Read and strictly validate canonical Sheet CSA policy")
+    csa_migrate_parser = subparsers.add_parser("csa-migrate-db", help="Dry-run or explicitly apply the additive CSA SQLite migration")
+    csa_migrate_parser.add_argument("--db", default="data/kamandal_v2.db")
+    csa_migrate_parser.add_argument("--backup-dir", default="")
+    csa_migrate_parser.add_argument("--apply", action="store_true", help="Apply migration; default is a non-mutating dry run")
+    csa_scan_parser = subparsers.add_parser("csa-shadow-scan", help="Run the broker-inert CSA discovery and entry shadow cycle")
+    csa_scan_parser.add_argument("--db", default="data/kamandal_v2.db")
+    csa_scan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
+    csa_scan_parser.add_argument("--ideas", nargs="+", default=["data/ideas/active"])
+    csa_management_parser = subparsers.add_parser("csa-shadow-management", help="Manage open CSA shadow lifecycles without broker effects")
+    csa_management_parser.add_argument("--db", default="data/kamandal_v2.db")
+    csa_management_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
+    csa_scorecard_parser = subparsers.add_parser("csa-shadow-scorecard", help="Write canonical CSA JSON, Markdown, and CSV scorecards")
+    csa_scorecard_parser.add_argument("--db", default="data/kamandal_v2.db")
+    csa_scorecard_parser.add_argument("--output-dir", default="data/reports/csa1")
+    csa_scorecard_parser.add_argument("--trading-date", default="")
 
     plan_parser = subparsers.add_parser("plan", help="Build deterministic portfolio plans from local ideas")
     _add_planner_args(plan_parser)
@@ -405,6 +421,65 @@ def main() -> None:
         return
 
     config = load_control()
+    if args.command == "csa-validate-policy":
+        from kamandal_v2.strategy_lanes.operator_policy import load_csa_operator_policy
+
+        result = load_csa_operator_policy(config)
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        if not result.ok:
+            raise SystemExit(1)
+        return
+    if args.command == "csa-migrate-db":
+        from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
+
+        result = migrate_csa_database(
+            args.db,
+            dry_run=not args.apply,
+            backup_dir=args.backup_dir or None,
+        )
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        return
+    if args.command == "csa-shadow-scan":
+        from kamandal_v2.planner.idea_loader import load_ideas
+        from kamandal_v2.strategy_lanes.runtime import run_csa_shadow_scan
+
+        result = run_csa_shadow_scan(
+            config,
+            sqlite_path=args.db,
+            provider=args.provider,
+            ideas=load_ideas(_expand_paths(args.ideas)),
+        )
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        if not result.ok:
+            raise SystemExit(1)
+        return
+    if args.command == "csa-shadow-management":
+        from kamandal_v2.strategy_lanes.management_runtime import run_csa_shadow_management
+
+        result = run_csa_shadow_management(
+            config,
+            sqlite_path=args.db,
+            provider=args.provider,
+        )
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        if not result.ok:
+            raise SystemExit(1)
+        return
+    if args.command == "csa-shadow-scorecard":
+        from kamandal_v2.strategy_lanes.reports import write_csa_scorecard
+
+        result = write_csa_scorecard(
+            args.db,
+            output_dir=args.output_dir,
+            trading_date=args.trading_date or None,
+        )
+        print(json.dumps({
+            "report": result.report,
+            "json_path": str(result.json_path),
+            "markdown_path": str(result.markdown_path),
+            "csv_path": str(result.csv_path),
+        }, indent=2, sort_keys=True))
+        return
     seeds = build_seed_tables(config)
     if args.command == "seed-preview":
         print(json.dumps({key: len(value) for key, value in seeds.items()}, indent=2))

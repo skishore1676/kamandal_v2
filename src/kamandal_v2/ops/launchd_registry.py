@@ -53,6 +53,9 @@ SCRIPT_JOBS = {
     "iv-afternoon": "run_iv_capture.sh",
     "weekly-reviewer": "run_weekly_reviewer.sh",
     "universe-proposer": "run_universe_proposer.sh",
+    "csa-shadow-scan": "run_csa_shadow_scan.sh",
+    "csa-shadow-management": "run_csa_shadow_management.sh",
+    "csa-shadow-scorecard": "run_csa_shadow_scorecard.sh",
 }
 
 JOB_LABEL_SUFFIXES = {
@@ -71,6 +74,9 @@ JOB_LABEL_SUFFIXES = {
     "iv-afternoon": "iv_afternoon",
     "weekly-reviewer": "weekly_reviewer",
     "universe-proposer": "universe_proposer",
+    "csa-shadow-scan": "csa_shadow_scan",
+    "csa-shadow-management": "csa_shadow_management",
+    "csa-shadow-scorecard": "csa_shadow_scorecard",
 }
 
 JOB_SCHEDULES = {
@@ -94,6 +100,9 @@ JOB_SCHEDULES = {
     "iv-afternoon": JobSchedule(fixed_times=(time(13, 45),)),
     "weekly-reviewer": JobSchedule(fixed_times=(time(10, 0),), weekday=4),
     "universe-proposer": JobSchedule(fixed_times=(time(8, 50),)),
+    "csa-shadow-scan": JobSchedule(fixed_times=(time(9, 35), time(12, 5), time(14, 35))),
+    "csa-shadow-management": JobSchedule(cadence_minutes=15, window_start=time(9, 45), window_end=time(14, 45)),
+    "csa-shadow-scorecard": JobSchedule(fixed_times=(time(15, 25),)),
 }
 
 JOB_PURPOSES = {
@@ -112,7 +121,12 @@ JOB_PURPOSES = {
     "weekly-reviewer": "Review rejected candidates and propose playbook tuning.",
     "universe-proposer": "Propose up to 5 new universe symbols from recent out-of-universe plan diagnostics (tier=proposed).",
     "daily-report": "Intraday Kamandal daily report (BHIKsha parity: JSON/Markdown/RYG via Lathi Bus).",
+    "csa-shadow-scan": "Broker-inert CSA opportunity discovery and shadow entry simulation.",
+    "csa-shadow-management": "Broker-inert CSA lifecycle management and shadow adjustment simulation.",
+    "csa-shadow-scorecard": "Write the canonical CSA daily shadow scorecard.",
 }
+
+DISABLED_BY_DEFAULT = {"csa-shadow-scan", "csa-shadow-management", "csa-shadow-scorecard"}
 
 JOB_RISK_CLASSES = {
     "live-reconciliation": "trading_observation",
@@ -121,6 +135,9 @@ JOB_RISK_CLASSES = {
     "live-management": "trading_management",
     "live-health-report": "trading_health",
     "scheduled-job-health": "ops_health",
+    "csa-shadow-scan": "trading_shadow",
+    "csa-shadow-management": "trading_shadow",
+    "csa-shadow-scorecard": "trading_shadow_report",
 }
 
 JOB_AVAILABLE_ACTIONS = {

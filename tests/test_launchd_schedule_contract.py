@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from kamandal_v2.config import load_control
 from kamandal_v2.live.option_sessions import submission_window
-from kamandal_v2.ops.launchd_registry import JOB_SCHEDULES
+from kamandal_v2.ops.launchd_registry import DISABLED_BY_DEFAULT, JOB_SCHEDULES
 
 
 CENTRAL = ZoneInfo("America/Chicago")
@@ -85,3 +85,36 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
     assert weekday_one_times("live_advisory") == {(9, 25), (11, 55), (14, 30)}
     assert (14, 35) in weekday_one_times("live_approved_orders")
     assert {(14, 45), (14, 50), (15, 5)}.issubset(weekday_one_times("live_management"))
+    assert weekday_one_times("csa_shadow_scan") == {(9, 35), (12, 5), (14, 35)}
+    assert (14, 45) in weekday_one_times("csa_shadow_management")
+    assert weekday_one_times("csa_shadow_scorecard") == {(15, 25)}
+    for suffix in ("csa_shadow_scan", "csa_shadow_management", "csa_shadow_scorecard"):
+        payload = plistlib.loads((launchd_dir / f"com.kamandal.v2.{suffix}.plist").read_bytes())
+        assert payload["Disabled"] is True
+    assert DISABLED_BY_DEFAULT == {"csa-shadow-scan", "csa-shadow-management", "csa-shadow-scorecard"}
+
+
+def test_installer_can_render_only_csa_without_touching_baseline_plists(tmp_path: Path) -> None:
+    launchd_dir = tmp_path / "LaunchAgents"
+    env = {
+        **os.environ,
+        "KAMANDAL_REPO_ROOT": str(REPO_ROOT),
+        "KAMANDAL_LAUNCHD_DIR": str(launchd_dir),
+        "KAMANDAL_LAUNCHD_LOG_DIR": str(tmp_path / "logs"),
+    }
+
+    subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts/launchd/install_kamandal_launchd.sh"), "render-csa-shadow"],
+        check=True,
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    rendered = {path.name for path in launchd_dir.glob("*.plist")}
+    assert rendered == {
+        "com.kamandal.v2.csa_shadow_scan.plist",
+        "com.kamandal.v2.csa_shadow_management.plist",
+        "com.kamandal.v2.csa_shadow_scorecard.plist",
+    }

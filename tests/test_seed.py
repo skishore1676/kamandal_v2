@@ -80,3 +80,12 @@ def test_seed_does_not_set_universe_expansion_policy() -> None:
     assert all(row[enabled_index] == "" for row in tables["playbooks"])
     assert all(row[price_min_index] == "" for row in tables["playbooks"])
     assert all(row[price_max_index] == "" for row in tables["playbooks"])
+
+
+def test_seed_does_not_arm_csa_policy() -> None:
+    tables = build_seed_tables(load_control())
+    headers = seed_headers()["playbooks"]
+
+    for field_name in ("csa_stage", "source_mode", "management_policy_json"):
+        field_index = headers.index(field_name)
+        assert all(row[field_index] == "" for row in tables["playbooks"])

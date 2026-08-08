@@ -74,6 +74,9 @@ PLAYBOOKS_HEADER = [
     "universe_expansion_enabled",
     "underlying_price_min",
     "underlying_price_max",
+    "csa_stage",
+    "source_mode",
+    "management_policy_json",
 ]
 
 DAILY_PLAN_HEADER = [
