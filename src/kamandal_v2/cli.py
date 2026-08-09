@@ -521,18 +521,27 @@ def main() -> None:
             raise SystemExit(1)
         return
     if args.command == "csa-shadow-scorecard":
-        from kamandal_v2.strategy_lanes.reports import write_csa_scorecard
+        from kamandal_v2.strategy_lanes.reports import write_csa_scorecard, write_csa_weekly_economics
 
         result = write_csa_scorecard(
             args.db,
             output_dir=args.output_dir,
             trading_date=args.trading_date or None,
         )
+        economics = write_csa_weekly_economics(
+            args.db,
+            output_dir=args.output_dir,
+            through_date=args.trading_date or None,
+        )
         print(json.dumps({
             "report": result.report,
             "json_path": str(result.json_path),
             "markdown_path": str(result.markdown_path),
             "csv_path": str(result.csv_path),
+            "weekly_economics": economics.report,
+            "weekly_economics_json_path": str(economics.json_path),
+            "weekly_economics_markdown_path": str(economics.markdown_path),
+            "weekly_economics_csv_path": str(economics.csv_path),
         }, indent=2, sort_keys=True))
         return
     seeds = build_seed_tables(config)

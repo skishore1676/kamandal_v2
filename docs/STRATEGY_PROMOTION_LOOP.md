@@ -37,6 +37,26 @@ but live buying power, live contract ownership, and live working orders do not v
 broker-inert shadow observation. Pilot/live stages retain the real account and broker
 safety gates.
 
+At 15:25 CT, the CSA scorecard job writes two app-owned evidence products:
+
+- a daily machinery scorecard covering scans, admissions, fills, management actions,
+  blockers, policy identity, and broker-effect invariants; and
+- a week-to-date economics packet grouped by playbook and stage, derived from the
+  lifecycle cashflow ledger, terminal outcomes, BPR, and same-day natural-close marks.
+
+The economics packet reports realized P&L, complete marked open P&L when available,
+return on closed BPR, wins/losses, adjustments, and evidence-quality limitations. It
+is content-digested and explicitly has no recommendation, Sheet-write, execution, or
+alpha-claim authority. Shadow results exclude commissions and use the quote-based fill
+model, so TradeLab must preserve those limitations in any recommendation.
+
+TradeLab validates both products and asks its bounded Codex analyst for a stage-aware
+`continue`, `modify`, `demote`, or promotion-review proposal. Codex cannot recommend
+promotion unless the machinery proposal already permits the same review and the
+economic packet contains at least one closed lifecycle plus complete positive total
+P&L. The proposal appears in the weekly operator brief; only the operator may change
+the Google Sheet.
+
 The live scan itself never calls the broker. It writes stage-authorized tickets to the
 existing live ledger. The existing guarded submitter still owns current health, BPR,
 concentration, broker preflight, submission windows, serialized submission, and order

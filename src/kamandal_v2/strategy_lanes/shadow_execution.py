@@ -84,6 +84,7 @@ class ShadowExecutionAdapter:
         cumulative_cashflow = sum(float(item.get("amount") or 0.0) for item in cashflows)
         metadata["cumulative_cashflow"] = round(cumulative_cashflow, 6)
         metadata["active_cost_basis"] = round(max(-cumulative_cashflow, 0.0), 6)
+        metadata["contract_multiplier"] = 100
         if "initial_short_contracts" not in metadata:
             metadata["initial_short_contracts"] = sum(
                 int(item.get("quantity") or 0)
@@ -100,6 +101,18 @@ class ShadowExecutionAdapter:
             metadata["front_expiry_roll_count"] = int(metadata.get("front_expiry_roll_count") or 0) + 1
         if adjustment_kind == "bounded_inversion":
             metadata["inverted"] = True
+        if active:
+            for key in (
+                "last_marked_at",
+                "mark_liquidation_price",
+                "mark_pnl_price",
+                "mark_profit_pct",
+                "mark_source",
+            ):
+                metadata.pop(key, None)
+        else:
+            metadata["realized_pnl_price"] = round(cumulative_cashflow, 6)
+            metadata["realized_pnl_usd"] = round(cumulative_cashflow * 100.0, 2)
         return replace(
             lifecycle,
             version=lifecycle.version + 1,
