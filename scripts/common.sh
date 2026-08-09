@@ -115,9 +115,10 @@ prepare_current_ideas_dir() {
     return 0
   fi
 
-  local today dest
+  local today dest current_root
   today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
-  dest="$REPO_ROOT/data/run/current_ideas/$lane"
+  current_root="${KAMANDAL_CURRENT_IDEAS_ROOT:-$REPO_ROOT/data/run/current_ideas}"
+  dest="$current_root/$lane"
   rm -rf "$dest"
   mkdir -p "$dest"
 
@@ -131,7 +132,10 @@ prepare_current_ideas_dir() {
     find "$source_dir" -maxdepth 1 -type f \( \
       -name "*$today*.yaml" -o \
       -name "*$today*.yml" -o \
-      -name "*$today*.json" \
+      -name "*$today*.json" -o \
+      -name "correspondent_*.yaml" -o \
+      -name "correspondent_*.yml" -o \
+      -name "correspondent_*.json" \
     \) -print0 2>/dev/null
   )
 

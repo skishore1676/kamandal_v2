@@ -15,7 +15,7 @@ from kamandal_v2.live.execution import (
 )
 from kamandal_v2.live.orders import build_csa_live_ticket
 from kamandal_v2.market.public import occ_symbol
-from kamandal_v2.planner.engine import _contract_key, _market_provider, _open_live_contract_keys
+from kamandal_v2.planner.engine import _market_provider
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.diagonal import build_diagonal_short_leg_ticket
@@ -135,18 +135,21 @@ def _run_csa_management(
     if market is None:
         wrapper = _market_provider(config, provider=provider, store=baseline_store)
         market = getattr(wrapper, "inner", wrapper)
-    live_contracts = _open_live_contract_keys(baseline_store)
     active_statuses = {
         *PENDING_TICKET_STATUSES,
         *ACTIVE_TICKET_STATUSES,
         *CANCEL_PENDING_TICKET_STATUSES,
         REPLACE_WAITING_CANCEL,
     }
-    working_underlyings = {
-        str(ticket.get("underlying") or "").upper()
-        for ticket in baseline_store.live_order_intents_by_status(active_statuses)
-        if str(ticket.get("underlying") or "").strip()
-    }
+    working_underlyings = (
+        {
+            str(ticket.get("underlying") or "").upper()
+            for ticket in baseline_store.live_order_intents_by_status(active_statuses)
+            if str(ticket.get("underlying") or "").strip()
+        }
+        if execution_mode == "live"
+        else set()
+    )
     registry = lifecycle_registry()
     counts: dict[str, int] = {}
     filled_actions = 0
@@ -161,11 +164,6 @@ def _run_csa_management(
         try:
             snapshot = market.chain_snapshot(underlying)
             active_legs = _active_option_legs(lifecycle, snapshot)
-            lifecycle_contracts = {
-                key
-                for item in lifecycle.active_legs
-                if (key := _contract_key(underlying, item))
-            }
             context, plans, observed_lifecycle = _management_context(
                 lifecycle,
                 policy,
@@ -174,11 +172,7 @@ def _run_csa_management(
                 market,
                 sqlite_path,
                 observed_at=started_at,
-                ownership_clear=(
-                    True
-                    if execution_mode == "live"
-                    else not bool(lifecycle_contracts & live_contracts)
-                ),
+                ownership_clear=True,
                 working_order_conflict=underlying.upper() in working_underlyings,
             )
             store.save_lifecycle(observed_lifecycle)

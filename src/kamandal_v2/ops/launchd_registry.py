@@ -106,7 +106,7 @@ JOB_SCHEDULES = {
     "iv-afternoon": JobSchedule(fixed_times=(time(13, 45),)),
     "weekly-reviewer": JobSchedule(fixed_times=(time(10, 0),), weekday=4),
     "universe-proposer": JobSchedule(fixed_times=(time(8, 50),)),
-    "csa-policy-snapshot": JobSchedule(fixed_times=(time(9, 22),)),
+    "csa-policy-snapshot": JobSchedule(fixed_times=(time(8, 15),)),
     "csa-shadow-scan": JobSchedule(fixed_times=(time(9, 35), time(12, 5), time(14, 35))),
     "csa-live-scan": JobSchedule(fixed_times=(time(9, 40), time(12, 10), time(14, 40))),
     "csa-shadow-management": JobSchedule(cadence_minutes=15, window_start=time(9, 45), window_end=time(14, 45)),

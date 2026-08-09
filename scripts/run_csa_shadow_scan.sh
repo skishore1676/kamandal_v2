@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 run_csa_shadow_scan() {
   require_trading_day
   require_market_window
+  export KAMANDAL_MODE=shadow
   mkdir -p data/logs data/reports/csa1
   local ideas_dir="${KAMANDAL_ACTIVE_IDEAS_DIR:-data/ideas/active}"
   prepare_current_ideas_dir "$ideas_dir" csa_shadow_scan

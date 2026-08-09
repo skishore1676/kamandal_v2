@@ -8,6 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 run_market_shadow() {
   require_trading_day
   require_market_window
+  export KAMANDAL_MODE=shadow
 
   local ideas_dir provider
   ideas_dir="${KAMANDAL_ACTIVE_IDEAS_DIR:-data/ideas/active}"

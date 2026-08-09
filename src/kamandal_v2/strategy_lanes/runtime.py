@@ -5,12 +5,18 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
-from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, PreflightResult, utc_now
+from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, PortfolioState, PreflightResult, utc_now
 from kamandal_v2.live.orders import build_csa_live_ticket
 from kamandal_v2.market.fixture import FixturePreflightClient
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.planner.candidate_builder import _apply_preflight_bpr
-from kamandal_v2.planner.engine import _candidate_contract_overlap, _market_provider, _open_live_contract_keys, _preflight_client
+from kamandal_v2.planner.engine import (
+    _candidate_contract_overlap,
+    _market_provider,
+    _open_live_contract_keys,
+    _preflight_client,
+    _shadow_portfolio_override,
+)
 from kamandal_v2.planner.shape_validators import validate_structure
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
@@ -185,13 +191,21 @@ def _run_csa_scan(
             observations[symbol] = {"source_fresh": False, "error": _safe_error(exc)}
             errors.append(f"{symbol}: market context unavailable: {_safe_error(exc)}")
 
+    raw_portfolio = resolved_market.account_state()
+    live_portfolio = local_store.live_portfolio_state(raw_portfolio)
+    if execution_mode == "shadow":
+        paper_portfolio = _shadow_portfolio_override(raw_portfolio, config, force=True)
+        paper_portfolio = local_store.shadow_portfolio_state(paper_portfolio)
+        portfolio = _reserve_open_csa_shadow_bpr(paper_portfolio, csa_store.open_lifecycles())
+    else:
+        portfolio = live_portfolio
+
     opportunities: list[StrategyOpportunity] = list(
         market_scan_opportunities(bundle.universe, selected_policies, observations, observed_at=started_at)
     )
-    portfolio = local_store.live_portfolio_state(resolved_market.account_state())
     opportunities.extend(
         portfolio_hedge_opportunities(
-            {**portfolio.to_dict(), "delta": portfolio.greeks.delta, "source_fresh": True},
+            {**live_portfolio.to_dict(), "delta": live_portfolio.greeks.delta, "source_fresh": True},
             selected_policies,
             observations,
             observed_at=started_at,
@@ -218,9 +232,12 @@ def _run_csa_scan(
             errors=errors,
         )
     live_intent_count = 0
+    open_lifecycles = csa_store.open_lifecycles()
     open_csa_keys = {
         (str(item.metadata.get("underlying") or ""), str(item.metadata.get("playbook_id") or ""))
-        for item in csa_store.open_lifecycles()
+        for item in open_lifecycles
+        if execution_mode == "live"
+        or str(item.metadata.get("execution_mode") or "shadow") == "shadow"
     }
     active_stage_intents = local_store.live_order_intents_by_status(
         {
@@ -232,11 +249,12 @@ def _run_csa_scan(
             "replace_waiting_cancel",
         }
     )
-    open_csa_keys.update(
-        (str(ticket.get("underlying") or ""), str(ticket.get("csa_playbook_id") or ""))
-        for ticket in active_stage_intents
-        if ticket.get("csa_policy_hash") and ticket.get("csa_playbook_id")
-    )
+    if execution_mode == "live":
+        open_csa_keys.update(
+            (str(ticket.get("underlying") or ""), str(ticket.get("csa_playbook_id") or ""))
+            for ticket in active_stage_intents
+            if ticket.get("csa_policy_hash") and ticket.get("csa_playbook_id")
+        )
     pilot_playbooks_used = {
         str(ticket.get("csa_playbook_id") or "")
         for ticket in local_store.live_order_intents_by_type("open")
@@ -248,7 +266,7 @@ def _run_csa_scan(
         for item in csa_store.open_lifecycles()
         if str(item.metadata.get("execution_mode") or "") == "live"
     )
-    open_live_contracts = _open_live_contract_keys(local_store)
+    open_live_contracts = _open_live_contract_keys(local_store) if execution_mode == "live" else set()
     for opportunity in opportunities:
         csa_store.save_opportunity(opportunity, scan_run_id=run_id)
         policy = policy_by_id[opportunity.playbook_id]
@@ -273,6 +291,7 @@ def _run_csa_scan(
                 portfolio,
                 preflight_result,
                 snapshot,
+                execution_mode=execution_mode,
                 ownership_clear=(opportunity.underlying, policy.playbook_id) not in open_csa_keys
                 and not bool(_candidate_contract_overlap(candidate, open_live_contracts)),
             )
@@ -337,11 +356,14 @@ def _run_csa_scan(
             if final_fill.status == "filled":
                 csa_store.save_lifecycle(adapter.adopt_fill(lifecycle, ticket, final_fill))
                 open_csa_keys.add((opportunity.underlying, policy.playbook_id))
+                portfolio = _reserve_candidate_bpr(portfolio, candidate)
                 filled_count += 1
             elif final_fill.status == "missed":
                 from dataclasses import replace
 
                 csa_store.save_lifecycle(replace(lifecycle, status="entry_missed", updated_at=started_at))
+            else:
+                portfolio = _reserve_candidate_bpr(portfolio, candidate)
         else:
             candidate.preflight = preflight_result
             live_ticket = build_csa_live_ticket(ticket)
@@ -455,6 +477,7 @@ def _admission_context(
     preflight: PreflightResult,
     snapshot: ChainSnapshot,
     *,
+    execution_mode: str,
     ownership_clear: bool,
 ) -> AdmissionContext:
     max_spread = max((abs(leg.ask - leg.bid) / max(leg.mid, 0.01) for leg in candidate.legs), default=1.0)
@@ -474,12 +497,58 @@ def _admission_context(
         bpr=bpr,
         bpr_source=bpr_source,
         broker_state_clear=bool(preflight.ok),
-        portfolio_allowed=bpr <= float(policy.resolved_fields["live_max_bpr_per_order"]),
+        portfolio_allowed=(
+            True
+            if execution_mode == "shadow"
+            else bpr <= float(policy.resolved_fields["live_max_bpr_per_order"])
+        ),
         buying_power_available=bpr <= float(portfolio.buying_power),
         ownership_clear=ownership_clear,
         working_order_conflict=False,
         event_state=str(opportunity.event_context.get("state") or "not_applicable"),
         evidence={"candidate_id": candidate.candidate_id, "shape_reason": shape.reason},
+    )
+
+
+def _reserve_open_csa_shadow_bpr(
+    portfolio: PortfolioState,
+    lifecycles: Iterable[LifecycleState],
+) -> PortfolioState:
+    reserved = [
+        lifecycle
+        for lifecycle in lifecycles
+        if str(lifecycle.metadata.get("execution_mode") or "shadow") == "shadow"
+    ]
+    total = sum(max(float(item.metadata.get("bpr") or 0.0), 0.0) for item in reserved)
+    per_underlying = dict(portfolio.per_underlying_bpr)
+    for lifecycle in reserved:
+        underlying = str(lifecycle.metadata.get("underlying") or "")
+        if underlying:
+            per_underlying[underlying] = round(
+                per_underlying.get(underlying, 0.0) + max(float(lifecycle.metadata.get("bpr") or 0.0), 0.0),
+                2,
+            )
+    return PortfolioState(
+        account_size=portfolio.account_size,
+        buying_power=round(max(portfolio.buying_power - total, 0.0), 2),
+        bpr_used=round(portfolio.bpr_used + total, 2),
+        positions_count=portfolio.positions_count + len(reserved),
+        greeks=portfolio.greeks,
+        per_underlying_bpr=per_underlying,
+    )
+
+
+def _reserve_candidate_bpr(portfolio: PortfolioState, candidate: Candidate) -> PortfolioState:
+    bpr = max(float(candidate.estimated_bpr or 0.0), 0.0)
+    per_underlying = dict(portfolio.per_underlying_bpr)
+    per_underlying[candidate.underlying] = round(per_underlying.get(candidate.underlying, 0.0) + bpr, 2)
+    return PortfolioState(
+        account_size=portfolio.account_size,
+        buying_power=round(max(portfolio.buying_power - bpr, 0.0), 2),
+        bpr_used=round(portfolio.bpr_used + bpr, 2),
+        positions_count=portfolio.positions_count + 1,
+        greeks=portfolio.greeks,
+        per_underlying_bpr=per_underlying,
     )
 
 
