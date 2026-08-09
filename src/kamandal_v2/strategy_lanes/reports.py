@@ -3,17 +3,31 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+
+CENTRAL = ZoneInfo("America/Chicago")
+CONTRACT_MULTIPLIER = 100.0
 
 
 @dataclass(frozen=True, slots=True)
 class ScorecardWriteResult:
+    report: dict[str, Any]
+    json_path: Path
+    markdown_path: Path
+    csv_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class WeeklyEconomicsWriteResult:
     report: dict[str, Any]
     json_path: Path
     markdown_path: Path
@@ -179,6 +193,165 @@ def render_csa_scorecard(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_csa_weekly_economics(
+    sqlite_path: str | Path,
+    *,
+    through_date: date | str | None = None,
+) -> dict[str, Any]:
+    """Aggregate app-owned CSA lifecycle cashflows without making a recommendation."""
+
+    path = Path(sqlite_path)
+    through = _as_date(through_date)
+    period_start = through - timedelta(days=through.weekday())
+    base = {
+        "schema": "kamandal.strategy_weekly_economics.v1",
+        "scope": "csa_strategy_promotion_lane",
+        "period_start": period_start.isoformat(),
+        "through": through.isoformat(),
+        "market_timezone": str(CENTRAL),
+        "contract_multiplier": int(CONTRACT_MULTIPLIER),
+        "schema_ready": False,
+        "economic_rows": [],
+        "totals": {
+            "opened_in_period": 0,
+            "closed_in_period": 0,
+            "active_open": 0,
+            "realized_pnl_usd": 0.0,
+            "open_unrealized_pnl_usd": None,
+            "total_pnl_usd": None,
+        },
+        "limitations": [
+            "Shadow fills use Kamandal's conservative quote-based fill model.",
+            "Commissions and fees are not included.",
+            "Open P&L is reportable only from a same-day natural-close mark.",
+            "Small samples are descriptive evidence, not proof of durable alpha.",
+        ],
+        "recommendation_authority": False,
+        "sheet_write_authority": False,
+        "execution_authority": False,
+        "alpha_claim_authority": False,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    if not path.is_file():
+        return _with_receipt(base, status="no_data")
+    with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        tables = {str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "csa_lifecycles" not in tables:
+            return _with_receipt(base, status="no_data")
+        lifecycles = _payload_rows(conn, "csa_lifecycles", "1=1", ())
+
+    grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for lifecycle in lifecycles:
+        metadata = dict(lifecycle.get("metadata") or {})
+        playbook_id = str(metadata.get("playbook_id") or "")
+        if not playbook_id:
+            continue
+        opened = _central_date(lifecycle.get("opened_at"))
+        updated = _central_date(lifecycle.get("updated_at"))
+        status = str(lifecycle.get("status") or "")
+        active = status in {"open", "proposed", "pending_live_submission"}
+        if opened is None or opened > through:
+            continue
+        if not active and (updated is None or updated < period_start or updated > through):
+            continue
+        execution_mode = str(metadata.get("execution_mode") or "shadow")
+        policy = dict(metadata.get("policy") or {})
+        stage = str(policy.get("stage") or ("shadow" if execution_mode == "shadow" else "live"))
+        grouped.setdefault((playbook_id, stage, execution_mode), []).append(lifecycle)
+
+    rows = [
+        _economic_row(key, values, period_start=period_start, through=through)
+        for key, values in sorted(grouped.items())
+    ]
+    realized = round(sum(float(row["realized_pnl_usd"]) for row in rows), 2)
+    open_marks_complete = all(row["open_unrealized_pnl_usd"] is not None for row in rows)
+    open_unrealized = (
+        round(sum(float(row["open_unrealized_pnl_usd"] or 0.0) for row in rows), 2)
+        if open_marks_complete
+        else None
+    )
+    total = round(realized + open_unrealized, 2) if open_unrealized is not None else None
+    report = {
+        **base,
+        "schema_ready": True,
+        "economic_rows": rows,
+        "totals": {
+            "opened_in_period": sum(int(row["opened_in_period"]) for row in rows),
+            "closed_in_period": sum(int(row["closed_in_period"]) for row in rows),
+            "active_open": sum(int(row["active_open"]) for row in rows),
+            "realized_pnl_usd": realized,
+            "open_unrealized_pnl_usd": open_unrealized,
+            "total_pnl_usd": total,
+        },
+    }
+    return _with_receipt(report, status="ok" if rows else "no_data")
+
+
+def write_csa_weekly_economics(
+    sqlite_path: str | Path,
+    *,
+    output_dir: str | Path,
+    through_date: date | str | None = None,
+) -> WeeklyEconomicsWriteResult:
+    report = build_csa_weekly_economics(sqlite_path, through_date=through_date)
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    through = report["through"]
+    json_path = target / f"csa1_weekly_economics_{through}.json"
+    markdown_path = target / f"csa1_weekly_economics_{through}.md"
+    csv_path = target / f"csa1_weekly_economics_{through}.csv"
+    json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    markdown_path.write_text(render_csa_weekly_economics(report), encoding="utf-8")
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=(
+                "playbook_id",
+                "stage",
+                "execution_mode",
+                "opened_in_period",
+                "closed_in_period",
+                "active_open",
+                "wins",
+                "losses",
+                "realized_pnl_usd",
+                "open_unrealized_pnl_usd",
+                "total_pnl_usd",
+                "realized_return_on_bpr_pct",
+                "economic_status",
+            ),
+        )
+        writer.writeheader()
+        for row in report["economic_rows"]:
+            writer.writerow({key: row.get(key) for key in writer.fieldnames})
+    return WeeklyEconomicsWriteResult(report, json_path, markdown_path, csv_path)
+
+
+def render_csa_weekly_economics(report: dict[str, Any]) -> str:
+    lines = [
+        f"# CSA Strategy Economics - week of {report['period_start']} through {report['through']}",
+        "",
+        "This packet reports app-owned economics only. It cannot recommend or apply a stage change.",
+        "",
+        "| Playbook | Stage | Closed | Open | Realized P&L | Open P&L | Return on closed BPR | Evidence |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+    ]
+    for row in report.get("economic_rows") or []:
+        open_pnl = row.get("open_unrealized_pnl_usd")
+        return_pct = row.get("realized_return_on_bpr_pct")
+        return_label = f"{return_pct:+.2f}%" if return_pct is not None else "Unavailable"
+        lines.append(
+            f"| `{row['playbook_id']}` | {row['stage']} | {row['closed_in_period']} | {row['active_open']} | "
+            f"{_money(row['realized_pnl_usd'])} | {_money(open_pnl) if open_pnl is not None else 'Unavailable'} | "
+            f"{return_label} | {row['economic_status']} |"
+        )
+    if not report.get("economic_rows"):
+        lines.append("| No strategy economics yet | — | 0 | 0 | $0.00 | Unavailable | Unavailable | no data |")
+    lines.extend(["", "Limitations:", "", *[f"- {item}" for item in report.get("limitations") or []], ""])
+    return "\n".join(lines)
+
+
 def _experiment_rows(
     receipts: list[dict[str, Any]],
     opportunities: list[dict[str, Any]],
@@ -281,3 +454,178 @@ def _payload_rows(conn: sqlite3.Connection, table: str, where: str, params: tupl
 
 def _rows(conn: sqlite3.Connection, query: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
     return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def _economic_row(
+    key: tuple[str, str, str],
+    lifecycles: list[dict[str, Any]],
+    *,
+    period_start: date,
+    through: date,
+) -> dict[str, Any]:
+    playbook_id, stage, execution_mode = key
+    opened_in_period = 0
+    closed_in_period: list[dict[str, Any]] = []
+    active_open: list[dict[str, Any]] = []
+    unresolved_entries = 0
+    adjustments = 0
+    quality_issues: list[str] = []
+    policy_hashes: set[str] = set()
+    observation_days: set[str] = set()
+    for lifecycle in lifecycles:
+        opened = _central_date(lifecycle.get("opened_at"))
+        updated = _central_date(lifecycle.get("updated_at"))
+        status = str(lifecycle.get("status") or "")
+        metadata = dict(lifecycle.get("metadata") or {})
+        if opened and period_start <= opened <= through:
+            opened_in_period += 1
+            observation_days.add(opened.isoformat())
+        if updated and period_start <= updated <= through:
+            observation_days.add(updated.isoformat())
+        if lifecycle.get("policy_hash"):
+            policy_hashes.add(str(lifecycle["policy_hash"]))
+        adjustments += int(metadata.get("adjustment_count") or 0)
+        if status == "closed" and updated and period_start <= updated <= through:
+            closed_in_period.append(lifecycle)
+        elif status == "open":
+            active_open.append(lifecycle)
+        elif status in {"proposed", "pending_live_submission"}:
+            unresolved_entries += 1
+    if len(policy_hashes) > 1:
+        quality_issues.append("multiple_policy_hashes_in_stage_cohort")
+
+    realized_values: list[float] = []
+    closed_bpr = 0.0
+    for lifecycle in closed_in_period:
+        cashflows = list(lifecycle.get("cashflow_ledger") or [])
+        metadata = dict(lifecycle.get("metadata") or {})
+        if not cashflows:
+            quality_issues.append("closed_lifecycle_missing_cashflows")
+            continue
+        realized_values.append(round(sum(float(item.get("amount") or 0.0) for item in cashflows) * CONTRACT_MULTIPLIER, 2))
+        bpr = _positive_float(metadata.get("bpr"))
+        if bpr is None:
+            quality_issues.append("closed_lifecycle_missing_bpr")
+        else:
+            closed_bpr += bpr
+
+    open_values: list[float] = []
+    open_bpr = 0.0
+    marked_open = 0
+    for lifecycle in active_open:
+        metadata = dict(lifecycle.get("metadata") or {})
+        bpr = _positive_float(metadata.get("bpr"))
+        if bpr is None:
+            quality_issues.append("open_lifecycle_missing_bpr")
+        else:
+            open_bpr += bpr
+        mark_date = _central_date(metadata.get("last_marked_at"))
+        mark_pnl = _float_or_none(metadata.get("mark_pnl_price"))
+        if mark_date == through and mark_pnl is not None:
+            marked_open += 1
+            open_values.append(round(mark_pnl * CONTRACT_MULTIPLIER, 2))
+        else:
+            quality_issues.append("open_lifecycle_missing_same_day_mark")
+
+    realized = round(sum(realized_values), 2)
+    open_complete = marked_open == len(active_open)
+    open_unrealized = round(sum(open_values), 2) if open_complete else None
+    total = round(realized + open_unrealized, 2) if open_unrealized is not None else None
+    wins = sum(value > 0 for value in realized_values)
+    losses = sum(value < 0 for value in realized_values)
+    breakeven = sum(value == 0 for value in realized_values)
+    closed_count = len(realized_values)
+    realized_return = round(100.0 * realized / closed_bpr, 4) if closed_bpr > 0 else None
+    total_bpr = closed_bpr + open_bpr
+    total_return = round(100.0 * total / total_bpr, 4) if total is not None and total_bpr > 0 else None
+    if not closed_count and not active_open:
+        economic_status = "no_fills"
+    elif not closed_count:
+        economic_status = "open_only" if open_complete else "partial"
+    elif quality_issues or not open_complete:
+        economic_status = "partial"
+    else:
+        economic_status = "observed"
+    return {
+        "playbook_id": playbook_id,
+        "stage": stage,
+        "execution_mode": execution_mode,
+        "policy_hashes": sorted(policy_hashes),
+        "observation_days": sorted(observation_days),
+        "opened_in_period": opened_in_period,
+        "completed_entries": len(closed_in_period) + len(active_open),
+        "closed_in_period": len(closed_in_period),
+        "economically_complete_closed": closed_count,
+        "active_open": len(active_open),
+        "unresolved_entries": unresolved_entries,
+        "marked_open": marked_open,
+        "wins": wins,
+        "losses": losses,
+        "breakeven": breakeven,
+        "win_rate_pct": round(100.0 * wins / closed_count, 2) if closed_count else None,
+        "realized_pnl_usd": realized,
+        "open_unrealized_pnl_usd": open_unrealized,
+        "total_pnl_usd": total,
+        "closed_bpr_usd": round(closed_bpr, 2),
+        "open_bpr_usd": round(open_bpr, 2),
+        "realized_return_on_bpr_pct": realized_return,
+        "total_return_on_bpr_pct": total_return,
+        "largest_win_usd": max(realized_values) if realized_values else None,
+        "largest_loss_usd": min(realized_values) if realized_values else None,
+        "adjustment_count": adjustments,
+        "economic_status": economic_status,
+        "quality_issues": sorted(set(quality_issues)),
+        "commissions_included": False,
+        "fill_basis": "quote_model" if execution_mode == "shadow" else "broker_fill",
+    }
+
+
+def _as_date(value: date | str | None) -> date:
+    if isinstance(value, date):
+        return value
+    if value:
+        return date.fromisoformat(str(value))
+    return datetime.now(CENTRAL).date()
+
+
+def _central_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(CENTRAL).date()
+
+
+def _float_or_none(value: Any) -> float | None:
+    if isinstance(value, bool) or value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _positive_float(value: Any) -> float | None:
+    parsed = _float_or_none(value)
+    return parsed if parsed is not None and parsed > 0 else None
+
+
+def _with_receipt(report: dict[str, Any], *, status: str) -> dict[str, Any]:
+    stable = {key: value for key, value in report.items() if key not in {"generated_at", "receipt"}}
+    digest = hashlib.sha256(
+        json.dumps(stable, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    return {**report, "receipt": {"status": status, "sha256": digest}}
+
+
+def _money(value: float) -> str:
+    amount = float(value)
+    if amount > 0:
+        return f"+${amount:,.2f}"
+    if amount < 0:
+        return f"-${abs(amount):,.2f}"
+    return "$0.00"

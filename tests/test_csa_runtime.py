@@ -10,7 +10,13 @@ from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
 from kamandal_v2.strategy_lanes.management_runtime import run_csa_live_management, run_csa_shadow_management
 from kamandal_v2.strategy_lanes.management_runtime import _cooldown_elapsed, _strangle_roll_plans
 from kamandal_v2.domain.models import OptionLeg
-from kamandal_v2.strategy_lanes.reports import build_csa_scorecard, render_csa_scorecard, write_csa_scorecard
+from kamandal_v2.strategy_lanes.reports import (
+    build_csa_scorecard,
+    build_csa_weekly_economics,
+    render_csa_scorecard,
+    write_csa_scorecard,
+    write_csa_weekly_economics,
+)
 from kamandal_v2.strategy_lanes.runtime import run_csa_live_scan, run_csa_shadow_scan
 from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
 from kamandal_v2.strategy_lanes.store import CsaStore
@@ -283,6 +289,119 @@ def test_empty_scorecard_is_no_data_not_green(tmp_path) -> None:
     assert "GREEN" not in render_csa_scorecard(report)
 
 
+def test_weekly_economics_uses_terminal_cashflows_and_same_day_open_marks(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    store = CsaStore(database)
+    common = {
+        "opportunity_id": "opportunity",
+        "lane": LaneId.SHORT_STRANGLE,
+        "version": 3,
+        "active_legs": (),
+        "policy_hash": "policy",
+    }
+    store.save_lifecycle(
+        LifecycleState(
+            lifecycle_id="closed",
+            status="closed",
+            cashflow_ledger=(
+                {"amount": 1.5, "filled_at": "2026-08-04T15:00:00Z"},
+                {"amount": -0.5, "filled_at": "2026-08-06T15:00:00Z"},
+            ),
+            opened_at="2026-08-04T15:00:00Z",
+            updated_at="2026-08-06T15:00:00Z",
+            metadata={
+                "playbook_id": "short_strangle_csa",
+                "execution_mode": "shadow",
+                "bpr": 2_000,
+                "adjustment_count": 1,
+                "policy": {"stage": "shadow"},
+            },
+            **common,
+        )
+    )
+    store.save_lifecycle(
+        LifecycleState(
+            lifecycle_id="open",
+            status="open",
+            cashflow_ledger=({"amount": 1.0, "filled_at": "2026-08-07T15:00:00Z"},),
+            opened_at="2026-08-07T15:00:00Z",
+            updated_at="2026-08-07T19:45:00Z",
+            metadata={
+                "playbook_id": "short_strangle_csa",
+                "execution_mode": "shadow",
+                "bpr": 1_500,
+                "last_marked_at": "2026-08-07T19:45:00Z",
+                "mark_pnl_price": 0.25,
+                "policy": {"stage": "shadow"},
+            },
+            **common,
+        )
+    )
+
+    report = build_csa_weekly_economics(database, through_date="2026-08-07")
+    row = report["economic_rows"][0]
+
+    assert report["schema"] == "kamandal.strategy_weekly_economics.v1"
+    assert report["period_start"] == "2026-08-03"
+    assert report["receipt"]["status"] == "ok"
+    assert row["closed_in_period"] == 1
+    assert row["active_open"] == 1
+    assert row["wins"] == 1
+    assert row["realized_pnl_usd"] == 100.0
+    assert row["open_unrealized_pnl_usd"] == 25.0
+    assert row["total_pnl_usd"] == 125.0
+    assert row["realized_return_on_bpr_pct"] == 5.0
+    assert row["economic_status"] == "observed"
+    assert report["recommendation_authority"] is False
+    assert report["sheet_write_authority"] is False
+
+    written = write_csa_weekly_economics(
+        database,
+        output_dir=tmp_path / "reports",
+        through_date="2026-08-07",
+    )
+    assert written.json_path.exists()
+    assert written.markdown_path.exists()
+    assert written.csv_path.exists()
+
+
+def test_weekly_economics_fails_open_pnl_closed_when_same_day_mark_is_missing(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    CsaStore(database).save_lifecycle(
+        LifecycleState(
+            lifecycle_id="open",
+            opportunity_id="opportunity",
+            lane=LaneId.SHORT_STRANGLE,
+            version=2,
+            status="open",
+            active_legs=(),
+            cashflow_ledger=({"amount": 1.0, "filled_at": "2026-08-07T15:00:00Z"},),
+            opened_at="2026-08-07T15:00:00Z",
+            updated_at="2026-08-07T19:45:00Z",
+            policy_hash="policy",
+            metadata={
+                "playbook_id": "short_strangle_csa",
+                "execution_mode": "shadow",
+                "bpr": 1_500,
+                "last_marked_at": "2026-08-06T19:45:00Z",
+                "mark_pnl_price": 0.25,
+                "policy": {"stage": "shadow"},
+            },
+        )
+    )
+
+    row = build_csa_weekly_economics(database, through_date="2026-08-07")["economic_rows"][0]
+
+    assert row["economic_status"] == "partial"
+    assert row["open_unrealized_pnl_usd"] is None
+    assert row["total_pnl_usd"] is None
+    assert row["quality_issues"] == ["open_lifecycle_missing_same_day_mark"]
+
+
 def test_stage_change_fails_closed_while_shadow_order_is_working(tmp_path) -> None:
     database = tmp_path / "kamandal.db"
     LocalStore(database)
@@ -486,6 +605,10 @@ def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_pat
     assert scorecard["experiments"][0]["playbook_id"] == "short_strangle_csa"
     assert scorecard["zero_broker_effect"] is True
     assert scorecard["csa_live_intents"] == 0
+    marked = CsaStore(database, read_only=True).open_lifecycles()[0]
+    assert marked.metadata["last_marked_at"] == "2026-08-08T12:15:00Z"
+    assert marked.metadata["mark_source"] == "natural_close_quote"
+    assert "mark_pnl_price" in marked.metadata
     assert written.json_path.exists()
     assert written.markdown_path.exists()
     assert written.csv_path.exists()

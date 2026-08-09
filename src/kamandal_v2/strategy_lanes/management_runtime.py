@@ -268,6 +268,16 @@ def _management_context(
     common = {"working_order_conflict": working_order_conflict, "ownership_clear": ownership_clear, "hard_emergency": False, "event_exit_due": False, "profit_pct": profit_pct, "loss_multiple": loss_multiple}
     plans: dict[str, Any] = {"liquidation": liquidation}
     metadata = dict(lifecycle.metadata)
+    metadata.update(
+        {
+            "last_marked_at": observed_at,
+            "mark_liquidation_price": round(liquidation, 6),
+            "mark_pnl_price": round(pnl, 6),
+            "mark_profit_pct": round(profit_pct, 6),
+            "mark_source": "natural_close_quote",
+            "contract_multiplier": 100,
+        }
+    )
     if lifecycle.lane is LaneId.SHORT_STRANGLE:
         put = next(leg for leg in legs if leg.role == "short_put")
         call = next(leg for leg in legs if leg.role == "short_call")
@@ -311,7 +321,7 @@ def _management_context(
             context = {"working_order_conflict": working_order_conflict, "ownership_clear": ownership_clear, "event_state": "unknown", "hard_emergency": False, "days_to_event": "", "profit_pct": profit_pct, "near_leg_expired": min(dtes) <= 0}
         else:
             context = {"working_order_conflict": working_order_conflict, "ownership_clear": ownership_clear, "event_state": "confirmed" if event.confirmed else "known", "hard_emergency": False, "days_to_event": event_days, "profit_pct": profit_pct, "near_leg_expired": min(dtes) <= 0}
-    return context, plans, replace(lifecycle, updated_at=utc_now(), metadata=metadata)
+    return context, plans, replace(lifecycle, updated_at=observed_at, metadata=metadata)
 
 
 def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot: Any, policy: CsaPolicy):
