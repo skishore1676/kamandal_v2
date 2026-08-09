@@ -7,12 +7,13 @@ from datetime import date, timedelta
 from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflightClient
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
-from kamandal_v2.strategy_lanes.management_runtime import run_csa_shadow_management
+from kamandal_v2.strategy_lanes.management_runtime import run_csa_live_management, run_csa_shadow_management
 from kamandal_v2.strategy_lanes.management_runtime import _cooldown_elapsed, _strangle_roll_plans
 from kamandal_v2.domain.models import OptionLeg
 from kamandal_v2.strategy_lanes.reports import build_csa_scorecard, render_csa_scorecard, write_csa_scorecard
 from kamandal_v2.strategy_lanes.runtime import run_csa_live_scan, run_csa_shadow_scan
 from kamandal_v2.strategy_lanes.store import CsaStore
+from kamandal_v2.live.execution import _adopt_csa_live_fill, execute_live_approved
 
 
 def _tables():  # noqa: ANN202
@@ -278,6 +279,71 @@ def test_live_stage_routes_one_intent_to_guarded_ledger_without_broker_submissio
     assert scorecard["unexpected_broker_effects"] == 0
     assert experiment["stage"] == "pilot_live"
     assert experiment["live_intents"] == {"stage_approved_pending_submit": 1}
+
+
+def test_live_fill_advances_same_lifecycle_and_management_stages_reusable_close(tmp_path, monkeypatch) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    tables = _tables()
+    tables["playbooks"][0]["csa_stage"] = "live"
+    management = json.loads(tables["playbooks"][0]["management_policy_json"])
+    management["lifecycle"]["loss_stages"]["close_multiple"] = 0
+    tables["playbooks"][0]["management_policy_json"] = json.dumps(management)
+
+    class BrokerAuthoritativeFixture:
+        def preflight(self, candidate):  # noqa: ANN001
+            return type(FixturePreflightClient().preflight(candidate))(
+                ok=True,
+                bpr=candidate.estimated_bpr,
+                message="broker authoritative fixture",
+                raw={"bpr_source": "broker_preflight", "broker_bpr_provided": True},
+            )
+
+    scan = run_csa_live_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=FixtureMarketDataProvider(account_size=100_000),
+        preflight=BrokerAuthoritativeFixture(),
+        observed_at="2026-08-08T12:00:00Z",
+    )
+    live_store = LocalStore(database)
+    entry = live_store.live_order_intents_by_status({"stage_approved_pending_submit"})[0]
+    adopted = _adopt_csa_live_fill(live_store, entry, {"averagePrice": "1.00", "filledAt": "2026-08-08T12:01:00Z"})
+
+    result = run_csa_live_management(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=FixtureMarketDataProvider(account_size=100_000),
+        observed_at="2026-08-08T12:15:00Z",
+    )
+    staged = live_store.live_order_intents_by_status({"stage_approved_pending_submit"})
+    close_ticket = next(item for item in staged if item["intent_type"] == "close")
+
+    assert scan.live_intent_count == 1
+    assert adopted["status"] == "open"
+    assert result.ok
+    assert result.live_intent_count == 1
+    assert result.selected_actions == {"close": 1}
+    assert close_ticket["csa_action_type"] == "close"
+    assert {leg["openCloseIndicator"] for leg in close_ticket["submit_payload"]["legs"]} == {"CLOSE"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": []})
+    monkeypatch.setattr("kamandal_v2.live.execution.load_daily_policy_snapshot", lambda _config: object())
+    monkeypatch.setattr(
+        "kamandal_v2.live.execution._stage_ticket_authorization",
+        lambda _ticket, _snapshot: (True, "stage_authorization_current"),
+    )
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: object())
+
+    executed = execute_live_approved({}, submit=False, store=live_store)
+
+    assert executed["management"] is True
+    assert executed["results"][0]["status"] == "dry_run"
 
 
 def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_path) -> None:

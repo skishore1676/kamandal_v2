@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, uuid5
 from kamandal_v2.domain.models import Candidate, OptionLeg, Plan
 from kamandal_v2.liquidity import candidate_liquidity_metrics
 from kamandal_v2.market.public import occ_symbol
+from kamandal_v2.strategy_lanes.models import LegEffect, StrategyTicket
 
 
 APPROVE_LIVE = "APPROVE_LIVE"
@@ -30,6 +31,63 @@ def build_open_ticket(plan: Plan, candidate: Candidate) -> dict[str, Any]:
         limit_price=_accepted_preflight_limit_price(candidate) or _limit_price(candidate.net_credit),
         preflight=candidate.preflight.to_dict() if candidate.preflight else None,
     )
+
+
+def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
+    """Translate one app-owned CSA strategy ticket into a broker-ready live ticket."""
+
+    effects = {leg.effect for leg in ticket.legs}
+    if effects == {LegEffect.OPEN}:
+        intent_type = "open"
+    elif effects == {LegEffect.CLOSE}:
+        intent_type = "close"
+    else:
+        intent_type = "adjust"
+    limit_price = _nickel_price(
+        abs(float(ticket.limit_price)),
+        rounding=ROUND_FLOOR if ticket.order_kind == "credit" else ROUND_CEILING,
+    )
+    if ticket.order_kind == "credit":
+        limit_price = f"-{limit_price}"
+    seed = json.dumps(
+        {
+            "strategy_ticket_id": ticket.ticket_id,
+            "intent_type": intent_type,
+            "legs": [leg.to_dict() for leg in ticket.legs],
+            "limit_price": limit_price,
+        },
+        sort_keys=True,
+    )
+    order_id = str(uuid5(NAMESPACE_URL, "kamandal-csa-live-order:" + seed))
+    submit_payload = _csa_submit_payload(order_id, ticket, limit_price)
+    live_ticket = {
+        "order_id": order_id,
+        "plan_id": ticket.lifecycle_id,
+        "plan_rank": 1,
+        "candidate_id": ticket.ticket_id,
+        "idea_id": "",
+        "intent_type": intent_type,
+        "underlying": ticket.underlying,
+        "playbook_id": str(ticket.metadata.get("playbook_id") or ""),
+        "structure": ticket.lane.value,
+        "quantity": 1,
+        "limit_price": limit_price,
+        "time_in_force": "DAY",
+        "created_at": ticket.created_at,
+        "preflight": None,
+        "execution_quality": {},
+        "legs": [leg.to_dict() for leg in ticket.legs],
+        "submit_payload": submit_payload,
+        "csa_strategy_ticket": ticket.to_dict(),
+        "csa_policy_hash": ticket.policy_hash,
+        "csa_playbook_id": str(ticket.metadata.get("playbook_id") or ""),
+        "csa_stage": str(ticket.metadata.get("deployment_stage") or ""),
+        "csa_lifecycle_id": ticket.lifecycle_id,
+        "csa_action_type": str(ticket.metadata.get("action_type") or ""),
+        "stage_authorized": True,
+    }
+    live_ticket["ticket_hash"] = ticket_hash(live_ticket)
+    return live_ticket
 
 
 def build_close_ticket(
@@ -185,6 +243,38 @@ def _leg_ticket_payload(underlying: str, leg: OptionLeg, open_close_indicator: s
         "side": leg.side.upper(),
         "openCloseIndicator": open_close_indicator,
         "ratioQuantity": int(leg.quantity or 1),
+    }
+
+
+def _csa_submit_payload(order_id: str, ticket: StrategyTicket, limit_price: str) -> dict[str, Any]:
+    legs = [
+        {
+            "instrument": {"symbol": leg.instrument_id, "type": "OPTION"},
+            "side": leg.side.value.upper(),
+            "openCloseIndicator": leg.effect.value.upper(),
+            "ratioQuantity": int(leg.quantity),
+        }
+        for leg in ticket.legs
+    ]
+    if len(legs) == 1:
+        leg = legs[0]
+        return {
+            "orderId": order_id,
+            "instrument": leg["instrument"],
+            "orderSide": leg["side"],
+            "orderType": "LIMIT",
+            "expiration": {"timeInForce": "DAY"},
+            "quantity": str(leg["ratioQuantity"]),
+            "limitPrice": limit_price,
+            "openCloseIndicator": leg["openCloseIndicator"],
+        }
+    return {
+        "orderId": order_id,
+        "quantity": "1",
+        "type": "LIMIT",
+        "limitPrice": limit_price,
+        "expiration": {"timeInForce": "DAY"},
+        "legs": legs,
     }
 
 

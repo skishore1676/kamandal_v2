@@ -73,6 +73,12 @@ def main() -> None:
     validate_parser = subparsers.add_parser("validate-config", help="Validate universe and playbook configuration")
     validate_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     subparsers.add_parser("csa-validate-policy", help="Read and strictly validate canonical Sheet CSA policy")
+    csa_snapshot_parser = subparsers.add_parser(
+        "csa-policy-snapshot",
+        help="Capture the immutable Google Sheet strategy state for one trading day",
+    )
+    csa_snapshot_parser.add_argument("--output-dir", default="data/run/strategy_policy")
+    csa_snapshot_parser.add_argument("--trading-date", default="")
     csa_migrate_parser = subparsers.add_parser("csa-migrate-db", help="Dry-run or explicitly apply the additive CSA SQLite migration")
     csa_migrate_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_migrate_parser.add_argument("--backup-dir", default="")
@@ -91,6 +97,12 @@ def main() -> None:
     csa_management_parser = subparsers.add_parser("csa-shadow-management", help="Manage open CSA shadow lifecycles without broker effects")
     csa_management_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_management_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
+    csa_live_management_parser = subparsers.add_parser(
+        "csa-live-management",
+        help="Stage Sheet-authorized live CSA lifecycle actions in the guarded live ledger",
+    )
+    csa_live_management_parser.add_argument("--db", default="data/kamandal_v2.db")
+    csa_live_management_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
     csa_scorecard_parser = subparsers.add_parser("csa-shadow-scorecard", help="Write canonical CSA JSON, Markdown, and CSV scorecards")
     csa_scorecard_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_scorecard_parser.add_argument("--output-dir", default="data/reports/csa1")
@@ -436,6 +448,16 @@ def main() -> None:
         if not result.ok:
             raise SystemExit(1)
         return
+    if args.command == "csa-policy-snapshot":
+        from kamandal_v2.strategy_lanes.daily_policy import capture_daily_policy_snapshot
+
+        result = capture_daily_policy_snapshot(
+            config,
+            trading_date=args.trading_date or None,
+            snapshot_dir=args.output_dir,
+        )
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        return
     if args.command == "csa-migrate-db":
         from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
 
@@ -478,6 +500,18 @@ def main() -> None:
         from kamandal_v2.strategy_lanes.management_runtime import run_csa_shadow_management
 
         result = run_csa_shadow_management(
+            config,
+            sqlite_path=args.db,
+            provider=args.provider,
+        )
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        if not result.ok:
+            raise SystemExit(1)
+        return
+    if args.command == "csa-live-management":
+        from kamandal_v2.strategy_lanes.management_runtime import run_csa_live_management
+
+        result = run_csa_live_management(
             config,
             sqlite_path=args.db,
             provider=args.provider,

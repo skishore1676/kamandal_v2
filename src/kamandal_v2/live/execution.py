@@ -28,7 +28,7 @@ from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.models import CsaStage
-from kamandal_v2.strategy_lanes.policy import compile_csa_policies
+from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, load_daily_policy_snapshot
 
 
 TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED"}
@@ -87,11 +87,20 @@ def execute_live_approved(
     if not rows and not close:
         staged = sorted(
             store.live_order_intents_by_status({"stage_approved_pending_submit"}),
-            key=lambda ticket: (str(ticket.get("created_at") or ""), str(ticket.get("ticket_hash") or "")),
+            key=lambda ticket: (
+                0 if str(ticket.get("intent_type") or "") in {"close", "adjust"} else 1,
+                str(ticket.get("created_at") or ""),
+                str(ticket.get("ticket_hash") or ""),
+            ),
         )
         if staged:
             ticket = staged[0]
-            authorized, authorization_reason = _stage_ticket_authorization(ticket, sheet_tables)
+            try:
+                daily_policy = load_daily_policy_snapshot(config)
+            except (FileNotFoundError, ValueError) as exc:
+                authorized, authorization_reason = False, f"blocked_daily_policy_snapshot:{type(exc).__name__}"
+            else:
+                authorized, authorization_reason = _stage_ticket_authorization(ticket, daily_policy)
             if not authorized:
                 store.event(
                     "stage_authorized_live_entry_blocked",
@@ -109,6 +118,18 @@ def execute_live_approved(
                     "source": "stage_authorized_ledger",
                 }
             _assert_submit_allowed(config, submit=submit)
+            is_management = str(ticket.get("intent_type") or "") in {"close", "adjust"}
+            if is_management:
+                adapter = broker_adapter(config)
+                result = _execute_ticket(config, adapter, store, ticket, submit=submit, close=True)
+                return {
+                    "action": action,
+                    "submit": submit,
+                    "processed": 1,
+                    "results": [result],
+                    "source": "stage_authorized_ledger",
+                    "management": True,
+                }
             gate = entry_health_gate(store, config)
             if submit and gate["blocked"]:
                 return {
@@ -345,10 +366,15 @@ def _execute_ticket(
     ledger_status = str(intent.get("_ledger_status") or "")
     allowed_statuses = {"dry_run", "pending_approval", "stage_approved_pending_submit"}
     if close:
-        allowed_statuses = {"dry_run", "pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT}
+        allowed_statuses = {
+            "dry_run",
+            "pending_close_approval",
+            APPROVED_CLOSE_PENDING_SUBMIT,
+            "stage_approved_pending_submit",
+        }
     if ledger_status and ledger_status not in allowed_statuses:
         return _failure(ticket, f"ticket_already_{ledger_status}")
-    if close and _same_day_close_blocked(config, store, ticket):
+    if close and not ticket.get("csa_lifecycle_id") and _same_day_close_blocked(config, store, ticket):
         store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_same_day_close")
         return _failure(ticket, "same_day_live_exit_blocked")
     if submit and not _ticket_fresh(config, ticket):
@@ -545,6 +571,11 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
             position_projection = _save_live_position_from_ticket(store, ticket, status=status.lower(), order_status=response)
         if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "close":
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "close_filled")
+        csa_lifecycle_projection = None
+        if status == "FILLED" and ticket.get("csa_lifecycle_id"):
+            csa_lifecycle_projection = _adopt_csa_live_fill(store, ticket, response)
+            if ticket.get("intent_type") == "adjust":
+                store.update_live_order_intent_status(str(ticket["ticket_hash"]), "filled")
         activity_receipt = None
         terminal_fill_quantity = _filled_quantity(response)
         filled_descendant = _filled_replacement_descendant(store, ticket) if intent_type == "open" else None
@@ -603,6 +634,8 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
         result = {"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, "ledger_status": ledger_status}
         if position_projection is not None:
             result["position_projection"] = position_projection
+        if csa_lifecycle_projection is not None:
+            result["csa_lifecycle_projection"] = csa_lifecycle_projection
         if activity_receipt is not None:
             result["activity_receipt"] = activity_receipt
         if ledger_status in CANCEL_PENDING_TICKET_STATUSES and status in {"NEW", "OPEN", "WORKING"}:
@@ -1686,21 +1719,19 @@ def _approved_rows(
 
 def _stage_ticket_authorization(
     ticket: dict[str, Any],
-    tables: dict[str, list[dict[str, str]]],
+    snapshot: DailyPolicySnapshot,
 ) -> tuple[bool, str]:
-    """Revalidate the exact Sheet policy immediately before submission."""
+    """Validate against the immutable state captured for this trading day."""
 
     playbook_id = str(ticket.get("csa_playbook_id") or "")
     policy_hash = str(ticket.get("csa_policy_hash") or "")
     if not playbook_id or not policy_hash or not bool(ticket.get("stage_authorized")):
         return False, "blocked_stage_authorization_metadata_missing"
-    compilation = compile_csa_policies(
-        tables.get("playbooks") or [],
-        source="google_sheet",
-        read_at=_now_utc(),
-        source_fresh=True,
-    )
-    policy = next((item for item in compilation.policies if item.playbook_id == playbook_id), None)
+    if str(ticket.get("csa_policy_snapshot_date") or "") != snapshot.trading_date:
+        return False, "blocked_stage_authorization_snapshot_date_mismatch"
+    if str(ticket.get("csa_policy_snapshot_hash") or "") != snapshot.snapshot_hash:
+        return False, "blocked_stage_authorization_snapshot_hash_mismatch"
+    policy = next((item for item in snapshot.policy.policies if item.playbook_id == playbook_id), None)
     if policy is None:
         return False, "blocked_stage_authorization_policy_unavailable"
     if policy.stage not in {CsaStage.PILOT_LIVE, CsaStage.LIVE}:
@@ -1889,6 +1920,86 @@ def _parse_db_timestamp(value: str) -> datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed
+
+
+def _adopt_csa_live_fill(
+    store: LocalStore,
+    ticket: dict[str, Any],
+    order_status: dict[str, Any],
+) -> dict[str, Any]:
+    """Advance the app-owned lifecycle exactly once after a complete broker fill."""
+
+    from kamandal_v2.strategy_lanes.models import ShadowFill, stable_csa_id
+    from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
+    from kamandal_v2.strategy_lanes.store import CsaStore, strategy_ticket_from_payload
+
+    payload = ticket.get("csa_strategy_ticket")
+    if not isinstance(payload, dict):
+        return {"saved": False, "reason": "csa_strategy_ticket_missing"}
+    strategy_ticket = strategy_ticket_from_payload(payload)
+    csa_store = CsaStore(store.sqlite_path)
+    lifecycle = csa_store.lifecycle(strategy_ticket.lifecycle_id)
+    if lifecycle is None:
+        return {"saved": False, "reason": "csa_lifecycle_missing"}
+    if lifecycle.version > strategy_ticket.lifecycle_version:
+        return {
+            "saved": True,
+            "idempotent": True,
+            "lifecycle_id": lifecycle.lifecycle_id,
+            "version": lifecycle.version,
+            "status": lifecycle.status,
+        }
+    if lifecycle.version != strategy_ticket.lifecycle_version:
+        return {
+            "saved": False,
+            "reason": "csa_lifecycle_version_mismatch",
+            "lifecycle_version": lifecycle.version,
+            "ticket_version": strategy_ticket.lifecycle_version,
+        }
+    raw_price = order_status.get("averagePrice")
+    if raw_price in (None, ""):
+        raw_price = order_status.get("average-price")
+    filled_price = abs(float(raw_price)) if raw_price not in (None, "") else abs(float(strategy_ticket.limit_price))
+    observed_at = str(
+        order_status.get("updatedAt")
+        or order_status.get("updated-at")
+        or order_status.get("filledAt")
+        or order_status.get("filled-at")
+        or _now_utc()
+    )
+    fill = ShadowFill(
+        fill_id=stable_csa_id("live-fill", [strategy_ticket.ticket_id, ticket.get("order_id"), filled_price]),
+        ticket_id=strategy_ticket.ticket_id,
+        lifecycle_id=strategy_ticket.lifecycle_id,
+        status="filled",
+        attempt=0,
+        natural_price=filled_price,
+        working_price=abs(float(strategy_ticket.limit_price)),
+        filled_price=filled_price,
+        filled_at=observed_at,
+        quote_evidence={"source": "broker_order_status", "order_id": ticket.get("order_id")},
+    )
+    updated = ShadowExecutionAdapter().adopt_fill(lifecycle, strategy_ticket, fill)
+    csa_store.save_lifecycle(updated)
+    store.update_live_order_intent_status_with_payload(
+        str(ticket.get("ticket_hash") or ""),
+        "close_filled" if strategy_ticket.metadata.get("action_type") == "close" else "filled",
+        {
+            "csa_lifecycle_fill": {
+                "lifecycle_id": updated.lifecycle_id,
+                "version": updated.version,
+                "status": updated.status,
+                "filled_at": observed_at,
+            }
+        },
+    )
+    return {
+        "saved": True,
+        "idempotent": False,
+        "lifecycle_id": updated.lifecycle_id,
+        "version": updated.version,
+        "status": updated.status,
+    }
 
 
 def _save_live_position_from_ticket(

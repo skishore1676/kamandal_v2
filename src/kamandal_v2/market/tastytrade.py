@@ -354,7 +354,8 @@ class TastytradeAdapter:
 
 def _action_for_leg(leg: OptionLeg | dict[str, Any], intent_type: str) -> str:
     side = str(_leg_value(leg, "side") or "").lower()
-    open_close = "Open" if intent_type == "open" else "Close"
+    effect = str(_leg_value(leg, "effect") or "").lower()
+    open_close = "Open" if effect == "open" or (not effect and intent_type == "open") else "Close"
     return ("Buy" if side == "buy" else "Sell") + f" to {open_close}"
 
 
@@ -421,7 +422,7 @@ def _items(payload: dict[str, Any]) -> list[Any]:
 def _leg_value(leg: OptionLeg | dict[str, Any], key: str) -> Any:
     if isinstance(leg, dict):
         return leg.get(key)
-    return getattr(leg, key)
+    return getattr(leg, key, None)
 
 
 def _as_list(value: Any) -> list[str]:
