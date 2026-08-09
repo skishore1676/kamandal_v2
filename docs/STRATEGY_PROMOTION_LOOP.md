@@ -22,11 +22,20 @@ Status: source contract implemented; oldmac deployment tracked by release readba
 | `pilot_live` | strategy capability engine + guarded live adapter | at most one new lifecycle per playbook per trading day; one contract |
 | `live` | strategy capability engine + guarded live adapter | normal Sheet sizing and existing live risk limits |
 
-At 09:22 CT, Kamandal reads `universe` and `playbooks` once and writes an immutable,
-dated strategy-policy snapshot. Shadow entry, pilot/live entry, shadow management,
-live management, and final staged-intent authorization all use that same snapshot for
-the trading day. A Sheet edit therefore takes effect on the next trading day's
-snapshot; it does not rewrite the state beneath an order already staged today.
+At 08:15 CT, before the market opens, Kamandal reads `universe` and `playbooks` once
+and writes an immutable, dated strategy-policy snapshot. Daily ideas remain a separate
+input and may continue arriving afterward from My Ideas, Birdclaw/X, and configured
+correspondent profiles before or between scans. Shadow entry, pilot/live entry, shadow
+management, live management, and final staged-intent authorization all use the same
+policy snapshot for the trading day. A Sheet edit therefore takes effect on the next
+trading day's snapshot; it does not rewrite the state beneath work already staged.
+
+The baseline shadow planner and CSA experiments share the configured shadow account.
+Open baseline shadow fills and open/working CSA lifecycles reserve buying power against
+that paper account. Live account positions may generate a portfolio-hedge opportunity,
+but live buying power, live contract ownership, and live working orders do not veto a
+broker-inert shadow observation. Pilot/live stages retain the real account and broker
+safety gates.
 
 The live scan itself never calls the broker. It writes stage-authorized tickets to the
 existing live ledger. The existing guarded submitter still owns current health, BPR,

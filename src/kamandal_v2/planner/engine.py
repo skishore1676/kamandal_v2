@@ -368,9 +368,14 @@ def _contract_key(underlying: str, leg: Any) -> str:
     return f"{underlying.upper()}|{expiration}|{option_type}|{strike:g}"
 
 
-def _shadow_portfolio_override(portfolio: PortfolioState, config: dict[str, Any]) -> PortfolioState:
+def _shadow_portfolio_override(
+    portfolio: PortfolioState,
+    config: dict[str, Any],
+    *,
+    force: bool = False,
+) -> PortfolioState:
     mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
-    if mode != "shadow":
+    if mode != "shadow" and not force:
         return portfolio
     shadow = config.get("shadow") or {}
     account_size = shadow.get("account_size_override")

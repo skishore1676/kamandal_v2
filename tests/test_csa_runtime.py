@@ -12,6 +12,7 @@ from kamandal_v2.strategy_lanes.management_runtime import _cooldown_elapsed, _st
 from kamandal_v2.domain.models import OptionLeg
 from kamandal_v2.strategy_lanes.reports import build_csa_scorecard, render_csa_scorecard, write_csa_scorecard
 from kamandal_v2.strategy_lanes.runtime import run_csa_live_scan, run_csa_shadow_scan
+from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.live.execution import _adopt_csa_live_fill, execute_live_approved
 
@@ -154,6 +155,102 @@ def test_shadow_scan_runs_end_to_end_without_baseline_or_broker_effects(tmp_path
     assert len(store.open_lifecycles()) == 1
     assert len(store.rows("csa_shadow_order_intents")) == 1
     assert _baseline_counts(database) == before
+
+
+def test_shadow_scan_uses_paper_account_and_ignores_live_account_entry_bars(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    live_store = LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    live_store.save_live_position_group(
+        "existing-live-position",
+        {"underlying": "XYZ", "candidate": {"underlying": "XYZ", "legs": []}},
+        status="open",
+    )
+    csa_store = CsaStore(database)
+    csa_store.save_lifecycle(
+        LifecycleState(
+            lifecycle_id="existing-live-csa",
+            opportunity_id="existing-live-opportunity",
+            lane=LaneId.SHORT_STRANGLE,
+            version=1,
+            status="open",
+            active_legs=(),
+            cashflow_ledger=(),
+            opened_at="2026-08-08T11:00:00Z",
+            updated_at="2026-08-08T11:00:00Z",
+            policy_hash="old-live-policy",
+            metadata={
+                "execution_mode": "live",
+                "underlying": "XYZ",
+                "playbook_id": "short_strangle_csa",
+                "bpr": 50_000,
+            },
+        )
+    )
+    tables = _tables()
+    tables["playbooks"][0]["live_max_bpr_per_order"] = 1
+    config = {
+        "runtime": {"mode": "live"},
+        "shadow": {
+            "account_size_override": 20_000,
+            "buying_power_override": 20_000,
+            "bpr_used_override": 0,
+        },
+    }
+
+    result = run_csa_shadow_scan(
+        config,
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=FixtureMarketDataProvider(account_size=100),
+        preflight=FixturePreflightClient(),
+        observed_at="2026-08-08T12:00:00Z",
+    )
+
+    assert result.ok
+    assert result.admitted_count == 1
+    shadow_lifecycles = [
+        item
+        for item in CsaStore(database, read_only=True).open_lifecycles()
+        if item.metadata.get("execution_mode") == "shadow"
+    ]
+    assert len(shadow_lifecycles) == 1
+    assert shadow_lifecycles[0].metadata["bpr"] > 100
+
+
+def test_shadow_scan_reserves_csa_bpr_against_shared_paper_buying_power(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    tables = _tables()
+    tables["universe"] = [
+        {"symbol": "AAA", "enabled": "TRUE", "profile": "large_cap"},
+        {"symbol": "BBB", "enabled": "TRUE", "profile": "large_cap"},
+    ]
+    config = {
+        "runtime": {"mode": "live"},
+        "shadow": {
+            "account_size_override": 2_500,
+            "buying_power_override": 2_500,
+            "bpr_used_override": 0,
+        },
+    }
+
+    result = run_csa_shadow_scan(
+        config,
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=FixtureMarketDataProvider(account_size=100_000),
+        preflight=FixturePreflightClient(),
+        observed_at="2026-08-08T12:00:00Z",
+    )
+
+    assert result.ok
+    assert result.opportunity_count == 2
+    assert result.admitted_count == 1
+    assert len(CsaStore(database, read_only=True).open_lifecycles()) == 1
 
 
 def test_shadow_runtime_ignores_nonshadow_stage_without_duplicate_execution(tmp_path) -> None:
@@ -469,7 +566,7 @@ def test_strangle_cooldown_uses_sheet_minutes_and_last_fill_timestamp() -> None:
     assert _cooldown_elapsed(metadata, policy, "2026-08-08T12:30:00Z") is True
 
 
-def test_management_blocks_when_live_ledger_claims_a_shadow_contract(tmp_path) -> None:
+def test_shadow_management_ignores_live_contract_ownership(tmp_path) -> None:
     database = tmp_path / "kamandal.db"
     baseline = LocalStore(database)
     migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
@@ -513,5 +610,5 @@ def test_management_blocks_when_live_ledger_claims_a_shadow_contract(tmp_path) -
 
     assert scan.filled_count == 0
     assert followup.filled_count == 1
-    assert management.selected_actions == {"block": 1}
+    assert management.selected_actions == {"hold": 1}
     assert len(CsaStore(database, read_only=True).rows("csa_shadow_order_intents")) == 1

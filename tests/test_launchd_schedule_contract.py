@@ -87,7 +87,7 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
     assert {(14, 45), (14, 50), (15, 5)}.issubset(weekday_one_times("live_management"))
     assert weekday_one_times("csa_shadow_scan") == {(9, 35), (12, 5), (14, 35)}
     assert weekday_one_times("csa_live_scan") == {(9, 40), (12, 10), (14, 40)}
-    assert weekday_one_times("csa_policy_snapshot") == {(9, 22)}
+    assert weekday_one_times("csa_policy_snapshot") == {(8, 15)}
     assert (14, 45) in weekday_one_times("csa_shadow_management")
     assert (14, 50) in weekday_one_times("csa_live_management")
     assert weekday_one_times("csa_shadow_scorecard") == {(15, 25)}
@@ -95,6 +95,36 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
         payload = plistlib.loads((launchd_dir / f"com.kamandal.v2.{suffix}.plist").read_bytes())
         assert payload["Disabled"] is True
     assert DISABLED_BY_DEFAULT == {"csa-policy-snapshot", "csa-shadow-scan", "csa-live-scan", "csa-shadow-management", "csa-live-management", "csa-shadow-scorecard"}
+
+
+def test_current_idea_filter_keeps_refined_correspondents_and_current_day_files(tmp_path: Path) -> None:
+    source = tmp_path / "active"
+    current_root = tmp_path / "current"
+    source.mkdir()
+    today = datetime.now(CENTRAL).date().isoformat()
+    (source / f"x_bookmarks_imported_{today}.yaml").write_text("ideas: []\n", encoding="utf-8")
+    (source / "correspondent_greg_harmon.yaml").write_text("ideas: []\n", encoding="utf-8")
+    (source / "x_bookmarks_imported_2000-01-01.yaml").write_text("ideas: []\n", encoding="utf-8")
+    (source / "undated_manual.yaml").write_text("ideas: []\n", encoding="utf-8")
+    command = (
+        f"source {REPO_ROOT / 'scripts/common.sh'}; "
+        f"prepare_current_ideas_dir {source} test_lane; "
+        'find "$CURRENT_IDEAS_DIR" -maxdepth 1 -type l -exec basename {} \\; | sort'
+    )
+
+    result = subprocess.run(
+        ["bash", "-c", command],
+        check=True,
+        cwd=REPO_ROOT,
+        env={**os.environ, "KAMANDAL_CURRENT_IDEAS_ROOT": str(current_root)},
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines()[-2:] == [
+        "correspondent_greg_harmon.yaml",
+        f"x_bookmarks_imported_{today}.yaml",
+    ]
 
 
 def test_installer_can_render_only_csa_without_touching_baseline_plists(tmp_path: Path) -> None:
