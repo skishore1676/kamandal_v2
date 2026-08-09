@@ -88,6 +88,12 @@ def _market_stage(opportunity: StrategyOpportunity, policy: CsaPolicy, context: 
             reasons.append("market_underlying_price_outside_sheet_range")
         if not _within(iv_rank, policy.resolved_fields.get("iv_rank_min"), policy.resolved_fields.get("iv_rank_max")):
             reasons.append("market_iv_rank_outside_sheet_range")
+    if (
+        policy.lane is not LaneId.EARNINGS_CALENDAR
+        and _as_bool(policy.resolved_fields.get("avoid_earnings"))
+        and str(opportunity.market_context.get("event_status") or "unknown") not in {"clear", "unknown"}
+    ):
+        reasons.append(f"market_event_blocked:{opportunity.market_context.get('event_status')}")
     if policy.lane is LaneId.EARNINGS_CALENDAR and context.event_state not in {"known", "confirmed"}:
         reasons.append(f"event_state_not_admissible:{context.event_state}")
     return AdmissionStageResult(

@@ -227,6 +227,7 @@ class Playbook:
     universe_expansion_enabled: bool = False
     underlying_price_min: float | None = None
     underlying_price_max: float | None = None
+    deployment_stage: str = "baseline"
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "Playbook":
@@ -284,6 +285,7 @@ class Playbook:
             universe_expansion_enabled=_as_bool(row.get("universe_expansion_enabled"), default=False),
             underlying_price_min=_optional_float(row.get("underlying_price_min")),
             underlying_price_max=_optional_float(row.get("underlying_price_max")),
+            deployment_stage=str(row.get("csa_stage") or "baseline").strip().lower() or "baseline",
         )
 
     def to_dict(self) -> dict[str, Any]:

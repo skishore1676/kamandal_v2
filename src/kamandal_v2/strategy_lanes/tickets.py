@@ -85,7 +85,10 @@ def _ticket(
         policy_hash=policy.policy_hash,
         created_at=created_at,
         metadata={
-            "execution_boundary": "shadow_or_future_live_adapter",
+            "execution_boundary": policy.stage.value,
+            "playbook_id": policy.playbook_id,
+            "deployment_stage": policy.stage.value,
+            "fill_policy": dict((policy.management.get("lifecycle") or {}).get("fill") or {}),
             "action_type": action.action_type.value,
             **({"adjustment_kind": action.payload["adjustment_kind"]} if action.payload.get("adjustment_kind") else {}),
         },

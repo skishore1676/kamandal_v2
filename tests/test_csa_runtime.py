@@ -10,8 +10,8 @@ from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
 from kamandal_v2.strategy_lanes.management_runtime import run_csa_shadow_management
 from kamandal_v2.strategy_lanes.management_runtime import _cooldown_elapsed, _strangle_roll_plans
 from kamandal_v2.domain.models import OptionLeg
-from kamandal_v2.strategy_lanes.reports import build_csa_scorecard, write_csa_scorecard
-from kamandal_v2.strategy_lanes.runtime import run_csa_shadow_scan
+from kamandal_v2.strategy_lanes.reports import build_csa_scorecard, render_csa_scorecard, write_csa_scorecard
+from kamandal_v2.strategy_lanes.runtime import run_csa_live_scan, run_csa_shadow_scan
 from kamandal_v2.strategy_lanes.store import CsaStore
 
 
@@ -36,6 +36,7 @@ def _tables():  # noqa: ANN202
                             "cooldown": {"minutes": 30},
                             "loss_stages": {"watch_multiple": 2, "close_multiple": 3},
                             "fill": {"max_attempts": 4, "price_increment": 0.05},
+                            "live_management_mode": "close_only",
                         }
                     }
                 ),
@@ -146,15 +147,15 @@ def test_shadow_scan_runs_end_to_end_without_baseline_or_broker_effects(tmp_path
     assert first.opportunity_count == 1
     assert first.candidate_count > 0
     assert first.admitted_count == 1
-    assert first.filled_count == 1
+    assert first.filled_count == 0
+    assert second.filled_count == 1
     assert second.admitted_count == 0
-    assert second.filled_count == 0
     assert len(store.open_lifecycles()) == 1
     assert len(store.rows("csa_shadow_order_intents")) == 1
     assert _baseline_counts(database) == before
 
 
-def test_shadow_runtime_refuses_nonshadow_stage(tmp_path) -> None:
+def test_shadow_runtime_ignores_nonshadow_stage_without_duplicate_execution(tmp_path) -> None:
     database = tmp_path / "kamandal.db"
     LocalStore(database)
     migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
@@ -171,9 +172,104 @@ def test_shadow_runtime_refuses_nonshadow_stage(tmp_path) -> None:
         observed_at="2026-08-08T12:00:00Z",
     )
 
-    assert not result.ok
+    assert result.ok
     assert result.opportunity_count == 0
-    assert any("shadow stage only" in error for error in result.errors)
+    assert result.errors == ()
+
+
+def test_empty_scorecard_is_no_data_not_green(tmp_path) -> None:
+    report = build_csa_scorecard(tmp_path / "missing.db", trading_date="2026-08-08")
+
+    assert report["evidence_status"] == "NO_DATA"
+    assert "Verdict: **NO_DATA**" in render_csa_scorecard(report)
+    assert "GREEN" not in render_csa_scorecard(report)
+
+
+def test_stage_change_fails_closed_while_shadow_order_is_working(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    tables = _tables()
+    market = FixtureMarketDataProvider()
+    first = run_csa_shadow_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=market,
+        preflight=FixturePreflightClient(),
+        observed_at="2026-08-08T12:00:00Z",
+    )
+    tables["playbooks"][0]["csa_stage"] = "pilot_live"
+
+    changed = run_csa_shadow_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=market,
+        preflight=FixturePreflightClient(),
+        observed_at="2026-08-08T12:05:00Z",
+    )
+
+    assert first.filled_count == 0
+    assert not changed.ok
+    assert any("must resolve before" in error for error in changed.errors)
+
+
+def test_live_stage_routes_one_intent_to_guarded_ledger_without_broker_submission(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    tables = _tables()
+    tables["playbooks"][0]["csa_stage"] = "pilot_live"
+
+    class BrokerAuthoritativeFixture:
+        def preflight(self, candidate):  # noqa: ANN001
+            return type(FixturePreflightClient().preflight(candidate))(
+                ok=True,
+                bpr=candidate.estimated_bpr,
+                message="broker authoritative fixture",
+                raw={"bpr_source": "broker_preflight", "broker_bpr_provided": True},
+            )
+
+    result = run_csa_live_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=FixtureMarketDataProvider(account_size=100_000),
+        preflight=BrokerAuthoritativeFixture(),
+        observed_at="2026-08-08T12:00:00Z",
+    )
+
+    intents = LocalStore(database, read_only=True).live_order_intents_by_status(
+        {"stage_approved_pending_submit"}
+    )
+    assert result.ok
+    assert result.execution_mode == "live"
+    assert result.live_intent_count == 1
+    assert len(intents) == 1
+    assert intents[0]["csa_stage"] == "pilot_live"
+    assert intents[0]["csa_playbook_id"] == "short_strangle_csa"
+    assert intents[0]["pilot_contract_cap"] == 1
+    assert intents[0]["stage_authorized"] is True
+
+    repeated = run_csa_live_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=FixtureMarketDataProvider(account_size=100_000),
+        preflight=BrokerAuthoritativeFixture(),
+        observed_at="2026-08-08T12:05:00Z",
+    )
+    assert repeated.live_intent_count == 0
+    assert len(
+        LocalStore(database, read_only=True).live_order_intents_by_status(
+            {"stage_approved_pending_submit"}
+        )
+    ) == 1
 
 
 def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_path) -> None:
@@ -190,6 +286,15 @@ def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_pat
         preflight=FixturePreflightClient(),
         observed_at="2026-08-08T12:00:00Z",
     )
+    followup = run_csa_shadow_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=_tables(),
+        market=market,
+        preflight=FixturePreflightClient(),
+        observed_at="2026-08-08T12:05:00Z",
+    )
     management = run_csa_shadow_management(
         {},
         sqlite_path=str(database),
@@ -201,10 +306,13 @@ def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_pat
     written = write_csa_scorecard(database, output_dir=tmp_path / "reports", trading_date="2026-08-08")
     scorecard = build_csa_scorecard(database, trading_date="2026-08-08")
 
-    assert scan.filled_count == 1
+    assert scan.filled_count == 0
+    assert followup.filled_count == 1
     assert management.ok
     assert management.selected_actions == {"hold": 1}
-    assert scorecard["runs"] == 2
+    assert scorecard["runs"] == 3
+    assert scorecard["evidence_status"] == "COLLECTING"
+    assert scorecard["experiments"][0]["playbook_id"] == "short_strangle_csa"
     assert scorecard["zero_broker_effect"] is True
     assert scorecard["csa_live_intents"] == 0
     assert written.json_path.exists()
@@ -301,6 +409,15 @@ def test_management_blocks_when_live_ledger_claims_a_shadow_contract(tmp_path) -
         preflight=FixturePreflightClient(),
         observed_at="2026-08-08T12:00:00Z",
     )
+    followup = run_csa_shadow_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=_tables(),
+        market=market,
+        preflight=FixturePreflightClient(),
+        observed_at="2026-08-08T12:05:00Z",
+    )
     lifecycle = CsaStore(database, read_only=True).open_lifecycles()[0]
     baseline.save_live_position_group(
         "live-overlap",
@@ -320,6 +437,7 @@ def test_management_blocks_when_live_ledger_claims_a_shadow_contract(tmp_path) -
         observed_at="2026-08-08T12:15:00Z",
     )
 
-    assert scan.filled_count == 1
+    assert scan.filled_count == 0
+    assert followup.filled_count == 1
     assert management.selected_actions == {"block": 1}
     assert len(CsaStore(database, read_only=True).rows("csa_shadow_order_intents")) == 1

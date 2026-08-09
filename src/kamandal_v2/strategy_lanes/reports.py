@@ -24,6 +24,7 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
     path = Path(sqlite_path)
     day = trading_date.isoformat() if isinstance(trading_date, date) else str(trading_date or datetime.now(UTC).date().isoformat())
     empty = {
+        "schema": "kamandal.strategy_experiment_evidence.v1",
         "trading_date": day,
         "schema_ready": False,
         "runs": 0,
@@ -39,6 +40,10 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         "run_errors": [],
         "csa_live_intents": 0,
         "zero_broker_effect": True,
+        "evidence_status": "NO_DATA",
+        "experiments": [],
+        "recommendation_authority": False,
+        "execution_authority": False,
     }
     if not path.is_file():
         return empty
@@ -52,6 +57,7 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         decisions = _payload_rows(conn, "csa_admission_decisions", "date(decided_at)=?", (day,))
         actions = _rows(conn, "SELECT action_type, disposition, payload FROM csa_actions WHERE date(created_at)=?", (day,))
         intents = _rows(conn, "SELECT status, payload FROM csa_shadow_order_intents WHERE date(created_at)=?", (day,))
+        intent_catalog = _rows(conn, "SELECT status, payload FROM csa_shadow_order_intents", ())
         fills = _rows(conn, "SELECT status, payload FROM csa_shadow_fills WHERE date(filled_at)=?", (day,))
         open_lifecycles = conn.execute("SELECT COUNT(*) FROM csa_lifecycles WHERE status IN ('proposed','open')").fetchone()[0]
         csa_live_intents = 0
@@ -72,6 +78,16 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         for receipt in receipts
         for error in ((receipt.get("result") or {}).get("errors") or [])
     ]
+    zero_broker_effect = int(csa_live_intents) == 0
+    evidence_status = "RED" if run_errors or not zero_broker_effect else ("COLLECTING" if receipts else "NO_DATA")
+    experiments = _experiment_rows(
+        receipts,
+        opportunities,
+        decisions,
+        _decoded_payload_rows(intents),
+        _decoded_payload_rows(intent_catalog),
+        _decoded_payload_rows(fills),
+    )
     return {
         **empty,
         "schema_ready": True,
@@ -87,7 +103,9 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         "primary_blockers": dict(sorted(blockers.items())),
         "run_errors": run_errors,
         "csa_live_intents": int(csa_live_intents),
-        "zero_broker_effect": int(csa_live_intents) == 0,
+        "zero_broker_effect": zero_broker_effect,
+        "evidence_status": evidence_status,
+        "experiments": experiments,
     }
 
 
@@ -115,7 +133,7 @@ def write_csa_scorecard(
 
 
 def render_csa_scorecard(report: dict[str, Any]) -> str:
-    verdict = "GREEN" if report.get("zero_broker_effect") and not report.get("run_errors") else "RED"
+    verdict = str(report.get("evidence_status") or "NO_DATA")
     lines = [
         f"# CSA-1 Shadow Scorecard - {report['trading_date']}",
         "",
@@ -133,6 +151,72 @@ def render_csa_scorecard(report: dict[str, Any]) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _experiment_rows(
+    receipts: list[dict[str, Any]],
+    opportunities: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+    intents: list[dict[str, Any]],
+    intent_catalog: list[dict[str, Any]],
+    fills: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    playbook_ids = sorted(
+        {
+            str(playbook_id)
+            for receipt in receipts
+            for playbook_id in ((receipt.get("result") or {}).get("playbook_ids") or [])
+            if playbook_id
+        }
+        | {str(row.get("playbook_id") or "") for row in opportunities if row.get("playbook_id")}
+    )
+    rows: list[dict[str, Any]] = []
+    for playbook_id in playbook_ids:
+        playbook_opportunities = [row for row in opportunities if row.get("playbook_id") == playbook_id]
+        opportunity_ids = {str(row.get("opportunity_id") or "") for row in playbook_opportunities}
+        playbook_decisions = [row for row in decisions if str(row.get("opportunity_id") or "") in opportunity_ids]
+        policy_hashes = sorted({str(row.get("policy_hash") or "") for row in playbook_opportunities if row.get("policy_hash")})
+        # Ticket snapshots carry playbook identity; older rows remain visible in
+        # aggregate totals but are not guessed into a cohort.
+        playbook_intents = [row for row in intents if (row.get("metadata") or {}).get("playbook_id") == playbook_id]
+        catalog_rows = [row for row in intent_catalog if (row.get("metadata") or {}).get("playbook_id") == playbook_id]
+        ticket_ids = {str(row.get("ticket_id") or "") for row in catalog_rows}
+        playbook_fills = [row for row in fills if str(row.get("ticket_id") or "") in ticket_ids]
+        rows.append(
+            {
+                "experiment_id": playbook_id,
+                "playbook_id": playbook_id,
+                "stage": "shadow",
+                "policy_hashes": policy_hashes,
+                "opportunities": len(playbook_opportunities),
+                "admitted": sum(bool(row.get("admitted")) for row in playbook_decisions),
+                "rejected": sum(not bool(row.get("admitted")) for row in playbook_decisions),
+                "intents": dict(sorted(Counter(str(row.get("status") or "unknown") for row in playbook_intents).items())),
+                "working_intents_current": sum(str(row.get("status") or "") in {"proposed", "working"} for row in catalog_rows),
+                "fills": dict(sorted(Counter(str(row.get("status") or "unknown") for row in playbook_fills).items())),
+                "primary_blockers": dict(
+                    sorted(
+                        Counter(
+                            str(row.get("primary_blocker") or "")
+                            for row in playbook_decisions
+                            if row.get("primary_blocker")
+                        ).items()
+                    )
+                ),
+            }
+        )
+    return rows
+
+
+def _decoded_payload_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    decoded: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row.get("payload") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        decoded.append({**payload, "status": row.get("status") or payload.get("status")})
+    return decoded
 
 
 def _payload_rows(conn: sqlite3.Connection, table: str, where: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:

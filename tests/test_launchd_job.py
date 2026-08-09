@@ -252,6 +252,9 @@ def test_scheduled_health_deduplicates_same_failure_until_clear(tmp_path) -> Non
 def test_watchdog_includes_new_report_and_universe_jobs() -> None:
     assert "daily-report" in launchd_job.MONITORED_JOBS
     assert "universe-proposer" in launchd_job.MONITORED_JOBS
+    assert {"csa-shadow-scan", "csa-live-scan", "csa-shadow-management", "csa-shadow-scorecard"}.issubset(
+        launchd_job.MONITORED_JOBS
+    )
 
 
 def test_scheduled_job_health_detects_stale_frequent_job(tmp_path) -> None:

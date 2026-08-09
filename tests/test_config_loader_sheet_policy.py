@@ -65,3 +65,25 @@ def test_missing_google_sheet_policy_has_no_repository_fallback(monkeypatch) -> 
     assert playbook.underlying_price_max is None
     assert playbook.iv_rank_min is None
     assert playbook.iv_rank_max is None
+
+
+def test_staged_playbooks_are_exclusively_routed_away_from_baseline_planner(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        config_loader,
+        "pull_sheet_tables",
+        lambda _config: {
+            "universe": [],
+            "playbooks": [
+                {"playbook_id": "baseline", "enabled": "TRUE", "csa_stage": "baseline"},
+                {"playbook_id": "shadow", "enabled": "TRUE", "csa_stage": "shadow"},
+                {"playbook_id": "pilot", "enabled": "TRUE", "csa_stage": "pilot_live"},
+                {"playbook_id": "live", "enabled": "TRUE", "csa_stage": "live"},
+            ],
+            "daily_plan": [],
+        },
+    )
+
+    _universe, playbooks = config_loader.load_planner_config({}, source="sheet")
+
+    assert [playbook.playbook_id for playbook in playbooks] == ["baseline"]
+    assert playbooks[0].deployment_stage == "baseline"

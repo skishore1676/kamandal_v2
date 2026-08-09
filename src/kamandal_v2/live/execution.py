@@ -27,6 +27,8 @@ from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_lanes.models import CsaStage
+from kamandal_v2.strategy_lanes.policy import compile_csa_policies
 
 
 TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED"}
@@ -80,7 +82,74 @@ def execute_live_approved(
         results = [_execute_ticket(config, adapter, store, ticket, submit=submit, close=True) for ticket in tickets]
         return {"action": action, "submit": submit, "processed": len(results), "results": results, "source": "ledger", "promoted": promoted}
 
-    rows = _approved_rows(config, close=close)
+    sheet_tables = pull_sheet_tables(config)
+    rows = _approved_rows(config, close=close, tables=sheet_tables)
+    if not rows and not close:
+        staged = sorted(
+            store.live_order_intents_by_status({"stage_approved_pending_submit"}),
+            key=lambda ticket: (str(ticket.get("created_at") or ""), str(ticket.get("ticket_hash") or "")),
+        )
+        if staged:
+            ticket = staged[0]
+            authorized, authorization_reason = _stage_ticket_authorization(ticket, sheet_tables)
+            if not authorized:
+                store.event(
+                    "stage_authorized_live_entry_blocked",
+                    {
+                        "ticket_hash": ticket.get("ticket_hash"),
+                        "playbook_id": ticket.get("csa_playbook_id"),
+                        "reason": authorization_reason,
+                    },
+                )
+                return {
+                    "action": action,
+                    "submit": submit,
+                    "processed": 1,
+                    "results": [{"status": "blocked", "reason": authorization_reason}],
+                    "source": "stage_authorized_ledger",
+                }
+            _assert_submit_allowed(config, submit=submit)
+            gate = entry_health_gate(store, config)
+            if submit and gate["blocked"]:
+                return {
+                    "action": action,
+                    "submit": submit,
+                    "processed": 1,
+                    "results": [{"status": "blocked", "reason": "blocked_live_health_red:" + ",".join(gate["reasons"])}],
+                    "source": "stage_authorized_ledger",
+                    "health_gate": gate,
+                }
+            risk_manager = gate.get("risk_manager") or {}
+            symbol = str(ticket.get("underlying") or "").upper()
+            underlying_cap = int((risk_manager.get("underlyings_at_cap") or {}).get(symbol) or 0)
+            cluster_cap = next(
+                (
+                    str(cluster)
+                    for cluster, symbols in (risk_manager.get("clusters_at_cap") or {}).items()
+                    if symbol in {str(item).upper() for item in symbols}
+                ),
+                "",
+            )
+            if submit and (underlying_cap or cluster_cap):
+                reason = "blocked_risk_underlying_cap" if underlying_cap else f"blocked_risk_cluster_cap:{cluster_cap}"
+                return {
+                    "action": action,
+                    "submit": submit,
+                    "processed": 1,
+                    "results": [{"status": "blocked", "reason": reason, "underlying": symbol}],
+                    "source": "stage_authorized_ledger",
+                    "health_gate": gate,
+                }
+            adapter = broker_adapter(config)
+            result = _execute_ticket(config, adapter, store, ticket, submit=submit, close=False)
+            return {
+                "action": action,
+                "submit": submit,
+                "processed": 1,
+                "results": [result],
+                "source": "stage_authorized_ledger",
+                "health_gate": gate,
+            }
     if not rows:
         return {"action": action, "submit": submit, "processed": 0, "results": []}
     _assert_submit_allowed(config, submit=submit)
@@ -274,7 +343,7 @@ def _execute_ticket(
     if intent.get("ticket_hash") != ticket.get("ticket_hash"):
         return _failure(ticket, "ticket_hash_mismatch")
     ledger_status = str(intent.get("_ledger_status") or "")
-    allowed_statuses = {"dry_run", "pending_approval"}
+    allowed_statuses = {"dry_run", "pending_approval", "stage_approved_pending_submit"}
     if close:
         allowed_statuses = {"dry_run", "pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT}
     if ledger_status and ledger_status not in allowed_statuses:
@@ -1595,8 +1664,13 @@ def record_manual_live_fill(ticket_hash: str, *, store: LocalStore | None = None
     }
 
 
-def _approved_rows(config: dict[str, Any], *, close: bool) -> list[dict[str, str]]:
-    rows = pull_sheet_tables(config).get("daily_plan") or []
+def _approved_rows(
+    config: dict[str, Any],
+    *,
+    close: bool,
+    tables: dict[str, list[dict[str, str]]] | None = None,
+) -> list[dict[str, str]]:
+    rows = (tables if tables is not None else pull_sheet_tables(config)).get("daily_plan") or []
     action = APPROVE_LIVE_CLOSE if close else APPROVE_LIVE
     lane = "live_close_advisory" if close else "live_advisory"
     approved = []
@@ -1608,6 +1682,34 @@ def _approved_rows(config: dict[str, Any], *, close: bool) -> list[dict[str, str
             continue
         approved.append(row)
     return approved
+
+
+def _stage_ticket_authorization(
+    ticket: dict[str, Any],
+    tables: dict[str, list[dict[str, str]]],
+) -> tuple[bool, str]:
+    """Revalidate the exact Sheet policy immediately before submission."""
+
+    playbook_id = str(ticket.get("csa_playbook_id") or "")
+    policy_hash = str(ticket.get("csa_policy_hash") or "")
+    if not playbook_id or not policy_hash or not bool(ticket.get("stage_authorized")):
+        return False, "blocked_stage_authorization_metadata_missing"
+    compilation = compile_csa_policies(
+        tables.get("playbooks") or [],
+        source="google_sheet",
+        read_at=_now_utc(),
+        source_fresh=True,
+    )
+    policy = next((item for item in compilation.policies if item.playbook_id == playbook_id), None)
+    if policy is None:
+        return False, "blocked_stage_authorization_policy_unavailable"
+    if policy.stage not in {CsaStage.PILOT_LIVE, CsaStage.LIVE}:
+        return False, "blocked_stage_authorization_revoked"
+    if policy.policy_hash != policy_hash:
+        return False, "blocked_stage_authorization_policy_changed"
+    if str(ticket.get("csa_stage") or "") != policy.stage.value:
+        return False, "blocked_stage_authorization_stage_changed"
+    return True, "stage_authorization_current"
 
 
 def _ticket_from_row(row: dict[str, Any]) -> dict[str, Any]:

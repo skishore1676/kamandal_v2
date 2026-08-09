@@ -9,7 +9,17 @@ from typing import Any
 
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.strategy_lanes.migrations import CSA_TABLES, csa_schema_ready
-from kamandal_v2.strategy_lanes.models import AdmissionDecision, CsaAction, LifecycleState, ShadowFill, StrategyOpportunity, StrategyTicket
+from kamandal_v2.strategy_lanes.models import (
+    AdmissionDecision,
+    CsaAction,
+    LegEffect,
+    LegSide,
+    LifecycleState,
+    ShadowFill,
+    StrategyOpportunity,
+    StrategyTicket,
+    TicketLeg,
+)
 
 
 class CsaStore:
@@ -219,6 +229,22 @@ class CsaStore:
                 (fill.status, fill.filled_at if fill.status == "filled" else None, fill.ticket_id),
             )
 
+    def working_shadow_orders(self) -> list[tuple[StrategyTicket, int]]:
+        """Return durable working orders with their last attempted price step."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT i.payload,
+                       COALESCE(MAX(CAST(json_extract(f.payload, '$.attempt') AS INTEGER)), -1) AS last_attempt
+                FROM csa_shadow_order_intents i
+                LEFT JOIN csa_shadow_fills f ON f.ticket_id = i.id
+                WHERE i.status IN ('proposed', 'working')
+                GROUP BY i.id
+                ORDER BY i.created_at, i.id
+                """
+            ).fetchall()
+        return [(_ticket_from_payload(json.loads(row["payload"])), int(row["last_attempt"])) for row in rows]
+
     def rows(self, table: str) -> list[dict[str, Any]]:
         if table not in CSA_TABLES:
             raise ValueError(f"not a CSA table: {table}")
@@ -245,5 +271,36 @@ def _lifecycle_from_payload(payload: dict[str, Any]) -> LifecycleState:
         opened_at=str(payload["opened_at"]),
         updated_at=str(payload["updated_at"]),
         policy_hash=str(payload["policy_hash"]),
+        metadata=dict(payload.get("metadata") or {}),
+    )
+
+
+def _ticket_from_payload(payload: dict[str, Any]) -> StrategyTicket:
+    from kamandal_v2.strategy_lanes.models import LaneId
+
+    return StrategyTicket(
+        ticket_id=str(payload["ticket_id"]),
+        action_id=str(payload["action_id"]),
+        lifecycle_id=str(payload["lifecycle_id"]),
+        lifecycle_version=int(payload["lifecycle_version"]),
+        lane=LaneId(str(payload["lane"])),
+        underlying=str(payload["underlying"]),
+        order_kind=str(payload["order_kind"]),
+        limit_price=float(payload["limit_price"]),
+        legs=tuple(
+            TicketLeg(
+                instrument_id=str(leg["instrument_id"]),
+                side=LegSide(str(leg["side"])),
+                effect=LegEffect(str(leg["effect"])),
+                quantity=int(leg["quantity"]),
+                option_type=str(leg["option_type"]),
+                expiration=str(leg["expiration"]),
+                strike=float(leg["strike"]),
+                role=str(leg["role"]),
+            )
+            for leg in payload.get("legs") or []
+        ),
+        policy_hash=str(payload["policy_hash"]),
+        created_at=str(payload["created_at"]),
         metadata=dict(payload.get("metadata") or {}),
     )

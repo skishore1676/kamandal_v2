@@ -830,17 +830,32 @@ def _iron_condor_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQ
 
 
 def _short_strangle_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:
-    candidates = []
     short_puts = _near_delta(quotes, "put", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
     short_calls = _near_delta(quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
-    for short_put, short_call in product(short_puts[:4], short_calls[:4]):
-        if short_put.expiration != short_call.expiration:
-            continue
-        candidates.append(_candidate(idea, playbook, [
+    target_delta = ((playbook.short_delta_min or 0.10) + (playbook.short_delta_max or 0.60)) / 2.0
+    target_dte = (playbook.dte_min + playbook.dte_max) / 2.0
+    pairs = [
+        (short_put, short_call)
+        for short_put, short_call in product(short_puts[:4], short_calls[:4])
+        if short_put.expiration == short_call.expiration and short_put.strike < short_call.strike
+    ]
+    pairs.sort(
+        key=lambda pair: (
+            abs(abs(pair[0].delta) - abs(pair[1].delta)),
+            abs(((abs(pair[0].delta) + abs(pair[1].delta)) / 2.0) - target_delta),
+            abs(((pair[0].dte + pair[1].dte) / 2.0) - target_dte),
+            pair[0].spread_pct + pair[1].spread_pct,
+            pair[0].strike,
+            pair[1].strike,
+        )
+    )
+    return [
+        _candidate(idea, playbook, [
             OptionLeg.from_quote(short_put, role="short_put", side="sell"),
             OptionLeg.from_quote(short_call, role="short_call", side="sell"),
-        ]))
-    return candidates[:6]
+        ])
+        for short_put, short_call in pairs[:6]
+    ]
 
 
 def _jade_lizard_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote]) -> list[Candidate]:
