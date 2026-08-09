@@ -42,7 +42,7 @@ class ShadowExecutionAdapter:
             natural_price = _natural_price(ticket, quotes)
             working_price = _working_price(ticket, increment, attempt)
             fillable = natural_price >= working_price if ticket.order_kind == "credit" else natural_price <= working_price
-            status = "filled" if fillable else "working"
+            status = "filled" if fillable else ("missed" if attempt >= max_attempts else "working")
             filled_price = natural_price if fillable else None
         fill_id = stable_csa_id("shadow-fill", [ticket.ticket_id, attempt, observed_at, status, natural_price, working_price])
         return ShadowFill(

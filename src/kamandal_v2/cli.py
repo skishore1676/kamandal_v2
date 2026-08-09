@@ -81,6 +81,13 @@ def main() -> None:
     csa_scan_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_scan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
     csa_scan_parser.add_argument("--ideas", nargs="+", default=["data/ideas/active"])
+    csa_live_scan_parser = subparsers.add_parser(
+        "csa-live-scan",
+        help="Route Sheet-authorized pilot/live CSA entries into the guarded live approval ledger",
+    )
+    csa_live_scan_parser.add_argument("--db", default="data/kamandal_v2.db")
+    csa_live_scan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
+    csa_live_scan_parser.add_argument("--ideas", nargs="+", default=["data/ideas/active"])
     csa_management_parser = subparsers.add_parser("csa-shadow-management", help="Manage open CSA shadow lifecycles without broker effects")
     csa_management_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_management_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
@@ -444,6 +451,20 @@ def main() -> None:
         from kamandal_v2.strategy_lanes.runtime import run_csa_shadow_scan
 
         result = run_csa_shadow_scan(
+            config,
+            sqlite_path=args.db,
+            provider=args.provider,
+            ideas=load_ideas(_expand_paths(args.ideas)),
+        )
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        if not result.ok:
+            raise SystemExit(1)
+        return
+    if args.command == "csa-live-scan":
+        from kamandal_v2.planner.idea_loader import load_ideas
+        from kamandal_v2.strategy_lanes.runtime import run_csa_live_scan
+
+        result = run_csa_live_scan(
             config,
             sqlite_path=args.db,
             provider=args.provider,

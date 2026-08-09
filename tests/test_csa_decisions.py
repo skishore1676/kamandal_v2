@@ -39,6 +39,7 @@ def _policy_row(structure: str = "short_strangle", **overrides):  # noqa: ANN003
                 "cooldown": {"minutes": 30},
                 "loss_stages": {"watch_multiple": 2, "close_multiple": 3},
                 "fill": {"max_attempts": 2, "price_increment": 0.05},
+                "live_management_mode": "close_only",
             },
         },
         "call_spread": {
@@ -304,3 +305,30 @@ def test_admitted_decision_includes_sheet_score_components() -> None:
     assert decision.primary_blocker == ""
     assert decision.score == score.score
     assert decision.score_components == score.components
+
+
+def test_noncalendar_policy_honors_sheet_event_avoidance() -> None:
+    policy = _policy(avoid_earnings="TRUE")
+    opportunity = market_scan_opportunities(
+        [UniverseEntry(symbol="XYZ", enabled=True, profile="large_cap")],
+        [policy],
+        {
+            "XYZ": {
+                "source_fresh": True,
+                "underlying_price": 100,
+                "iv_rank": 55,
+                "event_status": "earnings_soon",
+            }
+        },
+        observed_at="2026-08-08T12:00:00Z",
+    )[0]
+
+    decision = evaluate_admission(
+        opportunity,
+        policy,
+        _admission_context(),
+        decided_at="2026-08-08T12:01:00Z",
+    )
+
+    assert not decision.admitted
+    assert "market_event_blocked:earnings_soon" in decision.stages[1].reasons

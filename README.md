@@ -31,7 +31,7 @@ Kamandal operates through a strictly bounded pipeline designed to keep the AI cr
 
 ## Configuration & Control
 
-- **Playbooks & Universe:** Strategy parameters and tracked tickers are securely managed remotely in a Google Sheet (`universe`, `playbooks`, `daily_plan`).
+- **Playbooks & Universe:** Strategy parameters, composition, and deployment stage are managed remotely in a Google Sheet (`universe`, `playbooks`, `daily_plan`). Kamandal owns the reusable capability; a playbook row owns whether it is baseline, shadow, pilot-live, or live. See [Strategy Promotion Loop](docs/STRATEGY_PROMOTION_LOOP.md).
 - **Runtime Rules:** Controlled locally via `config/control.yaml` and environment variables.
   - The active broker is Public; Tastytrade supplies selected market metrics.
   - The checked-in posture is live and trading-enabled. Oldmac environment overrides remain part of runtime truth.

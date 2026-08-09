@@ -20,11 +20,18 @@ def load_planner_config(config: dict[str, Any], *, source: str = "sheet") -> tup
         universe_rows = tables["universe"]
         playbook_rows = tables["playbooks"]
     universe = [UniverseEntry.from_row(row) for row in universe_rows if row.get("symbol")]
-    playbooks = [Playbook.from_row(row) for row in playbook_rows if row.get("playbook_id")]
+    # A playbook has exactly one runtime owner. Blank/baseline rows belong to the
+    # established planner; staged experiment rows belong to strategy_lanes. This
+    # prevents the same enabled Sheet row from being planned twice.
+    playbooks = [
+        Playbook.from_row(row)
+        for row in playbook_rows
+        if row.get("playbook_id")
+        and str(row.get("csa_stage") or "baseline").strip().lower() in {"", "baseline"}
+    ]
     return universe, playbooks
 
 
 def _row_dict(header: list[str], row: list[Any]) -> dict[str, Any]:
     padded = list(row) + [""] * (len(header) - len(row))
     return {header[index]: padded[index] for index in range(len(header))}
-

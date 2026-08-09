@@ -881,6 +881,56 @@ def test_live_execute_approved_dry_run_uses_sheet_gate(tmp_path, monkeypatch) ->
         assert conn.execute("SELECT count(*) FROM live_order_attempts").fetchone()[0] == 1
 
 
+def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    candidate = _ticket_candidate("csa_candidate", "csa_idea", "MSFT")
+    plan = type("StagePlan", (), {"plan_id": "csa_lifecycle", "plan_rank": 1})()
+    ticket = build_open_ticket(plan, candidate)
+    ticket.update({
+        "csa_policy_hash": "policy-hash",
+        "csa_stage": "pilot_live",
+        "csa_lifecycle_id": "csa_lifecycle",
+        "stage_authorized": True,
+        "pilot_contract_cap": 1,
+    })
+    store.save_live_order_intent(ticket, status="stage_approved_pending_submit")
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": []})
+    monkeypatch.setattr(
+        "kamandal_v2.live.execution._stage_ticket_authorization",
+        lambda _ticket, _tables: (True, "stage_authorization_current"),
+    )
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: object())
+
+    executed = execute_live_approved(_live_control(), submit=False, store=store)
+
+    assert executed["source"] == "stage_authorized_ledger"
+    assert executed["processed"] == 1
+    assert executed["results"][0]["status"] == "dry_run"
+
+
+def test_live_execute_blocks_stage_ticket_when_sheet_authorization_is_revoked(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    candidate = _ticket_candidate("csa_candidate", "csa_idea", "MSFT")
+    plan = type("StagePlan", (), {"plan_id": "csa_lifecycle", "plan_rank": 1})()
+    ticket = build_open_ticket(plan, candidate)
+    ticket.update({
+        "csa_policy_hash": "policy-hash",
+        "csa_playbook_id": "short_strangle_csa",
+        "csa_stage": "pilot_live",
+        "csa_lifecycle_id": "csa_lifecycle",
+        "stage_authorized": True,
+    })
+    store.save_live_order_intent(ticket, status="stage_approved_pending_submit")
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [], "playbooks": []})
+
+    executed = execute_live_approved(_live_control(), submit=False, store=store)
+
+    assert executed["source"] == "stage_authorized_ledger"
+    assert executed["results"] == [
+        {"status": "blocked", "reason": "blocked_stage_authorization_policy_unavailable"}
+    ]
+
+
 def test_live_execute_approved_dry_run_can_process_basket_tickets(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     before = PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0, greeks=Greeks())

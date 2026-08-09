@@ -139,6 +139,20 @@ def test_csa_policy_rejects_duplicate_json_score_weights() -> None:
         compile_csa_policy(row, source="google_sheet", read_at="now")
 
 
+def test_nonshadow_policy_requires_supported_live_management_mode() -> None:
+    row = _strangle_policy_row(csa_stage="pilot_live")
+    with pytest.raises(PolicyError, match="live_management_mode=close_only"):
+        compile_csa_policy(row, source="google_sheet", read_at="now")
+
+    management = json.loads(row["management_policy_json"])
+    management["lifecycle"]["live_management_mode"] = "close_only"
+    row["management_policy_json"] = json.dumps(management)
+
+    policy = compile_csa_policy(row, source="google_sheet", read_at="now")
+    assert policy is not None
+    assert policy.stage.value == "pilot_live"
+
+
 @pytest.mark.parametrize(
     "changes",
     [

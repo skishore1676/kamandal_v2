@@ -141,4 +141,16 @@ def _builder_config(policy: CsaPolicy) -> dict[str, Any]:
         fallback = dict(raw_fallback)
     else:
         raise ValueError(f"{policy.playbook_id}: lifecycle.dte_fallback must be an object")
-    return {"planner": {"expiry": {"diagonal_calendar_dte_fallback": fallback}, "vertical_width_search": {"enabled": False}}}
+    raw_width_search = lifecycle.get("vertical_width_search")
+    if raw_width_search is None:
+        width_search = {"enabled": False}
+    elif isinstance(raw_width_search, dict):
+        width_search = dict(raw_width_search)
+    else:
+        raise ValueError(f"{policy.playbook_id}: lifecycle.vertical_width_search must be an object")
+    return {
+        "planner": {
+            "expiry": {"diagonal_calendar_dte_fallback": fallback},
+            "vertical_width_search": width_search,
+        }
+    }

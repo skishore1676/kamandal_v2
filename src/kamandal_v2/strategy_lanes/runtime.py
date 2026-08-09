@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, PreflightResult, utc_now
+from kamandal_v2.live.orders import build_open_ticket
 from kamandal_v2.market.fixture import FixturePreflightClient
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.planner.candidate_builder import _apply_preflight_bpr
@@ -39,6 +40,9 @@ class ShadowScanResult:
     filled_count: int
     errors: tuple[str, ...]
     policy_hashes: tuple[str, ...]
+    playbook_ids: tuple[str, ...]
+    execution_mode: str
+    live_intent_count: int
 
     @property
     def ok(self) -> bool:
@@ -59,19 +63,80 @@ def run_csa_shadow_scan(
     preflight: Any | None = None,
     observed_at: str | None = None,
 ) -> ShadowScanResult:
+    return _run_csa_scan(
+        config,
+        sqlite_path=sqlite_path,
+        provider=provider,
+        tables=tables,
+        ideas=ideas,
+        market=market,
+        preflight=preflight,
+        observed_at=observed_at,
+        stages=(CsaStage.SHADOW,),
+        execution_mode="shadow",
+    )
+
+
+def run_csa_live_scan(
+    config: dict[str, Any],
+    *,
+    sqlite_path: str = "data/kamandal_v2.db",
+    provider: str = "public",
+    tables: dict[str, list[dict[str, Any]]] | None = None,
+    ideas: Iterable[Idea] = (),
+    market: Any | None = None,
+    preflight: Any | None = None,
+    observed_at: str | None = None,
+) -> ShadowScanResult:
+    """Route Sheet-authorized pilot/live policies into the guarded live ledger."""
+    return _run_csa_scan(
+        config,
+        sqlite_path=sqlite_path,
+        provider=provider,
+        tables=tables,
+        ideas=ideas,
+        market=market,
+        preflight=preflight,
+        observed_at=observed_at,
+        stages=(CsaStage.PILOT_LIVE, CsaStage.LIVE),
+        execution_mode="live",
+    )
+
+
+def _run_csa_scan(
+    config: dict[str, Any],
+    *,
+    sqlite_path: str,
+    provider: str,
+    tables: dict[str, list[dict[str, Any]]] | None,
+    ideas: Iterable[Idea],
+    market: Any | None,
+    preflight: Any | None,
+    observed_at: str | None,
+    stages: tuple[CsaStage, ...],
+    execution_mode: str,
+) -> ShadowScanResult:
     ideas = tuple(ideas)
     started_at = observed_at or utc_now()
-    run_id = stable_csa_id("scan-run", [started_at, provider])
+    run_id = stable_csa_id("scan-run", [execution_mode, started_at, provider])
     csa_store = CsaStore(sqlite_path)
     local_store = LocalStore(sqlite_path, read_only=True)
     bundle = load_csa_operator_policy(config, tables=tables, read_at=started_at)
     errors = list(bundle.errors)
-    shadow_policies = tuple(policy for policy in bundle.policies if policy.stage is CsaStage.SHADOW)
-    for policy in bundle.policies:
-        if policy.stage is not CsaStage.SHADOW:
-            errors.append(f"{policy.playbook_id}: CSA-1 runtime accepts shadow stage only")
-    if not shadow_policies:
-        return _finish_scan(csa_store, run_id, started_at, shadow_policies, (), 0, 0, 0, errors)
+    # The Sheet may contain baseline, shadow, pilot, and live rows at the same
+    # time. This command owns only the shadow route; other stages are handled by
+    # their own adapters and must not poison or duplicate a shadow run.
+    selected_policies = tuple(policy for policy in bundle.policies if policy.stage in stages)
+    working_orders = csa_store.working_shadow_orders() if execution_mode == "shadow" else []
+    if not selected_policies:
+        if working_orders:
+            errors.append(
+                f"{len(working_orders)} working shadow order(s) must resolve before the last shadow stage changes"
+            )
+        return _finish_scan(
+            csa_store, run_id, started_at, selected_policies, (), 0, 0, 0, errors,
+            execution_mode=execution_mode, live_intent_count=0,
+        )
 
     if market is not None:
         resolved_market = market
@@ -82,7 +147,8 @@ def run_csa_shadow_scan(
     snapshots: dict[str, ChainSnapshot] = {}
     observations: dict[str, dict[str, Any]] = {}
 
-    symbols = _required_symbols(bundle, shadow_policies, ideas)
+    symbols = _required_symbols(bundle, selected_policies, ideas)
+    symbols.update(ticket.underlying for ticket, _attempt in working_orders)
     for symbol in sorted(symbols):
         try:
             snapshot = resolved_market.chain_snapshot(symbol)
@@ -101,20 +167,20 @@ def run_csa_shadow_scan(
             errors.append(f"{symbol}: market context unavailable: {_safe_error(exc)}")
 
     opportunities: list[StrategyOpportunity] = list(
-        market_scan_opportunities(bundle.universe, shadow_policies, observations, observed_at=started_at)
+        market_scan_opportunities(bundle.universe, selected_policies, observations, observed_at=started_at)
     )
     portfolio = local_store.live_portfolio_state(resolved_market.account_state())
     opportunities.extend(
         portfolio_hedge_opportunities(
             {**portfolio.to_dict(), "delta": portfolio.greeks.delta, "source_fresh": True},
-            shadow_policies,
+            selected_policies,
             observations,
             observed_at=started_at,
         )
     )
-    policy_by_id = {policy.playbook_id: policy for policy in shadow_policies}
+    policy_by_id = {policy.playbook_id: policy for policy in selected_policies}
     for idea in ideas:
-        for policy in shadow_policies:
+        for policy in selected_policies:
             if policy.source_mode is not SourceMode.IDEA:
                 continue
             event_context = _event_context(sqlite_path, idea.underlying) if policy.lane is LaneId.EARNINGS_CALENDAR else {}
@@ -123,10 +189,35 @@ def run_csa_shadow_scan(
     candidate_count = 0
     admitted_count = 0
     filled_count = 0
+    if execution_mode == "shadow":
+        filled_count = _advance_working_orders(
+            csa_store,
+            working_orders,
+            snapshots,
+            active_policy_hashes={policy.policy_hash for policy in selected_policies},
+            observed_at=started_at,
+            errors=errors,
+        )
+    live_intent_count = 0
     open_csa_keys = {
         (str(item.metadata.get("underlying") or ""), str(item.metadata.get("playbook_id") or ""))
         for item in csa_store.open_lifecycles()
     }
+    active_stage_intents = local_store.live_order_intents_by_status(
+        {
+            "stage_approved_pending_submit",
+            "submitted",
+            "repriced",
+            "partially_filled",
+            "replace_cancel_pending",
+            "replace_waiting_cancel",
+        }
+    )
+    open_csa_keys.update(
+        (str(ticket.get("underlying") or ""), str(ticket.get("csa_playbook_id") or ""))
+        for ticket in active_stage_intents
+        if ticket.get("csa_policy_hash") and ticket.get("csa_playbook_id")
+    )
     open_live_contracts = _open_live_contract_keys(local_store)
     for opportunity in opportunities:
         csa_store.save_opportunity(opportunity, scan_run_id=run_id)
@@ -163,12 +254,14 @@ def run_csa_shadow_scan(
             continue
         admitted_count += 1
         candidate, score, preflight_result = sorted(admitted, key=lambda item: (-item[1].score, item[0].candidate_id))[0]
+        if execution_mode == "live" and live_intent_count >= 1:
+            continue
         lifecycle = LifecycleState(
             lifecycle_id=stable_csa_id("lifecycle", [opportunity.opportunity_id, candidate.candidate_id]),
             opportunity_id=opportunity.opportunity_id,
             lane=policy.lane,
             version=1,
-            status="proposed",
+            status="proposed" if execution_mode == "shadow" else "pending_live_submission",
             active_legs=(),
             cashflow_ledger=(),
             opened_at=started_at,
@@ -195,38 +288,114 @@ def run_csa_shadow_scan(
             created_at=started_at,
             limit_price=candidate.net_credit,
         )
-        csa_store.save_shadow_order_intent(ticket)
-        quotes = _ticket_quotes(ticket, snapshot)
-        fill_policy = dict((policy.management.get("lifecycle") or {}).get("fill") or {})
-        adapter = ShadowExecutionAdapter()
-        max_attempts = int(float(fill_policy["max_attempts"]))
-        final_fill = None
-        for attempt in range(max_attempts + 1):
-            final_fill = adapter.simulate_fill(ticket, quotes, fill_policy, observed_at=started_at, attempt=attempt)
-            if final_fill.status in {"filled", "missed"}:
-                break
-        if final_fill is None:
-            continue
-        csa_store.save_shadow_fill(final_fill)
-        if final_fill.status == "filled":
-            csa_store.save_lifecycle(adapter.adopt_fill(lifecycle, ticket, final_fill))
-            open_csa_keys.add((opportunity.underlying, policy.playbook_id))
-            filled_count += 1
-        elif final_fill.status == "missed":
-            from dataclasses import replace
+        if execution_mode == "shadow":
+            csa_store.save_shadow_order_intent(ticket)
+            quotes = _ticket_quotes(ticket, snapshot)
+            fill_policy = dict((policy.management.get("lifecycle") or {}).get("fill") or {})
+            adapter = ShadowExecutionAdapter()
+            # One market observation gets one fill attempt. A working order is
+            # persisted and reconsidered on the next natural scan with fresh quotes.
+            final_fill = adapter.simulate_fill(ticket, quotes, fill_policy, observed_at=started_at, attempt=0)
+            csa_store.save_shadow_fill(final_fill)
+            if final_fill.status == "filled":
+                csa_store.save_lifecycle(adapter.adopt_fill(lifecycle, ticket, final_fill))
+                open_csa_keys.add((opportunity.underlying, policy.playbook_id))
+                filled_count += 1
+            elif final_fill.status == "missed":
+                from dataclasses import replace
 
-            csa_store.save_lifecycle(replace(lifecycle, status="entry_missed", updated_at=started_at))
+                csa_store.save_lifecycle(replace(lifecycle, status="entry_missed", updated_at=started_at))
+        else:
+            candidate.preflight = preflight_result
+            live_ticket = build_open_ticket(
+                _StagePlan(lifecycle.lifecycle_id),
+                candidate,
+            )
+            live_ticket.update(
+                {
+                    "csa_policy_hash": policy.policy_hash,
+                    "csa_playbook_id": policy.playbook_id,
+                    "csa_stage": policy.stage.value,
+                    "csa_lifecycle_id": lifecycle.lifecycle_id,
+                    "stage_authorized": True,
+                    "pilot_contract_cap": 1 if policy.stage is CsaStage.PILOT_LIVE else None,
+                }
+            )
+            # The live-approved-orders job owns submission and re-runs health,
+            # freshness, preflight, concentration, and serialized order gates.
+            LocalStore(sqlite_path).save_live_order_intent(
+                live_ticket,
+                status="stage_approved_pending_submit",
+            )
+            live_intent_count += 1
+            open_csa_keys.add((opportunity.underlying, policy.playbook_id))
     return _finish_scan(
         csa_store,
         run_id,
         started_at,
-        shadow_policies,
+        selected_policies,
         opportunities,
         candidate_count,
         admitted_count,
         filled_count,
         errors,
+        execution_mode=execution_mode,
+        live_intent_count=live_intent_count,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _StagePlan:
+    plan_id: str
+    plan_rank: int = 1
+
+
+def _advance_working_orders(
+    store: CsaStore,
+    working_orders: list[tuple[Any, int]],
+    snapshots: dict[str, ChainSnapshot],
+    *,
+    active_policy_hashes: set[str],
+    observed_at: str,
+    errors: list[str],
+) -> int:
+    filled_count = 0
+    adapter = ShadowExecutionAdapter()
+    for ticket, last_attempt in working_orders:
+        if ticket.policy_hash not in active_policy_hashes:
+            errors.append(
+                f"{ticket.ticket_id}: working shadow order policy is no longer routed to shadow"
+            )
+            continue
+        snapshot = snapshots.get(ticket.underlying)
+        lifecycle = store.lifecycle(ticket.lifecycle_id)
+        if snapshot is None or lifecycle is None:
+            errors.append(f"{ticket.ticket_id}: working shadow order lacks fresh market or lifecycle state")
+            continue
+        if lifecycle.version != ticket.lifecycle_version or lifecycle.status != "proposed":
+            errors.append(f"{ticket.ticket_id}: working shadow order no longer targets the proposed lifecycle")
+            continue
+        fill_policy = ticket.metadata.get("fill_policy") or {}
+        try:
+            fill = adapter.simulate_fill(
+                ticket,
+                _ticket_quotes(ticket, snapshot),
+                fill_policy,
+                observed_at=observed_at,
+                attempt=last_attempt + 1,
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{ticket.ticket_id}: working shadow attempt failed: {_safe_error(exc)}")
+            continue
+        store.save_shadow_fill(fill)
+        if fill.status == "filled":
+            store.save_lifecycle(adapter.adopt_fill(lifecycle, ticket, fill))
+            filled_count += 1
+        elif fill.status == "missed":
+            from dataclasses import replace
+
+            store.save_lifecycle(replace(lifecycle, status="entry_missed", updated_at=observed_at))
+    return filled_count
 
 
 def _required_symbols(bundle: OperatorPolicyBundle, policies: tuple[CsaPolicy, ...], ideas: Iterable[Idea]) -> set[str]:
@@ -329,6 +498,9 @@ def _finish_scan(
     admitted_count: int,
     filled_count: int,
     errors: list[str],
+    *,
+    execution_mode: str,
+    live_intent_count: int,
 ) -> ShadowScanResult:
     completed_at = utc_now()
     opportunity_count = len(tuple(opportunities))
@@ -343,10 +515,14 @@ def _finish_scan(
         filled_count=filled_count,
         errors=tuple(errors),
         policy_hashes=tuple(sorted(policy.policy_hash for policy in policies)),
+        playbook_ids=tuple(sorted(policy.playbook_id for policy in policies)),
+        execution_mode=execution_mode,
+        live_intent_count=live_intent_count,
     )
     payload = {"id": run_id, "lane": "all", "status": "completed" if result.ok else "completed_with_errors", "policy_hash": "multiple", **result.to_dict()}
     store.save_scan_run(payload)
-    store.save_run_receipt({"id": run_id, "command": "csa-shadow-scan", "status": payload["status"], "started_at": started_at, "completed_at": completed_at, "result": result.to_dict()})
+    command = "csa-shadow-scan" if execution_mode == "shadow" else "csa-live-scan"
+    store.save_run_receipt({"id": run_id, "command": command, "status": payload["status"], "started_at": started_at, "completed_at": completed_at, "result": result.to_dict()})
     return result
 
 
