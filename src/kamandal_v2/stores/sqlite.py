@@ -526,8 +526,8 @@ class LocalStore:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO live_order_intents
-                (ticket_hash, order_id, plan_id, candidate_id, idea_id, intent_type, status, updated_at, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                (ticket_hash, order_id, plan_id, candidate_id, idea_id, intent_type, status, created_at, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP, ?)
                 """,
                 (
                     str(ticket["ticket_hash"]),
@@ -537,6 +537,7 @@ class LocalStore:
                     str(ticket.get("idea_id") or ""),
                     str(ticket["intent_type"]),
                     status,
+                    str(ticket.get("created_at") or ""),
                     json.dumps(ticket, sort_keys=True),
                 ),
             )

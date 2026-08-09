@@ -40,6 +40,8 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         "run_errors": [],
         "csa_live_intents": 0,
         "zero_broker_effect": True,
+        "unexpected_broker_effects": 0,
+        "zero_unexpected_broker_effect": True,
         "evidence_status": "NO_DATA",
         "experiments": [],
         "recommendation_authority": False,
@@ -60,11 +62,14 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         intent_catalog = _rows(conn, "SELECT status, payload FROM csa_shadow_order_intents", ())
         fills = _rows(conn, "SELECT status, payload FROM csa_shadow_fills WHERE date(filled_at)=?", (day,))
         open_lifecycles = conn.execute("SELECT COUNT(*) FROM csa_lifecycles WHERE status IN ('proposed','open')").fetchone()[0]
-        csa_live_intents = 0
+        live_intents: list[dict[str, Any]] = []
         if "live_order_intents" in tables:
-            csa_live_intents = conn.execute(
-                "SELECT COUNT(*) FROM live_order_intents WHERE payload LIKE '%csa_policy_hash%' OR ticket_hash LIKE 'csa:%'"
-            ).fetchone()[0]
+            live_intents = _rows(
+                conn,
+                "SELECT status, payload FROM live_order_intents "
+                "WHERE date(created_at)=? AND (payload LIKE '%csa_policy_hash%' OR ticket_hash LIKE 'csa:%')",
+                (day,),
+            )
     blockers = Counter(str(item.get("primary_blocker") or "") for item in decisions if item.get("primary_blocker"))
     policy_hashes = sorted(
         {
@@ -78,8 +83,15 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         for receipt in receipts
         for error in ((receipt.get("result") or {}).get("errors") or [])
     ]
-    zero_broker_effect = int(csa_live_intents) == 0
-    evidence_status = "RED" if run_errors or not zero_broker_effect else ("COLLECTING" if receipts else "NO_DATA")
+    decoded_live_intents = _decoded_payload_rows(live_intents)
+    unexpected_broker_effects = sum(
+        not bool(item.get("stage_authorized"))
+        or str(item.get("csa_stage") or "") not in {"pilot_live", "live"}
+        for item in decoded_live_intents
+    )
+    zero_broker_effect = not decoded_live_intents
+    zero_unexpected_broker_effect = unexpected_broker_effects == 0
+    evidence_status = "RED" if run_errors or not zero_unexpected_broker_effect else ("COLLECTING" if receipts else "NO_DATA")
     experiments = _experiment_rows(
         receipts,
         opportunities,
@@ -87,6 +99,7 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         _decoded_payload_rows(intents),
         _decoded_payload_rows(intent_catalog),
         _decoded_payload_rows(fills),
+        decoded_live_intents,
     )
     return {
         **empty,
@@ -102,8 +115,10 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         "policy_hashes": policy_hashes,
         "primary_blockers": dict(sorted(blockers.items())),
         "run_errors": run_errors,
-        "csa_live_intents": int(csa_live_intents),
+        "csa_live_intents": len(decoded_live_intents),
         "zero_broker_effect": zero_broker_effect,
+        "unexpected_broker_effects": unexpected_broker_effects,
+        "zero_unexpected_broker_effect": zero_unexpected_broker_effect,
         "evidence_status": evidence_status,
         "experiments": experiments,
     }
@@ -127,7 +142,17 @@ def write_csa_scorecard(
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["metric", "value"])
-        for key in ("runs", "opportunities", "admitted", "rejected", "open_lifecycles", "csa_live_intents", "zero_broker_effect"):
+        for key in (
+            "runs",
+            "opportunities",
+            "admitted",
+            "rejected",
+            "open_lifecycles",
+            "csa_live_intents",
+            "zero_broker_effect",
+            "unexpected_broker_effects",
+            "zero_unexpected_broker_effect",
+        ):
             writer.writerow([key, report[key]])
     return ScorecardWriteResult(report, json_path, markdown_path, csv_path)
 
@@ -135,7 +160,7 @@ def write_csa_scorecard(
 def render_csa_scorecard(report: dict[str, Any]) -> str:
     verdict = str(report.get("evidence_status") or "NO_DATA")
     lines = [
-        f"# CSA-1 Shadow Scorecard - {report['trading_date']}",
+        f"# Strategy Experiment Scorecard - {report['trading_date']}",
         "",
         f"Verdict: **{verdict}**",
         "",
@@ -145,6 +170,7 @@ def render_csa_scorecard(report: dict[str, Any]) -> str:
         f"- Open lifecycles: {report['open_lifecycles']}",
         f"- CSA live intents: {report['csa_live_intents']}",
         f"- Zero broker effect: {report['zero_broker_effect']}",
+        f"- Unexpected broker effects: {report['unexpected_broker_effects']}",
         f"- Shadow fills: {json.dumps(report['shadow_fills'], sort_keys=True)}",
         f"- Primary blockers: {json.dumps(report['primary_blockers'], sort_keys=True)}",
         f"- Run errors: {json.dumps(report['run_errors'], sort_keys=True)}",
@@ -160,6 +186,7 @@ def _experiment_rows(
     intents: list[dict[str, Any]],
     intent_catalog: list[dict[str, Any]],
     fills: list[dict[str, Any]],
+    live_intents: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     playbook_ids = sorted(
         {
@@ -182,11 +209,30 @@ def _experiment_rows(
         catalog_rows = [row for row in intent_catalog if (row.get("metadata") or {}).get("playbook_id") == playbook_id]
         ticket_ids = {str(row.get("ticket_id") or "") for row in catalog_rows}
         playbook_fills = [row for row in fills if str(row.get("ticket_id") or "") in ticket_ids]
+        playbook_live_intents = [
+            row for row in live_intents if str(row.get("csa_playbook_id") or "") == playbook_id
+        ]
+        stage_observations = [
+            str(((receipt.get("result") or {}).get("playbook_stages") or {}).get(playbook_id) or "")
+            for receipt in sorted(receipts, key=lambda item: str(item.get("started_at") or ""))
+        ]
+        stage = next((item for item in reversed(stage_observations) if item), "shadow")
+        live_statuses = Counter(str(row.get("status") or "unknown") for row in playbook_live_intents)
+        live_working = sum(
+            str(row.get("status") or "")
+            in {"stage_approved_pending_submit", "submitted", "repriced", "partially_filled"}
+            for row in playbook_live_intents
+        )
+        unexpected = sum(
+            not bool(row.get("stage_authorized"))
+            or str(row.get("csa_stage") or "") not in {"pilot_live", "live"}
+            for row in playbook_live_intents
+        )
         rows.append(
             {
                 "experiment_id": playbook_id,
                 "playbook_id": playbook_id,
-                "stage": "shadow",
+                "stage": stage,
                 "policy_hashes": policy_hashes,
                 "opportunities": len(playbook_opportunities),
                 "admitted": sum(bool(row.get("admitted")) for row in playbook_decisions),
@@ -194,6 +240,9 @@ def _experiment_rows(
                 "intents": dict(sorted(Counter(str(row.get("status") or "unknown") for row in playbook_intents).items())),
                 "working_intents_current": sum(str(row.get("status") or "") in {"proposed", "working"} for row in catalog_rows),
                 "fills": dict(sorted(Counter(str(row.get("status") or "unknown") for row in playbook_fills).items())),
+                "live_intents": dict(sorted(live_statuses.items())),
+                "live_working_intents_current": live_working,
+                "unexpected_broker_effects": unexpected,
                 "primary_blockers": dict(
                     sorted(
                         Counter(
