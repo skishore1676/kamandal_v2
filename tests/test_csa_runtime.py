@@ -270,6 +270,14 @@ def test_live_stage_routes_one_intent_to_guarded_ledger_without_broker_submissio
             {"stage_approved_pending_submit"}
         )
     ) == 1
+    scorecard = build_csa_scorecard(database, trading_date="2026-08-08")
+    experiment = scorecard["experiments"][0]
+    assert scorecard["evidence_status"] == "COLLECTING"
+    assert scorecard["zero_broker_effect"] is False
+    assert scorecard["zero_unexpected_broker_effect"] is True
+    assert scorecard["unexpected_broker_effects"] == 0
+    assert experiment["stage"] == "pilot_live"
+    assert experiment["live_intents"] == {"stage_approved_pending_submit": 1}
 
 
 def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_path) -> None:

@@ -41,6 +41,7 @@ class ShadowScanResult:
     errors: tuple[str, ...]
     policy_hashes: tuple[str, ...]
     playbook_ids: tuple[str, ...]
+    playbook_stages: dict[str, str]
     execution_mode: str
     live_intent_count: int
 
@@ -313,6 +314,7 @@ def _run_csa_scan(
             )
             live_ticket.update(
                 {
+                    "created_at": started_at,
                     "csa_policy_hash": policy.policy_hash,
                     "csa_playbook_id": policy.playbook_id,
                     "csa_stage": policy.stage.value,
@@ -516,6 +518,7 @@ def _finish_scan(
         errors=tuple(errors),
         policy_hashes=tuple(sorted(policy.policy_hash for policy in policies)),
         playbook_ids=tuple(sorted(policy.playbook_id for policy in policies)),
+        playbook_stages={policy.playbook_id: policy.stage.value for policy in sorted(policies, key=lambda item: item.playbook_id)},
         execution_mode=execution_mode,
         live_intent_count=live_intent_count,
     )
