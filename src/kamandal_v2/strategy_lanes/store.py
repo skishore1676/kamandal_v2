@@ -243,7 +243,7 @@ class CsaStore:
                 ORDER BY i.created_at, i.id
                 """
             ).fetchall()
-        return [(_ticket_from_payload(json.loads(row["payload"])), int(row["last_attempt"])) for row in rows]
+        return [(strategy_ticket_from_payload(json.loads(row["payload"])), int(row["last_attempt"])) for row in rows]
 
     def rows(self, table: str) -> list[dict[str, Any]]:
         if table not in CSA_TABLES:
@@ -275,7 +275,7 @@ def _lifecycle_from_payload(payload: dict[str, Any]) -> LifecycleState:
     )
 
 
-def _ticket_from_payload(payload: dict[str, Any]) -> StrategyTicket:
+def strategy_ticket_from_payload(payload: dict[str, Any]) -> StrategyTicket:
     from kamandal_v2.strategy_lanes.models import LaneId
 
     return StrategyTicket(

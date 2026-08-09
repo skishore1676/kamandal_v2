@@ -895,6 +895,7 @@ def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_
     })
     store.save_live_order_intent(ticket, status="stage_approved_pending_submit")
     monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": []})
+    monkeypatch.setattr("kamandal_v2.live.execution.load_daily_policy_snapshot", lambda _config: object())
     monkeypatch.setattr(
         "kamandal_v2.live.execution._stage_ticket_authorization",
         lambda _ticket, _tables: (True, "stage_authorization_current"),
@@ -908,7 +909,7 @@ def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_
     assert executed["results"][0]["status"] == "dry_run"
 
 
-def test_live_execute_blocks_stage_ticket_when_sheet_authorization_is_revoked(tmp_path, monkeypatch) -> None:
+def test_live_execute_blocks_stage_ticket_when_daily_snapshot_is_missing(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     candidate = _ticket_candidate("csa_candidate", "csa_idea", "MSFT")
     plan = type("StagePlan", (), {"plan_id": "csa_lifecycle", "plan_rank": 1})()
@@ -927,7 +928,7 @@ def test_live_execute_blocks_stage_ticket_when_sheet_authorization_is_revoked(tm
 
     assert executed["source"] == "stage_authorized_ledger"
     assert executed["results"] == [
-        {"status": "blocked", "reason": "blocked_stage_authorization_policy_unavailable"}
+        {"status": "blocked", "reason": "blocked_daily_policy_snapshot:FileNotFoundError"}
     ]
 
 

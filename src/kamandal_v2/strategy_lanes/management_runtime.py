@@ -1,4 +1,4 @@
-"""Broker-inert CSA lifecycle management orchestration."""
+"""Shared shadow and guarded-live CSA lifecycle management orchestration."""
 
 from __future__ import annotations
 
@@ -13,13 +13,15 @@ from kamandal_v2.live.execution import (
     PENDING_TICKET_STATUSES,
     REPLACE_WAITING_CANCEL,
 )
+from kamandal_v2.live.orders import build_csa_live_ticket
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.planner.engine import _contract_key, _market_provider, _open_live_contract_keys
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.diagonal import build_diagonal_short_leg_ticket
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
-from kamandal_v2.strategy_lanes.models import ActionType, LaneId, LifecycleState, SourceMode
+from kamandal_v2.strategy_lanes.daily_policy import load_daily_policy_snapshot, policy_tables_hash
+from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode
 from kamandal_v2.strategy_lanes.operator_policy import load_csa_operator_policy
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.registry import lifecycle_registry
@@ -37,7 +39,11 @@ class ManagementRunResult:
     lifecycle_count: int
     selected_actions: dict[str, int]
     filled_actions: int
+    live_intent_count: int
     errors: tuple[str, ...]
+    execution_mode: str
+    policy_snapshot_date: str
+    policy_snapshot_hash: str
 
     @property
     def ok(self) -> bool:
@@ -56,13 +62,75 @@ def run_csa_shadow_management(
     market: Any | None = None,
     observed_at: str | None = None,
 ) -> ManagementRunResult:
+    return _run_csa_management(
+        config,
+        sqlite_path=sqlite_path,
+        provider=provider,
+        tables=tables,
+        market=market,
+        observed_at=observed_at,
+        execution_mode="shadow",
+    )
+
+
+def run_csa_live_management(
+    config: dict[str, Any],
+    *,
+    sqlite_path: str = "data/kamandal_v2.db",
+    provider: str = "public",
+    tables: dict[str, list[dict[str, Any]]] | None = None,
+    market: Any | None = None,
+    observed_at: str | None = None,
+) -> ManagementRunResult:
+    """Stage reusable live close, roll, and adjustment tickets for guarded execution."""
+
+    return _run_csa_management(
+        config,
+        sqlite_path=sqlite_path,
+        provider=provider,
+        tables=tables,
+        market=market,
+        observed_at=observed_at,
+        execution_mode="live",
+    )
+
+
+def _run_csa_management(
+    config: dict[str, Any],
+    *,
+    sqlite_path: str,
+    provider: str,
+    tables: dict[str, list[dict[str, Any]]] | None,
+    market: Any | None,
+    observed_at: str | None,
+    execution_mode: str,
+) -> ManagementRunResult:
     started_at = observed_at or utc_now()
-    run_id = f"csa:management:{started_at}"
+    run_id = f"csa:{execution_mode}-management:{started_at}"
     store = CsaStore(sqlite_path)
     baseline_store = LocalStore(sqlite_path, read_only=True)
-    lifecycles = store.open_lifecycles()
-    bundle = load_csa_operator_policy(config, tables=tables, read_at=started_at)
-    policies = {policy.playbook_id: policy for policy in bundle.policies}
+    writable_live_store = LocalStore(sqlite_path)
+    lifecycles = [
+        lifecycle
+        for lifecycle in store.open_lifecycles()
+        if str(lifecycle.metadata.get("execution_mode") or "shadow") == execution_mode
+    ]
+    if tables is None:
+        daily_policy = load_daily_policy_snapshot(config)
+        bundle = daily_policy.policy
+        policy_snapshot_date = daily_policy.trading_date
+        policy_snapshot_hash = daily_policy.snapshot_hash
+    else:
+        bundle = load_csa_operator_policy(config, tables=tables, read_at=started_at)
+        policy_snapshot_date = started_at[:10]
+        policy_snapshot_hash = policy_tables_hash(
+            {
+                "universe": [dict(row) for row in (tables.get("universe") or [])],
+                "playbooks": [dict(row) for row in (tables.get("playbooks") or [])],
+            }
+        )
+    allowed_stages = {CsaStage.SHADOW} if execution_mode == "shadow" else {CsaStage.PILOT_LIVE, CsaStage.LIVE}
+    policies = {policy.playbook_id: policy for policy in bundle.policies if policy.stage in allowed_stages}
     errors = list(bundle.errors)
     if market is None:
         wrapper = _market_provider(config, provider=provider, store=baseline_store)
@@ -82,6 +150,7 @@ def run_csa_shadow_management(
     registry = lifecycle_registry()
     counts: dict[str, int] = {}
     filled_actions = 0
+    live_intent_count = 0
     for lifecycle in lifecycles:
         playbook_id = str(lifecycle.metadata.get("playbook_id") or "")
         policy = policies.get(playbook_id)
@@ -105,7 +174,11 @@ def run_csa_shadow_management(
                 market,
                 sqlite_path,
                 observed_at=started_at,
-                ownership_clear=not bool(lifecycle_contracts & live_contracts),
+                ownership_clear=(
+                    True
+                    if execution_mode == "live"
+                    else not bool(lifecycle_contracts & live_contracts)
+                ),
                 working_order_conflict=underlying.upper() in working_underlyings,
             )
             store.save_lifecycle(observed_lifecycle)
@@ -116,25 +189,52 @@ def run_csa_shadow_management(
             if selected.action_type in {ActionType.HOLD, ActionType.BLOCK}:
                 continue
             ticket = _management_ticket(selected, observed_lifecycle, policy, active_legs, plans, underlying, started_at)
-            store.save_shadow_order_intent(ticket)
-            quotes = _ticket_quote_map(ticket, snapshot)
-            fill_policy = dict((policy.management.get("lifecycle") or {}).get("fill") or {})
-            adapter = ShadowExecutionAdapter()
-            final_fill = None
-            for attempt in range(int(float(fill_policy["max_attempts"])) + 1):
-                final_fill = adapter.simulate_fill(ticket, quotes, fill_policy, observed_at=started_at, attempt=attempt)
-                if final_fill.status in {"filled", "missed"}:
-                    break
-            if final_fill is not None:
-                store.save_shadow_fill(final_fill)
-                if final_fill.status == "filled":
-                    store.save_lifecycle(adapter.adopt_fill(observed_lifecycle, ticket, final_fill))
-                    filled_actions += 1
+            if execution_mode == "shadow":
+                store.save_shadow_order_intent(ticket)
+                quotes = _ticket_quote_map(ticket, snapshot)
+                fill_policy = dict((policy.management.get("lifecycle") or {}).get("fill") or {})
+                adapter = ShadowExecutionAdapter()
+                final_fill = None
+                for attempt in range(int(float(fill_policy["max_attempts"])) + 1):
+                    final_fill = adapter.simulate_fill(ticket, quotes, fill_policy, observed_at=started_at, attempt=attempt)
+                    if final_fill.status in {"filled", "missed"}:
+                        break
+                if final_fill is not None:
+                    store.save_shadow_fill(final_fill)
+                    if final_fill.status == "filled":
+                        store.save_lifecycle(adapter.adopt_fill(observed_lifecycle, ticket, final_fill))
+                        filled_actions += 1
+            else:
+                live_ticket = build_csa_live_ticket(ticket)
+                live_ticket.update(
+                    {
+                        "csa_policy_snapshot_date": policy_snapshot_date,
+                        "csa_policy_snapshot_hash": policy_snapshot_hash,
+                    }
+                )
+                if writable_live_store.live_order_intent(str(live_ticket["ticket_hash"])) is None:
+                    writable_live_store.save_live_order_intent(
+                        live_ticket,
+                        status="stage_approved_pending_submit",
+                    )
+                    live_intent_count += 1
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{lifecycle.lifecycle_id}: {type(exc).__name__}: {' '.join(str(exc).split())[:200]}")
     completed_at = utc_now()
-    result = ManagementRunResult(run_id, started_at, completed_at, len(lifecycles), counts, filled_actions, tuple(errors))
-    store.save_run_receipt({"id": run_id, "command": "csa-shadow-management", "status": "completed" if result.ok else "completed_with_errors", "started_at": started_at, "completed_at": completed_at, "result": result.to_dict()})
+    result = ManagementRunResult(
+        run_id,
+        started_at,
+        completed_at,
+        len(lifecycles),
+        counts,
+        filled_actions,
+        live_intent_count,
+        tuple(errors),
+        execution_mode,
+        policy_snapshot_date,
+        policy_snapshot_hash,
+    )
+    store.save_run_receipt({"id": run_id, "command": f"csa-{execution_mode}-management", "status": "completed" if result.ok else "completed_with_errors", "started_at": started_at, "completed_at": completed_at, "result": result.to_dict()})
     return result
 
 

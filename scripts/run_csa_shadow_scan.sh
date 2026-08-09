@@ -11,7 +11,6 @@ run_csa_shadow_scan() {
   mkdir -p data/logs data/reports/csa1
   local ideas_dir="${KAMANDAL_ACTIVE_IDEAS_DIR:-data/ideas/active}"
   prepare_current_ideas_dir "$ideas_dir" csa_shadow_scan
-  "$KAMANDAL_BIN" csa-validate-policy
   "$KAMANDAL_BIN" csa-shadow-scan \
     --db "${KAMANDAL_CSA_DB:-data/kamandal_v2.db}" \
     --provider "${KAMANDAL_MARKET_PROVIDER:-public}" \

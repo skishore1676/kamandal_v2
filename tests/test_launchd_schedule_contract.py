@@ -87,12 +87,14 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
     assert {(14, 45), (14, 50), (15, 5)}.issubset(weekday_one_times("live_management"))
     assert weekday_one_times("csa_shadow_scan") == {(9, 35), (12, 5), (14, 35)}
     assert weekday_one_times("csa_live_scan") == {(9, 40), (12, 10), (14, 40)}
+    assert weekday_one_times("csa_policy_snapshot") == {(9, 22)}
     assert (14, 45) in weekday_one_times("csa_shadow_management")
+    assert (14, 50) in weekday_one_times("csa_live_management")
     assert weekday_one_times("csa_shadow_scorecard") == {(15, 25)}
-    for suffix in ("csa_shadow_scan", "csa_live_scan", "csa_shadow_management", "csa_shadow_scorecard"):
+    for suffix in ("csa_policy_snapshot", "csa_shadow_scan", "csa_live_scan", "csa_shadow_management", "csa_live_management", "csa_shadow_scorecard"):
         payload = plistlib.loads((launchd_dir / f"com.kamandal.v2.{suffix}.plist").read_bytes())
         assert payload["Disabled"] is True
-    assert DISABLED_BY_DEFAULT == {"csa-shadow-scan", "csa-live-scan", "csa-shadow-management", "csa-shadow-scorecard"}
+    assert DISABLED_BY_DEFAULT == {"csa-policy-snapshot", "csa-shadow-scan", "csa-live-scan", "csa-shadow-management", "csa-live-management", "csa-shadow-scorecard"}
 
 
 def test_installer_can_render_only_csa_without_touching_baseline_plists(tmp_path: Path) -> None:
@@ -115,7 +117,9 @@ def test_installer_can_render_only_csa_without_touching_baseline_plists(tmp_path
 
     rendered = {path.name for path in launchd_dir.glob("*.plist")}
     assert rendered == {
+        "com.kamandal.v2.csa_policy_snapshot.plist",
         "com.kamandal.v2.csa_live_scan.plist",
+        "com.kamandal.v2.csa_live_management.plist",
         "com.kamandal.v2.csa_shadow_scan.plist",
         "com.kamandal.v2.csa_shadow_management.plist",
         "com.kamandal.v2.csa_shadow_scorecard.plist",

@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, PreflightResult, utc_now
-from kamandal_v2.live.orders import build_open_ticket
+from kamandal_v2.live.orders import build_csa_live_ticket
 from kamandal_v2.market.fixture import FixturePreflightClient
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.planner.candidate_builder import _apply_preflight_bpr
@@ -16,6 +16,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.admission import AdmissionContext, evaluate_admission
 from kamandal_v2.strategy_lanes.builders import build_lane_candidates
+from kamandal_v2.strategy_lanes.daily_policy import load_daily_policy_snapshot, policy_tables_hash
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
 from kamandal_v2.strategy_lanes.lane_common import propose_action
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode, StrategyOpportunity, stable_csa_id
@@ -44,6 +45,8 @@ class ShadowScanResult:
     playbook_stages: dict[str, str]
     execution_mode: str
     live_intent_count: int
+    policy_snapshot_date: str
+    policy_snapshot_hash: str
 
     @property
     def ok(self) -> bool:
@@ -122,7 +125,20 @@ def _run_csa_scan(
     run_id = stable_csa_id("scan-run", [execution_mode, started_at, provider])
     csa_store = CsaStore(sqlite_path)
     local_store = LocalStore(sqlite_path, read_only=True)
-    bundle = load_csa_operator_policy(config, tables=tables, read_at=started_at)
+    if tables is None:
+        daily_policy = load_daily_policy_snapshot(config)
+        bundle = daily_policy.policy
+        policy_snapshot_date = daily_policy.trading_date
+        policy_snapshot_hash = daily_policy.snapshot_hash
+    else:
+        bundle = load_csa_operator_policy(config, tables=tables, read_at=started_at)
+        policy_snapshot_date = started_at[:10]
+        policy_snapshot_hash = policy_tables_hash(
+            {
+                "universe": [dict(row) for row in (tables.get("universe") or [])],
+                "playbooks": [dict(row) for row in (tables.get("playbooks") or [])],
+            }
+        )
     errors = list(bundle.errors)
     # The Sheet may contain baseline, shadow, pilot, and live rows at the same
     # time. This command owns only the shadow route; other stages are handled by
@@ -137,6 +153,8 @@ def _run_csa_scan(
         return _finish_scan(
             csa_store, run_id, started_at, selected_policies, (), 0, 0, 0, errors,
             execution_mode=execution_mode, live_intent_count=0,
+            policy_snapshot_date=policy_snapshot_date,
+            policy_snapshot_hash=policy_snapshot_hash,
         )
 
     if market is not None:
@@ -219,6 +237,17 @@ def _run_csa_scan(
         for ticket in active_stage_intents
         if ticket.get("csa_policy_hash") and ticket.get("csa_playbook_id")
     )
+    pilot_playbooks_used = {
+        str(ticket.get("csa_playbook_id") or "")
+        for ticket in local_store.live_order_intents_by_type("open")
+        if ticket.get("csa_policy_hash")
+        and str(ticket.get("csa_policy_snapshot_date") or "") == policy_snapshot_date
+    }
+    pilot_playbooks_used.update(
+        str(item.metadata.get("playbook_id") or "")
+        for item in csa_store.open_lifecycles()
+        if str(item.metadata.get("execution_mode") or "") == "live"
+    )
     open_live_contracts = _open_live_contract_keys(local_store)
     for opportunity in opportunities:
         csa_store.save_opportunity(opportunity, scan_run_id=run_id)
@@ -255,7 +284,11 @@ def _run_csa_scan(
             continue
         admitted_count += 1
         candidate, score, preflight_result = sorted(admitted, key=lambda item: (-item[1].score, item[0].candidate_id))[0]
-        if execution_mode == "live" and live_intent_count >= 1:
+        if (
+            execution_mode == "live"
+            and policy.stage is CsaStage.PILOT_LIVE
+            and policy.playbook_id in pilot_playbooks_used
+        ):
             continue
         lifecycle = LifecycleState(
             lifecycle_id=stable_csa_id("lifecycle", [opportunity.opportunity_id, candidate.candidate_id]),
@@ -276,6 +309,9 @@ def _run_csa_scan(
                 "bpr": candidate.estimated_bpr,
                 "bpr_source": (preflight_result.raw or {}).get("bpr_source") or "local_fallback",
                 "policy": policy.to_dict(),
+                "execution_mode": execution_mode,
+                "policy_snapshot_date": policy_snapshot_date,
+                "policy_snapshot_hash": policy_snapshot_hash,
             },
         )
         csa_store.save_lifecycle(lifecycle)
@@ -308,10 +344,7 @@ def _run_csa_scan(
                 csa_store.save_lifecycle(replace(lifecycle, status="entry_missed", updated_at=started_at))
         else:
             candidate.preflight = preflight_result
-            live_ticket = build_open_ticket(
-                _StagePlan(lifecycle.lifecycle_id),
-                candidate,
-            )
+            live_ticket = build_csa_live_ticket(ticket)
             live_ticket.update(
                 {
                     "created_at": started_at,
@@ -319,6 +352,9 @@ def _run_csa_scan(
                     "csa_playbook_id": policy.playbook_id,
                     "csa_stage": policy.stage.value,
                     "csa_lifecycle_id": lifecycle.lifecycle_id,
+                    "csa_strategy_ticket": ticket.to_dict(),
+                    "csa_policy_snapshot_date": policy_snapshot_date,
+                    "csa_policy_snapshot_hash": policy_snapshot_hash,
                     "stage_authorized": True,
                     "pilot_contract_cap": 1 if policy.stage is CsaStage.PILOT_LIVE else None,
                 }
@@ -330,6 +366,8 @@ def _run_csa_scan(
                 status="stage_approved_pending_submit",
             )
             live_intent_count += 1
+            if policy.stage is CsaStage.PILOT_LIVE:
+                pilot_playbooks_used.add(policy.playbook_id)
             open_csa_keys.add((opportunity.underlying, policy.playbook_id))
     return _finish_scan(
         csa_store,
@@ -343,14 +381,9 @@ def _run_csa_scan(
         errors,
         execution_mode=execution_mode,
         live_intent_count=live_intent_count,
+        policy_snapshot_date=policy_snapshot_date,
+        policy_snapshot_hash=policy_snapshot_hash,
     )
-
-
-@dataclass(frozen=True, slots=True)
-class _StagePlan:
-    plan_id: str
-    plan_rank: int = 1
-
 
 def _advance_working_orders(
     store: CsaStore,
@@ -503,6 +536,8 @@ def _finish_scan(
     *,
     execution_mode: str,
     live_intent_count: int,
+    policy_snapshot_date: str,
+    policy_snapshot_hash: str,
 ) -> ShadowScanResult:
     completed_at = utc_now()
     opportunity_count = len(tuple(opportunities))
@@ -521,6 +556,8 @@ def _finish_scan(
         playbook_stages={policy.playbook_id: policy.stage.value for policy in sorted(policies, key=lambda item: item.playbook_id)},
         execution_mode=execution_mode,
         live_intent_count=live_intent_count,
+        policy_snapshot_date=policy_snapshot_date,
+        policy_snapshot_hash=policy_snapshot_hash,
     )
     payload = {"id": run_id, "lane": "all", "status": "completed" if result.ok else "completed_with_errors", "policy_hash": "multiple", **result.to_dict()}
     store.save_scan_run(payload)

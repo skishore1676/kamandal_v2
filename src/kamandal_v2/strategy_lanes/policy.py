@@ -194,13 +194,6 @@ def compile_csa_policy(
     lifecycle = management.get("lifecycle")
     if not isinstance(lifecycle, dict) or not lifecycle:
         raise PolicyError(f"{_row_name(row)}: management_policy_json.lifecycle must be a non-empty object")
-    if stage in {CsaStage.PILOT_LIVE, CsaStage.LIVE}:
-        live_management_mode = str(lifecycle.get("live_management_mode") or "").strip().lower()
-        if live_management_mode != "close_only":
-            raise PolicyError(
-                f"{_row_name(row)}: pilot_live/live requires "
-                "management_policy_json.lifecycle.live_management_mode=close_only"
-            )
     management = {
         **management,
         "score_weights": {

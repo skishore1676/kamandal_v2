@@ -1,6 +1,6 @@
 # Strategy Promotion Loop
 
-Status: source contract and guarded live adapter implemented; deployment is operator-gated
+Status: source contract implemented; oldmac deployment tracked by release readback
 
 ## Ownership
 
@@ -8,8 +8,8 @@ Status: source contract and guarded live adapter implemented; deployment is oper
   execution adapters, safety validation, and factual receipts.
 - **Google Sheet owns composition and stage:** each playbook row selects parameters,
   source mode, and exactly one of `baseline`, `shadow`, `pilot_live`, or `live`.
-- **TradeLab owns recommendations:** it consumes Kamandal evidence and proposes
-  `continue_shadow`, `modify`, `promote_to_pilot_review`, or `demote_to_shadow`.
+- **TradeLab owns recommendations:** its weekly Obsidian brief consumes Kamandal
+  scorecards and proposes continue, modify, demote, or promotion review.
 - **The operator owns effects:** recommendations never change a Sheet cell or authorize
   an order. Lathi may project the Board but does not own trading semantics.
 
@@ -19,20 +19,22 @@ Status: source contract and guarded live adapter implemented; deployment is oper
 | --- | --- | --- |
 | blank / `baseline` | established planner and live pipeline | existing approval policy |
 | `shadow` | strategy capability engine + shadow adapter | CSA tables only; no broker effect |
-| `pilot_live` | strategy capability engine + guarded live adapter | one staged intent per scan, one-contract cap |
-| `live` | strategy capability engine + guarded live adapter | one staged intent per scan, normal Sheet/live limits |
+| `pilot_live` | strategy capability engine + guarded live adapter | at most one new lifecycle per playbook per trading day; one contract |
+| `live` | strategy capability engine + guarded live adapter | normal Sheet sizing and existing live risk limits |
 
-Shadow and live scans are separate scheduled commands. A live scan never calls the
-broker: it writes one stage-authorized intent to the existing live ledger. The existing
-live submitter then re-reads the Sheet and requires the same playbook, stage, and policy
-hash before applying health, BPR, concentration, preflight, submission-window, and
-serialization gates. Demoting or changing the row therefore revokes a pending intent.
+At 09:22 CT, Kamandal reads `universe` and `playbooks` once and writes an immutable,
+dated strategy-policy snapshot. Shadow entry, pilot/live entry, shadow management,
+live management, and final staged-intent authorization all use that same snapshot for
+the trading day. A Sheet edit therefore takes effect on the next trading day's
+snapshot; it does not rewrite the state beneath an order already staged today.
 
-The first live-management contract is deliberately `close_only`. Every row intended
-for `pilot_live` or `live` must already contain
-`management_policy_json.lifecycle.live_management_mode=close_only`; otherwise policy
-compilation fails closed. This keeps a stage flip honest while live CSA adjustment
-actions remain a separate future capability.
+The live scan itself never calls the broker. It writes stage-authorized tickets to the
+existing live ledger. The existing guarded submitter still owns current health, BPR,
+concentration, broker preflight, submission windows, serialized submission, and order
+reconciliation. A complete broker fill advances the same app-owned lifecycle used in
+shadow. Live lifecycle management can close verticals/calendars, close or roll
+strangles, and close or roll the short leg of diagonals through the same typed ticket
+contract; there is no blanket `close_only` promotion requirement.
 
 ## Evidence and recommendation contract
 
@@ -46,11 +48,11 @@ That proposal is machinery readiness only and explicitly carries no alpha claim.
 
 1. Publish and deploy tested source at a session boundary, then read back the exact
    oldmac commit and monitored job health.
-2. Migrate existing playbook rows so every row has one unambiguous stage and every CSA
-   row carries the close-only live-management contract. Do not reuse
-   low-IV calendar rows for an earnings experiment; create separately identified rows.
+2. Keep every playbook row at one unambiguous stage. Reuse a row when the idea is only
+   a parameter/policy variant; add code only for a genuinely new structure or lifecycle
+   capability.
 3. Run three or more natural shadow sessions and let TradeLab publish its recommendation.
-4. If the operator accepts a pilot recommendation, confirm there are no working shadow
-   orders for that policy and change only `csa_stage` to `pilot_live`.
+4. If the operator accepts a pilot recommendation, change only `csa_stage` to
+   `pilot_live`. Kamandal consumes it in the next trading-day snapshot.
 5. Treat a later change to `live` as a separate operator decision. TradeLab never writes
    the stage and neither recommendation state can place an order.
