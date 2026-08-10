@@ -9,6 +9,7 @@ from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, PortfolioS
 from kamandal_v2.live.orders import build_csa_live_ticket
 from kamandal_v2.market.fixture import FixturePreflightClient
 from kamandal_v2.market.public import occ_symbol
+from kamandal_v2.market.tastytrade import TastytradeAdapter
 from kamandal_v2.planner.candidate_builder import _apply_preflight_bpr
 from kamandal_v2.planner.engine import (
     _candidate_contract_overlap,
@@ -169,6 +170,7 @@ def _run_csa_scan(
         snapshotting_market = _market_provider(config, provider=provider, store=local_store)
         resolved_market = getattr(snapshotting_market, "inner", snapshotting_market)
     resolved_preflight = preflight or (_preflight_client(resolved_market) if provider == "public" else FixturePreflightClient())
+    shadow_bpr_preflight = _shadow_bpr_preflight(config, provider=provider, execution_mode=execution_mode)
     snapshots: dict[str, ChainSnapshot] = {}
     observations: dict[str, dict[str, Any]] = {}
 
@@ -281,7 +283,13 @@ def _run_csa_scan(
         candidate_count += len(candidates)
         admitted: list[tuple[Candidate, ScoreResult, PreflightResult]] = []
         for candidate in candidates:
-            preflight_result = resolved_preflight.preflight(candidate)
+            preflight_result = _resolve_preflight(
+                candidate,
+                policy,
+                resolved_preflight.preflight(candidate),
+                shadow_bpr_preflight=shadow_bpr_preflight,
+                execution_mode=execution_mode,
+            )
             _apply_preflight_bpr(candidate, preflight_result)
             score = score_opportunity(policy, _score_components(candidate))
             context = _admission_context(
@@ -405,6 +413,48 @@ def _run_csa_scan(
         live_intent_count=live_intent_count,
         policy_snapshot_date=policy_snapshot_date,
         policy_snapshot_hash=policy_snapshot_hash,
+    )
+
+
+def _shadow_bpr_preflight(config: dict[str, Any], *, provider: str, execution_mode: str) -> Any | None:
+    if execution_mode != "shadow" or provider != "public":
+        return None
+    adapter = TastytradeAdapter(config)
+    return adapter if adapter.available() else None
+
+
+def _resolve_preflight(
+    candidate: Candidate,
+    policy: CsaPolicy,
+    primary: PreflightResult,
+    *,
+    shadow_bpr_preflight: Any | None,
+    execution_mode: str,
+) -> PreflightResult:
+    if primary.ok or execution_mode != "shadow" or policy.lane is not LaneId.SHORT_STRANGLE:
+        return primary
+    raw = primary.raw if isinstance(primary.raw, dict) else {}
+    public_error = raw.get("public_api_error") if isinstance(raw.get("public_api_error"), dict) else {}
+    if int(public_error.get("code") or 0) != 159:
+        return primary
+
+    secondary = shadow_bpr_preflight.preflight(candidate) if shadow_bpr_preflight is not None else None
+    bpr = float((secondary.bpr if secondary is not None else None) or candidate.estimated_bpr or 0.0)
+    if bpr <= 0:
+        return primary
+    secondary_raw = secondary.raw if secondary is not None and isinstance(secondary.raw, dict) else {}
+    return PreflightResult(
+        ok=True,
+        bpr=round(bpr, 2),
+        message="shadow BPR estimated after Public Level 4 entitlement rejection",
+        raw={
+            "bpr_source": "broker_preflight" if secondary_raw.get("response") else "local_fallback",
+            "bpr_broker": "tastytrade" if secondary_raw.get("response") else "local",
+            "public_live_eligibility": "level_4_required",
+            "public_error_code": 159,
+            "secondary_preflight_ok": secondary.ok if secondary is not None else None,
+            "shadow_only_warning": "public_short_strangle_level_4_required",
+        },
     )
 
 def _advance_working_orders(

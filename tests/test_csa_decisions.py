@@ -200,6 +200,15 @@ def test_idea_source_normalizes_without_calling_external_effects() -> None:
     assert opportunity.confidence is None
 
 
+def test_pending_automated_idea_remains_source_eligible() -> None:
+    policy = _policy("call_diagonal")
+    pending = Idea("idea-pending", "llm_transcript:x_timeline.txt", "XYZ", "bullish", operator_status="pending")
+    rejected = Idea("idea-rejected", "llm_transcript:x_timeline.txt", "XYZ", "bullish", operator_status="rejected")
+
+    assert idea_opportunity(pending, policy, observed_at="2026-08-08T12:00:00Z").evidence["source_approved"] is True
+    assert idea_opportunity(rejected, policy, observed_at="2026-08-08T12:00:00Z").evidence["source_approved"] is False
+
+
 def test_sheet_weighted_score_is_transparent_and_deterministic() -> None:
     policy = _policy()
     components = {"credit": 80, "pop": 50, "liquidity": 50, "spread": 50}

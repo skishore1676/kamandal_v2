@@ -37,6 +37,12 @@ but live buying power, live contract ownership, and live working orders do not v
 broker-inert shadow observation. Pilot/live stages retain the real account and broker
 safety gates.
 
+For a Public short strangle, Public error 159 is evidence that the account lacks the
+Level 4 designation required for its uncovered short legs, not an order-shape retry.
+Pilot/live therefore fail closed. A shadow scan may ask Tastytrade's order dry-run for
+a BPR estimate and, if needed, use the conservative local fallback; both are recorded
+as shadow evidence and neither makes the playbook executable at Public.
+
 At 15:25 CT, the CSA scorecard job writes two app-owned evidence products:
 
 - a daily machinery scorecard covering scans, admissions, fills, management actions,

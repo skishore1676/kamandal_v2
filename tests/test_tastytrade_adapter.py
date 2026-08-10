@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.market.tastytrade import TastytradeAdapter, parse_tasty_option_symbol, tasty_option_symbol
@@ -10,7 +12,7 @@ class _Response:
         self._payload = payload
         self.status_code = status_code
         self.ok = 200 <= status_code <= 399
-        self.text = "{}"
+        self.text = json.dumps(payload)
         self.reason = "OK"
 
     def json(self) -> dict:
@@ -149,6 +151,51 @@ def test_tastytrade_preflight_builds_open_option_order(tmp_path) -> None:
     assert request["price-effect"] == "Credit"
     assert request["legs"][0]["action"] == "Sell to Open"
     assert request["legs"][0]["symbol"] == "QQQ   260619C00465000"
+
+
+def test_tastytrade_preflight_preserves_bpr_from_failed_margin_check(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+
+    class MarginFailureSession(_FakeSession):
+        def request(self, method: str, url: str, **kwargs) -> _Response:
+            self.requests.append({"method": method, "url": url, **kwargs})
+            if url.endswith("/customers/me/accounts"):
+                return _Response({"data": {"items": [{"account": {"account-number": "5WT00000"}}]}})
+            return _Response(
+                {
+                    "data": {"buying-power-effect": {"change-in-buying-power": "3922.61658"}},
+                    "error": {
+                        "errors": [
+                            {
+                                "code": "margin_check_failed_with_flags",
+                                "message": "Account does not have sufficient buying power.",
+                            }
+                        ]
+                    },
+                },
+                status_code=422,
+            )
+
+    adapter._session = MarginFailureSession()
+    candidate = Candidate(
+        candidate_id="candidate",
+        idea_id="idea",
+        underlying="QQQ",
+        playbook_id="short_strangle",
+        structure="short_strangle",
+        legs=[_leg()],
+        net_credit=1.25,
+        estimated_bpr=125.0,
+        greeks=Greeks(),
+        liquidity_score=1.0,
+        score=0.0,
+    )
+
+    result = adapter.preflight(candidate)
+
+    assert result.ok is False
+    assert result.bpr == 3922.61658
+    assert result.raw["response"]["error"]["errors"][0]["code"] == "margin_check_failed_with_flags"
 
 
 def test_tastytrade_market_metrics_use_symbols_query(tmp_path) -> None:

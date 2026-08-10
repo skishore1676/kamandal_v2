@@ -200,10 +200,12 @@ class PublicAdapter:
                 except Exception as retry_exc:  # noqa: BLE001
                     message = f"Public preflight failed: {_safe_public_error(retry_exc)}"
                     raw = {"source": "public", "first_error": _safe_public_error(exc)}
+                    raw.update(_public_api_error_raw(message))
                     raw.update(_public_invalid_order_raw(message))
                     return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=message, raw=raw)
             message = f"Public preflight failed: {_safe_public_error(exc)}"
             raw = {"source": "public"}
+            raw.update(_public_api_error_raw(message))
             raw.update(_public_invalid_order_raw(message))
             return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=message, raw=raw)
 
@@ -606,6 +608,25 @@ def _safe_public_error(exc: Exception) -> str:
 def _public_invalid_order_raw(message: str) -> dict[str, Any]:
     details = _public_invalid_order_details(message)
     return {"public_invalid_order": details} if details else {}
+
+
+def _public_api_error_raw(message: str) -> dict[str, Any]:
+    match = re.search(r"status=(\d+):\s*(\{.*\})\s*$", message)
+    if not match:
+        return {}
+    try:
+        payload = json.loads(match.group(2))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        "public_api_error": {
+            "http_status": int(match.group(1)),
+            "code": payload.get("code"),
+            "message": payload.get("message"),
+        }
+    }
 
 
 def _public_invalid_order_details(message: str) -> dict[str, Any]:
