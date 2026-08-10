@@ -184,6 +184,9 @@ class TastytradeAdapter:
             response = self._post(f"/accounts/{self._account_number()}/orders/dry-run", payload)
             return _preflight_result(payload, response, default_bpr=candidate.estimated_bpr)
         except Exception as exc:  # noqa: BLE001
+            response = _api_error_payload(exc)
+            if response:
+                return _preflight_result(payload, response, default_bpr=candidate.estimated_bpr)
             return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"tastytrade preflight failed: {exc}", raw={"source": "tastytrade"})
 
     def preflight_ticket(self, ticket: dict[str, Any]) -> PreflightResult:
@@ -393,6 +396,17 @@ def _preflight_result(payload: dict[str, Any], response: dict[str, Any], *, defa
     if errors:
         return PreflightResult(ok=False, bpr=abs(bpr), message="tastytrade preflight returned errors", raw={"request": payload, "response": response})
     return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="tastytrade preflight ok", raw={"request": payload, "response": response})
+
+
+def _api_error_payload(exc: Exception) -> dict[str, Any]:
+    match = re.search(r"status=\d+:\s*(\{.*\})\s*$", str(exc))
+    if not match:
+        return {}
+    try:
+        payload = json.loads(match.group(1))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _order_response(response: dict[str, Any]) -> dict[str, Any]:

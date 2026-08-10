@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from typing import Any
 
@@ -49,6 +50,7 @@ def build_lane_candidates(
     elif policy.lane is LaneId.EARNINGS_CALENDAR:
         if opportunity.event_context.get("state") not in {"known", "confirmed"}:
             return ()
+        playbook = _event_relative_playbook(playbook, opportunity, policy)
         if playbook.structure == "call_calendar":
             candidates = _call_calendar_candidates(idea, playbook, quotes, config=_builder_config(policy))
         elif playbook.structure == "put_calendar":
@@ -74,6 +76,32 @@ def build_lane_candidates(
                 ]
             )
     return tuple(candidates)
+
+
+def _event_relative_playbook(
+    playbook: Playbook,
+    opportunity: StrategyOpportunity,
+    policy: CsaPolicy,
+) -> Playbook:
+    event_date = date.fromisoformat(str(opportunity.event_context["event_date"]))
+    observed_date = date.fromisoformat(opportunity.observed_at[:10])
+    event_dte = max((event_date - observed_date).days, 0)
+    expiration_policy = (policy.management.get("lifecycle") or {}).get("event_expiration") or {}
+    near_after_days = int(float(expiration_policy["near_before_days"]))
+    far_after_days = int(float(expiration_policy["far_after_days"]))
+    near_min = event_dte
+    near_max = event_dte + near_after_days
+    far_min = near_min + 1
+    far_max = event_dte + far_after_days
+    if far_max < far_min:
+        raise ValueError(f"{policy.playbook_id}: event expiration window has no far expiration")
+    return replace(
+        playbook,
+        dte_min=near_min,
+        dte_max=near_max,
+        long_dte_min=far_min,
+        long_dte_max=far_max,
+    )
 
 
 def _event_relative_calendars(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date, timedelta
 
 from kamandal_v2.domain.models import ChainSnapshot, Idea, OptionLeg, OptionQuote
@@ -215,6 +216,27 @@ def test_existing_builders_create_all_four_csa_lane_entries() -> None:
     assert {item.structure for item in diagonal_candidates} == {"call_diagonal"}
     assert {item.structure for item in calendar_candidates} == {"call_calendar"}
     assert all(any(reason.startswith("csa_policy_hash=") for reason in item.reasons) for item in (*strangle_candidates, *vertical_candidates, *diagonal_candidates, *calendar_candidates))
+
+
+def test_earnings_calendar_uses_event_relative_expirations_for_tomorrow_event() -> None:
+    policy = _policy("call_calendar")
+    today = date.today()
+    opportunity = replace(
+        _opportunity(policy, event_state="confirmed"),
+        observed_at=f"{today.isoformat()}T12:00:00Z",
+        event_context={"state": "confirmed", "event_date": (today + timedelta(days=1)).isoformat()},
+    )
+    candidates = build_lane_candidates(
+        opportunity,
+        policy,
+        _chain([_quote("call", 100, 4, 0.5, 2.0, 2.1), _quote("call", 100, 18, 0.5, 4.0, 4.2)]),
+    )
+
+    assert len(candidates) == 1
+    assert [leg.expiration for leg in candidates[0].legs] == [
+        (today + timedelta(days=4)).isoformat(),
+        (today + timedelta(days=18)).isoformat(),
+    ]
 
 
 def test_diagonal_blank_sheet_width_is_derived_from_the_quote_grid() -> None:

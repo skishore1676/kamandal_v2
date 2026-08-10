@@ -32,7 +32,10 @@ def idea_opportunity(
         policy_hash=policy.policy_hash,
         evidence={
             "idea": idea.to_dict(),
-            "source_approved": idea.operator_status == "approved",
+            # Match the established planner contract: current automated ideas
+            # remain eligible while pending operator review. The playbook stage,
+            # not a second per-idea approval gate, owns shadow/live routing.
+            "source_approved": idea.operator_status in {"approved", "pending"},
             "source_fresh": True,
         },
         event_context=dict(event_context or {}),

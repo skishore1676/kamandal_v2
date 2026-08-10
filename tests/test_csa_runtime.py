@@ -9,7 +9,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
 from kamandal_v2.strategy_lanes.management_runtime import run_csa_live_management, run_csa_shadow_management
 from kamandal_v2.strategy_lanes.management_runtime import _cooldown_elapsed, _strangle_roll_plans
-from kamandal_v2.domain.models import OptionLeg
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, PreflightResult
 from kamandal_v2.strategy_lanes.reports import (
     build_csa_scorecard,
     build_csa_weekly_economics,
@@ -17,8 +17,9 @@ from kamandal_v2.strategy_lanes.reports import (
     write_csa_scorecard,
     write_csa_weekly_economics,
 )
-from kamandal_v2.strategy_lanes.runtime import run_csa_live_scan, run_csa_shadow_scan
+from kamandal_v2.strategy_lanes.runtime import _resolve_preflight, run_csa_live_scan, run_csa_shadow_scan
 from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
+from kamandal_v2.strategy_lanes.operator_policy import load_csa_operator_policy
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.live.execution import _adopt_csa_live_fill, execute_live_approved
 
@@ -73,6 +74,59 @@ def _tables():  # noqa: ANN202
         ],
         "daily_plan": [],
     }
+
+
+def test_public_level_four_rejection_uses_tastytrade_bpr_in_shadow_only() -> None:
+    policy = load_csa_operator_policy({}, tables=_tables(), read_at="2026-08-10T12:00:00Z").policies[0]
+    candidate = Candidate(
+        candidate_id="candidate",
+        idea_id="idea",
+        underlying="XYZ",
+        playbook_id=policy.playbook_id,
+        structure="short_strangle",
+        legs=[],
+        net_credit=2.0,
+        estimated_bpr=3100.0,
+        greeks=Greeks(),
+        liquidity_score=1.0,
+        score=0.0,
+    )
+    public = PreflightResult(
+        ok=False,
+        bpr=3100.0,
+        message="Level 4 required",
+        raw={"public_api_error": {"http_status": 400, "code": 159}},
+    )
+
+    class TastytradeDryRun:
+        def preflight(self, _candidate):  # noqa: ANN001, ANN202
+            return PreflightResult(
+                ok=False,
+                bpr=3922.62,
+                message="margin check failed",
+                raw={"response": {"data": {"buying-power-effect": {"change-in-buying-power": "3922.62"}}}},
+            )
+
+    shadow = _resolve_preflight(
+        candidate,
+        policy,
+        public,
+        shadow_bpr_preflight=TastytradeDryRun(),
+        execution_mode="shadow",
+    )
+    live = _resolve_preflight(
+        candidate,
+        policy,
+        public,
+        shadow_bpr_preflight=TastytradeDryRun(),
+        execution_mode="live",
+    )
+
+    assert shadow.ok is True
+    assert shadow.bpr == 3922.62
+    assert shadow.raw["bpr_broker"] == "tastytrade"
+    assert shadow.raw["public_live_eligibility"] == "level_4_required"
+    assert live is public
 
 
 def _baseline_counts(database):  # noqa: ANN001, ANN202

@@ -62,9 +62,17 @@ records one migration identity, and requires `PRAGMA integrity_check=ok`.
 - The shadow adapter has no broker client and exposes no submit, replace, or
   cancel method.
 - Missing Sheet policy, market data, event evidence, quotes, BPR, ownership, or
-  reconciliation blocks new risk and remains visible in decisions/reports.
-- Public preflight is authoritative for short-strangle BPR. Local BPR may appear
-  only as labeled shadow fallback evidence.
+  reconciliation blocks new risk and remains visible in decisions/reports. Trusted
+  current-day automated ideas remain eligible while their operator status is
+  `pending`; an explicit rejection still blocks them.
+- Public error 159 on a short strangle means that Public requires Level 4 for the
+  uncovered short legs. It remains a hard pilot/live eligibility failure. In shadow,
+  Kamandal may use a labeled Tastytrade dry-run BPR estimate; if that service is
+  unavailable, the existing conservative local estimate remains the final labeled
+  fallback. Neither fallback authorizes a Public order.
+- Earnings-calendar near and far expirations are selected relative to the confirmed
+  event date and the row's `event_expiration` offsets. Generic playbook DTE bounds do
+  not override that event-specific lifecycle rule.
 - Duplicate underlying/playbook lifecycles and overlap with known live contracts
   are blocked before a ticket is created.
 - CSA launchd definitions are rendered disabled by default. Enabling them is a

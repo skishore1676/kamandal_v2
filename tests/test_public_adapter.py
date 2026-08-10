@@ -1,5 +1,5 @@
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
-from kamandal_v2.market.public import PublicAdapter, occ_symbol, parse_occ_symbol
+from kamandal_v2.market.public import PublicAdapter, _public_api_error_raw, occ_symbol, parse_occ_symbol
 from kamandal_v2.planner.engine import _preflight_client
 
 
@@ -256,3 +256,18 @@ def test_public_strangle_preflight_uses_broker_buying_power_requirement(tmp_path
     assert result.bpr == 1_275.50
     assert result.raw["broker_bpr_provided"] is True
     assert result.raw["bpr_source"] == "broker_preflight"
+
+
+def test_public_level_four_entitlement_error_is_structured() -> None:
+    raw = _public_api_error_raw(
+        'Public preflight failed: Public API POST /trading/<account>/preflight/multi-leg failed '
+        'status=400: {"code":159,"message":"Naked strategies require Level 4"}'
+    )
+
+    assert raw == {
+        "public_api_error": {
+            "http_status": 400,
+            "code": 159,
+            "message": "Naked strategies require Level 4",
+        }
+    }
