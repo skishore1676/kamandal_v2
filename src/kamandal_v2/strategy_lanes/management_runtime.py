@@ -113,7 +113,8 @@ def _run_csa_management(
     lifecycles = [
         lifecycle
         for lifecycle in store.open_lifecycles()
-        if str(lifecycle.metadata.get("execution_mode") or "shadow") == execution_mode
+        if lifecycle.status == "open"
+        and str(lifecycle.metadata.get("execution_mode") or "shadow") == execution_mode
     ]
     if tables is None:
         daily_policy = load_daily_policy_snapshot(config)

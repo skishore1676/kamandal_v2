@@ -668,6 +668,39 @@ def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_pat
     assert written.csv_path.exists()
 
 
+def test_shadow_management_skips_unfilled_proposed_lifecycles(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    market = FixtureMarketDataProvider(account_size=100_000)
+    scan = run_csa_shadow_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=_tables(),
+        market=market,
+        preflight=FixturePreflightClient(),
+        observed_at="2026-08-08T12:00:00Z",
+    )
+    management = run_csa_shadow_management(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=_tables(),
+        market=market,
+        observed_at="2026-08-08T12:15:00Z",
+    )
+
+    proposed = CsaStore(database, read_only=True).open_lifecycles()[0]
+
+    assert scan.filled_count == 0
+    assert proposed.status == "proposed"
+    assert proposed.active_legs == ()
+    assert management.ok
+    assert management.lifecycle_count == 0
+    assert management.selected_actions == {}
+
+
 def test_portfolio_hedge_source_uses_open_live_ledger_delta(tmp_path) -> None:
     database = tmp_path / "kamandal.db"
     baseline_store = LocalStore(database)
