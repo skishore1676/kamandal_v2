@@ -49,11 +49,21 @@ kamandal csa-migrate-db --db data/kamandal_v2.db
 kamandal csa-shadow-scan --db data/kamandal_v2.db --provider public --ideas data/ideas/active
 kamandal csa-shadow-management --db data/kamandal_v2.db --provider public
 kamandal csa-shadow-scorecard --db data/kamandal_v2.db --output-dir data/reports/csa1
+kamandal experiment-status --format json --db data/kamandal_v2.db --report-dir data/reports/csa1
 ```
 
 The migration command is a non-mutating dry run unless `--apply` is supplied.
 Applying it creates a SQLite backup and checksum, preserves every baseline table,
 records one migration identity, and requires `PRAGMA integrity_check=ok`.
+
+`experiment-status` is a read-only projection of the existing scorecard and weekly
+economics products. It does not refresh the Sheet, run a scan, mutate a stage,
+submit or reconcile an order, or make a recommendation. TradeLab consumes this
+packet for advisory analysis; the operator remains the only stage authority.
+For a bounded manual handoff, capture its stdout as
+`data/reports/csa1/csa1_experiment_status_YYYY-MM-DD.json`; the existing TradeLab
+collector prefers that dated packet and otherwise retains its legacy scorecard
+fallback.
 
 ## Isolation And Failure Behavior
 

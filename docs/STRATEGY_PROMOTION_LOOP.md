@@ -63,6 +63,13 @@ economic packet contains at least one closed lifecycle plus complete positive to
 P&L. The proposal appears in the weekly operator brief; only the operator may change
 the Google Sheet.
 
+For cross-application consumption, Kamandal exposes the same facts through the
+read-only command `kamandal experiment-status --format json`. The command adapts the
+existing `kamandal.strategy_experiment_evidence.v1` and
+`kamandal.strategy_weekly_economics.v1` products into
+`tradelab.app_experiment_status.v1`; it does not create a second experiment catalog,
+compiler, database, scheduler, or authoring surface.
+
 The live scan itself never calls the broker. It writes stage-authorized tickets to the
 existing live ledger. The existing guarded submitter still owns current health, BPR,
 concentration, broker preflight, submission windows, serialized submission, and order

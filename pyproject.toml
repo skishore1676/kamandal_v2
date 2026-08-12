@@ -20,7 +20,8 @@ dependencies = [
 agent-broker = { path = "../agent-broker", editable = true }
 
 [project.scripts]
-kamandal = "kamandal_v2.cli:main"
+kamandal = "kamandal_v2.entrypoint:main"
+kamandal-experiment-status = "kamandal_v2.experiment_status:main"
 
 [project.optional-dependencies]
 dev = [
