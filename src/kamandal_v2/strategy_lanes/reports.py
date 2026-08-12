@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import sqlite3
+import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -32,6 +34,12 @@ class WeeklyEconomicsWriteResult:
     json_path: Path
     markdown_path: Path
     csv_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class ExperimentStatusWriteResult:
+    report: dict[str, Any]
+    json_path: Path
 
 
 def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | None = None) -> dict[str, Any]:
@@ -326,6 +334,46 @@ def write_csa_weekly_economics(
         for row in report["economic_rows"]:
             writer.writerow({key: row.get(key) for key in writer.fieldnames})
     return WeeklyEconomicsWriteResult(report, json_path, markdown_path, csv_path)
+
+
+def write_csa_experiment_status(
+    sqlite_path: str | Path,
+    *,
+    output_dir: str | Path,
+    through_date: date | str | None = None,
+) -> ExperimentStatusWriteResult:
+    """Write the shared status packet atomically from the durable app reports."""
+
+    from kamandal_v2.experiment_status import build_experiment_status_from_paths
+
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    report = build_experiment_status_from_paths(
+        database=sqlite_path,
+        report_dir=target,
+        through=through_date,
+    )
+    day = report["as_of"]
+    json_path = target / f"csa1_experiment_status_{day}.json"
+    payload = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    temporary_path: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{json_path.name}.",
+            suffix=".tmp",
+            dir=target,
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, json_path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return ExperimentStatusWriteResult(report, json_path)
 
 
 def render_csa_weekly_economics(report: dict[str, Any]) -> str:

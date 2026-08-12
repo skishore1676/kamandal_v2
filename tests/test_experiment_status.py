@@ -6,11 +6,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from kamandal_v2 import cli
 from kamandal_v2.experiment_status import (
     STATUS_SCHEMA,
     build_experiment_status,
     build_experiment_status_from_paths,
     validate_experiment_status,
+)
+from kamandal_v2.strategy_lanes.reports import (
+    ScorecardWriteResult,
+    WeeklyEconomicsWriteResult,
+    write_csa_experiment_status,
 )
 
 
@@ -183,3 +189,89 @@ def test_status_command_is_read_only_and_does_not_import_legacy_cli(tmp_path: Pa
     assert payload["source_status"] == "unavailable"
     assert not database.exists()
     assert not report_dir.exists()
+
+
+def test_scorecard_status_writer_is_atomic_and_schema_valid(tmp_path: Path, monkeypatch) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    (report_dir / "csa1_scorecard_2026-08-12.json").write_text(
+        json.dumps(_card("2026-08-12")), encoding="utf-8"
+    )
+    (report_dir / "csa1_weekly_economics_2026-08-12.json").write_text(
+        json.dumps(_economics()), encoding="utf-8"
+    )
+
+    written = write_csa_experiment_status(
+        sqlite_path=tmp_path / "unused.db",
+        output_dir=report_dir,
+        through_date="2026-08-12",
+    )
+    payload = json.loads(written.json_path.read_text(encoding="utf-8"))
+    assert written.json_path.name == "csa1_experiment_status_2026-08-12.json"
+    assert payload["schema"] == STATUS_SCHEMA
+    assert payload["experiments"][0]["experiment_id"] == "short_strangle_high_iv"
+    assert not list(report_dir.glob("*.tmp"))
+
+    prior = written.json_path.read_text(encoding="utf-8")
+    def fail_builder(**_kwargs):
+        raise RuntimeError("status build failed")
+
+    monkeypatch.setattr(
+        "kamandal_v2.experiment_status.build_experiment_status_from_paths",
+        fail_builder,
+    )
+    try:
+        write_csa_experiment_status(
+            sqlite_path=tmp_path / "unused.db",
+            output_dir=report_dir,
+            through_date="2026-08-12",
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("status build failure should propagate")
+    assert written.json_path.read_text(encoding="utf-8") == prior
+
+
+def test_scorecard_command_emits_status_without_a_second_command(tmp_path: Path, monkeypatch, capsys) -> None:
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    scorecard = _card("2026-08-12")
+    economics = _economics()
+    scorecard_path = report_dir / "csa1_scorecard_2026-08-12.json"
+    economics_path = report_dir / "csa1_weekly_economics_2026-08-12.json"
+
+    def fake_scorecard(*_args, **_kwargs):
+        scorecard_path.write_text(json.dumps(scorecard), encoding="utf-8")
+        return ScorecardWriteResult(scorecard, scorecard_path, scorecard_path, scorecard_path)
+
+    def fake_economics(*_args, **_kwargs):
+        economics_path.write_text(json.dumps(economics), encoding="utf-8")
+        return WeeklyEconomicsWriteResult(economics, economics_path, economics_path, economics_path)
+
+    from kamandal_v2.strategy_lanes import reports as reports_module
+
+    monkeypatch.setattr(cli, "load_control", lambda: {})
+    monkeypatch.setattr(reports_module, "write_csa_scorecard", fake_scorecard)
+    monkeypatch.setattr(reports_module, "write_csa_weekly_economics", fake_economics)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "kamandal",
+            "csa-shadow-scorecard",
+            "--db",
+            str(tmp_path / "unused.db"),
+            "--output-dir",
+            str(report_dir),
+            "--trading-date",
+            "2026-08-12",
+        ],
+    )
+
+    cli.main()
+    output = json.loads(capsys.readouterr().out)
+    status_path = Path(output["experiment_status_json_path"])
+    assert status_path.exists()
+    assert output["experiment_status"]["schema"] == STATUS_SCHEMA
+    assert json.loads(status_path.read_text(encoding="utf-8"))["as_of"] == "2026-08-12"

@@ -60,10 +60,11 @@ records one migration identity, and requires `PRAGMA integrity_check=ok`.
 economics products. It does not refresh the Sheet, run a scan, mutate a stage,
 submit or reconcile an order, or make a recommendation. TradeLab consumes this
 packet for advisory analysis; the operator remains the only stage authority.
-For a bounded manual handoff, capture its stdout as
-`data/reports/csa1/csa1_experiment_status_YYYY-MM-DD.json`; the existing TradeLab
-collector prefers that dated packet and otherwise retains its legacy scorecard
-fallback.
+The scorecard command writes the dated shared packet
+`data/reports/csa1/csa1_experiment_status_YYYY-MM-DD.json` atomically after it writes
+the scorecard and weekly economics. The standalone `experiment-status` command
+remains a read-only inspection path; TradeLab prefers the dated packet and otherwise
+retains its legacy scorecard fallback.
 
 ## Isolation And Failure Behavior
 

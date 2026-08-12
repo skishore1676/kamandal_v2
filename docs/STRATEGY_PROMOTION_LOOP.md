@@ -43,12 +43,14 @@ Pilot/live therefore fail closed. A shadow scan may ask Tastytrade's order dry-r
 a BPR estimate and, if needed, use the conservative local fallback; both are recorded
 as shadow evidence and neither makes the playbook executable at Public.
 
-At 15:25 CT, the CSA scorecard job writes two app-owned evidence products:
+At 15:25 CT, the CSA scorecard job writes three app-owned evidence products:
 
 - a daily machinery scorecard covering scans, admissions, fills, management actions,
   blockers, policy identity, and broker-effect invariants; and
 - a week-to-date economics packet grouped by playbook and stage, derived from the
   lifecycle cashflow ledger, terminal outcomes, BPR, and same-day natural-close marks.
+- a dated read-only experiment-status packet that adapts those two products for
+  TradeLab's cross-application analyst boundary.
 
 The economics packet reports realized P&L, complete marked open P&L when available,
 return on closed BPR, wins/losses, adjustments, and evidence-quality limitations. It
