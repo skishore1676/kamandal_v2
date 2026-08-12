@@ -27,7 +27,8 @@ from kamandal_v2.strategy_lanes.strangle import build_strangle_adjustment_ticket
 from kamandal_v2.strategy_lanes.tickets import mixed_ticket, open_ticket_from_candidate
 
 
-NOW = "2026-08-08T12:00:00Z"
+TODAY = date.today()
+NOW = f"{TODAY.isoformat()}T12:00:00Z"
 
 
 def _row(structure: str):  # noqa: ANN202
@@ -144,7 +145,7 @@ def _opportunity(policy, *, event_state: str = "not_applicable"):  # noqa: ANN00
         evidence=evidence,
         event_context={
             "state": event_state,
-            "event_date": (date.today() + timedelta(days=17)).isoformat() if event_state in {"known", "confirmed"} else "",
+            "event_date": (TODAY + timedelta(days=17)).isoformat() if event_state in {"known", "confirmed"} else "",
         },
     )
 
@@ -152,7 +153,7 @@ def _opportunity(policy, *, event_state: str = "not_applicable"):  # noqa: ANN00
 def _quote(option_type: str, strike: float, dte: int, delta: float, bid: float, ask: float):  # noqa: ANN202
     return OptionQuote(
         underlying="XYZ",
-        expiration=(date.today() + timedelta(days=dte)).isoformat(),
+        expiration=(TODAY + timedelta(days=dte)).isoformat(),
         option_type=option_type,
         strike=strike,
         bid=bid,
@@ -220,7 +221,7 @@ def test_existing_builders_create_all_four_csa_lane_entries() -> None:
 
 def test_earnings_calendar_uses_event_relative_expirations_for_tomorrow_event() -> None:
     policy = _policy("call_calendar")
-    today = date.today()
+    today = TODAY
     opportunity = replace(
         _opportunity(policy, event_state="confirmed"),
         observed_at=f"{today.isoformat()}T12:00:00Z",
@@ -273,7 +274,7 @@ def test_earnings_builder_fails_closed_without_known_event() -> None:
 
 def test_earnings_builder_requires_event_between_sheet_bounded_expirations() -> None:
     policy = _policy("call_calendar")
-    event_date = date.today() + timedelta(days=17)
+    event_date = TODAY + timedelta(days=17)
     opportunity = _opportunity(policy, event_state="confirmed")
     accepted = build_lane_candidates(
         opportunity,

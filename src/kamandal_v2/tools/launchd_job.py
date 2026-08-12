@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 from typing import Any
@@ -52,6 +53,30 @@ OPERATOR_ACTIONS = {
 }
 LIVE_HEALTH_ATTENTION_STATE_EVENT = "live_health_attention_state"
 SCHEDULED_HEALTH_ATTENTION_STATE_EVENT = "scheduled_health_attention_state"
+LOCK_ALREADY_RUNNING = 75
+LOCK_UNVERIFIABLE = 76
+LIVE_RECONCILIATION_TIMEOUT_SECONDS = 300.0
+
+
+class ScriptTimeoutError(TimeoutError):
+    def __init__(self, script: str, timeout_seconds: float, stdout: str, stderr: str) -> None:
+        self.script = script
+        self.timeout_seconds = timeout_seconds
+        self.stdout = stdout
+        self.stderr = stderr
+        super().__init__(
+            "\n".join(
+                [
+                    f"{script} timed out after {timeout_seconds:.1f} seconds",
+                    "",
+                    "partial stdout:",
+                    tail(stdout, max_lines=24, max_chars=2400),
+                    "",
+                    "partial stderr:",
+                    tail(stderr, max_lines=24, max_chars=2400),
+                ]
+            )
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -89,7 +114,12 @@ def main(argv: list[str] | None = None) -> int:
 
 def script_job(args: argparse.Namespace, *, repo_root: Path) -> int:
     script = SCRIPT_JOBS[args.job]
-    completed = run_script(script, repo_root=repo_root, force=args.force)
+    completed = run_script(
+        script,
+        repo_root=repo_root,
+        force=args.force,
+        timeout_seconds=job_timeout_seconds(args.job),
+    )
     result = {
         "job": args.job,
         "status": "ok" if completed.returncode == 0 else "failed",
@@ -100,6 +130,14 @@ def script_job(args: argparse.Namespace, *, repo_root: Path) -> int:
     if completed.returncode == 0:
         print_result(result)
         return 0
+    if completed.returncode in {LOCK_ALREADY_RUNNING, LOCK_UNVERIFIABLE}:
+        print_result(
+            {
+                **result,
+                "status": "skipped_already_running" if completed.returncode == LOCK_ALREADY_RUNNING else "blocked_unverifiable_lock",
+            }
+        )
+        return 0 if completed.returncode == LOCK_ALREADY_RUNNING else 2
 
     alert = failure_alert(args, title=f"Kamandal launchd job failed: {args.job}", detail=command_failure_detail(completed))
     print_result({**result, "alert": alert.to_dict()})
@@ -237,22 +275,47 @@ def should_skip_for_calendar(_job: str, *, force: bool) -> bool:
     return is_non_trading_day(datetime.now(CENTRAL).date())
 
 
-def run_script(script: str, *, repo_root: Path, force: bool) -> subprocess.CompletedProcess[str]:
+def job_timeout_seconds(job: str) -> float:
+    specific = os.getenv(f"KAMANDAL_LAUNCHD_JOB_TIMEOUT_SECONDS_{job.upper().replace('-', '_')}")
+    if specific:
+        return float(specific)
+    if job == "live-reconciliation":
+        return LIVE_RECONCILIATION_TIMEOUT_SECONDS
+    return float(os.getenv("KAMANDAL_LAUNCHD_JOB_TIMEOUT_SECONDS", "1800"))
+
+
+def run_script(
+    script: str,
+    *,
+    repo_root: Path,
+    force: bool,
+    timeout_seconds: float,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(repo_root / "src")
     env["PYTHONUNBUFFERED"] = "1"
     if force:
         env["KAMANDAL_FORCE_RUN"] = "1"
-    return subprocess.run(  # noqa: S603
+    process = subprocess.Popen(  # noqa: S603
         ["/bin/bash", str(repo_root / "scripts" / script)],
-        check=False,
         cwd=str(repo_root),
         env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=float(os.getenv("KAMANDAL_LAUNCHD_JOB_TIMEOUT_SECONDS", "1800")),
+        start_new_session=True,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        raise ScriptTimeoutError(script, timeout_seconds, stdout or "", stderr or "") from None
+    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
 
 def failure_alert(args: argparse.Namespace, *, title: str, detail: str) -> AlertResult:

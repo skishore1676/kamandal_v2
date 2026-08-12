@@ -34,6 +34,20 @@ def _review_request(store: LocalStore, *, request_id: str = "or_recon_1") -> dic
     )
 
 
+def test_launchd_status_health_probe_is_read_only(monkeypatch, tmp_path: Path) -> None:  # noqa: ANN001
+    observed: dict[str, object] = {}
+
+    def fake_health(_store, _config, *, now=None, allow_mutation=True):  # noqa: ANN001
+        observed["allow_mutation"] = allow_mutation
+        return {"overall": "GREEN", "counts": {}, "reasons": [], "events": []}
+
+    monkeypatch.setattr(launchd_status, "run_live_health", fake_health)
+
+    launchd_status._safe_live_health(LocalStore(tmp_path / "kamandal.db"), {})
+
+    assert observed["allow_mutation"] is False
+
+
 def test_review_queue_outputs_lathi_review_units(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     request = _review_request(store)

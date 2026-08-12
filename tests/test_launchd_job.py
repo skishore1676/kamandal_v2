@@ -6,6 +6,8 @@ import subprocess
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
+
 from kamandal_v2.ops.alerts import AlertResult
 from kamandal_v2.tools import launchd_job
 
@@ -25,7 +27,11 @@ def test_launchd_job_skips_non_trading_day(monkeypatch, capsys) -> None:  # noqa
 def test_script_job_failure_sends_alert(monkeypatch, tmp_path, capsys) -> None:  # noqa: ANN001
     args = SimpleNamespace(job="iv", force=False, alert_mode="spool", alert_profile="kamandal-northstar")
     completed = subprocess.CompletedProcess(["run"], 9, stdout="bad stdout", stderr="bad stderr")
-    monkeypatch.setattr(launchd_job, "run_script", lambda _script, repo_root, force: completed)
+    monkeypatch.setattr(
+        launchd_job,
+        "run_script",
+        lambda _script, repo_root, force, timeout_seconds: completed,
+    )
     monkeypatch.setattr(
         launchd_job,
         "failure_alert",
@@ -39,6 +45,51 @@ def test_script_job_failure_sends_alert(monkeypatch, tmp_path, capsys) -> None: 
     payload = json.loads(out.split("=", 1)[1])
     assert payload["status"] == "failed"
     assert payload["alert"]["ok"] is True
+
+
+@pytest.mark.parametrize(
+    ("return_code", "expected_status", "expected_code"),
+    [(75, "skipped_already_running", 0), (76, "blocked_unverifiable_lock", 2)],
+)
+def test_script_job_reports_lock_state_without_generic_alert(
+    monkeypatch, tmp_path, capsys, return_code, expected_status, expected_code
+) -> None:  # noqa: ANN001
+    args = SimpleNamespace(job="iv", force=False, alert_mode="spool", alert_profile="test")
+    completed = subprocess.CompletedProcess(["run"], return_code, stdout="lock status", stderr="")
+    monkeypatch.setattr(
+        launchd_job,
+        "run_script",
+        lambda _script, repo_root, force, timeout_seconds: completed,
+    )
+    monkeypatch.setattr(
+        launchd_job,
+        "failure_alert",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("lock state is structured")),
+    )
+
+    code = launchd_job.script_job(args, repo_root=tmp_path)
+
+    payload = json.loads(capsys.readouterr().out.split("=", 1)[1])
+    assert code == expected_code
+    assert payload["status"] == expected_status
+
+
+def test_reconciliation_has_bounded_default_timeout(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.delenv("KAMANDAL_LAUNCHD_JOB_TIMEOUT_SECONDS_LIVE_RECONCILIATION", raising=False)
+    monkeypatch.delenv("KAMANDAL_LAUNCHD_JOB_TIMEOUT_SECONDS", raising=False)
+
+    assert launchd_job.job_timeout_seconds("live-reconciliation") == 300.0
+    assert launchd_job.job_timeout_seconds("iv") == 1800.0
+
+
+def test_run_script_timeout_keeps_partial_output_and_terminates_group(tmp_path) -> None:
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    script = scripts / "hang.sh"
+    script.write_text("#!/bin/bash\necho reached-stage\nwhile true; do sleep 1; done\n", encoding="utf-8")
+
+    with pytest.raises(launchd_job.ScriptTimeoutError, match="reached-stage"):
+        launchd_job.run_script("hang.sh", repo_root=tmp_path, force=False, timeout_seconds=0.1)
 
 
 def test_live_health_summary_and_alert_level() -> None:

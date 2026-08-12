@@ -31,11 +31,48 @@ def retire_stale_entry_approvals(
     yesterday's leftovers without guessing about fresh same-day approvals.
     """
 
+    retired = stale_entry_approvals(
+        config,
+        store,
+        active_hashes=active_hashes,
+        now=now,
+        source=source,
+    )
+    for item in retired:
+        ticket_hash = str(item["ticket_hash"])
+        store.update_live_order_intent_status_with_payload(
+            ticket_hash,
+            RETIRED_STALE_ENTRY_APPROVAL_STATUS,
+            {
+                "order_reconciliation": {
+                    "status": RETIRED_STALE_ENTRY_APPROVAL_STATUS,
+                    "prior_status": "pending_approval",
+                    "reason": item["reason"],
+                    "age_minutes": item["age_minutes"],
+                    "stale_after_minutes": stale_entry_approval_minutes(config),
+                    "reconciled_at": now_utc(),
+                    "source": source,
+                }
+            },
+        )
+    return retired
+
+
+def stale_entry_approvals(
+    config: dict[str, Any],
+    store: LocalStore,
+    *,
+    active_hashes: set[str] | None = None,
+    now: datetime | None = None,
+    source: str = "health_self_heal",
+) -> list[dict[str, Any]]:
+    """Describe stale approvals without changing their ledger state."""
+
     active_hashes = active_hashes or set()
     now = now or datetime.now(UTC)
     stale_minutes = stale_entry_approval_minutes(config)
     market_start = market_day_start(config, now=now)
-    retired = []
+    stale = []
     for ticket in store.live_order_intents_by_type("open", statuses={"pending_approval"}):
         ticket_hash = str(ticket.get("ticket_hash") or "")
         if ticket_hash in active_hashes:
@@ -48,21 +85,6 @@ def retire_stale_entry_approvals(
         if not active_hashes and not before_today:
             continue
         reason = "stale_entry_approval_not_in_current_daily_plan" if active_hashes else "stale_entry_approval_from_prior_market_day"
-        store.update_live_order_intent_status_with_payload(
-            ticket_hash,
-            RETIRED_STALE_ENTRY_APPROVAL_STATUS,
-            {
-                "order_reconciliation": {
-                    "status": RETIRED_STALE_ENTRY_APPROVAL_STATUS,
-                    "prior_status": "pending_approval",
-                    "reason": reason,
-                    "age_minutes": round(age_minutes, 2),
-                    "stale_after_minutes": stale_minutes,
-                    "reconciled_at": now_utc(),
-                    "source": source,
-                }
-            },
-        )
         item = {
             "ticket_hash": ticket_hash,
             "order_id": ticket.get("order_id"),
@@ -73,8 +95,8 @@ def retire_stale_entry_approvals(
             "reason": reason,
             "source": source,
         }
-        retired.append(item)
-    return retired
+        stale.append(item)
+    return stale
 
 
 def stale_entry_approval_minutes(config: dict[str, Any]) -> int:

@@ -93,17 +93,62 @@ require_market_window() {
   fi
 }
 
+release_kamandal_lock() {
+  if [[ -n "${KAMANDAL_ACTIVE_LOCKDIR:-}" && -n "${KAMANDAL_ACTIVE_LOCK_TOKEN:-}" ]]; then
+    local owner_file="$KAMANDAL_ACTIVE_LOCKDIR/owner"
+    if [[ -f "$owner_file" ]] && grep -Fqx "token=$KAMANDAL_ACTIVE_LOCK_TOKEN" "$owner_file"; then
+      rm -f "$owner_file"
+      rmdir "$KAMANDAL_ACTIVE_LOCKDIR" 2>/dev/null || true
+    fi
+  fi
+}
+
 with_lock() {
   local name="$1"
   shift
-  local lockroot="$REPO_ROOT/data/runlocks"
-  local lockdir="$lockroot/$name.lock"
+  local lockroot="${KAMANDAL_RUNLOCK_ROOT:-$REPO_ROOT/data/runlocks}" lockdir owner_file owner_pid owner_script owner_command
+  local recovered_root recovered_path token
+  lockdir="$lockroot/$name.lock"
+  owner_file="$lockdir/owner"
   mkdir -p "$lockroot"
   if ! mkdir "$lockdir" 2>/dev/null; then
-    log "Lock exists for $name; exiting."
-    exit 0
+    owner_pid="$(awk -F= '$1 == "pid" {print $2}' "$owner_file" 2>/dev/null || true)"
+    owner_script="$(awk -F= '$1 == "script" {sub(/^script=/, ""); print}' "$owner_file" 2>/dev/null || true)"
+    if [[ "$owner_pid" =~ ^[0-9]+$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
+      owner_command="$(ps -p "$owner_pid" -o command= 2>/dev/null || true)"
+      if [[ -n "$owner_script" && "$owner_command" == *"$owner_script"* ]]; then
+        log "Active lock exists for $name; owner_pid=$owner_pid owner_script=$owner_script."
+        printf 'KAMANDAL_LOCK_STATUS={"name":"%s","status":"already_running","owner_pid":%s}\n' "$name" "$owner_pid"
+        return 75
+      fi
+      log "Live PID $owner_pid does not match the recorded owner for $name; refusing automatic recovery."
+      printf 'KAMANDAL_LOCK_STATUS={"name":"%s","status":"unverifiable","owner_pid":%s}\n' "$name" "$owner_pid"
+      return 76
+    fi
+    if [[ -z "$owner_pid" || -z "$owner_script" ]]; then
+      log "Unverifiable lock exists for $name; refusing automatic recovery."
+      printf 'KAMANDAL_LOCK_STATUS={"name":"%s","status":"unverifiable"}\n' "$name"
+      return 76
+    fi
+    recovered_root="$lockroot/recovered"
+    mkdir -p "$recovered_root"
+    recovered_path="$recovered_root/${name}.$(date -u '+%Y%m%dT%H%M%SZ').$$.lock"
+    if ! mv "$lockdir" "$recovered_path" 2>/dev/null; then
+      log "Lock for $name changed during recovery; refusing to continue."
+      return 76
+    fi
+    log "Recovered abandoned lock for $name from owner_pid=$owner_pid to $recovered_path."
+    printf 'KAMANDAL_LOCK_STATUS={"name":"%s","status":"stale_lock_recovered","owner_pid":%s}\n' "$name" "$owner_pid"
+    mkdir "$lockdir"
   fi
-  trap "rmdir '$lockdir'" EXIT
+  token="$$-$(date +%s)-${RANDOM:-0}"
+  printf 'pid=%s\nscript=%s\nstarted_at=%s\ntoken=%s\n' \
+    "$$" "$0" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$token" > "$owner_file"
+  KAMANDAL_ACTIVE_LOCKDIR="$lockdir"
+  KAMANDAL_ACTIVE_LOCK_TOKEN="$token"
+  trap release_kamandal_lock EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM HUP
   "$@"
 }
 

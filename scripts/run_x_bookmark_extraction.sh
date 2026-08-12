@@ -75,15 +75,19 @@ else:
           chart_request=""
         fi
       fi
-      if [[ -n "$chart_request" && -f "$chart_request" ]] && command -v market-cartographer >/dev/null 2>&1; then
+      chart_bin="${KAMANDAL_MARKET_CARTOGRAPHER_BIN:-$REPO_ROOT/../market-cartographer/.venv/bin/market-cartographer}"
+      if [[ ! -x "$chart_bin" ]]; then
+        chart_bin="$(command -v market-cartographer 2>/dev/null || true)"
+      fi
+      if [[ -n "$chart_request" && -f "$chart_request" && -n "$chart_bin" ]]; then
         log "Running Market Cartographer seed evaluation: $chart_request -> $chart_output (provider=$chart_provider)"
-        if market-cartographer evaluate-seeds --input "$chart_request" --provider "$chart_provider" --output "$chart_output" 2>&1 | while IFS= read -r line; do log "chart: $line"; done; then
+        if "$chart_bin" evaluate-seeds --input "$chart_request" --provider "$chart_provider" --output "$chart_output" 2>&1 | while IFS= read -r line; do log "chart: $line"; done; then
           log "Chart seed evaluation succeeded."
         else
           log "Chart seed evaluation failed (non-fatal, Lathi will surface via health)."
         fi
       elif [[ -n "$chart_request" ]]; then
-        log "Chart request ready at $chart_request but market-cartographer not on PATH; evaluation will be picked up by activation's chart_seeds.enabled scan on next cycle."
+        log "Chart request ready at $chart_request but Market Cartographer is unavailable; leaving the request pending without treating it as an evaluation."
       fi
     fi
     log "Activating configured correspondent signals for the planner."

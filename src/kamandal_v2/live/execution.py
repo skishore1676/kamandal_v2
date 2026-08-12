@@ -24,6 +24,7 @@ from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
+from kamandal_v2.ops.stage_receipt import reconciliation_stage
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
 from kamandal_v2.stores.sqlite import LocalStore
@@ -447,15 +448,16 @@ def _execute_ticket(
 def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None, manage_entries: bool = True) -> dict[str, Any]:
     """Serialize broker order reconciliation across Kamandal launchd jobs."""
 
-    store = store or LocalStore()
-    lock_path = store.sqlite_path.parent / "runlocks" / "live_order_sync.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("a+", encoding="utf-8") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        try:
-            return _sync_live_orders_locked(config, store=store, manage_entries=manage_entries)
-        finally:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    with reconciliation_stage("sync_live_orders"):
+        store = store or LocalStore()
+        lock_path = store.sqlite_path.parent / "runlocks" / "live_order_sync.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                return _sync_live_orders_locked(config, store=store, manage_entries=manage_entries)
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manage_entries: bool) -> dict[str, Any]:

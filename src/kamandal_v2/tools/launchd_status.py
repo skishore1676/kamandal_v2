@@ -399,7 +399,7 @@ def _safe_live_health(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     try:
-        return run_live_health(store, config, now=now)
+        return run_live_health(store, config, now=now, allow_mutation=False)
     except Exception as exc:  # noqa: BLE001 - status must degrade instead of crashing Control Tower.
         return {
             "checked_at": _now(),

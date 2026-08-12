@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from kamandal_v2.intelligence.correspondent_activation import activate_correspondent_sources
+from kamandal_v2.intelligence.correspondent_activation import _chart_evaluation_paths, activate_correspondent_sources
 from kamandal_v2.planner.idea_loader import load_ideas
 
 
@@ -163,3 +163,34 @@ def test_production_x_job_invokes_correspondent_activation_before_llm_extraction
     llm = script.index("extract-ideas-llm")
     assert activation < llm
     assert "--config-source sheet" in script
+
+
+def test_chart_discovery_ignores_seed_requests_and_unrelated_json(tmp_path: Path) -> None:
+    chart_root = tmp_path / "chart_seeds"
+    request_dir = chart_root / "requests"
+    request_dir.mkdir(parents=True)
+    request = request_dir / "pending.json"
+    request.write_text(json.dumps({"schema": "market_cartographer.seed_request.v1"}), encoding="utf-8")
+    (chart_root / "receipt.json").write_text(
+        json.dumps({"schema": "kamandal.chart_seed_import_receipt.v1"}),
+        encoding="utf-8",
+    )
+    evaluation = chart_root / "evaluation.json"
+    evaluation.write_text(
+        json.dumps({"schema": "market_cartographer.seed_evaluation.v1"}),
+        encoding="utf-8",
+    )
+
+    paths = _chart_evaluation_paths(
+        {"chart_seeds": {"enabled": True, "evaluation_dir": str(chart_root)}}
+    )
+
+    assert paths == [evaluation]
+
+
+def test_production_x_job_uses_sibling_cartographer_venv() -> None:
+    script = Path("scripts/run_x_bookmark_extraction.sh").read_text(encoding="utf-8")
+
+    assert "KAMANDAL_MARKET_CARTOGRAPHER_BIN" in script
+    assert "$REPO_ROOT/../market-cartographer/.venv/bin/market-cartographer" in script
+    assert "leaving the request pending without treating it as an evaluation" in script

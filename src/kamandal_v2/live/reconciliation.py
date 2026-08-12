@@ -13,6 +13,7 @@ from kamandal_v2.live.operator_review import OperatorReviewError, create_operato
 from kamandal_v2.live.order_reconciliation import reconcile_live_orders
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.market.public import occ_symbol
+from kamandal_v2.ops.stage_receipt import StageReceipt
 from kamandal_v2.schemas import DAILY_PLAN_HEADER, LIVE_BOOK_HEADER
 from kamandal_v2.sheets import write_daily_plan, write_live_book
 from kamandal_v2.stores.sqlite import LocalStore
@@ -30,12 +31,16 @@ def reconcile_live_positions(
     store: LocalStore | None = None,
 ) -> dict[str, Any]:
     store = store or LocalStore()
+    stage_receipt = StageReceipt.from_env()
     if not _reconciliation_enabled(config):
         return {"status": "disabled", "issues": [], "daily_plan_rows": []}
+    stage_receipt.update("broker_positions", "running")
     adapter = broker_adapter(config)
     if not hasattr(adapter, "broker_positions"):
         raise RuntimeError(f"configured broker adapter {type(adapter).__name__} does not expose broker_positions")
     broker_positions = [position for position in adapter.broker_positions() if str(position.get("asset_type")) == "option"]
+    stage_receipt.update("broker_positions", "completed")
+    stage_receipt.update("local_reconciliation", "running")
     broker_index = _broker_position_index(broker_positions)
     projection_repairs = _repair_duplicate_entry_lineage_projections(
         store,
@@ -112,14 +117,22 @@ def reconcile_live_positions(
                 _request_review(config, store, stored, dry_run=dry_run)
 
     _resolve_unobserved_issues(store, observed_issue_ids, dry_run=dry_run)
+    stage_receipt.update("local_reconciliation", "completed")
+    stage_receipt.update("order_reconciliation", "running")
     order_reconciliation = reconcile_live_orders(config, dry_run=dry_run, store=store, adapter=adapter)
+    stage_receipt.update("order_reconciliation", "completed")
     rows = [_daily_plan_row(index, issue) for index, issue in enumerate(issues, start=1)]
     live_book_rows_written = 0
     if write_sheet:
+        stage_receipt.update("daily_plan_sheet", "running")
         write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_reconciliation"})
+        stage_receipt.update("daily_plan_sheet", "completed")
     if write_sheet:
+        stage_receipt.update("live_book_sheet", "running")
         live_book_report = run_live_book(store, config)
         live_book_rows_written = write_live_book(config, LIVE_BOOK_HEADER, live_book_sheet_rows(live_book_report, LIVE_BOOK_HEADER))
+        stage_receipt.update("live_book_sheet", "completed")
+    stage_receipt.update("completed", "completed")
     return {
         "status": "ok",
         "broker_option_positions": len(broker_positions),

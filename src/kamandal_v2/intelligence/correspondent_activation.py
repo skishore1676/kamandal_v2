@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterable
 
 import yaml
 
+from kamandal_v2.intelligence.chart_seeds import SOURCE_SCHEMA as CHART_EVALUATION_SCHEMA
 from kamandal_v2.intelligence.correspondent_signals import (
     import_correspondent_signals,
     validate_correspondent_packet,
@@ -261,13 +262,20 @@ def _chart_evaluation_paths(settings: dict[str, Any]) -> list[Path]:
                 paths.append(candidate)
         except Exception:
             continue
-    # De-duplicate, sorted
+    # Discovery is schema-based, not filename-based. The output tree also contains
+    # seed requests and import receipts, and neither is an evaluation.
     seen: set[str] = set()
     unique: list[Path] = []
     for path in sorted(paths):
         key = str(path)
-        if key not in seen and path.is_file():
-            seen.add(key)
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict) and payload.get("schema") == CHART_EVALUATION_SCHEMA:
             unique.append(path)
     return unique
 

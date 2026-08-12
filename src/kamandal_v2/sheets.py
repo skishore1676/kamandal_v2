@@ -33,6 +33,8 @@ class GoogleSheetClient:
         retry_attempts: int = 3,
         retry_base_delay_seconds: float = 1.0,
         retry_max_delay_seconds: float = 4.0,
+        connect_timeout_seconds: float = 10.0,
+        read_timeout_seconds: float = 30.0,
         sleep: Callable[[float], None] = time.sleep,
     ):
         try:
@@ -49,6 +51,12 @@ class GoogleSheetClient:
             scopes=["https://www.googleapis.com/auth/spreadsheets"],
         )
         self._client = gspread.authorize(credentials)
+        self._client.set_timeout(
+            (
+                max(float(connect_timeout_seconds), 0.1),
+                max(float(read_timeout_seconds), 0.1),
+            )
+        )
         self._worksheet_not_found = WorksheetNotFound
         self._retry_attempts = max(int(retry_attempts), 1)
         self._retry_base_delay_seconds = max(float(retry_base_delay_seconds), 0.0)
@@ -69,6 +77,8 @@ class GoogleSheetClient:
             retry_attempts=int(retry.get("attempts") or 3),
             retry_base_delay_seconds=float(retry.get("base_delay_seconds") or 1.0),
             retry_max_delay_seconds=float(retry.get("max_delay_seconds") or 4.0),
+            connect_timeout_seconds=float(retry.get("connect_timeout_seconds") or 10.0),
+            read_timeout_seconds=float(retry.get("read_timeout_seconds") or 30.0),
         )
 
     def replace_tab(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from kamandal_v2.live.entry_hygiene import retire_stale_entry_approvals
+from kamandal_v2.live.entry_hygiene import retire_stale_entry_approvals, stale_entry_approvals
 from kamandal_v2.live.position_management import profit_target_reached
 from kamandal_v2.live.risk_manager import (
     BREAKER_ACCOUNT_SNAPSHOT_STALE,
@@ -104,8 +104,18 @@ def run_live_health(
         for issue in store.open_live_reconciliation_issues()
         if not _is_pending_confirmation_issue(issue)
     ]
-    pending_entry_self_heal = retire_stale_entry_approvals(config, store) if allow_mutation else []
+    pending_entry_self_heal = (
+        retire_stale_entry_approvals(config, store, now=checked_at)
+        if allow_mutation
+        else stale_entry_approvals(config, store, now=checked_at)
+    )
     pending_entry_approvals = store.live_order_intents_by_type("open", statuses={"pending_approval"})
+    self_healed_hashes = {str(item.get("ticket_hash") or "") for item in pending_entry_self_heal}
+    pending_entry_approvals = [
+        ticket
+        for ticket in pending_entry_approvals
+        if str(ticket.get("ticket_hash") or "") not in self_healed_hashes
+    ]
     risk = _risk_overview(store, config)
 
     events: list[dict[str, Any]] = []

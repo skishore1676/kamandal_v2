@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import gspread
+from google.oauth2 import service_account
 import pytest
 
 from kamandal_v2.sheets import GoogleSheetClient, is_transient_sheet_error, retry_transient_sheet_call
@@ -13,6 +15,34 @@ class FakeSheetError(RuntimeError):
 
 class FakeWorksheetNotFound(RuntimeError):
     pass
+
+
+def test_sheet_client_sets_bounded_http_timeouts(monkeypatch, tmp_path) -> None:  # noqa: ANN001
+    observed = {}
+
+    class FakeClient:
+        def set_timeout(self, timeout):  # noqa: ANN001
+            observed["timeout"] = timeout
+
+        def open_by_key(self, spreadsheet_id):  # noqa: ANN001
+            observed["spreadsheet_id"] = spreadsheet_id
+            return object()
+
+    monkeypatch.setattr(
+        service_account.Credentials,
+        "from_service_account_file",
+        lambda *_args, **_kwargs: object(),
+    )
+    monkeypatch.setattr(gspread, "authorize", lambda _credentials: FakeClient())
+
+    GoogleSheetClient(
+        credentials_path=tmp_path / "credentials.json",
+        spreadsheet_id_value="sheet-1",
+        connect_timeout_seconds=4,
+        read_timeout_seconds=12,
+    )
+
+    assert observed == {"timeout": (4.0, 12.0), "spreadsheet_id": "sheet-1"}
 
 
 def test_retry_transient_sheet_call_recovers_after_503() -> None:
