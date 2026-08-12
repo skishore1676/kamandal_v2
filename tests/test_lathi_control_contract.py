@@ -66,7 +66,8 @@ def test_review_queue_outputs_lathi_review_units(tmp_path: Path) -> None:
     assert unit["action_requirements"]["dismiss"]["requires_confirmation"] is True
 
 
-def test_launchd_status_outputs_units_without_broker_mutation(tmp_path: Path) -> None:
+def test_launchd_status_outputs_units_without_broker_mutation(monkeypatch, tmp_path: Path) -> None:  # noqa: ANN001
+    monkeypatch.setattr(launchd_status, "_csa_plist_enabled_jobs", lambda: set())
     db = tmp_path / "kamandal.db"
     repo = tmp_path / "repo"
     (repo / "data" / "logs" / "launchd").mkdir(parents=True)
@@ -107,9 +108,12 @@ def test_launchd_status_outputs_units_without_broker_mutation(tmp_path: Path) ->
 
 
 def test_launchd_status_reports_retired_shadow_history_without_reclassifying_it(
+    monkeypatch,
     tmp_path: Path,
-) -> None:
+) -> None:  # noqa: ANN001
     import sqlite3
+
+    monkeypatch.setattr(launchd_status, "_csa_plist_enabled_jobs", lambda: set())
 
     db = tmp_path / "kamandal.db"
     repo = tmp_path / "repo"
