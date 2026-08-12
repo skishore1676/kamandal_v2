@@ -8,6 +8,7 @@ shadow cycle, submit orders, change a stage, or call TradeLab.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 from collections import defaultdict
@@ -23,6 +24,7 @@ EVIDENCE_SCHEMA = "kamandal.strategy_experiment_evidence.v1"
 ECONOMIC_SCHEMA = "kamandal.strategy_weekly_economics.v1"
 SOURCE_STATUSES = frozenset({"ok", "partial", "stale", "unavailable"})
 EFFECT_KEYS = ("sheet_write", "stage_change", "broker_action", "order_action")
+ACTIVE_EXPERIMENT_STAGES = frozenset({"shadow", "pilot_live", "live"})
 CENTRAL = ZoneInfo("America/Chicago")
 
 
@@ -48,6 +50,7 @@ def build_experiment_status_from_paths(
     report_path = resolve_path(report_dir)
     scorecards, scorecard_problems, scorecard_sources = _load_scorecards(report_path, as_of)
     economics, economics_problem, economics_source = _load_economics(report_path, as_of)
+    current_stages, policy_source = _load_current_policy(report_path, as_of)
 
     source_status = "ok"
     source_limitations: list[str] = []
@@ -73,15 +76,30 @@ def build_experiment_status_from_paths(
                 source_status = "partial"
             source_limitations.append(economics_problem or "missing_evidence")
 
+    # The policy snapshot is the app-owned read-only record of the current
+    # Sheet composition. If it is unavailable, limit the fallback to the most
+    # recent scorecard rather than turning historical baseline rows into live
+    # experiment rows.
+    if current_stages:
+        effective_stages = current_stages
+        if policy_source and policy_source.get("trading_date") != as_of.isoformat():
+            if source_status == "ok":
+                source_status = "stale"
+            source_limitations.append("stale_source")
+    else:
+        effective_stages = _latest_scorecard_stages(scorecards)
+
     packet = build_experiment_status(
         scorecards,
         economics=economics,
         source_status=source_status,
         as_of=as_of,
+        current_stages=effective_stages or None,
         source_limitations=source_limitations,
         provenance={
             "scorecards": scorecard_sources,
             "economics": economics_source,
+            "policy": policy_source,
             "database": str(database_path),
             "report_dir": str(report_path),
         },
@@ -96,6 +114,7 @@ def build_experiment_status(
     economics: Mapping[str, Any] | None,
     source_status: str = "ok",
     as_of: date | str | None = None,
+    current_stages: Mapping[str, str] | None = None,
     source_limitations: Iterable[str] = (),
     provenance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -118,10 +137,24 @@ def build_experiment_status(
             if experiment_id:
                 grouped[experiment_id].append((card, dict(row)))
 
+    if current_stages is not None:
+        grouped = {
+            experiment_id: observations
+            for experiment_id, observations in grouped.items()
+            if current_stages.get(experiment_id) in ACTIVE_EXPERIMENT_STAGES
+        }
+
     economic_rows = _economic_rows(economics)
     limitations = _unique_strings(source_limitations)
     experiments = [
-        _build_experiment(experiment_id, observations, economic_rows, source_status, limitations)
+        _build_experiment(
+            experiment_id,
+            observations,
+            economic_rows,
+            source_status,
+            limitations,
+            stage_override=(current_stages or {}).get(experiment_id),
+        )
         for experiment_id, observations in sorted(grouped.items())
     ]
     packet = {
@@ -192,10 +225,11 @@ def _build_experiment(
     economic_rows: Mapping[tuple[str, str], Mapping[str, Any]],
     source_status: str,
     source_limitations: list[str],
+    stage_override: str | None = None,
 ) -> dict[str, Any]:
-    active = _current_stage_observations(observations)
+    active = _current_stage_observations(observations, stage_override=stage_override)
     dates = [str(card.get("trading_date")) for card, _row in active if card.get("trading_date")]
-    stage = str(active[-1][1].get("stage") or "shadow") if active else "shadow"
+    stage = stage_override or (str(active[-1][1].get("stage") or "shadow") if active else "shadow")
     policy_hashes = sorted(
         {
             str(policy_hash)
@@ -251,11 +285,20 @@ def _build_experiment(
 
 def _current_stage_observations(
     observations: list[tuple[dict[str, Any], dict[str, Any]]],
+    *,
+    stage_override: str | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     active = [item for item in observations if int(item[0].get("runs") or 0) > 0]
     if not active:
         return []
-    stage = str(active[-1][1].get("stage") or "shadow")
+    stage = stage_override or str(active[-1][1].get("stage") or "shadow")
+    if stage_override:
+        active = [
+            item for item in active
+            if str(item[1].get("stage") or "shadow") == stage_override
+        ]
+        if not active:
+            return []
     current: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for card, row in reversed(active):
         if str(row.get("stage") or "shadow") != stage:
@@ -348,6 +391,57 @@ def _load_scorecards(
         cards.append(payload)
         sources.append({"kind": "scorecard", "path": str(path), "trading_date": trading_date})
     return cards, _unique_strings(problems), sources
+
+
+def _load_current_policy(
+    report_dir: Path,
+    through: date,
+) -> tuple[dict[str, str], dict[str, Any] | None]:
+    policy_dir = report_dir.parent.parent / "run" / "strategy_policy"
+    candidates = sorted(policy_dir.glob("strategy_policy_????-??-??.json"))
+    selected: tuple[Path, dict[str, Any]] | None = None
+    for path in candidates:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        trading_date = str(payload.get("trading_date") or "")
+        if trading_date and trading_date <= through.isoformat():
+            selected = (path, payload)
+    if selected is None:
+        return {}, None
+    path, payload = selected
+    rows = ((payload.get("tables") or {}).get("playbooks") or [])
+    stages = {
+        str(row.get("playbook_id")): str(row.get("csa_stage") or "baseline").strip().lower()
+        for row in rows
+        if row.get("playbook_id")
+    }
+    return stages, {
+        "kind": "policy_snapshot",
+        "path": str(path),
+        "trading_date": payload.get("trading_date"),
+        "snapshot_hash": payload.get("snapshot_hash"),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+def _latest_scorecard_stages(
+    scorecards: Iterable[Mapping[str, Any]],
+) -> dict[str, str]:
+    cards = [dict(card) for card in scorecards]
+    if not cards:
+        return {}
+    latest_date = max(str(card.get("trading_date") or "") for card in cards)
+    stages: dict[str, str] = {}
+    for card in cards:
+        if str(card.get("trading_date") or "") != latest_date:
+            continue
+        for row in card.get("experiments") or []:
+            experiment_id = str(row.get("experiment_id") or row.get("playbook_id") or "")
+            if experiment_id:
+                stages[experiment_id] = str(row.get("stage") or "shadow")
+    return stages
 
 
 def _load_economics(

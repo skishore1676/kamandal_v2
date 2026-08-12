@@ -120,6 +120,46 @@ def test_status_command_reads_existing_reports_without_recomputing_or_writing(tm
     assert not (tmp_path / "unused.db").exists()
 
 
+def test_status_projection_does_not_promote_historical_baseline_rows_to_experiments(tmp_path: Path) -> None:
+    report_dir = tmp_path / "data" / "reports" / "csa1"
+    report_dir.mkdir(parents=True)
+    policy_dir = tmp_path / "data" / "run" / "strategy_policy"
+    policy_dir.mkdir(parents=True)
+    policy = {
+        "schema": "kamandal.strategy_policy_snapshot.v1",
+        "trading_date": "2026-08-12",
+        "snapshot_hash": "snapshot-1",
+        "tables": {"playbooks": [
+            {"playbook_id": "short_strangle_high_iv", "csa_stage": "shadow"},
+            {"playbook_id": "legacy_baseline", "csa_stage": "baseline"},
+        ]},
+    }
+    (policy_dir / "strategy_policy_2026-08-12.json").write_text(
+        json.dumps(policy), encoding="utf-8"
+    )
+    current = _card("2026-08-12")
+    historical_baseline = _card("2026-08-11")
+    historical_baseline["experiments"][0]["experiment_id"] = "legacy_baseline"
+    historical_baseline["experiments"][0]["playbook_id"] = "legacy_baseline"
+    historical_baseline["experiments"][0]["stage"] = "shadow"
+    for card in (historical_baseline, current):
+        (report_dir / f"csa1_scorecard_{card['trading_date']}.json").write_text(
+            json.dumps(card), encoding="utf-8"
+        )
+
+    packet = build_experiment_status_from_paths(
+        database=tmp_path / "unused.db",
+        report_dir=report_dir,
+        through="2026-08-12",
+    )
+
+    assert [row["experiment_id"] for row in packet["experiments"]] == [
+        "short_strangle_high_iv"
+    ]
+    assert packet["experiments"][0]["stage"] == "shadow"
+    assert packet["provenance"]["policy"]["snapshot_hash"] == "snapshot-1"
+
+
 def test_status_command_is_read_only_and_does_not_import_legacy_cli(tmp_path: Path) -> None:
     database = tmp_path / "missing.db"
     report_dir = tmp_path / "reports"
