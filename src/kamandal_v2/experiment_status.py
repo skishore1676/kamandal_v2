@@ -336,6 +336,8 @@ def _economic_facts(
             "realized_pnl_usd",
             "open_unrealized_pnl_usd",
             "total_pnl_usd",
+            "closed_bpr_usd",
+            "open_bpr_usd",
             "realized_return_on_bpr_pct",
             "total_return_on_bpr_pct",
             "win_rate_pct",

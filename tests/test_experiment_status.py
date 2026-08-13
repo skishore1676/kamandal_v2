@@ -51,6 +51,7 @@ def _economics(*, closed: int = 2, pnl: float = 80.0) -> dict[str, object]:
             "open_unrealized_pnl_usd": 0.0,
             "total_pnl_usd": pnl,
             "closed_bpr_usd": 1_000.0,
+            "open_bpr_usd": 500.0,
             "economic_status": "observed",
             "quality_issues": [],
         }],
@@ -73,6 +74,8 @@ def test_status_projection_adapts_existing_facts_without_authority() -> None:
     assert experiment["entries"] == 3
     assert experiment["closed"] == 2
     assert experiment["metrics"]["closed_net_r"] == 0.08
+    assert experiment["metrics"]["closed_bpr_usd"] == 1_000.0
+    assert experiment["metrics"]["open_bpr_usd"] == 500.0
     assert experiment["health"] == "ready_for_review"
     assert packet["effects"] == {
         "sheet_write": False,
