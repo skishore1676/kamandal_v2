@@ -2,12 +2,13 @@
 
 ## Bottom line
 
-**Source release candidate: ready for protected Phase 9 review at commit
-`c89d4e7`.** The local repository now has one policy compiler, one optimizer
-invocation per isolated live/shadow book, one scheduled planning owner, and one
-scheduled lifecycle-management owner. All local checks passed. This is not an
-oldmac deployment authorization and does not establish any live P&L or broker
-claim.
+**Superseded source-release claim.** The earlier `c89d4e7` assertion was
+withdrawn by the 2026-08-15 architecture-conformance review because returned
+planning objects and helper checks did not prove the scheduled persisted
+effects. The subsequent repairs are checkpointed through `bd76402`; they need
+a fresh independent Phase 8 conformance review before this document may claim
+protected Phase 9 readiness. This is not an oldmac deployment authorization and
+does not establish any live P&L or broker claim.
 
 The next action is a separate review of
 `UNIFIED_STRATEGY_ENGINE_CUTOVER_RUNBOOK.md`, followed only by explicit
@@ -27,7 +28,10 @@ operations.
 
 ## Local proof receipt
 
-At commit `c89d4e7`, all of the following ran in the development checkout:
+The historical `c89d4e7` proof list below is retained for traceability only; it
+is not a current readiness verdict. The fresh repair proof is recorded in the
+Super Goal evidence and must be independently reviewed against the amended
+Phase 3/4/5/7/8 criteria.
 
 - full `pytest -q` suite: passed;
 - focused planner, lifecycle, management, event-timing, session, proposal,
@@ -70,6 +74,7 @@ that source routing cannot sidestep the portfolio selection and safety path.
 
 ## Phase 9 decision
 
-Authorize only the atomic, session-boundary procedure in
-`UNIFIED_STRATEGY_ENGINE_CUTOVER_RUNBOOK.md`, or request changes to that packet.
-Without that authorization, the correct state is **GATE_BLOCKED_SOURCE_READY**.
+**Do not authorize Phase 9 from this superseded audit.** First obtain a fresh
+independent conformance verdict for the repaired source path. Even a positive
+source verdict remains separate from the protected oldmac/Sheet/database/
+launchd/broker authorization.
