@@ -14,7 +14,8 @@ run_unified_planning() {
     --db "${KAMANDAL_CSA_DB:-data/kamandal_v2.db}" \
     --provider "${KAMANDAL_MARKET_PROVIDER:-public}" \
     --ideas "$CURRENT_IDEAS_DIR" \
-    --config-source sheet
+    --config-source sheet \
+    --write-sheet
 }
 
 with_lock unified_planning run_unified_planning

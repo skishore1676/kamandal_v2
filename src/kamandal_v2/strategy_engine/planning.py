@@ -48,6 +48,7 @@ def run_unified_books(
     provider: str = "fixture",
     store: LocalStore | None = None,
     audit_root: str | Path = "data/audit/unified",
+    write_sheet: bool = False,
 ) -> UnifiedPlanningResult:
     """Build independent books from one normalized Sheet snapshot.
 
@@ -65,8 +66,8 @@ def run_unified_books(
             live=PlanningBook(ExecutionMode.LIVE, (), None, errors),
             shadow=PlanningBook(ExecutionMode.SHADOW, (), None, errors),
         )
-    live = _run_book(ExecutionMode.LIVE, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root)
-    shadow = _run_book(ExecutionMode.SHADOW, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root)
+    live = _run_book(ExecutionMode.LIVE, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root, write_sheet)
+    shadow = _run_book(ExecutionMode.SHADOW, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root, write_sheet)
     return UnifiedPlanningResult(compilation=compilation, live=live, shadow=shadow)
 
 
@@ -79,6 +80,7 @@ def _run_book(
     provider: str,
     store: LocalStore,
     audit_root: str | Path,
+    write_sheet: bool,
 ) -> PlanningBook:
     selected = tuple(policy for policy in policies if policy.mode is mode)
     if not selected:
@@ -94,7 +96,7 @@ def _run_book(
             idea_paths=idea_paths,
             config_source="seed",
             provider=provider,
-            write_sheet=False,
+            write_sheet=write_sheet,
             store=store,
             audit=AuditWriter(Path(audit_root) / mode.value),
             universe_override=universe,

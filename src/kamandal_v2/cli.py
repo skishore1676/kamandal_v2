@@ -91,6 +91,7 @@ def main() -> None:
     unified_plan_parser.add_argument("--ideas", nargs="+", default=["data/ideas/active"])
     unified_plan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
     unified_plan_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    unified_plan_parser.add_argument("--write-sheet", action="store_true", help="Project each healthy unified book to its own daily_plan mode")
     unified_management_parser = subparsers.add_parser(
         "unified-lifecycle-management",
         help="Run the one live-first lifecycle-management owner with isolated branch receipts",
@@ -508,6 +509,7 @@ def main() -> None:
             idea_paths=_expand_paths(args.ideas),
             provider=args.provider,
             store=LocalStore(args.db),
+            write_sheet=args.write_sheet,
         )
         print(json.dumps({
             "policy_errors": result.compilation.errors,

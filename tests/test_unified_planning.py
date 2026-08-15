@@ -114,3 +114,26 @@ def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> 
     assert result.compilation.ok
     assert any(idea.source == "market_scan" for idea in result.shadow.result.ideas)
     assert any(idea.source == "portfolio_hedge" for idea in result.live.result.ideas)
+
+
+def test_unified_books_only_project_when_explicitly_requested(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    universe, playbooks = _rows()
+    writes: list[set[str]] = []
+    from kamandal_v2.planner import engine
+
+    def write_daily_plan(_config, _rows, _header, *, replace_lanes):  # noqa: ANN001
+        writes.append(replace_lanes)
+        return 0
+
+    monkeypatch.setattr(engine, "write_daily_plan", write_daily_plan)
+    run_unified_books(
+        load_control(),
+        universe_rows=universe,
+        playbook_rows=playbooks,
+        idea_paths=["tests/fixtures/sample_ideas.yaml"],
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit_root=tmp_path / "audit",
+        write_sheet=True,
+    )
+
+    assert writes == [{"live"}, {"shadow"}]
