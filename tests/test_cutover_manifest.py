@@ -217,10 +217,14 @@ def test_sheet_mapping_is_bounded_non_applying_and_preserves_generic_calendar_ro
     assert compiled.ok
     earnings = next(policy for policy in compiled.policies if policy.capability.key == "earnings_calendar")
     assert earnings.mode.value == "live"
+    sheet_roundtrip = [
+        {column: str(value) if value is not None else "" for column, value in row.items()}
+        for row in materialized
+    ]
     repeated = build_sheet_mapping_manifest(
         _target_header,
-        materialized,
-        earnings_calendar_row=default_earnings_calendar_row(materialized),
+        sheet_roundtrip,
+        earnings_calendar_row=default_earnings_calendar_row(sheet_roundtrip),
     )
     assert repeated.ready
     assert repeated.header_additions == ()

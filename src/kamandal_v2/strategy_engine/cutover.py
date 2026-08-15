@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import shutil
@@ -332,8 +333,22 @@ def _legacy_mode(explicit_mode: Any, legacy_stage: Any) -> str | None:
 def _append_cell_change(
     changes: list[SheetCellMapping], sheet_row: int, playbook_id: str, column: str, old_value: Any, new_value: Any
 ) -> None:
-    if old_value != new_value:
+    if not _same_sheet_scalar(old_value, new_value):
         changes.append(SheetCellMapping(sheet_row, playbook_id, column, old_value, new_value))
+
+
+def _same_sheet_scalar(left: Any, right: Any) -> bool:
+    """Treat Google Sheet string readback as equal to typed manifest scalars."""
+    left_text = str(left if left is not None else "").strip()
+    right_text = str(right if right is not None else "").strip()
+    if left_text == right_text:
+        return True
+    if left_text.lower() in {"true", "false"} or right_text.lower() in {"true", "false"}:
+        return left_text.lower() == right_text.lower()
+    try:
+        return Decimal(left_text) == Decimal(right_text)
+    except (InvalidOperation, ValueError):
+        return False
 
 
 def _append_strangle_mapping(
