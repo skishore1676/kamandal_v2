@@ -385,7 +385,7 @@ def test_lane_lifecycle_scenarios_cover_adjust_close_and_approval_block() -> Non
         registry.resolve(earnings.lane)(
             _lifecycle(earnings.lane),
             earnings,
-            {"working_order_conflict": False, "ownership_clear": True, "event_state": "known", "hard_emergency": False, "days_to_event": 1, "profit_pct": 0, "near_leg_expired": False},
+            {"working_order_conflict": False, "ownership_clear": True, "event_state": "confirmed", "hard_emergency": False, "event_exit_due": True, "profit_pct": 0, "near_leg_expired": False},
             proposed_at=NOW,
         )
     )
@@ -434,7 +434,7 @@ def test_all_lanes_have_deterministic_hold_and_earnings_has_expiry_close() -> No
         ),
         (
             _policy("call_calendar"),
-            {"working_order_conflict": False, "ownership_clear": True, "event_state": "known", "hard_emergency": False, "days_to_event": 10, "profit_pct": 0, "near_leg_expired": False},
+            {"working_order_conflict": False, "ownership_clear": True, "event_state": "confirmed", "hard_emergency": False, "event_exit_due": False, "profit_pct": 0, "near_leg_expired": False},
         ),
     ]
     for policy, context in cases:

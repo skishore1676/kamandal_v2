@@ -30,6 +30,7 @@ from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_lanes.strangle import build_strangle_adjustment_ticket
 from kamandal_v2.strategy_lanes.tickets import mixed_ticket
 from kamandal_v2.strategy_engine.lifecycle import observe_strangle_episode, strangle_adjustment_eligible
+from kamandal_v2.strategy_engine.event_timing import event_exit_due
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,12 +318,26 @@ def _management_context(
         long = next(leg for leg in legs if leg.role == "long_far")
         context = {**common, "far_dte": max((date.fromisoformat(long.expiration) - observed_date).days, 0), "short_leg_present": short is not None, "paired_position_complete": short is not None and len(legs) == 2}
     else:
-        event = latest_earnings_snapshot(sqlite_path, snapshot.underlying)
-        event_days = None if event is None or not event.next_earnings_date else (date.fromisoformat(event.next_earnings_date) - observed_date).days
-        if event_days is None:
-            context = {"working_order_conflict": working_order_conflict, "ownership_clear": ownership_clear, "event_state": "unknown", "hard_emergency": False, "days_to_event": "", "profit_pct": profit_pct, "near_leg_expired": min(dtes) <= 0}
-        else:
-            context = {"working_order_conflict": working_order_conflict, "ownership_clear": ownership_clear, "event_state": "confirmed" if event.confirmed else "known", "hard_emergency": False, "days_to_event": event_days, "profit_pct": profit_pct, "near_leg_expired": min(dtes) <= 0}
+        frozen_event = dict(lifecycle.metadata.get("event_context") or {})
+        event = latest_earnings_snapshot(sqlite_path, snapshot.underlying) if not frozen_event else None
+        event_date = frozen_event.get("event_date") if frozen_event else (event.next_earnings_date if event else None)
+        timing = frozen_event.get("time_of_day") if frozen_event else (event.time_of_day if event else "")
+        confirmed = str(frozen_event.get("state") or "") == "confirmed" if frozen_event else bool(event and event.confirmed)
+        due = False
+        if event_date and confirmed:
+            try:
+                due = event_exit_due(event_date=date.fromisoformat(str(event_date)), time_of_day=str(timing), observed_at=observed_at)
+            except ValueError:
+                confirmed = False
+        context = {
+            "working_order_conflict": working_order_conflict,
+            "ownership_clear": ownership_clear,
+            "event_state": "confirmed" if confirmed else "unknown",
+            "hard_emergency": False,
+            "event_exit_due": due,
+            "profit_pct": profit_pct,
+            "near_leg_expired": min(dtes) <= 0,
+        }
     return context, plans, replace(lifecycle, updated_at=observed_at, metadata=metadata)
 
 

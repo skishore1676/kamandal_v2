@@ -34,6 +34,7 @@ from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
 from kamandal_v2.strategy_lanes.sources import idea_opportunity, market_scan_opportunities, portfolio_hedge_opportunities
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_lanes.tickets import open_ticket_from_candidate
+from kamandal_v2.strategy_engine.lifecycle import freeze_lifecycle_policy
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,7 +318,7 @@ def _run_csa_scan(
             and policy.playbook_id in pilot_playbooks_used
         ):
             continue
-        lifecycle = LifecycleState(
+        lifecycle = freeze_lifecycle_policy(LifecycleState(
             lifecycle_id=stable_csa_id("lifecycle", [opportunity.opportunity_id, candidate.candidate_id]),
             opportunity_id=opportunity.opportunity_id,
             lane=policy.lane,
@@ -339,8 +340,9 @@ def _run_csa_scan(
                 "execution_mode": execution_mode,
                 "policy_snapshot_date": policy_snapshot_date,
                 "policy_snapshot_hash": policy_snapshot_hash,
+                "event_context": dict(opportunity.event_context),
             },
-        )
+        ), compiled_policy=policy.to_dict())
         csa_store.save_lifecycle(lifecycle)
         proposal = propose_action(lifecycle, ActionType.OPEN, "admitted", arbiter_class="routine_management", proposed_at=started_at)
         action = arbitrate_actions((proposal,)).selected
@@ -639,7 +641,12 @@ def _event_context(sqlite_path: str, symbol: str) -> dict[str, Any]:
     snapshot = latest_earnings_snapshot(sqlite_path, symbol)
     if snapshot is None or not snapshot.next_earnings_date:
         return {"state": "unknown"}
-    return {"state": "confirmed" if snapshot.confirmed else "known", "event_date": snapshot.next_earnings_date, "source": snapshot.source}
+    return {
+        "state": "confirmed" if snapshot.confirmed else "known",
+        "event_date": snapshot.next_earnings_date,
+        "time_of_day": snapshot.time_of_day,
+        "source": snapshot.source,
+    }
 
 
 def _finish_scan(

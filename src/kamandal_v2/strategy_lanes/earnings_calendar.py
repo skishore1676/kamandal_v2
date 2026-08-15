@@ -21,13 +21,13 @@ def propose_earnings_calendar_actions(
         actions.append(propose_action(lifecycle, ActionType.BLOCK, "working_order_conflict", arbiter_class="working_order_conflict", proposed_at=proposed_at))
     if not bool(context.get("ownership_clear", False)):
         actions.append(propose_action(lifecycle, ActionType.BLOCK, "ownership_ambiguous", arbiter_class="ownership_ambiguity", proposed_at=proposed_at))
-    if str(context.get("event_state") or "") not in {"known", "confirmed"}:
+    if str(context.get("event_state") or "") != "confirmed":
         actions.append(propose_action(lifecycle, ActionType.BLOCK, "event_state_ambiguous", arbiter_class="ownership_ambiguity", proposed_at=proposed_at))
         actions.append(propose_action(lifecycle, ActionType.HOLD, "earnings_calendar_hold", arbiter_class="hold", proposed_at=proposed_at))
         return tuple(actions)
     if bool(context.get("hard_emergency")):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "hard_emergency", arbiter_class="hard_emergency", proposed_at=proposed_at))
-    if _number(context, "days_to_event") <= sheet_number(policy, "exit_pre_event_days"):
+    if bool(context.get("event_exit_due")):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "earnings_event_exit", arbiter_class="mandatory_event_exit", proposed_at=proposed_at))
     if _number(context, "profit_pct") >= sheet_number(policy, "profit_target_pct"):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "profit_target", arbiter_class="executable_profit", proposed_at=proposed_at))
