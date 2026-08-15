@@ -643,7 +643,10 @@ def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_pat
         {},
         sqlite_path=str(database),
         provider="fixture",
-        tables=_tables(),
+        # Management must govern the immutable policy embedded when this
+        # lifecycle was opened.  A later Sheet edit (including removal of the
+        # playbook) cannot orphan or rewrite the open trade.
+        tables={"universe": [], "playbooks": [], "daily_plan": []},
         market=market,
         observed_at="2026-08-08T12:15:00Z",
     )

@@ -19,10 +19,8 @@ from kamandal_v2.planner.engine import _market_provider
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
-from kamandal_v2.strategy_lanes.daily_policy import load_daily_policy_snapshot, policy_tables_hash
 from kamandal_v2.strategy_lanes.lane_common import lifecycle_number
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode
-from kamandal_v2.strategy_lanes.operator_policy import load_csa_operator_policy
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.registry import lifecycle_registry
 from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
@@ -118,23 +116,12 @@ def _run_csa_management(
         if lifecycle.status == "open"
         and str(lifecycle.metadata.get("execution_mode") or "shadow") == execution_mode
     ]
-    if tables is None:
-        daily_policy = load_daily_policy_snapshot(config)
-        bundle = daily_policy.policy
-        policy_snapshot_date = daily_policy.trading_date
-        policy_snapshot_hash = daily_policy.snapshot_hash
-    else:
-        bundle = load_csa_operator_policy(config, tables=tables, read_at=started_at)
-        policy_snapshot_date = started_at[:10]
-        policy_snapshot_hash = policy_tables_hash(
-            {
-                "universe": [dict(row) for row in (tables.get("universe") or [])],
-                "playbooks": [dict(row) for row in (tables.get("playbooks") or [])],
-            }
-        )
-    allowed_stages = {CsaStage.SHADOW} if execution_mode == "shadow" else {CsaStage.PILOT_LIVE, CsaStage.LIVE}
-    policies = {policy.playbook_id: policy for policy in bundle.policies if policy.stage in allowed_stages}
-    errors = list(bundle.errors)
+    # Entry eligibility is Sheet-controlled, but an open lifecycle is governed
+    # by its immutable entry/adoption snapshot.  Do not reload a current row or
+    # stage here: an edit, disable, or restage must never rewrite an open trade.
+    policy_snapshot_date = "frozen_lifecycle"
+    policy_snapshot_hash = "frozen_lifecycle"
+    errors: list[str] = []
     if market is None:
         wrapper = _market_provider(config, provider=provider, store=baseline_store)
         market = getattr(wrapper, "inner", wrapper)
@@ -158,10 +145,10 @@ def _run_csa_management(
     filled_actions = 0
     live_intent_count = 0
     for lifecycle in lifecycles:
-        playbook_id = str(lifecycle.metadata.get("playbook_id") or "")
-        policy = policies.get(playbook_id)
-        if policy is None:
-            errors.append(f"{lifecycle.lifecycle_id}: current Sheet policy unavailable")
+        try:
+            policy = _frozen_lifecycle_policy(lifecycle)
+        except (KeyError, TypeError, ValueError) as exc:
+            errors.append(f"{lifecycle.lifecycle_id}: frozen policy unavailable: {exc}")
             continue
         underlying = str(lifecycle.metadata.get("underlying") or "")
         try:
@@ -205,8 +192,8 @@ def _run_csa_management(
                 live_ticket = build_csa_live_ticket(ticket)
                 live_ticket.update(
                     {
-                        "csa_policy_snapshot_date": policy_snapshot_date,
-                        "csa_policy_snapshot_hash": policy_snapshot_hash,
+                        "csa_policy_snapshot_date": str(lifecycle.metadata.get("policy_snapshot_date") or "frozen_lifecycle"),
+                        "csa_policy_snapshot_hash": str(lifecycle.metadata.get("policy_snapshot_hash") or lifecycle.policy_hash),
                     }
                 )
                 if writable_live_store.live_order_intent(str(live_ticket["ticket_hash"])) is None:
@@ -233,6 +220,31 @@ def _run_csa_management(
     )
     store.save_run_receipt({"id": run_id, "command": f"csa-{execution_mode}-management", "status": "completed" if result.ok else "completed_with_errors", "started_at": started_at, "completed_at": completed_at, "result": result.to_dict()})
     return result
+
+
+def _frozen_lifecycle_policy(lifecycle: LifecycleState) -> CsaPolicy:
+    raw = lifecycle.metadata.get("compiled_management_policy") or lifecycle.metadata.get("policy")
+    if not isinstance(raw, dict):
+        raise ValueError("compiled_management_policy missing")
+    lane = LaneId(str(raw.get("lane") or lifecycle.lane.value))
+    stage_raw = str(raw.get("stage") or ("shadow" if lifecycle.metadata.get("execution_mode") == "shadow" else "live"))
+    stage = CsaStage(stage_raw)
+    source_mode = SourceMode(str(raw.get("source_mode") or "idea"))
+    management = raw.get("management")
+    resolved_fields = raw.get("resolved_fields")
+    if not isinstance(management, dict) or not isinstance(resolved_fields, dict):
+        raise ValueError("compiled policy is incomplete")
+    return CsaPolicy(
+        playbook_id=str(raw.get("playbook_id") or lifecycle.metadata.get("playbook_id") or ""),
+        lane=lane,
+        stage=stage,
+        source_mode=source_mode,
+        management=dict(management),
+        resolved_fields=dict(resolved_fields),
+        policy_hash=str(raw.get("policy_hash") or lifecycle.policy_hash),
+        source=str(raw.get("source") or "frozen_lifecycle"),
+        read_at=str(raw.get("read_at") or lifecycle.opened_at),
+    )
 
 
 def _active_option_legs(lifecycle: LifecycleState, snapshot: Any) -> tuple[OptionLeg, ...]:
