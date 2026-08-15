@@ -67,7 +67,7 @@ def test_missing_google_sheet_policy_has_no_repository_fallback(monkeypatch) -> 
     assert playbook.iv_rank_max is None
 
 
-def test_staged_playbooks_are_exclusively_routed_away_from_baseline_planner(monkeypatch) -> None:  # noqa: ANN001
+def test_all_playbooks_remain_visible_for_the_unified_policy_compiler(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setattr(
         config_loader,
         "pull_sheet_tables",
@@ -85,5 +85,5 @@ def test_staged_playbooks_are_exclusively_routed_away_from_baseline_planner(monk
 
     _universe, playbooks = config_loader.load_planner_config({}, source="sheet")
 
-    assert [playbook.playbook_id for playbook in playbooks] == ["baseline"]
+    assert [playbook.playbook_id for playbook in playbooks] == ["baseline", "shadow", "pilot", "live"]
     assert playbooks[0].deployment_stage == "baseline"

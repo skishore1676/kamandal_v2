@@ -32,3 +32,26 @@ def test_universe_proposals_append_only_and_preserve_existing_rows(monkeypatch) 
     assert existing[0]["tier"] == "held"
     assert existing[0]["notes"] == "operator note"
     assert calls[0]["rows"][0][UNIVERSE_HEADER.index("symbol")] == "NEW"
+
+
+def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch) -> None:  # noqa: ANN001
+    existing = [{key: "" for key in UNIVERSE_HEADER}]
+
+    class Client:
+        def read_tab(self, _title):  # noqa: ANN001
+            return existing
+
+        def append_tab_rows(self, _title, *, header, rows):  # noqa: ANN001
+            appended = dict(zip(header, rows[0], strict=True))
+            appended["tier"] = "held"
+            existing.append(appended)
+            return 1
+
+    monkeypatch.setattr(sheets.GoogleSheetClient, "from_config", lambda _config: Client())
+
+    try:
+        sheets.write_universe_proposals({}, [{"symbol": "NEW", "enabled": "FALSE", "tier": "proposed"}])
+    except RuntimeError as exc:
+        assert "tier" in str(exc)
+    else:
+        raise AssertionError("proposal write must reject an inexact readback")

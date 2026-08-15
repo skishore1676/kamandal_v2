@@ -20,14 +20,14 @@ def load_planner_config(config: dict[str, Any], *, source: str = "sheet") -> tup
         universe_rows = tables["universe"]
         playbook_rows = tables["playbooks"]
     universe = [UniverseEntry.from_row(row) for row in universe_rows if row.get("symbol")]
-    # A playbook has exactly one runtime owner. Blank/baseline rows belong to the
-    # established planner; staged experiment rows belong to strategy_lanes. This
-    # prevents the same enabled Sheet row from being planned twice.
+    # The unified policy compiler now owns mode selection.  This loader keeps
+    # every enabled row visible to callers so no legacy CSA-stage split can
+    # silently hide a capability from portfolio planning.  Target scheduling
+    # invokes the unified planner exactly once, which prevents double planning.
     playbooks = [
         Playbook.from_row(row)
         for row in playbook_rows
         if row.get("playbook_id")
-        and str(row.get("csa_stage") or "baseline").strip().lower() in {"", "baseline"}
     ]
     return universe, playbooks
 

@@ -216,7 +216,7 @@ def _compile_strangle_management(
         entry_delta_range=(entry_min, entry_max),
         target_delta=target,
         max_delta=maximum,
-        tested_side_confirmations=_integer(lifecycle.get("tested_side_confirmation"), default=2, field="tested_side_confirmation", playbook_id=playbook_id),
+        tested_side_confirmations=_integer(row.get("tested_side_confirmations", lifecycle.get("tested_side_confirmation")), default=2, field="tested_side_confirmations", playbook_id=playbook_id),
         rearm_inside_confirmations=_integer(row.get("rearm_inside_confirmations"), default=2, field="rearm_inside_confirmations", playbook_id=playbook_id),
         minimum_credit=_number(roll, "min_credit", playbook_id, default=0.10),
         cooldown_minutes=_integer(cooldown.get("minutes"), default=30, field="cooldown.minutes", playbook_id=playbook_id),

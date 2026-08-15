@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import hashlib
+import json
 import shutil
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,68 @@ class FixtureApplyReceipt:
     integrity_check: str
 
 
+_UNIFIED_PLAYBOOK_COLUMNS = (
+    "mode",
+    "management_delta_target",
+    "management_delta_max",
+    "tested_side_confirmations",
+    "rearm_inside_confirmations",
+    "filled_side_adjustment_limit",
+    "dte_action",
+    "dte_action_threshold",
+    "duration_roll_limit",
+    "inversion_enabled",
+    "event_timing",
+    "event_near_expiry_after_days",
+    "paired_order_required",
+    "post_event_exit",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SheetCellMapping:
+    sheet_row: int
+    playbook_id: str
+    column: str
+    old_value: Any
+    new_value: Any
+
+
+@dataclass(frozen=True, slots=True)
+class SheetRowAddition:
+    start_row: int
+    end_row: int
+    values: dict[str, Any]
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class SheetMappingManifest:
+    source_header: tuple[str, ...]
+    target_header: tuple[str, ...]
+    header_additions: tuple[str, ...]
+    cell_mappings: tuple[SheetCellMapping, ...]
+    row_additions: tuple[SheetRowAddition, ...]
+    validation_preservation: tuple[str, ...]
+    blockers: tuple[str, ...]
+
+    @property
+    def ready(self) -> bool:
+        return not self.blockers
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "ready": self.ready,
+            "source_header": list(self.source_header),
+            "target_header": list(self.target_header),
+            "header_additions": list(self.header_additions),
+            "cell_mappings": [asdict(item) for item in self.cell_mappings],
+            "row_additions": [asdict(item) for item in self.row_additions],
+            "validation_preservation": list(self.validation_preservation),
+            "blockers": list(self.blockers),
+        }
+
+
 def build_cutover_manifest(store: LocalStore) -> CutoverManifest:
     """Inventory baseline groups without mutating the database or scheduler."""
     decisions: list[CutoverDecision] = []
@@ -70,8 +133,163 @@ def unified_schedule_manifest() -> dict[str, tuple[str, ...]]:
         "csa-shadow-scan", "csa-live-scan", "csa-shadow-management",
         "csa-live-management", "csa-shadow-scorecard",
     )
-    add = ("unified-planning", "unified-lifecycle-management", "unified-lifecycle-history")
+    add = ("unified-planning", "unified-lifecycle-management")
     return {"retain": retain, "retire": retire, "add": add}
+
+
+def build_sheet_mapping_manifest(
+    header: list[str] | tuple[str, ...],
+    rows: list[dict[str, Any]],
+    *,
+    earnings_calendar_row: dict[str, Any] | None = None,
+) -> SheetMappingManifest:
+    """Describe the exact Phase 9 Sheet edit without touching a Sheet client.
+
+    Existing column order is preserved and unified fields are appended.  The
+    returned ranges are deliberately bounded to the supplied snapshot; a
+    protected Phase 9 runner must reread and compare this manifest before any
+    external write.
+    """
+    source_header = tuple(str(item) for item in header if str(item))
+    missing_identity = {"playbook_id", "enabled", "strategy_family", "structure"} - set(source_header)
+    if missing_identity:
+        raise ValueError(f"playbook mapping header is missing: {', '.join(sorted(missing_identity))}")
+    additions = tuple(column for column in _UNIFIED_PLAYBOOK_COLUMNS if column not in source_header)
+    target_header = source_header + additions
+    changes: list[SheetCellMapping] = []
+    blockers: list[str] = []
+    for index, raw_row in enumerate(rows, start=2):
+        row = dict(raw_row)
+        playbook_id = str(row.get("playbook_id") or "").strip()
+        if not playbook_id:
+            blockers.append(f"row {index}: playbook_id is required")
+            continue
+        mode = _legacy_mode(row.get("mode"), row.get("csa_stage"))
+        if mode is None:
+            blockers.append(f"{playbook_id}: unsupported csa_stage={row.get('csa_stage')!r}")
+            continue
+        _append_cell_change(changes, index, playbook_id, "mode", row.get("mode", ""), mode)
+        structure = str(row.get("structure") or "").strip().lower()
+        family = str(row.get("strategy_family") or "").strip().lower()
+        if structure in {"short_strangle", "strangle"} or family == "short_strangle":
+            _append_strangle_mapping(changes, index, playbook_id, row)
+        if structure in {"call_calendar", "put_calendar"} and family != "earnings_calendar":
+            _remove_unused_generic_calendar_event_expiration(changes, blockers, index, playbook_id, row)
+
+    additions_rows: list[SheetRowAddition] = []
+    if earnings_calendar_row is None:
+        blockers.append("earnings_calendar: reviewed direction and approved row values are required before Phase 9")
+    else:
+        proposed = _validated_earnings_calendar_row(earnings_calendar_row, target_header)
+        additions_rows.append(
+            SheetRowAddition(
+                start_row=len(rows) + 2,
+                end_row=len(rows) + 2,
+                values=proposed,
+                reason="separate event-aware earnings calendar; disabled until operator approval",
+            )
+        )
+    return SheetMappingManifest(
+        source_header=source_header,
+        target_header=target_header,
+        header_additions=additions,
+        cell_mappings=tuple(changes),
+        row_additions=tuple(additions_rows),
+        validation_preservation=(
+            "copy existing playbooks header order, formatting, formulas, and validations unchanged",
+            "extend existing column validation only through the bounded final addition row",
+            "apply only listed cell ranges after exact pre-write readback; do not clear or replace the tab",
+            "read back every listed cell and the appended earnings-calendar row after write",
+        ),
+        blockers=tuple(blockers),
+    )
+
+
+def _legacy_mode(explicit_mode: Any, legacy_stage: Any) -> str | None:
+    explicit = str(explicit_mode or "").strip().lower()
+    if explicit in {"live", "shadow"}:
+        return explicit
+    if explicit:
+        return None
+    stage = str(legacy_stage or "baseline").strip().lower() or "baseline"
+    if stage == "shadow":
+        return "shadow"
+    if stage in {"baseline", "pilot_live", "live"}:
+        return "live"
+    return None
+
+
+def _append_cell_change(
+    changes: list[SheetCellMapping], sheet_row: int, playbook_id: str, column: str, old_value: Any, new_value: Any
+) -> None:
+    if old_value != new_value:
+        changes.append(SheetCellMapping(sheet_row, playbook_id, column, old_value, new_value))
+
+
+def _append_strangle_mapping(
+    changes: list[SheetCellMapping], sheet_row: int, playbook_id: str, row: dict[str, Any]
+) -> None:
+    # These are the reviewed initial controls.  Existing JSON fields remain
+    # historical evidence; the explicit columns become the compiled policy.
+    for column, value in (
+        ("management_delta_target", 0.30),
+        ("management_delta_max", 0.40),
+        ("tested_side_confirmations", 2),
+        ("rearm_inside_confirmations", 2),
+        ("filled_side_adjustment_limit", 2),
+        ("dte_action", "close"),
+        ("dte_action_threshold", 21),
+        ("duration_roll_limit", 0),
+        ("inversion_enabled", "FALSE"),
+    ):
+        _append_cell_change(changes, sheet_row, playbook_id, column, row.get(column, ""), value)
+
+
+def _remove_unused_generic_calendar_event_expiration(
+    changes: list[SheetCellMapping], blockers: list[str], sheet_row: int, playbook_id: str, row: dict[str, Any]
+) -> None:
+    raw = row.get("management_policy_json")
+    if raw in (None, ""):
+        return
+    try:
+        policy = json.loads(str(raw))
+    except json.JSONDecodeError:
+        blockers.append(f"{playbook_id}: management_policy_json is not valid JSON")
+        return
+    if not isinstance(policy, dict) or "event_expiration" not in policy:
+        return
+    policy = dict(policy)
+    policy.pop("event_expiration")
+    _append_cell_change(
+        changes,
+        sheet_row,
+        playbook_id,
+        "management_policy_json",
+        raw,
+        json.dumps(policy, sort_keys=True, separators=(",", ":")),
+    )
+
+
+def _validated_earnings_calendar_row(values: dict[str, Any], header: tuple[str, ...]) -> dict[str, Any]:
+    row = {column: "" for column in header}
+    row.update(values)
+    required = {
+        "playbook_id", "strategy_family", "structure", "applicable_direction", "dte_min", "dte_max",
+        "long_dte_min", "long_dte_max", "event_timing", "event_near_expiry_after_days",
+        "paired_order_required", "post_event_exit",
+    }
+    missing = sorted(field for field in required if row.get(field) in (None, ""))
+    if missing:
+        raise ValueError(f"earnings calendar mapping missing: {', '.join(missing)}")
+    if str(row["strategy_family"]).strip().lower() != "earnings_calendar":
+        raise ValueError("earnings calendar mapping must use strategy_family=earnings_calendar")
+    if str(row["structure"]).strip().lower() not in {"call_calendar", "put_calendar"}:
+        raise ValueError("earnings calendar mapping must use a calendar structure")
+    if str(row["mode"] or "shadow").strip().lower() not in {"shadow", "live"}:
+        raise ValueError("earnings calendar mapping mode must be shadow or live")
+    row["enabled"] = "FALSE"
+    row["mode"] = str(row["mode"] or "shadow").strip().lower()
+    return row
 
 
 def apply_cutover_fixture(

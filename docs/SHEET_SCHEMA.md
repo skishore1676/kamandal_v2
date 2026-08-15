@@ -137,6 +137,11 @@ Notes:
   non-empty `lifecycle` object. The existing `score_weight_credit/pop/liquidity/spread`
   columns remain canonical for scoring; duplicating `score_weights` inside JSON
   fails closed. CSA does not supply repository numeric fallbacks for missing values.
+- The protected unified cutover appends (without moving existing columns)
+  `mode`, explicit strangle management controls, and event-calendar timing
+  controls.  Until that guarded migration occurs, `csa_stage` is read only as
+  compatibility input; `mode` wins when supplied.  The cutover manifest, not
+  this document, is the authority for exact Sheet ranges and validation copy.
 - `iv_abs_min/max`: optional absolute ATM IV gate, useful for avoiding
   low-volatility false positives.
 - `half_time_exit`: true/false. If true, the engine can recommend exit around

@@ -165,6 +165,7 @@ FALLBACK_PROFILES = [
 def build_seed_tables(control: dict[str, Any]) -> dict[str, list[list[Any]]]:
     playbooks = _playbook_rows()
     playbooks.extend(_narrative_ignition_rows())
+    playbooks = [row + [""] * (len(PLAYBOOKS_HEADER) - len(row)) for row in playbooks]
     return {
         "universe": _universe_rows(control, playbooks),
         "playbooks": playbooks,

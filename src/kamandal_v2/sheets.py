@@ -329,9 +329,21 @@ def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, s
     rows = [[proposal.get(col, "") for col in header] for proposal in appendable]
     written = client.append_tab_rows(title, header=header, rows=rows)
     readback = {str(row.get("symbol") or "").upper(): row for row in client.read_tab(title)}
-    missing = [str(row.get("symbol") or "") for row in appendable if str(row.get("symbol") or "").upper() not in readback]
-    if missing:
-        raise RuntimeError(f"universe proposal append readback missing: {', '.join(missing)}")
+    mismatches: list[str] = []
+    machine_owned = {"symbol", "enabled", "tier", "proposal_source", "proposal_reason", "proposal_date"}
+    for proposal in appendable:
+        symbol = str(proposal.get("symbol") or "").upper()
+        observed = readback.get(symbol)
+        if observed is None:
+            mismatches.append(f"{symbol}: missing")
+            continue
+        for field in machine_owned:
+            expected = str(proposal.get(field, "")).strip()
+            actual = str(observed.get(field, "")).strip()
+            if expected != actual:
+                mismatches.append(f"{symbol}:{field} expected={expected!r} actual={actual!r}")
+    if mismatches:
+        raise RuntimeError(f"universe proposal append readback mismatch: {'; '.join(mismatches)}")
     return written
 
 

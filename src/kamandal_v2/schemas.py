@@ -77,6 +77,22 @@ PLAYBOOKS_HEADER = [
     "csa_stage",
     "source_mode",
     "management_policy_json",
+    # Unified-engine controls are appended so the protected migration preserves
+    # every legacy column position, validation, and formula.
+    "mode",
+    "management_delta_target",
+    "management_delta_max",
+    "tested_side_confirmations",
+    "rearm_inside_confirmations",
+    "filled_side_adjustment_limit",
+    "dte_action",
+    "dte_action_threshold",
+    "duration_roll_limit",
+    "inversion_enabled",
+    "event_timing",
+    "event_near_expiry_after_days",
+    "paired_order_required",
+    "post_event_exit",
 ]
 
 DAILY_PLAN_HEADER = [
