@@ -8,7 +8,6 @@ from kamandal_v2.domain.models import ChainSnapshot, Idea, OptionLeg, OptionQuot
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.builders import build_lane_candidates
-from kamandal_v2.strategy_lanes.diagonal import build_diagonal_short_leg_ticket
 from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
 from kamandal_v2.strategy_lanes.models import (
     ActionDisposition,
@@ -379,7 +378,7 @@ def test_lane_lifecycle_scenarios_cover_adjust_close_and_approval_block() -> Non
             proposed_at=NOW,
         )
     )
-    assert diagonal_result.selected.reason_codes == ("long_only_requires_approval",)
+    assert diagonal_result.selected.reason_codes == ("diagonal_pair_reconciliation_required",)
 
     earnings = _policy("call_calendar")
     earnings_result = arbitrate_actions(
@@ -497,72 +496,30 @@ def test_mixed_tickets_reverse_close_sides_and_shadow_restart_is_safe(tmp_path) 
     assert {leg.side.value for leg in close_ticket.legs} == {"buy"}
 
 
-def test_diagonal_short_leg_roll_reduces_cost_basis_and_preserves_short_limit() -> None:
+def test_diagonal_partial_state_blocks_and_never_emits_a_short_leg_roll() -> None:
     policy = _policy("call_diagonal")
-    candidate = build_lane_candidates(
-        _opportunity(policy),
-        policy,
-        _chain([_quote("call", 105, 30, 0.25, 1.5, 1.6), _quote("call", 100, 75, 0.6, 8.0, 8.2)]),
-    )[0]
     lifecycle = _lifecycle(policy.lane)
-    open_action = CsaAction("open-diagonal", lifecycle.lifecycle_id, 1, ActionType.OPEN, ActionDisposition.SELECTED, ("admitted",), NOW, 1)
-    open_ticket = open_ticket_from_candidate(candidate, open_action, policy, created_at=NOW, limit_price=-7.0)
-    open_quotes = {
-        leg.instrument_id: {
-            "bid": 1.5 if leg.role == "short_near" else 8.0,
-            "ask": 1.6 if leg.role == "short_near" else 8.2,
-            "fresh": True,
-        }
-        for leg in open_ticket.legs
-    }
-    adapter = ShadowExecutionAdapter()
-    opened = adapter.adopt_fill(
-        lifecycle,
-        open_ticket,
-        adapter.simulate_fill(open_ticket, open_quotes, {"max_attempts": 2, "price_increment": 0.05}, observed_at=NOW, attempt=0),
-    )
-    current_short = next(leg for leg in candidate.legs if leg.role == "short_near")
-    replacement_quote = _quote("call", 107, 45, 0.25, 2.0, 2.1)
-    replacement_short = OptionLeg.from_quote(replacement_quote, role="short_near", side="sell")
-    roll_action = CsaAction(
-        "roll-diagonal",
-        opened.lifecycle_id,
-        opened.version,
-        ActionType.ADJUST,
-        ActionDisposition.SELECTED,
-        ("short_leg_roll_due",),
-        NOW,
-        1,
-        {"adjustment_kind": "short_leg_roll_or_resale"},
-    )
-    roll_ticket = build_diagonal_short_leg_ticket(
-        opened,
-        roll_action,
-        policy,
-        underlying="XYZ",
-        current_short=current_short,
-        replacement_short=replacement_short,
-        created_at=NOW,
-        limit_price=0.3,
-    )
-    roll_quotes = {
-        leg.instrument_id: {
-            "bid": 2.0 if leg.effect.value == "open" else 1.5,
-            "ask": 2.1 if leg.effect.value == "open" else 1.6,
-            "fresh": True,
-        }
-        for leg in roll_ticket.legs
-    }
-    rolled = adapter.adopt_fill(
-        opened,
-        roll_ticket,
-        adapter.simulate_fill(roll_ticket, roll_quotes, {"max_attempts": 2, "price_increment": 0.05}, observed_at=NOW, attempt=0),
+    result = arbitrate_actions(
+        lifecycle_registry().resolve(policy.lane)(
+            lifecycle,
+            policy,
+            {
+                "working_order_conflict": False,
+                "ownership_clear": True,
+                "hard_emergency": False,
+                "loss_multiple": 0,
+                "event_exit_due": False,
+                "profit_pct": 0,
+                "far_dte": 70,
+                "short_leg_present": False,
+                "paired_position_complete": False,
+            },
+            proposed_at=NOW,
+        )
     )
 
-    assert opened.metadata["initial_short_contracts"] == 1
-    assert rolled.metadata["front_expiry_roll_count"] == 1
-    assert rolled.metadata["active_cost_basis"] < opened.metadata["active_cost_basis"]
-    assert sum(item["side"] == "sell" for item in rolled.active_legs) == 1
+    assert result.selected.action_type is ActionType.BLOCK
+    assert result.selected.reason_codes == ("diagonal_pair_reconciliation_required",)
 
 
 def test_strangle_adjustment_cannot_increase_short_contract_count() -> None:

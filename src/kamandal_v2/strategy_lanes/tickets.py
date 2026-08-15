@@ -91,6 +91,15 @@ def _ticket(
             "fill_policy": dict((policy.management.get("lifecycle") or {}).get("fill") or {}),
             "action_type": action.action_type.value,
             **({"adjustment_kind": action.payload["adjustment_kind"]} if action.payload.get("adjustment_kind") else {}),
+            **(
+                {
+                    "tested_side": str(action.payload.get("tested_side") or ""),
+                    "breached_strike": action.payload.get("breached_strike"),
+                    "episode_id": str(action.payload.get("episode_id") or ""),
+                }
+                if action.payload.get("tested_side")
+                else {}
+            ),
         },
     )
 

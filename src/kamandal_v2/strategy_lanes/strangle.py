@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, lifecycle_value, nested_number, policy_bool, propose_action, sheet_number
+from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, lifecycle_value, nested_number, propose_action, sheet_number
 from kamandal_v2.strategy_lanes.models import ActionType, CsaAction, LifecycleState
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.tickets import mixed_ticket
 from kamandal_v2.domain.models import OptionLeg
 from kamandal_v2.strategy_lanes.models import StrategyTicket
+from kamandal_v2.strategy_engine.lifecycle import validate_strangle_replacement
 
 
 def propose_strangle_actions(
@@ -41,18 +42,7 @@ def propose_strangle_actions(
         if _context_number(context, "loss_multiple") >= nested_number(loss_stages, "close_multiple", prefix="lifecycle.loss_stages"):
             actions.append(propose_action(lifecycle, ActionType.CLOSE, "loss_stage_close", arbiter_class="hard_emergency", proposed_at=proposed_at))
 
-    if bool(context.get("duration_roll_due")):
-        actions.append(
-            propose_action(
-                lifecycle,
-                ActionType.DURATION_ROLL,
-                "duration_roll_due",
-                arbiter_class="lane_adjustment",
-                proposed_at=proposed_at,
-                payload={"adjustment_kind": "duration_roll"},
-            )
-        )
-    elif _tested_side_confirmed(policy, context) and _adjustment_available(policy, context):
+    if _tested_side_confirmed(policy, context) and _adjustment_available(policy, context):
         roll = lifecycle_value(policy, "roll")
         roll_credit = _context_number(context, "same_expiry_roll_credit")
         if isinstance(roll, dict) and roll.get("min_credit") not in (None, "") and roll_credit >= nested_number(roll, "min_credit", prefix="lifecycle.roll"):
@@ -63,22 +53,14 @@ def propose_strangle_actions(
                     "tested_side_confirmed",
                     arbiter_class="lane_adjustment",
                     proposed_at=proposed_at,
-                    payload={"adjustment_kind": "untested_side_same_expiry_credit_roll"},
+                    payload={
+                        "adjustment_kind": "untested_side_same_expiry_credit_roll",
+                        "tested_side": str(context.get("tested_side") or ""),
+                        "breached_strike": context.get("breached_strike"),
+                        "episode_id": str(context.get("strangle_episode_id") or ""),
+                    },
                 )
             )
-        else:
-            inversion = lifecycle_value(policy, "inversion")
-            if isinstance(inversion, dict) and policy_bool(inversion.get("allowed"), label="lifecycle.inversion.allowed") and bool(context.get("inversion_possible")):
-                actions.append(
-                    propose_action(
-                        lifecycle,
-                        ActionType.ADJUST,
-                        "tested_side_confirmed",
-                        arbiter_class="lane_adjustment",
-                        proposed_at=proposed_at,
-                        payload={"adjustment_kind": "bounded_inversion"},
-                    )
-                )
     actions.append(propose_action(lifecycle, ActionType.HOLD, "no_higher_precedence_action", arbiter_class="hold", proposed_at=proposed_at))
     return tuple(actions)
 
@@ -94,9 +76,9 @@ def build_strangle_adjustment_ticket(
     created_at: str,
     limit_price: float,
 ) -> StrategyTicket:
-    if action.action_type not in {ActionType.ADJUST, ActionType.DURATION_ROLL}:
+    if action.action_type is not ActionType.ADJUST:
         raise ValueError("strangle adjustment ticket requires an adjustment action")
-    return mixed_ticket(
+    ticket = mixed_ticket(
         action,
         policy,
         underlying=underlying,
@@ -106,9 +88,19 @@ def build_strangle_adjustment_ticket(
         limit_price=limit_price,
         lifecycle=lifecycle,
     )
+    validate_strangle_replacement(
+        lifecycle,
+        ticket.legs,
+        tested_side=str(action.payload.get("tested_side") or ""),
+        minimum_credit=float(((policy.management.get("lifecycle") or {}).get("roll") or {}).get("min_credit") or 0.10),
+        net_credit=limit_price,
+    )
+    return ticket
 
 
 def _tested_side_confirmed(policy: CsaPolicy, context: Mapping[str, Any]) -> bool:
+    if "strangle_episode_eligible" in context and not bool(context.get("strangle_episode_eligible")):
+        return False
     return (
         bool(context.get("tested_side"))
         and bool(context.get("cooldown_elapsed"))

@@ -18,9 +18,9 @@ from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.planner.engine import _market_provider
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
-from kamandal_v2.strategy_lanes.diagonal import build_diagonal_short_leg_ticket
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
 from kamandal_v2.strategy_lanes.daily_policy import load_daily_policy_snapshot, policy_tables_hash
+from kamandal_v2.strategy_lanes.lane_common import lifecycle_number
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode
 from kamandal_v2.strategy_lanes.operator_policy import load_csa_operator_policy
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
@@ -29,6 +29,7 @@ from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_lanes.strangle import build_strangle_adjustment_ticket
 from kamandal_v2.strategy_lanes.tickets import mixed_ticket
+from kamandal_v2.strategy_engine.lifecycle import observe_strangle_episode, strangle_adjustment_eligible
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,38 +284,38 @@ def _management_context(
         put = next(leg for leg in legs if leg.role == "short_put")
         call = next(leg for leg in legs if leg.role == "short_call")
         tested = "put" if snapshot.underlying_price <= put.strike else ("call" if snapshot.underlying_price >= call.strike else "")
-        confirmations = int(metadata.get("tested_side_confirmations") or 0) + 1 if tested else 0
+        breached_strike = put.strike if tested == "put" else (call.strike if tested == "call" else None)
+        observed = observe_strangle_episode(
+            replace(lifecycle, metadata=metadata),
+            tested_side=tested,
+            breached_strike=breached_strike,
+            required_confirmations=int(lifecycle_number(policy, "tested_side_confirmation")),
+            rearm_inside_confirmations=2,
+        )
+        metadata = dict(observed.metadata)
+        episode = dict(metadata.get("strangle_test_episode") or {})
+        confirmations = int(episode.get("confirmations") or 0)
         metadata["tested_side_confirmations"] = confirmations
-        roll_plan, inversion_plan = _strangle_roll_plans(tested, put, call, snapshot, policy)
+        roll_plan, _inversion_plan = _strangle_roll_plans(tested, put, call, snapshot, policy)
         plans["roll"] = roll_plan
-        plans["inversion"] = inversion_plan
-        duration_plan = _strangle_duration_plan(put, call, snapshot, policy)
-        plans["duration"] = duration_plan
-        roll_policy = ((policy.management.get("lifecycle") or {}).get("roll") or {})
-        duration_trigger = float(roll_policy["duration_trigger_dte"])
-        min_credit = float(roll_policy["min_credit"])
         context = {
             **common,
             "dte": min(dtes),
-            "duration_roll_due": min(dtes) <= duration_trigger and duration_plan is not None and duration_plan["credit"] >= min_credit,
             "tested_side": tested,
+            "breached_strike": breached_strike,
+            "strangle_episode_id": str(episode.get("episode_id") or ""),
+            "strangle_episode_eligible": strangle_adjustment_eligible(observed),
             "cooldown_elapsed": _cooldown_elapsed(metadata, policy, observed_at),
             "tested_side_confirmations": confirmations,
             "adjustment_count": int(metadata.get("adjustment_count") or 0),
             "same_expiry_roll_credit": roll_plan["credit"] if roll_plan else 0.0,
-            "inversion_possible": inversion_plan is not None,
         }
     elif lifecycle.lane is LaneId.CALL_VERTICAL:
         context = {**common, "dte": min(dtes)}
     elif lifecycle.lane is LaneId.DIRECTIONAL_DIAGONAL:
         short = next((leg for leg in legs if leg.role == "short_near"), None)
         long = next(leg for leg in legs if leg.role == "long_far")
-        short_cfg = (policy.management.get("lifecycle") or {}).get("short_leg") or {}
-        roll_dte = float(short_cfg["roll_dte"])
-        short_dte = max((date.fromisoformat(short.expiration) - observed_date).days, 0) if short else -1
-        replacement = _diagonal_replacement(short, long, snapshot, policy) if short and short_dte <= roll_dte else None
-        plans["diagonal_replacement"] = replacement
-        context = {**common, "far_dte": max((date.fromisoformat(long.expiration) - observed_date).days, 0), "short_leg_present": short is not None, "short_leg_roll_due": replacement is not None, "long_only_approved": False, "active_cost_basis": float(metadata.get("active_cost_basis") or 0.0)}
+        context = {**common, "far_dte": max((date.fromisoformat(long.expiration) - observed_date).days, 0), "short_leg_present": short is not None, "paired_position_complete": short is not None and len(legs) == 2}
     else:
         event = latest_earnings_snapshot(sqlite_path, snapshot.underlying)
         event_days = None if event is None or not event.next_earnings_date else (date.fromisoformat(event.next_earnings_date) - observed_date).days
@@ -334,70 +335,32 @@ def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot:
         for q in snapshot.quotes
         if q.option_type == old.option_type
         and q.expiration == old.expiration
-        and float(policy.resolved_fields["short_delta_min"]) <= abs(q.delta) <= float(policy.resolved_fields["short_delta_max"])
+        and abs(q.delta) <= 0.40
     ]
-    if tested == "put":
-        ordinary = [q for q in eligible if put.strike < q.strike < call.strike]
-        inverted = [q for q in eligible if q.strike <= put.strike]
-    else:
-        ordinary = [q for q in eligible if put.strike < q.strike < call.strike]
-        inverted = [q for q in eligible if q.strike >= call.strike]
-    inversion_cfg = ((policy.management.get("lifecycle") or {}).get("inversion") or {})
-    max_width = float(inversion_cfg["max_width"])
-    inverted = [q for q in inverted if abs(q.strike - (put.strike if tested == "put" else call.strike)) <= max_width]
+    ordinary = [
+        q
+        for q in eligible
+        if put.strike < q.strike < call.strike
+        and ((tested == "put" and q.strike < call.strike) or (tested == "call" and q.strike > put.strike))
+    ]
 
     def plan(candidates: list[Any]):
         if not candidates:
             return None
-        new = max(candidates, key=lambda q: q.bid - old.ask)
+        new = min(candidates, key=lambda q: (abs(abs(q.delta) - 0.30), -(q.bid - old.ask), q.strike))
         return {"old": old, "new": OptionLeg.from_quote(new, role=old.role, side="sell"), "credit": new.bid - old.ask}
 
-    return plan(ordinary), plan(inverted)
-
-
-def _diagonal_replacement(short: OptionLeg, long: OptionLeg, snapshot: Any, policy: CsaPolicy):
-    candidates = [q for q in snapshot.quotes if q.option_type == short.option_type and short.expiration < q.expiration < long.expiration and float(policy.resolved_fields["short_delta_min"]) <= abs(q.delta) <= float(policy.resolved_fields["short_delta_max"])]
-    if not candidates:
-        return None
-    quote = max(candidates, key=lambda q: q.bid)
-    return OptionLeg.from_quote(quote, role="short_near", side="sell")
-
-
-def _strangle_duration_plan(put: OptionLeg, call: OptionLeg, snapshot: Any, policy: CsaPolicy):
-    expirations = sorted({q.expiration for q in snapshot.quotes if q.expiration > put.expiration})
-    for expiration in expirations:
-        puts = [q for q in snapshot.quotes if q.expiration == expiration and q.option_type == "put" and float(policy.resolved_fields["short_delta_min"]) <= abs(q.delta) <= float(policy.resolved_fields["short_delta_max"])]
-        calls = [q for q in snapshot.quotes if q.expiration == expiration and q.option_type == "call" and float(policy.resolved_fields["short_delta_min"]) <= abs(q.delta) <= float(policy.resolved_fields["short_delta_max"])]
-        if puts and calls:
-            new_put = max(puts, key=lambda q: q.bid)
-            new_call = max(calls, key=lambda q: q.bid)
-            return {
-                "old": (put, call),
-                "new": (OptionLeg.from_quote(new_put, role="short_put", side="sell"), OptionLeg.from_quote(new_call, role="short_call", side="sell")),
-                "credit": new_put.bid + new_call.bid - put.ask - call.ask,
-            }
-    return None
+    return plan(ordinary), None
 
 
 def _management_ticket(action: Any, lifecycle: LifecycleState, policy: CsaPolicy, legs: tuple[OptionLeg, ...], plans: dict[str, Any], underlying: str, created_at: str):
     if action.action_type is ActionType.CLOSE:
         return mixed_ticket(action, policy, underlying=underlying, close_legs=legs, open_legs=(), created_at=created_at, limit_price=float(plans["liquidation"]))
-    if lifecycle.lane is LaneId.SHORT_STRANGLE and action.action_type is ActionType.DURATION_ROLL:
-        plan = plans.get("duration")
-        if not plan:
-            raise ValueError("selected duration roll has no executable plan")
-        return build_strangle_adjustment_ticket(lifecycle, action, policy, underlying=underlying, close_legs=tuple(plan["old"]), open_legs=tuple(plan["new"]), created_at=created_at, limit_price=float(plan["credit"]))
     if lifecycle.lane is LaneId.SHORT_STRANGLE and action.action_type is ActionType.ADJUST:
-        plan = plans.get("inversion") if action.payload.get("adjustment_kind") == "bounded_inversion" else plans.get("roll")
+        plan = plans.get("roll")
         if not plan:
             raise ValueError("selected strangle adjustment has no executable roll plan")
         return build_strangle_adjustment_ticket(lifecycle, action, policy, underlying=underlying, close_legs=(plan["old"],), open_legs=(plan["new"],), created_at=created_at, limit_price=float(plan["credit"]))
-    if lifecycle.lane is LaneId.DIRECTIONAL_DIAGONAL and action.action_type is ActionType.ADJUST:
-        replacement = plans.get("diagonal_replacement")
-        current = next((leg for leg in legs if leg.role == "short_near"), None)
-        if replacement is None:
-            raise ValueError("selected diagonal adjustment has no replacement")
-        return build_diagonal_short_leg_ticket(lifecycle, action, policy, underlying=underlying, current_short=current, replacement_short=replacement, created_at=created_at, limit_price=replacement.bid - (current.ask if current else 0.0))
     raise ValueError(f"unsupported selected management action: {action.action_type.value}")
 
 

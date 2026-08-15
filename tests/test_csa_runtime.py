@@ -733,7 +733,7 @@ def test_portfolio_hedge_source_uses_open_live_ledger_delta(tmp_path) -> None:
     assert result.candidate_count > 0
 
 
-def test_strangle_adjustment_moves_untested_side_inward_and_bounds_inversion() -> None:
+def test_strangle_adjustment_moves_untested_side_inward_without_inversion() -> None:
     policy_tables = _tables()
     from kamandal_v2.strategy_lanes.policy import compile_csa_policy
 
@@ -759,8 +759,7 @@ def test_strangle_adjustment_moves_untested_side_inward_and_bounds_inversion() -
 
     assert ordinary["new"].strike == 100
     assert put.strike < ordinary["new"].strike < call.strike
-    assert inversion["new"].strike == 88
-    assert abs(inversion["new"].strike - put.strike) <= 5
+    assert inversion is None
 
 
 def test_strangle_cooldown_uses_sheet_minutes_and_last_fill_timestamp() -> None:

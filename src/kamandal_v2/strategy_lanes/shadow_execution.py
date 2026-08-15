@@ -6,7 +6,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
 
-from kamandal_v2.strategy_lanes.models import LegSide, LifecycleState, ShadowFill, StrategyTicket, stable_csa_id
+from kamandal_v2.strategy_lanes.models import ActionType, LaneId, LegSide, LifecycleState, ShadowFill, StrategyTicket, stable_csa_id
+from kamandal_v2.strategy_engine.lifecycle import finalize_strangle_replacement, validate_strangle_replacement
 
 
 class ShadowExecutionAdapter:
@@ -63,6 +64,18 @@ class ShadowExecutionAdapter:
             raise ValueError("only a completed shadow fill can update a lifecycle")
         if lifecycle.lifecycle_id != ticket.lifecycle_id or lifecycle.version != ticket.lifecycle_version:
             raise ValueError("ticket does not target the current lifecycle version")
+        adjustment_kind = str(ticket.metadata.get("adjustment_kind") or "")
+        is_strangle_replacement = (
+            lifecycle.lane is LaneId.SHORT_STRANGLE
+            and adjustment_kind == "untested_side_same_expiry_credit_roll"
+        )
+        if is_strangle_replacement:
+            validate_strangle_replacement(
+                lifecycle,
+                ticket.legs,
+                tested_side=str(ticket.metadata.get("tested_side") or ""),
+                net_credit=fill.filled_price,
+            )
         active = list(lifecycle.active_legs)
         for leg in ticket.legs:
             identity = (leg.instrument_id, leg.role)
@@ -91,8 +104,9 @@ class ShadowExecutionAdapter:
                 for item in active
                 if str(item.get("side") or "") == LegSide.SELL.value
             )
-        adjustment_kind = str(ticket.metadata.get("adjustment_kind") or "")
-        if adjustment_kind:
+        if lifecycle.lane is LaneId.SHORT_STRANGLE and ticket.metadata.get("action_type") == ActionType.OPEN.value:
+            metadata.setdefault("opening_credit", round(max(signed_cashflow, 0.0), 6))
+        if adjustment_kind and not is_strangle_replacement:
             metadata["adjustment_count"] = int(metadata.get("adjustment_count") or 0) + 1
             metadata["last_adjustment_at"] = fill.filled_at
         if adjustment_kind == "duration_roll":
@@ -113,7 +127,7 @@ class ShadowExecutionAdapter:
         else:
             metadata["realized_pnl_price"] = round(cumulative_cashflow, 6)
             metadata["realized_pnl_usd"] = round(cumulative_cashflow * 100.0, 2)
-        return replace(
+        adopted = replace(
             lifecycle,
             version=lifecycle.version + 1,
             status="open" if active else "closed",
@@ -122,6 +136,7 @@ class ShadowExecutionAdapter:
             updated_at=fill.filled_at,
             metadata=metadata,
         )
+        return finalize_strangle_replacement(adopted, filled_at=fill.filled_at) if is_strangle_replacement else adopted
 
 
 def _natural_price(ticket: StrategyTicket, quotes: Mapping[str, Mapping[str, Any]]) -> float:
