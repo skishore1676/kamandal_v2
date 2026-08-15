@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState
@@ -8,8 +9,11 @@ from kamandal_v2.planner.engine import PlanRunResult
 from kamandal_v2.seed import build_seed_tables, seed_headers
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
+from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, capture_daily_policy_snapshot, current_trading_date, policy_tables_hash
+from kamandal_v2.strategy_lanes.operator_policy import OperatorPolicyBundle
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_engine.planning import run_unified_books
+from kamandal_v2.live.execution import execute_live_approved
 
 
 def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -38,9 +42,22 @@ def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     return universe, playbooks
 
 
+def _daily_snapshot(tmp_path, control: dict, universe: list[dict[str, object]], playbooks: list[dict[str, object]]):  # noqa: ANN001
+    tables = {"universe": universe, "playbooks": playbooks}
+    return DailyPolicySnapshot(
+        trading_date=current_trading_date(control),
+        captured_at="2026-08-15T12:00:00Z",
+        snapshot_hash=policy_tables_hash(tables),
+        tables=tables,
+        path=Path(tmp_path / "policy" / "strategy_policy_fixture.json"),
+        policy=OperatorPolicyBundle((), (), (), "2026-08-15T12:00:00Z", source="fixture"),
+    )
+
+
 def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) -> None:
     universe, playbooks = _rows()
     control = load_control()
+    snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
     result = run_unified_books(
         control,
         universe_rows=universe,
@@ -48,6 +65,7 @@ def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) 
         idea_paths=["tests/fixtures/sample_ideas.yaml"],
         store=LocalStore(tmp_path / "kamandal.db"),
         audit_root=tmp_path / "audit",
+        daily_policy_snapshot=snapshot,
     )
 
     assert result.compilation.ok
@@ -71,13 +89,16 @@ def test_one_book_failure_does_not_erase_other_book(tmp_path, monkeypatch) -> No
         return original(config, **kwargs)
 
     monkeypatch.setattr(planning, "run_plan", fail_shadow)
+    control = load_control()
+    snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
     result = run_unified_books(
-        load_control(),
+        control,
         universe_rows=universe,
         playbook_rows=playbooks,
         idea_paths=["tests/fixtures/sample_ideas.yaml"],
         store=LocalStore(tmp_path / "kamandal.db"),
         audit_root=tmp_path / "audit",
+        daily_policy_snapshot=snapshot,
     )
 
     assert result.live.result is not None
@@ -108,13 +129,16 @@ def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> 
         }
     )
 
+    control = load_control()
+    snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
     result = run_unified_books(
-        load_control(),
+        control,
         universe_rows=universe,
         playbook_rows=playbooks,
         idea_paths=["tests/fixtures/sample_ideas.yaml"],
         store=LocalStore(tmp_path / "kamandal.db"),
         audit_root=tmp_path / "audit",
+        daily_policy_snapshot=snapshot,
     )
 
     assert result.compilation.ok
@@ -134,14 +158,17 @@ def test_unified_books_only_project_when_explicitly_requested(tmp_path, monkeypa
 
     monkeypatch.setattr(planning, "write_daily_plan", write_daily_plan)
     monkeypatch.setattr(engine, "write_daily_plan", write_daily_plan)
+    control = load_control()
+    snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
     run_unified_books(
-        load_control(),
+        control,
         universe_rows=universe,
         playbook_rows=playbooks,
         idea_paths=["tests/fixtures/sample_ideas.yaml"],
         store=LocalStore(tmp_path / "kamandal.db"),
         audit_root=tmp_path / "audit",
         write_sheet=True,
+        daily_policy_snapshot=snapshot,
     )
 
     assert writes == [{"live_advisory"}, {"shadow"}]
@@ -240,7 +267,9 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
     )
     portfolio = PortfolioState(100_000, 100_000, 0, 0)
     result = PlanRunResult(
-        plan_run_id="run_2026-08-15T12:00:00Z",
+        # Real planner identifiers are compact.  Snapshot identity must not be
+        # inferred by slicing this value.
+        plan_run_id="run_20260815T120000Z",
         ideas=[], candidates=[candidate],
         plans=[Plan("live-plan", 1, "eligible", [candidate], 1, 500, 0.5, 99_500, portfolio, portfolio)],
         daily_plan_rows=[], metrics={}, idea_diagnostics=[], rejection_summary=[],
@@ -250,17 +279,45 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
     monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: result)
     control = load_control()
     control.setdefault("live", {})["entry_approval_mode"] = "auto_top_plan"
+    tables = {
+        "universe": [{"symbol": "XYZ", "enabled": "TRUE", "profile": "large_cap"}],
+        "playbooks": [live_row],
+    }
+    monkeypatch.setenv("KAMANDAL_STRATEGY_POLICY_SNAPSHOT_DIR", str(tmp_path / "policy"))
+    snapshot = capture_daily_policy_snapshot(
+        control,
+        trading_date=current_trading_date(control),
+        tables=tables,
+        captured_at="2026-08-15T12:00:00Z",
+    )
     unified = run_unified_books(
         control,
-        universe_rows=[{"symbol": "XYZ", "enabled": "TRUE", "profile": "large_cap"}],
-        playbook_rows=[live_row], idea_paths=[], store=store, audit_root=tmp_path / "audit",
+        universe_rows=snapshot.tables["universe"],
+        playbook_rows=snapshot.tables["playbooks"],
+        idea_paths=[],
+        store=store,
+        audit_root=tmp_path / "audit",
+        daily_policy_snapshot=snapshot,
     )
 
     assert unified.live.errors == ()
     live_intent = store.live_order_intents_by_status({"pending_approval"})[0]
     assert live_intent["intent_type"] == "open"
     assert live_intent["csa_lifecycle_id"]
+    assert live_intent["csa_policy_snapshot_date"] == snapshot.trading_date
+    assert live_intent["csa_policy_snapshot_hash"] == snapshot.snapshot_hash
+    assert live_intent["csa_compiled_policy_hash"] == live_intent["csa_policy_hash"]
     assert CsaStore(database, read_only=True).lifecycle(live_intent["csa_lifecycle_id"]).status == "pending_live_submission"
     detail = json.loads(dict(zip(seed_headers()["daily_plan"], unified.live.result.daily_plan_rows[0], strict=False))["plan_detail_json"])
     assert detail["lane"] == "live_advisory"
     assert detail["order_ticket_json"]["ticket_hash"]
+
+    # The executor uses the persisted snapshot and its real authorization
+    # function; only the broker construction is inert for this dry run.
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": []})
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: object())
+    store.update_live_order_intent_status(live_intent["ticket_hash"], "stage_approved_pending_submit")
+    executed = execute_live_approved(control, submit=False, store=store)
+
+    assert executed["source"] == "stage_authorized_ledger"
+    assert executed["results"][0]["status"] == "dry_run"

@@ -23,6 +23,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_engine.lifecycle import freeze_lifecycle_policy
 from kamandal_v2.strategy_engine.policy import ExecutionMode, PlaybookPolicy, PolicyCompilation, compile_playbook_policies
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
+from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, policy_tables_hash
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode, stable_csa_id
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
@@ -64,6 +65,7 @@ def run_unified_books(
     store: LocalStore | None = None,
     audit_root: str | Path = "data/audit/unified",
     write_sheet: bool = False,
+    daily_policy_snapshot: DailyPolicySnapshot | None = None,
 ) -> UnifiedPlanningResult:
     """Build independent books from one normalized Sheet snapshot.
 
@@ -72,6 +74,12 @@ def run_unified_books(
     per-book: a shadow failure cannot erase a valid live result and vice versa.
     """
     compilation = compile_playbook_policies(playbook_rows)
+    supplied_policy_hash = policy_tables_hash(
+        {
+            "universe": [dict(row) for row in universe_rows],
+            "playbooks": [dict(row) for row in playbook_rows],
+        }
+    )
     active_store = store or LocalStore()
     universe = [UniverseEntry.from_row(row) for row in universe_rows if row.get("symbol")]
     if not compilation.ok:
@@ -81,7 +89,19 @@ def run_unified_books(
             live=PlanningBook(ExecutionMode.LIVE, (), None, errors),
             shadow=PlanningBook(ExecutionMode.SHADOW, (), None, errors),
         )
-    live = _run_book(ExecutionMode.LIVE, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root, write_sheet)
+    live = _run_book(
+        ExecutionMode.LIVE,
+        compilation.policies,
+        universe,
+        config,
+        idea_paths,
+        provider,
+        active_store,
+        audit_root,
+        write_sheet,
+        daily_policy_snapshot=daily_policy_snapshot,
+        supplied_policy_hash=supplied_policy_hash,
+    )
     shadow = _run_book(ExecutionMode.SHADOW, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root, write_sheet)
     return UnifiedPlanningResult(compilation=compilation, live=live, shadow=shadow)
 
@@ -96,10 +116,21 @@ def _run_book(
     store: LocalStore,
     audit_root: str | Path,
     write_sheet: bool,
+    *,
+    daily_policy_snapshot: DailyPolicySnapshot | None = None,
+    supplied_policy_hash: str = "",
 ) -> PlanningBook:
     selected = tuple(policy for policy in policies if policy.mode is mode)
     if not selected:
         return PlanningBook(mode, (), None, ())
+    if mode is ExecutionMode.LIVE:
+        snapshot_error = _validate_live_policy_snapshot(
+            daily_policy_snapshot,
+            policies=selected,
+            supplied_policy_hash=supplied_policy_hash,
+        )
+        if snapshot_error:
+            return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (snapshot_error,))
     mode_config = deepcopy(config)
     mode_config.setdefault("runtime", {})["mode"] = mode.value
     live_renderer = None
@@ -141,7 +172,12 @@ def _run_book(
     if mode is ExecutionMode.LIVE:
         rows = live_renderer[0](result, mode_config, store=store, mode="live_advisory")
         try:
-            handoffs = _bind_selected_live_lifecycle(result, selected, store=store)
+            handoffs = _bind_selected_live_lifecycle(
+                result,
+                selected,
+                store=store,
+                daily_policy_snapshot=daily_policy_snapshot,
+            )
         except Exception as exc:  # noqa: BLE001 - no live intent may lack an adoptable lifecycle.
             return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (f"live handoff failed: {type(exc).__name__}: {exc}",))
         result.daily_plan_rows[:] = rows
@@ -164,6 +200,7 @@ def _bind_selected_live_lifecycle(
     policies: tuple[PlaybookPolicy, ...],
     *,
     store: LocalStore,
+    daily_policy_snapshot: DailyPolicySnapshot | None,
 ) -> list[dict[str, Any]]:
     """Attach the frozen selected-entry lifecycle to its existing guarded ticket."""
     if not result.plans:
@@ -176,6 +213,8 @@ def _bind_selected_live_lifecycle(
         policy = policy_by_id.get(candidate.playbook_id)
         if policy is None:
             raise ValueError(f"selected candidate {candidate.candidate_id} has no unified policy")
+        if daily_policy_snapshot is None:  # Defended above, retained for direct callers.
+            raise ValueError("live selected-entry handoff requires a daily policy snapshot")
         compiled = _shadow_csa_policy(policy, stage=CsaStage.LIVE)
         lifecycle_id = stable_csa_id("unified-live-lifecycle", [selected_plan.plan_id, candidate.candidate_id])
         lifecycle = freeze_lifecycle_policy(
@@ -196,8 +235,11 @@ def _bind_selected_live_lifecycle(
                     "candidate_id": candidate.candidate_id,
                     "unified_plan_id": selected_plan.plan_id,
                     "execution_mode": "live",
-                    "policy_snapshot_hash": compiled.policy_hash,
-                    "policy_snapshot_date": _plan_time(result)[:10],
+                    # This is the daily Sheet snapshot identity, not the
+                    # per-playbook compiled-policy identity below.
+                    "policy_snapshot_hash": daily_policy_snapshot.snapshot_hash,
+                    "policy_snapshot_date": daily_policy_snapshot.trading_date,
+                    "entry_policy_hash": compiled.policy_hash,
                     "source_identity": {"idea_id": candidate.idea_id, "plan_run_id": result.plan_run_id},
                 },
             ),
@@ -230,6 +272,8 @@ def _bind_selected_live_lifecycle(
                 "csa_strategy_ticket": strategy_ticket.to_dict(),
                 "csa_policy_snapshot_date": str(lifecycle.metadata["policy_snapshot_date"]),
                 "csa_policy_snapshot_hash": str(lifecycle.metadata["policy_snapshot_hash"]),
+                "csa_authorization_policy": "unified_strategy_engine",
+                "csa_compiled_policy_hash": compiled.policy_hash,
                 "stage_authorized": True,
             }
         )
@@ -238,6 +282,39 @@ def _bind_selected_live_lifecycle(
             {"source_id": candidate.idea_id, "plan_id": selected_plan.plan_id, "candidate_id": candidate.candidate_id, "playbook_id": compiled.playbook_id, "capability": policy.capability.key, "mode": "live", "lifecycle_id": lifecycle_id, "ticket_id": strategy_ticket.ticket_id, "adapter_state": str(ticket["_ledger_status"])}
         )
     return handoffs
+
+
+def _validate_live_policy_snapshot(
+    snapshot: DailyPolicySnapshot | None,
+    *,
+    policies: tuple[PlaybookPolicy, ...],
+    supplied_policy_hash: str,
+) -> str | None:
+    """Require live planning to use the exact persisted daily policy input.
+
+    The daily snapshot is captured once by the unified command and becomes the
+    shared identity between selection and the guarded executor.  Comparing the
+    supplied raw tables to the snapshot prevents a caller from planning against
+    a newer Sheet read while attaching an older snapshot hash to its ticket.
+    """
+    if snapshot is None:
+        return "live planning requires the persisted daily policy snapshot"
+    snapshot_hash = policy_tables_hash(snapshot.tables)
+    if snapshot.snapshot_hash != snapshot_hash:
+        return "live planning daily policy snapshot hash is invalid"
+    if supplied_policy_hash != snapshot.snapshot_hash:
+        return "live planning inputs differ from the persisted daily policy snapshot"
+    # Every selected live playbook must still be present in the frozen daily
+    # table.  Full raw-row equality is intentionally avoided here because the
+    # planner has already normalized optional/blank Sheet fields.
+    snapshot_ids = {
+        str(row.get("playbook_id") or "")
+        for row in snapshot.tables.get("playbooks") or []
+    }
+    missing = sorted(policy.playbook_id for policy in policies if policy.mode is ExecutionMode.LIVE and policy.playbook_id not in snapshot_ids)
+    if missing:
+        return "live planning snapshot missing playbook(s): " + ", ".join(missing)
+    return None
 
 
 def _materialize_shadow_handoff(

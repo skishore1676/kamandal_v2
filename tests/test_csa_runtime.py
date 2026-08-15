@@ -603,17 +603,29 @@ def test_live_fill_advances_same_lifecycle_and_management_stages_reusable_close(
     assert {leg["openCloseIndicator"] for leg in close_ticket["submit_payload"]["legs"]} == {"CLOSE"}
 
     monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": []})
-    monkeypatch.setattr("kamandal_v2.live.execution.load_daily_policy_snapshot", lambda _config: object())
-    monkeypatch.setattr(
-        "kamandal_v2.live.execution._stage_ticket_authorization",
-        lambda _ticket, _snapshot: (True, "stage_authorization_current"),
-    )
     monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: object())
 
     executed = execute_live_approved({}, submit=False, store=live_store)
 
     assert executed["management"] is True
     assert executed["results"][0]["status"] == "dry_run"
+
+    # A later-day adjustment uses the same frozen lifecycle authority even
+    # when the current Sheet projection is absent.  Keep this as a real
+    # executor path: do not replace stage authorization with an allow stub.
+    live_store.update_live_order_intent_status(close_ticket["ticket_hash"], "close_filled")
+    adjustment = json.loads(json.dumps(close_ticket))
+    adjustment["ticket_hash"] = "adjust-" + str(close_ticket["ticket_hash"])
+    adjustment["order_id"] = "adjust-" + str(close_ticket["order_id"])
+    adjustment["intent_type"] = "adjust"
+    adjustment["csa_action_type"] = "adjust"
+    adjustment["csa_strategy_ticket"]["metadata"]["action_type"] = "adjust"
+    live_store.save_live_order_intent(adjustment, status="stage_approved_pending_submit")
+
+    adjusted = execute_live_approved({}, submit=False, store=live_store)
+
+    assert adjusted["management"] is True
+    assert adjusted["results"][0]["status"] == "dry_run"
 
 
 def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_path) -> None:

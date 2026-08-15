@@ -30,6 +30,8 @@ from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.models import CsaStage
 from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, load_daily_policy_snapshot
+from kamandal_v2.strategy_lanes.store import CsaStore, strategy_ticket_from_payload
+from kamandal_v2.strategy_engine.policy import ExecutionMode, compile_playbook_policies
 
 
 TERMINAL_UNFILLED_ORDER_STATUSES = {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED", "FAILED"}
@@ -96,12 +98,16 @@ def execute_live_approved(
         )
         if staged:
             ticket = staged[0]
-            try:
-                daily_policy = load_daily_policy_snapshot(config)
-            except (FileNotFoundError, ValueError) as exc:
-                authorized, authorization_reason = False, f"blocked_daily_policy_snapshot:{type(exc).__name__}"
+            is_management = _is_lifecycle_management_ticket(ticket)
+            if is_management:
+                authorized, authorization_reason = _lifecycle_management_authorization(ticket, config=config, store=store)
             else:
-                authorized, authorization_reason = _stage_ticket_authorization(ticket, daily_policy)
+                try:
+                    daily_policy = load_daily_policy_snapshot(config)
+                except (FileNotFoundError, ValueError) as exc:
+                    authorized, authorization_reason = False, f"blocked_daily_policy_snapshot:{type(exc).__name__}"
+                else:
+                    authorized, authorization_reason = _stage_ticket_authorization(ticket, daily_policy)
             if not authorized:
                 store.event(
                     "stage_authorized_live_entry_blocked",
@@ -119,7 +125,6 @@ def execute_live_approved(
                     "source": "stage_authorized_ledger",
                 }
             _assert_submit_allowed(config, submit=submit)
-            is_management = str(ticket.get("intent_type") or "") in {"close", "adjust"}
             if is_management:
                 adapter = broker_adapter(config)
                 result = _execute_ticket(
@@ -1740,6 +1745,20 @@ def _stage_ticket_authorization(
         return False, "blocked_stage_authorization_snapshot_date_mismatch"
     if str(ticket.get("csa_policy_snapshot_hash") or "") != snapshot.snapshot_hash:
         return False, "blocked_stage_authorization_snapshot_hash_mismatch"
+    if str(ticket.get("csa_authorization_policy") or "") == "unified_strategy_engine":
+        compiled = compile_playbook_policies(snapshot.tables.get("playbooks") or [])
+        if not compiled.ok:
+            return False, "blocked_stage_authorization_policy_invalid"
+        policy = next((item for item in compiled.policies if item.playbook_id == playbook_id), None)
+        if policy is None:
+            return False, "blocked_stage_authorization_policy_unavailable"
+        if policy.mode is not ExecutionMode.LIVE:
+            return False, "blocked_stage_authorization_revoked"
+        if policy.policy_hash != policy_hash:
+            return False, "blocked_stage_authorization_policy_changed"
+        if str(ticket.get("csa_compiled_policy_hash") or "") != policy_hash:
+            return False, "blocked_stage_authorization_compiled_policy_mismatch"
+        return True, "stage_authorization_current"
     policy = next((item for item in snapshot.policy.policies if item.playbook_id == playbook_id), None)
     if policy is None:
         return False, "blocked_stage_authorization_policy_unavailable"
@@ -1750,6 +1769,80 @@ def _stage_ticket_authorization(
     if str(ticket.get("csa_stage") or "") != policy.stage.value:
         return False, "blocked_stage_authorization_stage_changed"
     return True, "stage_authorization_current"
+
+
+def _is_lifecycle_management_ticket(ticket: dict[str, Any]) -> bool:
+    return (
+        str(ticket.get("intent_type") or "") in {"close", "adjust"}
+        and bool(ticket.get("csa_lifecycle_id"))
+    )
+
+
+def _lifecycle_management_authorization(
+    ticket: dict[str, Any],
+    *,
+    config: dict[str, Any],
+    store: LocalStore,
+) -> tuple[bool, str]:
+    """Authorize management from frozen lifecycle state, never today's Sheet.
+
+    Current Sheet policy controls new entries.  This branch deliberately uses
+    only the lifecycle and local safety/reconciliation state so a later Sheet
+    edit cannot orphan a legitimately open position.
+    """
+    action_type = str(ticket.get("intent_type") or "")
+    lifecycle_id = str(ticket.get("csa_lifecycle_id") or "")
+    if action_type not in {"close", "adjust"} or not lifecycle_id:
+        return False, "blocked_lifecycle_authorization_metadata_missing"
+    if bool((config.get("runtime") or {}).get("halt")):
+        return False, "blocked_lifecycle_authorization_runtime_halt"
+    payload = ticket.get("csa_strategy_ticket")
+    if not isinstance(payload, dict):
+        return False, "blocked_lifecycle_authorization_strategy_ticket_missing"
+    try:
+        strategy_ticket = strategy_ticket_from_payload(payload)
+        lifecycle = CsaStore(store.sqlite_path, read_only=True).lifecycle(lifecycle_id)
+    except (RuntimeError, TypeError, ValueError):
+        return False, "blocked_lifecycle_authorization_lifecycle_unavailable"
+    if lifecycle is None or lifecycle.status != "open":
+        return False, "blocked_lifecycle_authorization_not_open"
+    if str(lifecycle.metadata.get("execution_mode") or "") != "live":
+        return False, "blocked_lifecycle_authorization_execution_mode"
+    if strategy_ticket.lifecycle_id != lifecycle_id or strategy_ticket.lifecycle_version != lifecycle.version:
+        return False, "blocked_lifecycle_authorization_version_mismatch"
+    if str(ticket.get("csa_action_type") or "") != action_type or str(strategy_ticket.metadata.get("action_type") or "") != action_type:
+        return False, "blocked_lifecycle_authorization_action_mismatch"
+    frozen_policy = lifecycle.metadata.get("compiled_management_policy")
+    if not isinstance(frozen_policy, dict) or str(frozen_policy.get("policy_hash") or "") != lifecycle.policy_hash:
+        return False, "blocked_lifecycle_authorization_frozen_policy_missing"
+    if strategy_ticket.policy_hash != lifecycle.policy_hash or str(ticket.get("csa_policy_hash") or "") != lifecycle.policy_hash:
+        return False, "blocked_lifecycle_authorization_policy_mismatch"
+    if not lifecycle.active_legs:
+        return False, "blocked_lifecycle_authorization_ownership_missing"
+    from kamandal_v2.live.reconciliation import reconciliation_blockers_for_group
+
+    reconciliation = reconciliation_blockers_for_group(
+        store,
+        {"underlying": ticket.get("underlying") or lifecycle.metadata.get("underlying")},
+        config=config,
+    )
+    if reconciliation:
+        return False, "blocked_lifecycle_authorization_reconciliation"
+    active_statuses = {
+        *PENDING_TICKET_STATUSES,
+        *ACTIVE_TICKET_STATUSES,
+        *CANCEL_PENDING_TICKET_STATUSES,
+        REPLACE_WAITING_CANCEL,
+    }
+    conflicts = [
+        item
+        for item in store.live_order_intents_by_status(active_statuses)
+        if str(item.get("csa_lifecycle_id") or "") == lifecycle_id
+        and str(item.get("ticket_hash") or "") != str(ticket.get("ticket_hash") or "")
+    ]
+    if conflicts:
+        return False, "blocked_lifecycle_authorization_working_order_conflict"
+    return True, "lifecycle_authorization_frozen"
 
 
 def _ticket_from_row(row: dict[str, Any]) -> dict[str, Any]:

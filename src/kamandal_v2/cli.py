@@ -521,6 +521,7 @@ def main() -> None:
         return
     if args.command == "unified-plan":
         from kamandal_v2.strategy_engine.planning import run_unified_books
+        from kamandal_v2.strategy_lanes.daily_policy import capture_daily_policy_snapshot
 
         if args.config_source == "sheet":
             tables = pull_sheet_tables(config)
@@ -530,14 +531,20 @@ def main() -> None:
                 key: [dict(zip(headers[key], row, strict=False)) for row in build_seed_tables(config)[key]]
                 for key in ("universe", "playbooks")
             }
+        # Capture (or reload) the one immutable Sheet policy view before
+        # planning.  The planner must use these frozen rows, so every selected
+        # live intent carries the exact daily snapshot identity the guarded
+        # executor will later verify.
+        daily_policy_snapshot = capture_daily_policy_snapshot(config, tables=tables)
         result = run_unified_books(
             config,
-            universe_rows=tables["universe"],
-            playbook_rows=tables["playbooks"],
+            universe_rows=daily_policy_snapshot.tables["universe"],
+            playbook_rows=daily_policy_snapshot.tables["playbooks"],
             idea_paths=_expand_paths(args.ideas),
             provider=args.provider,
             store=LocalStore(args.db),
             write_sheet=args.write_sheet,
+            daily_policy_snapshot=daily_policy_snapshot,
         )
         print(json.dumps({
             "policy_errors": result.compilation.errors,

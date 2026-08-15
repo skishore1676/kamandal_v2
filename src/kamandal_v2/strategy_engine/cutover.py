@@ -199,7 +199,7 @@ def build_sheet_mapping_manifest(
                 start_row=len(rows) + 2,
                 end_row=len(rows) + 2,
                 values=proposed,
-                reason="separate event-aware earnings calendar; disabled until operator approval",
+                reason="separate event-aware earnings calendar; exact Phase 9 live/enabled target, rendered locally only",
             )
         )
     return SheetMappingManifest(
@@ -298,10 +298,15 @@ def _validated_earnings_calendar_row(values: dict[str, Any], header: tuple[str, 
         raise ValueError("earnings calendar mapping must use strategy_family=earnings_calendar")
     if str(row["structure"]).strip().lower() not in {"call_calendar", "put_calendar"}:
         raise ValueError("earnings calendar mapping must use a calendar structure")
-    if str(row["mode"] or "shadow").strip().lower() not in {"shadow", "live"}:
-        raise ValueError("earnings calendar mapping mode must be shadow or live")
-    row["enabled"] = "FALSE"
-    row["mode"] = str(row["mode"] or "shadow").strip().lower()
+    if str(row["mode"] or "").strip().lower() != "live":
+        raise ValueError("earnings calendar mapping must target mode=live")
+    if str(row["enabled"] or "").strip().lower() not in {"true", "1", "yes", "on"}:
+        raise ValueError("earnings calendar mapping must target enabled=TRUE")
+    # This manifest is intentionally effect-free.  The protected Phase 9
+    # transaction boundary, not a substituted disabled/shadow row, keeps the
+    # reviewed target from reaching the operator Sheet before authorization.
+    row["enabled"] = "TRUE"
+    row["mode"] = "live"
     return row
 
 

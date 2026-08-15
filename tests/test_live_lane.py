@@ -24,6 +24,10 @@ from kamandal_v2.planner.engine import run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot
+from kamandal_v2.strategy_lanes.models import CsaStage, LaneId, SourceMode
+from kamandal_v2.strategy_lanes.operator_policy import OperatorPolicyBundle
+from kamandal_v2.strategy_lanes.policy import CsaPolicy
 
 
 @pytest.fixture(autouse=True)
@@ -888,18 +892,42 @@ def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_
     ticket = build_open_ticket(plan, candidate)
     ticket.update({
         "csa_policy_hash": "policy-hash",
+        "csa_playbook_id": "short_strangle_csa",
         "csa_stage": "pilot_live",
-        "csa_lifecycle_id": "csa_lifecycle",
+        "csa_policy_snapshot_date": "2026-08-15",
+        "csa_policy_snapshot_hash": "snapshot-hash",
         "stage_authorized": True,
         "pilot_contract_cap": 1,
     })
     store.save_live_order_intent(ticket, status="stage_approved_pending_submit")
-    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": []})
-    monkeypatch.setattr("kamandal_v2.live.execution.load_daily_policy_snapshot", lambda _config: object())
-    monkeypatch.setattr(
-        "kamandal_v2.live.execution._stage_ticket_authorization",
-        lambda _ticket, _tables: (True, "stage_authorization_current"),
+    snapshot = DailyPolicySnapshot(
+        trading_date="2026-08-15",
+        captured_at="2026-08-15T12:00:00Z",
+        snapshot_hash="snapshot-hash",
+        tables={"universe": [], "playbooks": []},
+        path=tmp_path / "strategy_policy_fixture.json",
+        policy=OperatorPolicyBundle(
+            (),
+            (
+                CsaPolicy(
+                    playbook_id="short_strangle_csa",
+                    lane=LaneId.SHORT_STRANGLE,
+                    stage=CsaStage.PILOT_LIVE,
+                    source_mode=SourceMode.MARKET_SCAN,
+                    management={},
+                    resolved_fields={},
+                    policy_hash="policy-hash",
+                    source="fixture",
+                    read_at="2026-08-15T12:00:00Z",
+                ),
+            ),
+            (),
+            "2026-08-15T12:00:00Z",
+            source="fixture",
+        ),
     )
+    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": []})
+    monkeypatch.setattr("kamandal_v2.live.execution.load_daily_policy_snapshot", lambda _config: snapshot)
     monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: object())
 
     executed = execute_live_approved(_live_control(), submit=False, store=store)

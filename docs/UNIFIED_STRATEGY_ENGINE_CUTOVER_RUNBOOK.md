@@ -43,12 +43,13 @@ and validation; it must never clear or replace the tab.
   `inversion_enabled=FALSE`.
 - Keep `call_calendar_low_iv` and `put_calendar_low_iv` as generic fixed-DTE
   calendar rows. Remove only their unused `event_expiration` JSON member.
-- Append one disabled, separately reviewed `earnings_calendar` row. It must
+- Append one separately reviewed `earnings_calendar` row with `mode=live` and
+  `enabled=TRUE` inside the protected Phase 9 transaction only. It must
   accept bullish and bearish direction as the call/put selector, use a 45–60
   DTE far leg and 5–7 DTE near leg after the confirmed event, require a paired
   package, enter in the final eligible pre-event session, and close in the
-  first eligible post-event session. The exact approved row values are a
-  required Phase 9 input; an absent row is intentionally a manifest blocker.
+  first eligible post-event session. Local manifests render that exact desired
+  state without applying it; an absent row is intentionally a manifest blocker.
 
 ## Database and lifecycle procedure
 
