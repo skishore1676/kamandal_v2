@@ -20,8 +20,8 @@ def test_late_day_sequence_preserves_dependency_order_and_submission_window() ->
     assert JOB_SCHEDULES["iv-afternoon"].fixed_times[-1] == time(13, 45)
     assert JOB_SCHEDULES["youtube"].fixed_times[-1] == time(14, 0)
     assert JOB_SCHEDULES["live-reconciliation"].fixed_times[-1] == time(14, 20)
-    assert JOB_SCHEDULES["live-advisory"].fixed_times[-1] == time(14, 30)
-    assert time(14, 50) in JOB_SCHEDULES["live-management"].fixed_times
+    assert JOB_SCHEDULES["unified-planning"].fixed_times[-1] == time(14, 30)
+    assert time(14, 50) in JOB_SCHEDULES["unified-lifecycle-management"].fixed_times
 
     config = load_control()
     allowed = submission_window(
@@ -82,19 +82,12 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
     assert weekday_one_times("iv_afternoon") == {(13, 45)}
     assert weekday_one_times("youtube") == {(9, 15), (11, 45), (14, 0)}
     assert weekday_one_times("live_reconciliation") == {(8, 35), (10, 30), (12, 30), (14, 20)}
-    assert weekday_one_times("live_advisory") == {(9, 25), (11, 55), (14, 30)}
+    assert weekday_one_times("unified_planning") == {(9, 25), (11, 55), (14, 30)}
     assert (14, 35) in weekday_one_times("live_approved_orders")
-    assert {(14, 45), (14, 50), (15, 5)}.issubset(weekday_one_times("live_management"))
-    assert weekday_one_times("csa_shadow_scan") == {(9, 35), (12, 5), (14, 35)}
-    assert weekday_one_times("csa_live_scan") == {(9, 40), (12, 10), (14, 40)}
-    assert weekday_one_times("csa_policy_snapshot") == {(8, 15)}
-    assert (14, 45) in weekday_one_times("csa_shadow_management")
-    assert (14, 50) in weekday_one_times("csa_live_management")
-    assert weekday_one_times("csa_shadow_scorecard") == {(15, 25)}
-    for suffix in ("csa_policy_snapshot", "csa_shadow_scan", "csa_live_scan", "csa_shadow_management", "csa_live_management", "csa_shadow_scorecard"):
-        payload = plistlib.loads((launchd_dir / f"com.kamandal.v2.{suffix}.plist").read_bytes())
-        assert payload["Disabled"] is True
-    assert DISABLED_BY_DEFAULT == {"csa-policy-snapshot", "csa-shadow-scan", "csa-live-scan", "csa-shadow-management", "csa-live-management", "csa-shadow-scorecard"}
+    assert {(14, 45), (14, 50), (15, 5)}.issubset(weekday_one_times("unified_lifecycle_management"))
+    rendered = {path.name for path in launchd_dir.glob("*.plist")}
+    assert not any("csa_" in item or "live_advisory" in item or "live_management" in item for item in rendered)
+    assert DISABLED_BY_DEFAULT == set()
 
 
 def test_current_idea_filter_keeps_refined_correspondents_and_current_day_files(tmp_path: Path) -> None:
@@ -127,7 +120,7 @@ def test_current_idea_filter_keeps_refined_correspondents_and_current_day_files(
     ]
 
 
-def test_installer_can_render_only_csa_without_touching_baseline_plists(tmp_path: Path) -> None:
+def test_installer_can_render_only_unified_ownership_jobs(tmp_path: Path) -> None:
     launchd_dir = tmp_path / "LaunchAgents"
     env = {
         **os.environ,
@@ -137,7 +130,7 @@ def test_installer_can_render_only_csa_without_touching_baseline_plists(tmp_path
     }
 
     subprocess.run(
-        ["bash", str(REPO_ROOT / "scripts/launchd/install_kamandal_launchd.sh"), "render-csa-shadow"],
+        ["bash", str(REPO_ROOT / "scripts/launchd/install_kamandal_launchd.sh"), "render-unified"],
         check=True,
         cwd=REPO_ROOT,
         env=env,
@@ -147,10 +140,6 @@ def test_installer_can_render_only_csa_without_touching_baseline_plists(tmp_path
 
     rendered = {path.name for path in launchd_dir.glob("*.plist")}
     assert rendered == {
-        "com.kamandal.v2.csa_policy_snapshot.plist",
-        "com.kamandal.v2.csa_live_scan.plist",
-        "com.kamandal.v2.csa_live_management.plist",
-        "com.kamandal.v2.csa_shadow_scan.plist",
-        "com.kamandal.v2.csa_shadow_management.plist",
-        "com.kamandal.v2.csa_shadow_scorecard.plist",
+        "com.kamandal.v2.unified_planning.plist",
+        "com.kamandal.v2.unified_lifecycle_management.plist",
     }

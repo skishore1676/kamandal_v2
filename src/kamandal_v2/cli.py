@@ -86,6 +86,11 @@ def main() -> None:
     csa_history_parser = subparsers.add_parser("csa-lifecycle-history", help="Read versioned lifecycle history without external effects")
     csa_history_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_history_parser.add_argument("--lifecycle-id", default="")
+    unified_plan_parser = subparsers.add_parser("unified-plan", help="Build isolated live and shadow books through the unified policy compiler")
+    unified_plan_parser.add_argument("--db", default="data/kamandal_v2.db")
+    unified_plan_parser.add_argument("--ideas", nargs="+", default=["data/ideas/active"])
+    unified_plan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
+    unified_plan_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     csa_scan_parser = subparsers.add_parser("csa-shadow-scan", help="Run the broker-inert CSA discovery and entry shadow cycle")
     csa_scan_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_scan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
@@ -478,6 +483,33 @@ def main() -> None:
 
         records = lifecycle_history(CsaStore(args.db, read_only=True), lifecycle_id=args.lifecycle_id or None)
         print(json.dumps({"schema_version": "kamandal.lifecycle-history.v1", "records": records}, indent=2, sort_keys=True))
+        return
+    if args.command == "unified-plan":
+        from kamandal_v2.strategy_engine.planning import run_unified_books
+
+        if args.config_source == "sheet":
+            tables = pull_sheet_tables(config)
+        else:
+            headers = seed_headers()
+            tables = {
+                key: [dict(zip(headers[key], row, strict=False)) for row in build_seed_tables(config)[key]]
+                for key in ("universe", "playbooks")
+            }
+        result = run_unified_books(
+            config,
+            universe_rows=tables["universe"],
+            playbook_rows=tables["playbooks"],
+            idea_paths=_expand_paths(args.ideas),
+            provider=args.provider,
+            store=LocalStore(args.db),
+        )
+        print(json.dumps({
+            "policy_errors": result.compilation.errors,
+            "live": {"policy_ids": result.live.policy_ids, "plans": len(result.live.result.plans) if result.live.result else None, "errors": result.live.errors},
+            "shadow": {"policy_ids": result.shadow.policy_ids, "plans": len(result.shadow.result.plans) if result.shadow.result else None, "errors": result.shadow.errors},
+        }, indent=2, sort_keys=True))
+        if not result.compilation.ok or result.live.errors or result.shadow.errors:
+            raise SystemExit(1)
         return
     if args.command == "csa-shadow-scan":
         from kamandal_v2.planner.idea_loader import load_ideas

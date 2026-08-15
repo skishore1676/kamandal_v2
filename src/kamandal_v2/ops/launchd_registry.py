@@ -45,20 +45,13 @@ SCRIPT_JOBS = {
     "youtube": "run_youtube_extraction.sh",
     "my-ideas": "run_my_ideas_import.sh",
     "live-reconciliation": "run_live_reconciliation.sh",
-    "live-advisory": "run_live_advisory.sh",
     "live-approved-orders": "run_live_approved_orders.sh",
-    "live-management": "run_live_management.sh",
+    "unified-planning": "run_unified_planning.sh",
+    "unified-lifecycle-management": "run_unified_lifecycle_management.sh",
     "earnings": "run_earnings_capture.sh",
     "iv": "run_iv_capture.sh",
     "iv-afternoon": "run_iv_capture.sh",
     "weekly-reviewer": "run_weekly_reviewer.sh",
-    "universe-proposer": "run_universe_proposer.sh",
-    "csa-policy-snapshot": "run_csa_policy_snapshot.sh",
-    "csa-shadow-scan": "run_csa_shadow_scan.sh",
-    "csa-live-scan": "run_csa_live_scan.sh",
-    "csa-shadow-management": "run_csa_shadow_management.sh",
-    "csa-live-management": "run_csa_live_management.sh",
-    "csa-shadow-scorecard": "run_csa_shadow_scorecard.sh",
 }
 
 JOB_LABEL_SUFFIXES = {
@@ -66,9 +59,9 @@ JOB_LABEL_SUFFIXES = {
     "youtube": "youtube",
     "my-ideas": "my_ideas",
     "live-reconciliation": "live_reconciliation",
-    "live-advisory": "live_advisory",
     "live-approved-orders": "live_approved_orders",
-    "live-management": "live_management",
+    "unified-planning": "unified_planning",
+    "unified-lifecycle-management": "unified_lifecycle_management",
     "live-health-report": "live_health_report",
     "scheduled-job-health": "scheduled_job_health",
     "daily-report": "daily_report",
@@ -76,13 +69,6 @@ JOB_LABEL_SUFFIXES = {
     "iv": "iv",
     "iv-afternoon": "iv_afternoon",
     "weekly-reviewer": "weekly_reviewer",
-    "universe-proposer": "universe_proposer",
-    "csa-policy-snapshot": "csa_policy_snapshot",
-    "csa-shadow-scan": "csa_shadow_scan",
-    "csa-live-scan": "csa_live_scan",
-    "csa-shadow-management": "csa_shadow_management",
-    "csa-live-management": "csa_live_management",
-    "csa-shadow-scorecard": "csa_shadow_scorecard",
 }
 
 JOB_SCHEDULES = {
@@ -90,9 +76,9 @@ JOB_SCHEDULES = {
     "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 0))),
     "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
     "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 20))),
-    "live-advisory": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 30))),
+    "unified-planning": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 30))),
     "live-approved-orders": JobSchedule(cadence_minutes=5, window_start=time(9, 0), window_end=time(15, 15)),
-    "live-management": JobSchedule(
+    "unified-lifecycle-management": JobSchedule(
         fixed_times=(time(14, 50), time(15, 5)),
         cadence_minutes=15,
         window_start=time(9, 0),
@@ -105,13 +91,6 @@ JOB_SCHEDULES = {
     "iv": JobSchedule(fixed_times=(time(8, 45),)),
     "iv-afternoon": JobSchedule(fixed_times=(time(13, 45),)),
     "weekly-reviewer": JobSchedule(fixed_times=(time(10, 0),), weekday=4),
-    "universe-proposer": JobSchedule(fixed_times=(time(8, 50),)),
-    "csa-policy-snapshot": JobSchedule(fixed_times=(time(8, 15),)),
-    "csa-shadow-scan": JobSchedule(fixed_times=(time(9, 35), time(12, 5), time(14, 35))),
-    "csa-live-scan": JobSchedule(fixed_times=(time(9, 40), time(12, 10), time(14, 40))),
-    "csa-shadow-management": JobSchedule(cadence_minutes=15, window_start=time(9, 45), window_end=time(14, 45)),
-    "csa-live-management": JobSchedule(cadence_minutes=15, window_start=time(9, 50), window_end=time(14, 50)),
-    "csa-shadow-scorecard": JobSchedule(fixed_times=(time(15, 25),)),
 }
 
 JOB_PURPOSES = {
@@ -119,47 +98,27 @@ JOB_PURPOSES = {
     "youtube": "Import YouTube/transcript intelligence.",
     "my-ideas": "Import operator ideas.",
     "live-reconciliation": "Reconcile local live groups against broker state.",
-    "live-advisory": "Build live advisory rows when health gates allow entries.",
+    "unified-planning": "Build isolated live and shadow portfolio books through one policy compiler.",
     "live-approved-orders": "Submit approved live entry intents.",
-    "live-management": "Evaluate exit policy and submit close intents.",
+    "unified-lifecycle-management": "Evaluate all lifecycle management before guarded close execution.",
     "live-health-report": "Summarize live health and notify only when attention is needed.",
     "scheduled-job-health": "Watch Kamandal launchd logs for stale, missing, or failed runs.",
     "earnings": "Refresh earnings/event data.",
     "iv": "Refresh IV data.",
     "iv-afternoon": "Refresh afternoon IV data.",
     "weekly-reviewer": "Review rejected candidates and propose playbook tuning.",
-    "universe-proposer": "Propose up to 5 new universe symbols from recent out-of-universe plan diagnostics (tier=proposed).",
     "daily-report": "Intraday Kamandal daily report (BHIKsha parity: JSON/Markdown/RYG via Lathi Bus).",
-    "csa-policy-snapshot": "Freeze the Google Sheet strategy and universe state once for the trading day.",
-    "csa-shadow-scan": "Broker-inert CSA opportunity discovery and shadow entry simulation.",
-    "csa-live-scan": "Route explicitly staged pilot/live CSA entries into the guarded live ledger.",
-    "csa-shadow-management": "Broker-inert CSA lifecycle management and shadow adjustment simulation.",
-    "csa-live-management": "Stage Sheet-authorized CSA lifecycle closes, rolls, and adjustments in the guarded live ledger.",
-    "csa-shadow-scorecard": "Write the canonical CSA daily shadow scorecard.",
 }
 
-DISABLED_BY_DEFAULT = {
-    "csa-policy-snapshot",
-    "csa-shadow-scan",
-    "csa-live-scan",
-    "csa-shadow-management",
-    "csa-live-management",
-    "csa-shadow-scorecard",
-}
+DISABLED_BY_DEFAULT: set[str] = set()
 
 JOB_RISK_CLASSES = {
     "live-reconciliation": "trading_observation",
-    "live-advisory": "trading_advisory",
+    "unified-planning": "trading_advisory",
     "live-approved-orders": "trading_submit",
-    "live-management": "trading_management",
+    "unified-lifecycle-management": "trading_management",
     "live-health-report": "trading_health",
     "scheduled-job-health": "ops_health",
-    "csa-policy-snapshot": "trading_operator_state",
-    "csa-shadow-scan": "trading_shadow",
-    "csa-live-scan": "trading_advisory",
-    "csa-shadow-management": "trading_shadow",
-    "csa-live-management": "trading_management",
-    "csa-shadow-scorecard": "trading_shadow_report",
 }
 
 JOB_AVAILABLE_ACTIONS = {
@@ -204,22 +163,15 @@ MONITORED_JOBS = [
     "youtube",
     "my-ideas",
     "live-reconciliation",
-    "live-advisory",
+    "unified-planning",
     "live-approved-orders",
-    "live-management",
+    "unified-lifecycle-management",
     "live-health-report",
     "earnings",
     "iv",
     "iv-afternoon",
     "weekly-reviewer",
-    "universe-proposer",
     "daily-report",
-    "csa-policy-snapshot",
-    "csa-shadow-scan",
-    "csa-live-scan",
-    "csa-shadow-management",
-    "csa-live-management",
-    "csa-shadow-scorecard",
 ]
 
 ALL_JOBS = sorted([*SCRIPT_JOBS, "live-health-report", "scheduled-job-health", "daily-report"])

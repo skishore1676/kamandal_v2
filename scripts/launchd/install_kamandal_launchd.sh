@@ -62,7 +62,7 @@ def calendar_entries(schedule):
 
 
 for job, schedule in JOB_SCHEDULES.items():
-    if scope == "csa" and job not in DISABLED_BY_DEFAULT:
+    if scope == "unified" and job not in {"unified-planning", "unified-lifecycle-management"}:
         continue
     suffix = JOB_LABEL_SUFFIXES[job]
     label = f"{label_prefix}.{suffix}"
@@ -142,8 +142,8 @@ case "$ACTION" in
   render)
     write_plists
     ;;
-  render-csa-shadow)
-    write_plists csa
+  render-unified)
+    write_plists unified
     ;;
   install-csa-shadow)
     chmod +x "$REPO_ROOT/scripts/launchd/run_kamandal_job.sh"
