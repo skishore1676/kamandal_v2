@@ -8,6 +8,7 @@ from typing import Any
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Idea, Playbook
 from kamandal_v2.planner.candidate_builder import (
+    _build_for_playbook,
     _call_calendar_candidates,
     _call_diagonal_candidates,
     _call_spread_candidates,
@@ -47,6 +48,14 @@ def build_lane_candidates(
             candidates = _put_diagonal_candidates(idea, playbook, quotes, config=_builder_config(policy))
         else:
             raise ValueError(f"unsupported diagonal structure: {playbook.structure}")
+    elif policy.lane is LaneId.GENERIC_CLOSE_ONLY:
+        candidates = _build_for_playbook(
+            idea,
+            playbook,
+            snapshot.underlying_price,
+            quotes,
+            config=_builder_config(policy),
+        )
     elif policy.lane is LaneId.EARNINGS_CALENDAR:
         if opportunity.event_context.get("state") not in {"known", "confirmed"}:
             return ()

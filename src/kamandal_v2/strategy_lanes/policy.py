@@ -51,21 +51,11 @@ class PolicyCompilation:
         return not self.errors
 
 
-_STRUCTURE_TO_LANE = {
-    "short_strangle": LaneId.SHORT_STRANGLE,
-    "strangle": LaneId.SHORT_STRANGLE,
-    "call_spread": LaneId.CALL_VERTICAL,
-    "call_vertical": LaneId.CALL_VERTICAL,
-    "call_diagonal": LaneId.DIRECTIONAL_DIAGONAL,
-    "put_diagonal": LaneId.DIRECTIONAL_DIAGONAL,
-    "call_calendar": LaneId.EARNINGS_CALENDAR,
-    "put_calendar": LaneId.EARNINGS_CALENDAR,
-}
-
 _LANE_SOURCE_MODES = {
     LaneId.SHORT_STRANGLE: {SourceMode.MARKET_SCAN},
     LaneId.CALL_VERTICAL: {SourceMode.IDEA, SourceMode.PORTFOLIO_HEDGE},
     LaneId.DIRECTIONAL_DIAGONAL: {SourceMode.IDEA},
+    LaneId.GENERIC_CLOSE_ONLY: {SourceMode.IDEA, SourceMode.MARKET_SCAN, SourceMode.PORTFOLIO_HEDGE},
     LaneId.EARNINGS_CALENDAR: {SourceMode.IDEA},
 }
 
@@ -125,6 +115,14 @@ _LANE_REQUIRED_FIELDS = {
         "exit_dte_min",
         "live_max_bpr_per_order",
     ),
+    LaneId.GENERIC_CLOSE_ONLY: (
+        "dte_min",
+        "dte_max",
+        "profit_target_pct",
+        "max_loss_multiple",
+        "exit_dte_min",
+        "live_max_bpr_per_order",
+    ),
     LaneId.EARNINGS_CALENDAR: (
         "dte_min",
         "dte_max",
@@ -159,9 +157,7 @@ def compile_csa_policy(
         raise PolicyError(f"{_row_name(row)}: invalid csa_stage={raw_stage!r}") from exc
 
     structure = str(row.get("structure") or "").strip().lower()
-    lane = _STRUCTURE_TO_LANE.get(structure)
-    if lane is None:
-        raise PolicyError(f"{_row_name(row)}: unsupported CSA structure={structure!r}")
+    lane = _lane_from_row(row, structure)
     if not _as_bool(row.get("enabled")):
         raise PolicyError(f"{_row_name(row)}: CSA stage requires enabled=TRUE")
 
@@ -232,6 +228,32 @@ def compile_csa_policy(
         source=source,
         read_at=read_at,
     )
+
+
+def _lane_from_row(row: dict[str, Any], structure: str) -> LaneId:
+    """Map capability first; structure only constrains its order shape.
+
+    An ordinary calendar is not an earnings calendar merely because both use
+    calendar legs.  Only the explicit earnings capability receives the
+    event-relative lifecycle; every other supported family uses the one
+    generic close-only lifecycle until it earns a specialised owner.
+    """
+    family = str(row.get("strategy_family") or "").strip().lower()
+    if family == "earnings_calendar":
+        if structure not in {"call_calendar", "put_calendar"}:
+            raise PolicyError(f"{_row_name(row)}: earnings_calendar requires a calendar structure")
+        return LaneId.EARNINGS_CALENDAR
+    if family == "short_strangle" or structure in {"short_strangle", "strangle"}:
+        return LaneId.SHORT_STRANGLE
+    if family in {"call_vertical", "call_spread"} or structure in {"call_spread", "call_vertical"}:
+        return LaneId.CALL_VERTICAL
+    if family in {"directional_diagonal", "narrative_ignition", "call_diagonal", "put_diagonal"} or structure in {"call_diagonal", "put_diagonal"}:
+        return LaneId.DIRECTIONAL_DIAGONAL
+    if structure in {
+        "short_put", "long_call", "long_put", "put_spread", "iron_condor", "jade_lizard", "call_calendar", "put_calendar",
+    }:
+        return LaneId.GENERIC_CLOSE_ONLY
+    raise PolicyError(f"{_row_name(row)}: unsupported CSA structure={structure!r}")
 
 
 def compile_csa_policies(
@@ -311,6 +333,10 @@ def _validate_lifecycle_shape(management: dict[str, Any], *, lane: LaneId, sourc
                 ("lifecycle", "long_only", "requires_approval"),
             ]
         )
+    elif lane is LaneId.GENERIC_CLOSE_ONLY:
+        paths.append(("lifecycle", "close_only"))
+        if source_mode is SourceMode.PORTFOLIO_HEDGE:
+            paths.extend([("lifecycle", "portfolio_delta_trigger"), ("lifecycle", "hedge_underlyings")])
     elif lane is LaneId.EARNINGS_CALENDAR:
         paths.extend(
             [
@@ -331,6 +357,8 @@ def _validate_lifecycle_shape(management: dict[str, Any], *, lane: LaneId, sourc
         boolean_paths.extend(
             [("lifecycle", "short_leg", "roll"), ("lifecycle", "long_only", "requires_approval")]
         )
+    elif lane is LaneId.GENERIC_CLOSE_ONLY:
+        boolean_paths.append(("lifecycle", "close_only"))
     elif lane is LaneId.EARNINGS_CALENDAR:
         boolean_paths.append(("lifecycle", "close_only"))
     for path in boolean_paths:
@@ -400,6 +428,8 @@ def _validate_numeric_policy(row: dict[str, Any], *, lane: LaneId, management: d
         numeric_paths.append(("lifecycle", "portfolio_delta_trigger"))
     elif lane is LaneId.DIRECTIONAL_DIAGONAL:
         numeric_paths.append(("lifecycle", "short_leg", "roll_dte"))
+    elif lane is LaneId.GENERIC_CLOSE_ONLY and source_mode_is_portfolio(management, row):
+        numeric_paths.append(("lifecycle", "portfolio_delta_trigger"))
     elif lane is LaneId.EARNINGS_CALENDAR:
         numeric_paths.extend([("lifecycle", "event_expiration", "near_before_days"), ("lifecycle", "event_expiration", "far_after_days")])
     for path in numeric_paths:

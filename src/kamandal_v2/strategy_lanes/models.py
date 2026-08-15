@@ -26,6 +26,7 @@ class LaneId(StrEnum):
     SHORT_STRANGLE = "short_strangle"
     CALL_VERTICAL = "call_vertical"
     DIRECTIONAL_DIAGONAL = "directional_diagonal"
+    GENERIC_CLOSE_ONLY = "generic_close_only"
     EARNINGS_CALENDAR = "earnings_calendar"
 
 

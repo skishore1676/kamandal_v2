@@ -6,8 +6,9 @@ import pytest
 
 from kamandal_v2.domain.models import Idea, UniverseEntry
 from kamandal_v2.strategy_lanes.admission import AdmissionContext, evaluate_admission
-from kamandal_v2.strategy_lanes.models import CsaStage, LaneId, SourceMode
+from kamandal_v2.strategy_lanes.models import CsaStage, LaneId, LifecycleState, SourceMode
 from kamandal_v2.strategy_lanes.policy import compile_csa_policy
+from kamandal_v2.strategy_lanes.registry import lifecycle_registry
 from kamandal_v2.strategy_lanes.scoring import score_opportunity
 from kamandal_v2.strategy_lanes.sources import idea_opportunity, market_scan_opportunities, portfolio_hedge_opportunities
 
@@ -187,6 +188,42 @@ def test_portfolio_hedge_source_uses_sheet_trigger_and_underlyings() -> None:
     assert len(above) == 1
     assert above[0].underlying == "SPY"
     assert above[0].source_mode is SourceMode.PORTFOLIO_HEDGE
+
+
+def test_ordinary_calendar_uses_generic_close_only_lane_not_earnings() -> None:
+    row = _policy_row("call_spread")
+    row.update(
+        {
+            "playbook_id": "ordinary_call_calendar",
+            "strategy_family": "call_calendar",
+            "structure": "call_calendar",
+            "source_mode": "idea",
+            "management_policy_json": json.dumps(
+                {"lifecycle": {"close_only": True, "fill": {"max_attempts": 2, "price_increment": 0.05}}}
+            ),
+        }
+    )
+    policy = compile_csa_policy(row, source="google_sheet", read_at="2026-08-15T12:00:00Z")
+
+    assert policy is not None
+    assert policy.lane is LaneId.GENERIC_CLOSE_ONLY
+    assert lifecycle_registry().resolve(policy.lane)(
+        LifecycleState(
+            lifecycle_id="ordinary-calendar",
+            opportunity_id="opp",
+            lane=policy.lane,
+            version=1,
+            status="open",
+            active_legs=(),
+            cashflow_ledger=(),
+            opened_at="2026-08-15T12:00:00Z",
+            updated_at="2026-08-15T12:00:00Z",
+            policy_hash=policy.policy_hash,
+        ),
+        policy,
+        {"ownership_clear": True, "working_order_conflict": False, "hard_emergency": False, "event_exit_due": False, "profit_pct": 0, "loss_multiple": 0, "dte": 30},
+        proposed_at="2026-08-15T12:00:00Z",
+    )[0].reason_codes == ("close_oriented_hold",)
 
 
 def test_idea_source_normalizes_without_calling_external_effects() -> None:

@@ -44,12 +44,14 @@ def lifecycle_registry() -> LaneRegistry:
     from kamandal_v2.strategy_lanes.call_vertical import propose_call_vertical_actions
     from kamandal_v2.strategy_lanes.diagonal import propose_diagonal_actions
     from kamandal_v2.strategy_lanes.earnings_calendar import propose_earnings_calendar_actions
+    from kamandal_v2.strategy_lanes.generic_close_only import propose_generic_close_only_actions
     from kamandal_v2.strategy_lanes.strangle import propose_strangle_actions
 
     registry = LaneRegistry()
     registry.register(LaneId.SHORT_STRANGLE, propose_strangle_actions)
     registry.register(LaneId.CALL_VERTICAL, propose_call_vertical_actions)
     registry.register(LaneId.DIRECTIONAL_DIAGONAL, propose_diagonal_actions)
+    registry.register(LaneId.GENERIC_CLOSE_ONLY, propose_generic_close_only_actions)
     registry.register(LaneId.EARNINGS_CALENDAR, propose_earnings_calendar_actions)
     registry.require_all(LaneId)
     return registry

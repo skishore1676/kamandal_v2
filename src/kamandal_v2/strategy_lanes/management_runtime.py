@@ -323,7 +323,7 @@ def _management_context(
             "adjustment_count": int(metadata.get("adjustment_count") or 0),
             "same_expiry_roll_credit": roll_plan["credit"] if roll_plan else 0.0,
         }
-    elif lifecycle.lane is LaneId.CALL_VERTICAL:
+    elif lifecycle.lane in {LaneId.CALL_VERTICAL, LaneId.GENERIC_CLOSE_ONLY}:
         context = {**common, "dte": min(dtes)}
     elif lifecycle.lane is LaneId.DIRECTIONAL_DIAGONAL:
         short = next((leg for leg in legs if leg.role == "short_near"), None)
