@@ -418,6 +418,7 @@ def main() -> None:
             universe_symbols=[entry.symbol for entry in universe if entry.enabled],
             chart_evaluation_paths=args.chart_evaluation,
             output_dir=args.output_dir,
+            store=LocalStore(),
         )
         print(json.dumps(result.to_dict(), indent=2))
         return

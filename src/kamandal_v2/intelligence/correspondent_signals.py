@@ -15,6 +15,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from kamandal_v2.intelligence.chart_seeds import validate_chart_seed_evaluation
 from kamandal_v2.paths import resolve_path
+from kamandal_v2.stores.sqlite import LocalStore
 
 SOURCE_SCHEMA = "birdclaw.correspondent_signals.v1"
 SOURCE_RECORD_SCHEMA = "birdclaw.correspondent_signal.v1"
@@ -70,6 +71,7 @@ def import_correspondent_signals(
     universe_symbols: Iterable[str],
     chart_evaluation_paths: Iterable[str | Path] = (),
     output_dir: str | Path = "data/research/correspondent_signals",
+    store: LocalStore | None = None,
 ) -> CorrespondentImportResult:
     source_path = resolve_path(input_path)
     source_text = source_path.read_text(encoding="utf-8")
@@ -92,6 +94,20 @@ def import_correspondent_signals(
     batch_id = hashlib.sha256(_stable_json(identity).encode()).hexdigest()[:16]
     for record in translated:
         record["record_id"] = _record_id(record, profile_text=profile_text)
+    if store is not None:
+        for record in translated:
+            if "outside_configured_universe" not in (record.get("blockers") or []):
+                continue
+            symbol = str(record.get("symbol") or "").strip().upper()
+            if symbol:
+                store.record_discovery_evidence(
+                    symbol=symbol,
+                    source_profile=str(profile["profile_id"]),
+                    source_record_id=str(record["record_id"]),
+                    exclusion_reason="outside_enabled_universe",
+                    evidence_ref=f"correspondent:{profile['profile_id']}:{record['record_id']}",
+                    observed_at=str(record.get("observed_at") or packet["generated_at"]),
+                )
 
     planner_ideas = [_planner_idea(record, profile) for record in translated if record["planner_eligible"]]
     root = resolve_path(output_dir)
