@@ -91,6 +91,12 @@ def main() -> None:
     unified_plan_parser.add_argument("--ideas", nargs="+", default=["data/ideas/active"])
     unified_plan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
     unified_plan_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    unified_management_parser = subparsers.add_parser(
+        "unified-lifecycle-management",
+        help="Run the one live-first lifecycle-management owner with isolated branch receipts",
+    )
+    unified_management_parser.add_argument("--db", default="data/kamandal_v2.db")
+    unified_management_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
     csa_scan_parser = subparsers.add_parser("csa-shadow-scan", help="Run the broker-inert CSA discovery and entry shadow cycle")
     csa_scan_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_scan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
@@ -509,6 +515,14 @@ def main() -> None:
             "shadow": {"policy_ids": result.shadow.policy_ids, "plans": len(result.shadow.result.plans) if result.shadow.result else None, "errors": result.shadow.errors},
         }, indent=2, sort_keys=True))
         if not result.compilation.ok or result.live.errors or result.shadow.errors:
+            raise SystemExit(1)
+        return
+    if args.command == "unified-lifecycle-management":
+        from kamandal_v2.strategy_engine.management import run_unified_lifecycle_management
+
+        result = run_unified_lifecycle_management(config, sqlite_path=args.db, provider=args.provider)
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        if not result.ok:
             raise SystemExit(1)
         return
     if args.command == "csa-shadow-scan":
