@@ -197,7 +197,7 @@ def test_live_overlap_preflight_guard_rejects_open_contract_without_broker_call(
     assert called["preflight"] is False
 
 
-def test_daily_plan_write_is_preserved_when_no_eligible_plans(tmp_path, monkeypatch) -> None:
+def test_daily_plan_write_clears_the_current_mode_when_no_eligible_plans(tmp_path, monkeypatch) -> None:
     from kamandal_v2.planner import engine
 
     store = LocalStore(tmp_path / "kamandal.db")
@@ -225,7 +225,9 @@ def test_daily_plan_write_is_preserved_when_no_eligible_plans(tmp_path, monkeypa
     )
 
     assert result.plans == []
-    assert calls == []
+    assert len(calls) == 1
+    assert calls[0][0][1] == []
+    assert calls[0][1]["replace_lanes"] == {"shadow"}
 
 
 def test_shadow_position_cap_override_allows_exploration(tmp_path) -> None:
