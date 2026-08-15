@@ -243,10 +243,10 @@ def main() -> None:
 
     propose_parser = subparsers.add_parser(
         "propose-universe-symbols",
-        help="Propose up to 5 new universe rows from recent out-of-universe plan diagnostics (max 5/day, last N days)",
+        help="Propose up to 5 universe rows from the committed weekly discovery window",
     )
     propose_parser.add_argument("--limit", type=int, default=5, help="Max proposals per day (cap 5)")
-    propose_parser.add_argument("--lookback-days", type=int, default=3, help="Lookback window for recent plan rejections")
+    propose_parser.add_argument("--lookback-days", type=int, default=None, help="Compatibility override; default is the committed weekly review window")
     propose_parser.add_argument("--write-sheet", action="store_true", help="Append proposals to the universe sheet (enabled=FALSE, tier=proposed)")
     propose_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     propose_parser.add_argument("--dry-run", action="store_true", help="Print proposals without writing sheet")
