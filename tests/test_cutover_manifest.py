@@ -14,11 +14,23 @@ from kamandal_v2.strategy_engine.cutover import (
 from kamandal_v2.strategy_lanes.store import CsaStore
 
 
+def _legacy_strangle_policy() -> dict[str, object]:
+    return {
+        "playbook_id": "legacy_strangle",
+        "lane": "short_strangle",
+        "stage": "live",
+        "source_mode": "market_scan",
+        "management": {"lifecycle": {"tested_side_confirmation": 2, "roll": {"min_credit": 0.1, "duration_trigger_dte": 21}, "adjustment_limit": 2, "inversion": {"allowed": False, "max_width": 5}, "cooldown": {"minutes": 30}, "loss_stages": {"watch_multiple": 2, "close_multiple": 3}, "fill": {"max_attempts": 2, "price_increment": 0.05}}},
+        "resolved_fields": {"profit_target_pct": 40, "exit_dte_min": 21, "max_loss_multiple": 3},
+        "policy_hash": "legacy-policy",
+    }
+
+
 def test_cutover_manifest_is_read_only_and_blocks_ambiguous_shapes(tmp_path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     store.save_live_position_group(
         "strangle-1",
-        {"candidate": {"structure": "short_strangle", "legs": [
+        {"compiled_management_policy": _legacy_strangle_policy(), "candidate": {"structure": "short_strangle", "legs": [
             {"side": "sell", "role": "short_put", "option_type": "put", "expiration": "2026-09-25", "strike": 90, "quantity": 1},
             {"side": "sell", "role": "short_call", "option_type": "call", "expiration": "2026-09-25", "strike": 110, "quantity": 1},
         ]}},
@@ -104,7 +116,7 @@ def test_fixture_cutover_apply_is_idempotent_and_restore_rehearses(tmp_path) -> 
     store = LocalStore(database)
     store.save_live_position_group(
         "strangle-1",
-        {"candidate": {"structure": "short_strangle", "legs": [
+        {"compiled_management_policy": _legacy_strangle_policy(), "candidate": {"structure": "short_strangle", "legs": [
             {"side": "sell", "role": "short_put", "option_type": "put", "expiration": "2026-09-25", "strike": 90, "quantity": 1},
             {"side": "sell", "role": "short_call", "option_type": "call", "expiration": "2026-09-25", "strike": 110, "quantity": 1},
         ]}},
@@ -128,7 +140,7 @@ def test_production_shaped_runner_can_only_apply_to_a_fresh_copy(tmp_path) -> No
     store = LocalStore(source)
     store.save_live_position_group(
         "strangle-1",
-        {"candidate": {"structure": "short_strangle", "legs": [
+        {"compiled_management_policy": _legacy_strangle_policy(), "candidate": {"structure": "short_strangle", "legs": [
             {"side": "sell", "role": "short_put", "option_type": "put", "expiration": "2026-09-25", "strike": 90, "quantity": 1},
             {"side": "sell", "role": "short_call", "option_type": "call", "expiration": "2026-09-25", "strike": 110, "quantity": 1},
         ]}},

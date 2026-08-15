@@ -438,6 +438,7 @@ def _adoption_payload(group: dict[str, Any]) -> dict[str, Any]:
         "active_legs": candidate.get("legs") or (),
         "cashflow_ledger": group.get("cashflow_ledger") or (),
         "policy_hash": str(group.get("policy_hash") or "policy-at-adoption"),
+        "compiled_management_policy": group.get("compiled_management_policy") or group.get("policy_at_adoption"),
     }
 
 

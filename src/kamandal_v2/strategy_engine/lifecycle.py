@@ -192,6 +192,9 @@ def adopt_legacy_position(payload: dict[str, Any], *, lifecycle_id: str, adopted
     if lane is LaneId.GENERIC_CLOSE_ONLY and not legs:
         raise ValueError("legacy adoption blocked: generic close-only position requires active legs")
     policy_hash = str(payload.get("policy_hash") or "policy-at-adoption")
+    compiled_policy = payload.get("compiled_management_policy")
+    if not isinstance(compiled_policy, dict):
+        raise ValueError("legacy adoption blocked: complete policy_at_adoption snapshot is required")
     return LifecycleState(
         lifecycle_id=lifecycle_id,
         opportunity_id=str(payload.get("opportunity_id") or f"legacy:{lifecycle_id}"),
@@ -203,7 +206,11 @@ def adopt_legacy_position(payload: dict[str, Any], *, lifecycle_id: str, adopted
         opened_at=adopted_at,
         updated_at=adopted_at,
         policy_hash=policy_hash,
-        metadata={"policy_at_adoption": True, "legacy_source_id": str(payload.get("group_id") or "")},
+        metadata={
+            "policy_at_adoption": True,
+            "legacy_source_id": str(payload.get("group_id") or ""),
+            "compiled_management_policy": dict(compiled_policy),
+        },
     )
 
 
