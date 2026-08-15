@@ -266,6 +266,13 @@ def main() -> None:
     propose_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     propose_parser.add_argument("--dry-run", action="store_true", help="Print proposals without writing sheet")
 
+    weekly_universe_parser = subparsers.add_parser(
+        "review-universe",
+        help="Commit the bounded Friday universe-discovery review after exact proposal publication",
+    )
+    weekly_universe_parser.add_argument("--limit", type=int, default=5)
+    weekly_universe_parser.add_argument("--write-sheet", action="store_true")
+
     correspondent_parser = subparsers.add_parser(
         "import-correspondent-signals",
         help="Translate a Birdclaw correspondent packet into durable signals and eligible planner ideas",
@@ -422,6 +429,27 @@ def main() -> None:
             trimmed = rows[:remaining]
             written = write_universe_proposals(load_control(), trimmed)
             print(json.dumps({"status": "written", "written": written, "remaining": remaining}, indent=2))
+        return
+
+    if args.command == "review-universe":
+        from datetime import UTC, datetime
+        from kamandal_v2.tools.universe_proposer import run_weekly_universe_review
+
+        tables = pull_sheet_tables(config)
+        universe_rows = list(tables.get("universe") or [])
+        publisher = None
+        if args.write_sheet:
+            from kamandal_v2.sheets import write_universe_proposals
+
+            publisher = lambda rows: write_universe_proposals(config, rows)
+        result = run_weekly_universe_review(
+            LocalStore(),
+            universe_rows=universe_rows,
+            publish=publisher,
+            cutoff=datetime.now(UTC),
+            limit=args.limit,
+        )
+        print(json.dumps({"review_id": result.review_id, "proposal_count": result.proposal_count, "published_count": result.published_count, "committed": result.committed}, indent=2))
         return
 
     if args.command == "import-correspondent-signals":

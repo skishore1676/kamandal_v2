@@ -12,7 +12,9 @@ falls back to a denylist + price sanity.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+import hashlib
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,6 +30,56 @@ DEFAULT_BOOTSTRAP_COMPLETED_SESSIONS = 5
 DEFAULT_MIN_PRICE = 10.0
 DEFAULT_MIN_AVG_DOLLAR_VOLUME = 20_000_000.0
 DEFAULT_MIN_MARKET_CAP = 2_000_000_000.0
+
+
+@dataclass(frozen=True, slots=True)
+class WeeklyUniverseReviewResult:
+    review_id: str
+    cutoff: str
+    proposal_count: int
+    published_count: int
+    committed: bool
+
+
+def run_weekly_universe_review(
+    store: LocalStore,
+    *,
+    universe_rows: list[dict[str, Any]],
+    publish: Callable[[list[dict[str, str]]], int] | None,
+    cutoff: datetime,
+    market_facts_loader: Callable[[str], dict[str, float | None]] | None = None,
+    limit: int = DEFAULT_MAX_PROPOSALS_PER_DAY,
+) -> WeeklyUniverseReviewResult:
+    """Aggregate one committed discovery window and advance it exactly once.
+
+    A zero-row review is still a completed weekly boundary.  Any publication
+    exception or an inexact append count leaves the boundary untouched so the
+    same evidence remains eligible for a retry.
+    """
+    cutoff = _as_utc(cutoff)
+    existing_symbols = {str(row.get("symbol") or "").upper() for row in universe_rows}
+    proposals = collect_out_of_universe_symbols(
+        store,
+        limit=limit,
+        existing_symbols=existing_symbols,
+        market_facts_loader=market_facts_loader,
+        cutoff=cutoff,
+    )
+    rows = proposals_to_universe_rows(proposals)
+    published = 0
+    if publish is not None and rows:
+        published = int(publish(rows))
+        if published != len(rows):
+            raise RuntimeError(f"universe proposal publication was inexact: expected={len(rows)} actual={published}")
+    review_id = "universe-review:" + hashlib.sha256(
+        (cutoff.isoformat() + "|" + "|".join(sorted(str(row.get("symbol") or "") for row in rows))).encode("utf-8")
+    ).hexdigest()[:24]
+    store.record_universe_review_commit(
+        review_id=review_id,
+        committed_at=cutoff.isoformat(),
+        payload={"proposal_count": len(rows), "published_count": published, "symbols": [row["symbol"] for row in rows]},
+    )
+    return WeeklyUniverseReviewResult(review_id, cutoff.isoformat(), len(rows), published, True)
 
 
 def collect_out_of_universe_symbols(

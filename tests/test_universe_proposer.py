@@ -5,7 +5,7 @@ import os
 from datetime import UTC, datetime
 
 from kamandal_v2.stores.sqlite import LocalStore
-from kamandal_v2.tools.universe_proposer import collect_out_of_universe_symbols, micro_stock_guard
+from kamandal_v2.tools.universe_proposer import collect_out_of_universe_symbols, micro_stock_guard, run_weekly_universe_review
 
 
 def test_micro_stock_guard_requires_sourced_price_and_liquidity() -> None:
@@ -72,3 +72,45 @@ def test_proposer_uses_committed_review_window_and_ranks_recency_deterministical
 
     assert [proposal["symbol"] for proposal in proposals] == ["NEWER", "OLDER"]
     assert "2026-08-07 through 2026-08-14" in proposals[0]["proposal_reason"]
+
+
+def test_weekly_review_commits_zero_and_nonzero_windows_only_after_exact_publish(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    cutoff = datetime(2026, 8, 14, 18, tzinfo=UTC)
+    zero = run_weekly_universe_review(store, universe_rows=[], publish=lambda rows: len(rows), cutoff=cutoff)
+
+    assert zero.committed is True
+    assert zero.proposal_count == 0
+    assert store.latest_universe_review_commit_at() == cutoff.isoformat()
+
+    store.record_discovery_evidence(symbol="GOOD", source_profile="x", source_record_id="1", exclusion_reason="outside", evidence_ref="x:1", observed_at="2026-08-15T12:00:00Z")
+    next_cutoff = datetime(2026, 8, 21, 18, tzinfo=UTC)
+    review = run_weekly_universe_review(
+        store,
+        universe_rows=[],
+        publish=lambda rows: len(rows),
+        cutoff=next_cutoff,
+        market_facts_loader=lambda _symbol: {"price": 75.0, "avg_dollar_volume": 40_000_000.0, "market_cap": 4_000_000_000.0},
+    )
+
+    assert review.proposal_count == review.published_count == 1
+    assert store.latest_universe_review_commit_at() == next_cutoff.isoformat()
+
+
+def test_weekly_review_does_not_advance_boundary_when_publication_fails(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    store.record_discovery_evidence(symbol="GOOD", source_profile="x", source_record_id="1", exclusion_reason="outside", evidence_ref="x:1", observed_at="2026-08-15T12:00:00Z")
+
+    try:
+        run_weekly_universe_review(
+            store,
+            universe_rows=[],
+            publish=lambda _rows: 0,
+            cutoff=datetime(2026, 8, 21, 18, tzinfo=UTC),
+            market_facts_loader=lambda _symbol: {"price": 75.0, "avg_dollar_volume": 40_000_000.0, "market_cap": 4_000_000_000.0},
+        )
+    except RuntimeError as exc:
+        assert "inexact" in str(exc)
+    else:
+        raise AssertionError("inexact proposal publication must fail")
+    assert store.latest_universe_review_commit_at() is None
