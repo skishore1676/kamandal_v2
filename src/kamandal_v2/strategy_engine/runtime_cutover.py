@@ -238,8 +238,14 @@ def apply_runtime_cutover(
 
 
 def default_earnings_calendar_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    if any(str(row.get("strategy_family") or "") == "earnings_calendar" for row in rows):
-        raise ValueError("earnings_calendar already exists; explicit merge review is required")
+    existing = [
+        dict(row) for row in rows
+        if str(row.get("strategy_family") or "").strip().lower() == "earnings_calendar"
+    ]
+    if len(existing) > 1:
+        raise ValueError("multiple earnings_calendar rows require explicit operator review")
+    if existing:
+        return existing[0]
     template = next(
         (dict(row) for row in rows if str(row.get("playbook_id") or "") == "call_calendar_low_iv"),
         None,

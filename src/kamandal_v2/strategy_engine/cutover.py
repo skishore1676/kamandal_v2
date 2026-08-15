@@ -273,8 +273,22 @@ def build_sheet_mapping_manifest(
             _remove_legacy_diagonal_management(changes, blockers, index, playbook_id, row)
 
     additions_rows: list[SheetRowAddition] = []
+    existing_earnings = [
+        row for row in rows
+        if str(row.get("strategy_family") or "").strip().lower() == "earnings_calendar"
+    ]
+    if len(existing_earnings) > 1:
+        blockers.append("earnings_calendar: exactly one operator row is allowed")
     if earnings_calendar_row is None:
         blockers.append("earnings_calendar: reviewed direction and approved row values are required before Phase 9")
+    elif existing_earnings:
+        try:
+            reviewed = _validated_earnings_calendar_row(dict(existing_earnings[0]), target_header)
+        except ValueError as exc:
+            blockers.append(str(exc))
+        else:
+            if str(reviewed.get("playbook_id") or "") != str(earnings_calendar_row.get("playbook_id") or ""):
+                blockers.append("earnings_calendar: existing row identity differs from reviewed target")
     else:
         proposed = _validated_earnings_calendar_row(earnings_calendar_row, target_header)
         additions_rows.append(
@@ -433,11 +447,14 @@ def _validated_earnings_calendar_row(values: dict[str, Any], header: tuple[str, 
         raise ValueError("earnings calendar mapping must target mode=live")
     if str(row["enabled"] or "").strip().lower() not in {"true", "1", "yes", "on"}:
         raise ValueError("earnings calendar mapping must target enabled=TRUE")
+    if str(row.get("source_mode") or "idea").strip().lower() != "idea":
+        raise ValueError("earnings calendar mapping must use source_mode=idea")
     # This manifest is intentionally effect-free.  The protected Phase 9
     # transaction boundary, not a substituted disabled/shadow row, keeps the
     # reviewed target from reaching the operator Sheet before authorization.
     row["enabled"] = "TRUE"
     row["mode"] = "live"
+    row["source_mode"] = "idea"
     return row
 
 

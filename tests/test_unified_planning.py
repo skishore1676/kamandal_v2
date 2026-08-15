@@ -54,6 +54,13 @@ def _daily_snapshot(tmp_path, control: dict, universe: list[dict[str, object]], 
     )
 
 
+def _migrated_store(tmp_path) -> LocalStore:  # noqa: ANN001
+    database = tmp_path / "kamandal.db"
+    store = LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    return store
+
+
 def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) -> None:
     universe, playbooks = _rows()
     control = load_control()
@@ -63,7 +70,7 @@ def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) 
         universe_rows=universe,
         playbook_rows=playbooks,
         idea_paths=["tests/fixtures/sample_ideas.yaml"],
-        store=LocalStore(tmp_path / "kamandal.db"),
+        store=_migrated_store(tmp_path),
         audit_root=tmp_path / "audit",
         daily_policy_snapshot=snapshot,
     )
@@ -96,7 +103,7 @@ def test_one_book_failure_does_not_erase_other_book(tmp_path, monkeypatch) -> No
         universe_rows=universe,
         playbook_rows=playbooks,
         idea_paths=["tests/fixtures/sample_ideas.yaml"],
-        store=LocalStore(tmp_path / "kamandal.db"),
+        store=_migrated_store(tmp_path),
         audit_root=tmp_path / "audit",
         daily_policy_snapshot=snapshot,
     )
@@ -136,7 +143,7 @@ def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> 
         universe_rows=universe,
         playbook_rows=playbooks,
         idea_paths=["tests/fixtures/sample_ideas.yaml"],
-        store=LocalStore(tmp_path / "kamandal.db"),
+        store=_migrated_store(tmp_path),
         audit_root=tmp_path / "audit",
         daily_policy_snapshot=snapshot,
     )
@@ -165,7 +172,7 @@ def test_unified_books_only_project_when_explicitly_requested(tmp_path, monkeypa
         universe_rows=universe,
         playbook_rows=playbooks,
         idea_paths=["tests/fixtures/sample_ideas.yaml"],
-        store=LocalStore(tmp_path / "kamandal.db"),
+        store=_migrated_store(tmp_path),
         audit_root=tmp_path / "audit",
         write_sheet=True,
         daily_policy_snapshot=snapshot,

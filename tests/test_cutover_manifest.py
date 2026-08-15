@@ -217,6 +217,15 @@ def test_sheet_mapping_is_bounded_non_applying_and_preserves_generic_calendar_ro
     assert compiled.ok
     earnings = next(policy for policy in compiled.policies if policy.capability.key == "earnings_calendar")
     assert earnings.mode.value == "live"
+    repeated = build_sheet_mapping_manifest(
+        _target_header,
+        materialized,
+        earnings_calendar_row=default_earnings_calendar_row(materialized),
+    )
+    assert repeated.ready
+    assert repeated.header_additions == ()
+    assert repeated.cell_mappings == ()
+    assert repeated.row_additions == ()
 
 
 def test_sheet_mapping_blocks_unreviewed_earnings_row_and_invalid_stage() -> None:
