@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import product
 
 from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, OptionQuote, Playbook, PreflightResult, UniverseEntry
@@ -584,6 +584,22 @@ def _build_for_playbook(
     *,
     config: dict | None = None,
 ) -> list[Candidate]:
+    if playbook.strategy_family == "earnings_calendar":
+        if idea.direction == "bullish":
+            return _call_calendar_candidates(
+                idea,
+                replace(playbook, structure="call_calendar"),
+                quotes,
+                config=config,
+            )
+        if idea.direction == "bearish":
+            return _put_calendar_candidates(
+                idea,
+                replace(playbook, structure="put_calendar"),
+                quotes,
+                config=config,
+            )
+        return []
     if playbook.structure == "short_put":
         return _short_put_candidates(idea, playbook, quotes)
     if playbook.structure == "long_call":

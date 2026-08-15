@@ -284,8 +284,13 @@ def _validate_earnings_calendar(capability: Capability, row: dict[str, Any], sou
         return
     if source_mode != "idea":
         raise PolicyError(f"{playbook_id}: earnings calendar requires idea source_mode")
-    if not str(row.get("applicable_direction") or "").strip():
-        raise PolicyError(f"{playbook_id}: earnings calendar requires direction selection")
+    directions = {
+        item.strip().lower()
+        for item in str(row.get("applicable_direction") or "").split(",")
+        if item.strip()
+    }
+    if not {"bullish", "bearish"}.issubset(directions):
+        raise PolicyError(f"{playbook_id}: earnings calendar must select calls for bullish and puts for bearish signals")
     if _integer(row.get("long_dte_min"), default=0, field="long_dte_min", playbook_id=playbook_id) < 45 or _integer(row.get("long_dte_max"), default=0, field="long_dte_max", playbook_id=playbook_id) > 60:
         raise PolicyError(f"{playbook_id}: earnings calendar far leg must be 45-60 DTE")
     if _integer(row.get("dte_min"), default=0, field="dte_min", playbook_id=playbook_id) < 5 or _integer(row.get("dte_max"), default=0, field="dte_max", playbook_id=playbook_id) > 7:

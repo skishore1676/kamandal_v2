@@ -11,6 +11,7 @@ from typing import Any
 
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_engine.lifecycle import adopt_legacy_position
+from kamandal_v2.strategy_engine.policy import PlaybookPolicy, compile_playbook_policies
 from kamandal_v2.strategy_lanes.models import LaneId
 from kamandal_v2.strategy_lanes.migrations import csa_schema_ready, migrate_csa_database
 from kamandal_v2.strategy_lanes.store import CsaStore
@@ -120,18 +121,96 @@ class SheetMappingManifest:
         }
 
 
-def build_cutover_manifest(store: LocalStore) -> CutoverManifest:
+def materialize_sheet_mapping(
+    manifest: SheetMappingManifest,
+    rows: list[dict[str, Any]],
+) -> tuple[tuple[str, ...], list[dict[str, Any]]]:
+    """Apply a manifest to in-memory rows for proof and bounded writers."""
+    if not manifest.ready:
+        raise ValueError("cannot materialize a blocked Sheet mapping manifest")
+    materialized = [dict(row) for row in rows]
+    for change in manifest.cell_mappings:
+        index = change.sheet_row - 2
+        if index < 0 or index >= len(materialized):
+            raise ValueError(f"Sheet mapping row is out of bounds: {change.sheet_row}")
+        if str(materialized[index].get("playbook_id") or "") != change.playbook_id:
+            raise ValueError(f"Sheet mapping identity drift at row {change.sheet_row}")
+        if materialized[index].get(change.column, "") != change.old_value:
+            raise ValueError(f"Sheet mapping source drift for {change.playbook_id}:{change.column}")
+        materialized[index][change.column] = change.new_value
+    for addition in manifest.row_additions:
+        if addition.start_row != len(materialized) + 2 or addition.end_row != addition.start_row:
+            raise ValueError("Sheet mapping addition is not the next bounded row")
+        materialized.append(dict(addition.values))
+    normalized = [
+        {column: row.get(column, "") for column in manifest.target_header}
+        for row in materialized
+    ]
+    return manifest.target_header, normalized
+
+
+def build_cutover_manifest(
+    store: LocalStore,
+    *,
+    playbook_rows: list[dict[str, Any]] | None = None,
+) -> CutoverManifest:
     """Inventory baseline groups without mutating the database or scheduler."""
     decisions: list[CutoverDecision] = []
+    policies, policy_errors = _adoption_policies(playbook_rows)
+    if policy_errors:
+        return CutoverManifest(
+            tuple(CutoverDecision("operator-policy", "block", error) for error in policy_errors)
+        )
     for group in sorted(store.open_live_position_groups(), key=lambda item: str(item.get("group_id") or "")):
         group_id = str(group.get("group_id") or "")
         try:
-            lifecycle = adopt_legacy_position(_adoption_payload(group), lifecycle_id=f"adopt:{group_id}", adopted_at=str(group.get("opened_at") or ""))
+            lifecycle = adopt_legacy_position(
+                _adoption_payload(group, compiled_policy=policies.get(str(group.get("playbook_id") or (group.get("candidate") or {}).get("playbook_id") or ""))),
+                lifecycle_id=f"adopt:{group_id}",
+                adopted_at=str(group.get("opened_at") or ""),
+            )
         except (ValueError, KeyError, TypeError) as exc:
             decisions.append(CutoverDecision(group_id, "block", str(exc)))
         else:
             decisions.append(CutoverDecision(group_id, "create", "legacy position maps exactly", lifecycle.lifecycle_id))
     return CutoverManifest(tuple(decisions))
+
+
+def planned_lifecycle_adoptions(
+    store: LocalStore,
+    *,
+    playbook_rows: list[dict[str, Any]],
+) -> tuple[Any, ...]:
+    """Build every production adoption in memory before the first DB write."""
+    manifest = build_cutover_manifest(store, playbook_rows=playbook_rows)
+    if not manifest.ready:
+        blockers = "; ".join(
+            f"{item.subject}: {item.reason}"
+            for item in manifest.decisions
+            if item.decision == "block"
+        )
+        raise ValueError(f"cutover adoption blocked: {blockers}")
+    policies, errors = _adoption_policies(playbook_rows)
+    if errors:
+        raise ValueError("cutover adoption policy blocked: " + "; ".join(errors))
+    groups = {
+        str(group.get("group_id") or ""): group
+        for group in store.open_live_position_groups()
+    }
+    lifecycles = []
+    for decision in manifest.decisions:
+        if decision.decision != "create":
+            continue
+        group = groups[decision.subject]
+        playbook_id = str(group.get("playbook_id") or (group.get("candidate") or {}).get("playbook_id") or "")
+        lifecycles.append(
+            adopt_legacy_position(
+                _adoption_payload(group, compiled_policy=policies.get(playbook_id)),
+                lifecycle_id=decision.lifecycle_id,
+                adopted_at=str(group.get("opened_at") or ""),
+            )
+        )
+    return tuple(lifecycles)
 
 
 def unified_schedule_manifest() -> dict[str, tuple[str, ...]]:
@@ -182,12 +261,16 @@ def build_sheet_mapping_manifest(
             blockers.append(f"{playbook_id}: unsupported csa_stage={row.get('csa_stage')!r}")
             continue
         _append_cell_change(changes, index, playbook_id, "mode", row.get("mode", ""), mode)
+        if not str(row.get("source_mode") or "").strip():
+            _append_cell_change(changes, index, playbook_id, "source_mode", row.get("source_mode", ""), "idea")
         structure = str(row.get("structure") or "").strip().lower()
         family = str(row.get("strategy_family") or "").strip().lower()
         if structure in {"short_strangle", "strangle"} or family == "short_strangle":
             _append_strangle_mapping(changes, index, playbook_id, row)
         if structure in {"call_calendar", "put_calendar"} and family != "earnings_calendar":
             _remove_unused_generic_calendar_event_expiration(changes, blockers, index, playbook_id, row)
+        if structure in {"call_diagonal", "put_diagonal"} or family in {"call_diagonal", "put_diagonal", "narrative_ignition"}:
+            _remove_legacy_diagonal_management(changes, blockers, index, playbook_id, row)
 
     additions_rows: list[SheetRowAddition] = []
     if earnings_calendar_row is None:
@@ -283,6 +366,47 @@ def _remove_unused_generic_calendar_event_expiration(
     )
 
 
+def _remove_legacy_diagonal_management(
+    changes: list[SheetCellMapping],
+    blockers: list[str],
+    sheet_row: int,
+    playbook_id: str,
+    row: dict[str, Any],
+) -> None:
+    raw = row.get("management_policy_json")
+    if raw in (None, ""):
+        return
+    try:
+        policy = raw if isinstance(raw, dict) else json.loads(str(raw))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        blockers.append(f"{playbook_id}: management_policy_json is not valid JSON")
+        return
+    if not isinstance(policy, dict):
+        blockers.append(f"{playbook_id}: management_policy_json must be an object")
+        return
+    lifecycle = policy.get("lifecycle")
+    if not isinstance(lifecycle, dict):
+        return
+    cleaned = dict(lifecycle)
+    removed = False
+    for key in ("long_only", "short_leg"):
+        if key in cleaned:
+            cleaned.pop(key)
+            removed = True
+    if not removed:
+        return
+    normalized = dict(policy)
+    normalized["lifecycle"] = cleaned
+    _append_cell_change(
+        changes,
+        sheet_row,
+        playbook_id,
+        "management_policy_json",
+        raw,
+        json.dumps(normalized, sort_keys=True, separators=(",", ":")),
+    )
+
+
 def _validated_earnings_calendar_row(values: dict[str, Any], header: tuple[str, ...]) -> dict[str, Any]:
     row = {column: "" for column in header}
     row.update(values)
@@ -298,6 +422,13 @@ def _validated_earnings_calendar_row(values: dict[str, Any], header: tuple[str, 
         raise ValueError("earnings calendar mapping must use strategy_family=earnings_calendar")
     if str(row["structure"]).strip().lower() not in {"call_calendar", "put_calendar"}:
         raise ValueError("earnings calendar mapping must use a calendar structure")
+    directions = {
+        item.strip().lower()
+        for item in str(row["applicable_direction"]).split(",")
+        if item.strip()
+    }
+    if not {"bullish", "bearish"}.issubset(directions):
+        raise ValueError("earnings calendar mapping must cover bullish call and bearish put selection")
     if str(row["mode"] or "").strip().lower() != "live":
         raise ValueError("earnings calendar mapping must target mode=live")
     if str(row["enabled"] or "").strip().lower() not in {"true", "1", "yes", "on"}:
@@ -315,6 +446,7 @@ def apply_cutover_fixture(
     *,
     backup_dir: str | Path,
     allow_fixture_apply: bool = False,
+    playbook_rows: list[dict[str, Any]] | None = None,
 ) -> FixtureApplyReceipt:
     """Apply adoption only to an explicit fixture database, with a restore point.
 
@@ -328,7 +460,7 @@ def apply_cutover_fixture(
     if not database.is_file():
         raise FileNotFoundError(f"fixture database does not exist: {database}")
     store = LocalStore(database)
-    manifest = build_cutover_manifest(store)
+    manifest = build_cutover_manifest(store, playbook_rows=playbook_rows)
     if not manifest.ready:
         blockers = "; ".join(f"{item.subject}: {item.reason}" for item in manifest.decisions if item.decision == "block")
         raise ValueError(f"cutover fixture blocked before mutation: {blockers}")
@@ -342,11 +474,17 @@ def apply_cutover_fixture(
     csa_store = CsaStore(database)
     created: list[str] = []
     groups = {str(group.get("group_id") or ""): group for group in store.open_live_position_groups()}
+    policies, policy_errors = _adoption_policies(playbook_rows)
+    if policy_errors:
+        raise ValueError("cutover fixture policy blocked: " + "; ".join(policy_errors))
     for decision in manifest.decisions:
         if decision.decision != "create":
             continue
         lifecycle = adopt_legacy_position(
-            _adoption_payload(groups[decision.subject]),
+            _adoption_payload(
+                groups[decision.subject],
+                compiled_policy=policies.get(str(groups[decision.subject].get("playbook_id") or (groups[decision.subject].get("candidate") or {}).get("playbook_id") or "")),
+            ),
             lifecycle_id=decision.lifecycle_id,
             adopted_at=str(groups[decision.subject].get("opened_at") or ""),
         )
@@ -376,6 +514,7 @@ def rehearse_cutover_on_copy(
     backup_dir: str | Path,
     apply: bool,
     verify_rollback: bool = True,
+    playbook_rows: list[dict[str, Any]] | None = None,
 ) -> CopiedCutoverReceipt:
     """Inventory and optionally migrate a fresh copy, never the source DB.
 
@@ -394,13 +533,18 @@ def rehearse_cutover_on_copy(
         raise FileExistsError(f"cutover work database already exists: {work}")
     work.parent.mkdir(parents=True, exist_ok=True)
     source_sha = _sha256(source)
-    manifest = build_cutover_manifest(LocalStore(source))
+    manifest = build_cutover_manifest(LocalStore(source), playbook_rows=playbook_rows)
     if not manifest.ready:
         return CopiedCutoverReceipt(str(source), str(work), source_sha, manifest, None, _integrity_check(source), False)
     if not apply:
         return CopiedCutoverReceipt(str(source), str(work), source_sha, manifest, None, _integrity_check(source), False)
     shutil.copy2(source, work)
-    receipt = apply_cutover_fixture(work, backup_dir=backup_dir, allow_fixture_apply=True)
+    receipt = apply_cutover_fixture(
+        work,
+        backup_dir=backup_dir,
+        allow_fixture_apply=True,
+        playbook_rows=playbook_rows,
+    )
     verified = _integrity_check(work)
     rollback_verified = False
     if verify_rollback:
@@ -411,7 +555,11 @@ def rehearse_cutover_on_copy(
     return CopiedCutoverReceipt(str(source), str(work), source_sha, manifest, receipt, verified, rollback_verified)
 
 
-def _adoption_payload(group: dict[str, Any]) -> dict[str, Any]:
+def _adoption_payload(
+    group: dict[str, Any],
+    *,
+    compiled_policy: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     candidate = dict(group.get("candidate") or {})
     structure = str(candidate.get("structure") or group.get("structure") or "").lower()
     family = str(candidate.get("strategy_family") or group.get("strategy_family") or "").lower()
@@ -436,15 +584,96 @@ def _adoption_payload(group: dict[str, Any]) -> dict[str, Any]:
         lane = lanes.get(structure)
     if lane is None:
         raise ValueError(f"legacy adoption blocked: unsupported structure {structure or '<missing>'}")
+    frozen_policy = group.get("compiled_management_policy") or group.get("policy_at_adoption") or compiled_policy
+    signed_entry = _optional_float(candidate.get("net_credit"))
+    cashflow_ledger = group.get("cashflow_ledger") or ()
+    if not cashflow_ledger and signed_entry is not None:
+        cashflow_ledger = (
+            {
+                "ticket_id": f"legacy-entry:{group.get('group_id')}",
+                "fill_id": f"policy-at-adoption:{group.get('group_id')}",
+                "amount": signed_entry,
+                "filled_at": str(group.get("opened_at") or ""),
+            },
+        )
+    cumulative = sum(float(item.get("amount") or 0.0) for item in cashflow_ledger)
+    playbook_id = str(group.get("playbook_id") or candidate.get("playbook_id") or "")
+    underlying = str(group.get("underlying") or candidate.get("underlying") or "")
+    policy_hash = str((frozen_policy or {}).get("policy_hash") or group.get("policy_hash") or "policy-at-adoption")
     return {
         "group_id": group.get("group_id"),
         "opportunity_id": str(candidate.get("idea_id") or group.get("group_id") or ""),
         "lane": lane.value,
         "active_legs": candidate.get("legs") or (),
-        "cashflow_ledger": group.get("cashflow_ledger") or (),
-        "policy_hash": str(group.get("policy_hash") or "policy-at-adoption"),
-        "compiled_management_policy": group.get("compiled_management_policy") or group.get("policy_at_adoption"),
+        "cashflow_ledger": cashflow_ledger,
+        "policy_hash": policy_hash,
+        "compiled_management_policy": frozen_policy,
+        "metadata": {
+            "underlying": underlying,
+            "playbook_id": playbook_id,
+            "structure": structure,
+            "execution_mode": "live",
+            "candidate_id": str(group.get("candidate_id") or candidate.get("candidate_id") or ""),
+            "source_identity": {
+                "idea_id": str(group.get("idea_id") or candidate.get("idea_id") or ""),
+                "plan_id": str(group.get("plan_id") or ""),
+            },
+            "policy_snapshot_date": "policy-at-adoption",
+            "policy_snapshot_hash": policy_hash,
+            "cumulative_cashflow": round(cumulative, 6),
+            "active_cost_basis": round(max(-cumulative, 0.0), 6),
+            "opening_credit": round(max(cumulative, 0.0), 6),
+            "contract_multiplier": 100,
+        },
     }
+
+
+def _adoption_policies(
+    playbook_rows: list[dict[str, Any]] | None,
+) -> tuple[dict[str, dict[str, Any]], tuple[str, ...]]:
+    if playbook_rows is None:
+        return {}, ()
+    compilation = compile_playbook_policies(playbook_rows)
+    if not compilation.ok:
+        return {}, compilation.errors
+    return {
+        policy.playbook_id: _compiled_policy_at_adoption(policy)
+        for policy in compilation.policies
+    }, ()
+
+
+def _compiled_policy_at_adoption(policy: PlaybookPolicy) -> dict[str, Any]:
+    capability = policy.capability.key
+    if capability == "short_strangle":
+        lane = LaneId.SHORT_STRANGLE
+    elif capability in {"call_spread", "call_vertical"}:
+        lane = LaneId.CALL_VERTICAL
+    elif capability in {"call_diagonal", "put_diagonal", "narrative_ignition"}:
+        lane = LaneId.DIRECTIONAL_DIAGONAL
+    elif capability == "earnings_calendar":
+        lane = LaneId.EARNINGS_CALENDAR
+    else:
+        lane = LaneId.GENERIC_CLOSE_ONLY
+    return {
+        "playbook_id": policy.playbook_id,
+        "lane": lane.value,
+        "stage": "live",
+        "source_mode": policy.source_mode,
+        "management": dict(policy.management),
+        "resolved_fields": dict(policy.fields),
+        "policy_hash": policy.policy_hash,
+        "source": "sheet_policy_at_adoption",
+        "read_at": "policy-at-adoption",
+    }
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _sha256(path: Path) -> str:

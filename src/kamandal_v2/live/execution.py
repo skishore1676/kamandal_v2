@@ -75,6 +75,48 @@ def execute_live_approved(
     store = store or LocalStore()
     action = APPROVE_LIVE_CLOSE if close else APPROVE_LIVE
     if close and _exit_submit_source(config) == "ledger":
+        # Typed lifecycle management is already authorized and persisted by
+        # the unified manager.  Consume it before consulting the Sheet-backed
+        # legacy close queue so an open lifecycle can always be closed or
+        # adjusted from its frozen policy, even when the operator Sheet is
+        # unavailable.  Adjustments must retain their own action class rather
+        # than inheriting close-window permission from this CLI entrypoint.
+        lifecycle_tickets = _staged_lifecycle_management_tickets(store, config)
+        if lifecycle_tickets:
+            _assert_submit_allowed(config, submit=submit)
+            adapter = broker_adapter(config)
+            results = []
+            for ticket in lifecycle_tickets:
+                authorized, reason = _lifecycle_management_authorization(ticket, config=config, store=store)
+                if not authorized:
+                    store.event(
+                        "stage_authorized_lifecycle_management_blocked",
+                        {
+                            "ticket_hash": ticket.get("ticket_hash"),
+                            "lifecycle_id": ticket.get("csa_lifecycle_id"),
+                            "reason": reason,
+                        },
+                    )
+                    results.append({"status": "blocked", "reason": reason, "ticket_hash": ticket.get("ticket_hash")})
+                    continue
+                results.append(
+                    _execute_ticket(
+                        config,
+                        adapter,
+                        store,
+                        ticket,
+                        submit=submit,
+                        close=str(ticket.get("intent_type") or "") == "close",
+                    )
+                )
+            return {
+                "action": action,
+                "submit": submit,
+                "processed": len(results),
+                "results": results,
+                "source": "frozen_lifecycle_ledger",
+                "management": True,
+            }
         promoted = _promote_sheet_approved_closes_to_ledger(config, store)
         promoted += _promote_legacy_auto_rule_closes_to_ledger(config, store)
         tickets = _ledger_approved_close_tickets(store, config)
@@ -761,6 +803,22 @@ def _max_close_submits_per_run(config: dict[str, Any]) -> int:
 def _ledger_approved_close_tickets(store: LocalStore, config: dict[str, Any]) -> list[dict[str, Any]]:
     tickets = store.live_order_intents_by_type("close", statuses={APPROVED_CLOSE_PENDING_SUBMIT})
     tickets.sort(key=lambda item: (str(item.get("_ledger_created_at") or ""), str(item.get("ticket_hash") or "")))
+    return tickets[:_max_close_submits_per_run(config)]
+
+
+def _staged_lifecycle_management_tickets(store: LocalStore, config: dict[str, Any]) -> list[dict[str, Any]]:
+    tickets = [
+        ticket
+        for ticket in store.live_order_intents_by_status({"stage_approved_pending_submit"})
+        if _is_lifecycle_management_ticket(ticket)
+    ]
+    tickets.sort(
+        key=lambda item: (
+            0 if str(item.get("intent_type") or "") == "close" else 1,
+            str(item.get("_ledger_created_at") or item.get("created_at") or ""),
+            str(item.get("ticket_hash") or ""),
+        )
+    )
     return tickets[:_max_close_submits_per_run(config)]
 
 

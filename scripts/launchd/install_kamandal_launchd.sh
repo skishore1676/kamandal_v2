@@ -107,6 +107,25 @@ for suffix in ["market_shadow", "shadow_eod_report"]:
 PY
 }
 
+retired_owner_labels() {
+  python3 - "$LABEL_PREFIX" <<'PY'
+import sys
+prefix = sys.argv[1]
+for suffix in [
+    "universe_proposer",
+    "live_advisory",
+    "live_management",
+    "csa_policy_snapshot",
+    "csa_shadow_scan",
+    "csa_live_scan",
+    "csa_shadow_management",
+    "csa_live_management",
+    "csa_shadow_scorecard",
+]:
+    print(f"{prefix}.{suffix}")
+PY
+}
+
 remove_kamandal_cron_block() {
   local current new
   current="$(mktemp)"
@@ -129,7 +148,7 @@ case "$ACTION" in
   render-unified)
     write_plists unified
     ;;
-  install|"")
+  install|install-unified|"")
     chmod +x "$REPO_ROOT/scripts/launchd/run_kamandal_job.sh"
     write_plists
     uid="$(id -u)"
@@ -137,6 +156,11 @@ case "$ACTION" in
       launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
       rm -f "$LAUNCHD_DIR/$label.plist"
     done < <(legacy_labels)
+    while IFS= read -r label; do
+      launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+      rm -f "$LAUNCHD_DIR/$label.plist"
+      echo "RETIRED $label"
+    done < <(retired_owner_labels)
     while IFS= read -r label; do
       plist="$LAUNCHD_DIR/$label.plist"
       launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
@@ -160,13 +184,17 @@ case "$ACTION" in
       rm -f "$LAUNCHD_DIR/$label.plist"
       echo "UNLOADED $label"
     done < <(labels)
+    while IFS= read -r label; do
+      launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+      rm -f "$LAUNCHD_DIR/$label.plist"
+    done < <(retired_owner_labels)
     launchctl list | grep "$LABEL_PREFIX" || true
     ;;
   uninstall-cron)
     remove_kamandal_cron_block
     ;;
   *)
-    echo "usage: $0 [render|render-unified|install|uninstall|uninstall-cron]" >&2
+    echo "usage: $0 [render|render-unified|install|install-unified|uninstall|uninstall-cron]" >&2
     exit 2
     ;;
 esac

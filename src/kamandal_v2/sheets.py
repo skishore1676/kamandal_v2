@@ -119,6 +119,46 @@ class GoogleSheetClient:
             rows.append({header[index]: str(padded[index]).strip() for index in range(len(header)) if header[index]})
         return rows
 
+    def read_tab_values(self, title: str) -> list[list[str]]:
+        """Read the exact populated value matrix without changing the tab."""
+        worksheet = self._worksheet(title, rows=100, cols=26)
+        values = self._retry(worksheet.get_all_values, operation=f"read worksheet values {title!r}") or []
+        return [list(row) for row in values]
+
+    def tab_dimensions(self, title: str) -> tuple[int, int]:
+        worksheet = self._worksheet(title, rows=100, cols=26)
+        return int(worksheet.row_count), int(worksheet.col_count)
+
+    def resize_tab(self, title: str, *, rows: int | None = None, cols: int | None = None) -> None:
+        worksheet = self._worksheet(title, rows=max(rows or 100, 1), cols=max(cols or 26, 1))
+        self._retry(
+            lambda: worksheet.resize(rows=rows, cols=cols),
+            operation=f"resize worksheet {title!r}",
+        )
+
+    def batch_update_tab(self, title: str, updates: Sequence[dict[str, Any]]) -> None:
+        """Apply explicitly bounded range updates without clearing the worksheet."""
+        if not updates:
+            return
+        worksheet = self._worksheet(title, rows=100, cols=26)
+        payload = [
+            {"range": str(item["range"]), "values": [list(row) for row in item["values"]]}
+            for item in updates
+        ]
+        self._retry(
+            lambda: worksheet.batch_update(payload, value_input_option="USER_ENTERED"),
+            operation=f"batch update worksheet {title!r}",
+        )
+
+    def batch_clear_tab(self, title: str, ranges: Sequence[str]) -> None:
+        if not ranges:
+            return
+        worksheet = self._worksheet(title, rows=100, cols=26)
+        self._retry(
+            lambda: worksheet.batch_clear(list(ranges)),
+            operation=f"batch clear worksheet {title!r}",
+        )
+
     def append_tab_rows(self, title: str, *, header: Sequence[str], rows: Sequence[Sequence[Any]]) -> int:
         """Append a bounded range without clearing existing cells or formatting."""
         if not rows:

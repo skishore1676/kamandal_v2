@@ -1,10 +1,12 @@
 import json
 import sqlite3
+from datetime import date, timedelta
 
 import pytest
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, PreflightResult
+from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, OptionQuote, Playbook, PreflightResult
+from kamandal_v2.planner.candidate_builder import _build_for_playbook
 from kamandal_v2.planner.engine import _live_overlap_preflight_guard, _rejection_summary, run_plan, run_shadow_cycle
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
@@ -19,6 +21,38 @@ def _isolate_fixture_plans_from_runtime_earnings(monkeypatch) -> None:
 
 
 SAMPLE_IDEAS = "tests/fixtures/sample_ideas.yaml"
+
+
+def test_one_earnings_playbook_selects_call_or_put_shape_from_direction() -> None:
+    playbook = Playbook.from_row(
+        {
+            "playbook_id": "earnings_calendar_directional",
+            "enabled": "TRUE",
+            "strategy_family": "earnings_calendar",
+            "structure": "call_calendar",
+            "applicable_direction": "bullish,bearish",
+            "dte_min": 5,
+            "dte_max": 7,
+            "long_dte_min": 45,
+            "long_dte_max": 60,
+            "long_delta_min": 0.45,
+            "long_delta_max": 0.55,
+        }
+    )
+    today = date.today()
+    quotes = [
+        OptionQuote("XYZ", (today + timedelta(days=dte)).isoformat(), option_type, 100, bid, ask, delta, 0, 0, 0, 0.25, 500, 100)
+        for option_type, delta, bid, ask in (("call", 0.50, 2.0, 2.1), ("put", -0.50, 2.0, 2.1))
+        for dte in (6, 50)
+    ]
+
+    bullish = _build_for_playbook(Idea("bull", "fixture", "XYZ", "bullish"), playbook, 100, quotes)
+    bearish = _build_for_playbook(Idea("bear", "fixture", "XYZ", "bearish"), playbook, 100, quotes)
+
+    assert {candidate.structure for candidate in bullish} == {"call_calendar"}
+    assert {leg.option_type for candidate in bullish for leg in candidate.legs} == {"call"}
+    assert {candidate.structure for candidate in bearish} == {"put_calendar"}
+    assert {leg.option_type for candidate in bearish for leg in candidate.legs} == {"put"}
 
 
 def _shadow_control() -> dict:

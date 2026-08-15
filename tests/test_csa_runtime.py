@@ -602,12 +602,17 @@ def test_live_fill_advances_same_lifecycle_and_management_stages_reusable_close(
     assert close_ticket["csa_action_type"] == "close"
     assert {leg["openCloseIndicator"] for leg in close_ticket["submit_payload"]["legs"]} == {"CLOSE"}
 
-    monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": []})
+    monkeypatch.setattr(
+        "kamandal_v2.live.execution.pull_sheet_tables",
+        lambda _config: (_ for _ in ()).throw(AssertionError("frozen lifecycle management must not read the Sheet")),
+    )
     monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: object())
+    executor_config = {"live": {"exit_submit_source": "ledger"}}
 
-    executed = execute_live_approved({}, submit=False, store=live_store)
+    executed = execute_live_approved(executor_config, submit=False, close=True, store=live_store)
 
     assert executed["management"] is True
+    assert executed["source"] == "frozen_lifecycle_ledger"
     assert executed["results"][0]["status"] == "dry_run"
 
     # A later-day adjustment uses the same frozen lifecycle authority even
@@ -622,9 +627,10 @@ def test_live_fill_advances_same_lifecycle_and_management_stages_reusable_close(
     adjustment["csa_strategy_ticket"]["metadata"]["action_type"] = "adjust"
     live_store.save_live_order_intent(adjustment, status="stage_approved_pending_submit")
 
-    adjusted = execute_live_approved({}, submit=False, store=live_store)
+    adjusted = execute_live_approved(executor_config, submit=False, close=True, store=live_store)
 
     assert adjusted["management"] is True
+    assert adjusted["source"] == "frozen_lifecycle_ledger"
     assert adjusted["results"][0]["status"] == "dry_run"
 
 

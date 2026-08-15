@@ -64,8 +64,26 @@ and validation; it must never clear or replace the tab.
    identity, cashflow/cost-basis evidence, policy hash or `policy_at_adoption`,
    and one owner. Any mismatch triggers rollback before scheduler replacement.
 
-The source helper `apply_cutover_fixture` is fixture-only. A production runner
-must be separately reviewed and cannot reuse a test apply switch as authority.
+The fixture helper remains fixture-only. The protected production runner is:
+
+```bash
+.venv/bin/python -m kamandal_v2.strategy_engine.runtime_cutover inspect \
+  --database data/kamandal_v2.db
+
+.venv/bin/python -m kamandal_v2.strategy_engine.runtime_cutover apply \
+  --database data/kamandal_v2.db \
+  --backup-dir data/backups/unified-cutover-<timestamp> \
+  --expected-database-sha256 <sha-from-inspect> \
+  --expected-sheet-snapshot-hash <hash-from-inspect> \
+  --allow-apply
+```
+
+`apply` requires the two exact inspection hashes and an explicit effect flag.
+It creates and verifies a SQLite backup and a Sheet value receipt before its
+first write, adopts every open group in memory before persisting any lifecycle,
+applies only manifest-owned Sheet cells, reads both surfaces back, and restores
+both surfaces automatically if either half fails. It never calls a broker or
+triggers a scheduled job.
 
 ## Scheduler replacement
 
@@ -80,10 +98,13 @@ Replace ownership atomically at the session boundary:
   reconciliation, health, reporting, and weekly review jobs.
 
 First render the exact plist set to an explicit empty temporary directory and
-compare it with the captured source set. Only after the database and Sheet
-readbacks succeed may the authorized operator unload the retired labels and
-load the rendered target labels. The target must show one planning and one
-lifecycle-management owner; never leave old and new managers loaded together.
+compare it with the captured source set. Quiesce all current Kamandal labels at
+the transaction boundary. Only after the database and Sheet readbacks succeed
+may the authorized operator deploy the approved commit and run
+`install_kamandal_launchd.sh install-unified`. The installer explicitly removes
+the nine retired owner plists before loading the 14 registry jobs. The target
+must show one planning and one lifecycle-management owner; never leave old and
+new managers loaded together.
 
 ## Immediate readback and rollback
 

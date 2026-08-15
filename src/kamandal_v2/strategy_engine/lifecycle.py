@@ -195,6 +195,15 @@ def adopt_legacy_position(payload: dict[str, Any], *, lifecycle_id: str, adopted
     compiled_policy = payload.get("compiled_management_policy")
     if not isinstance(compiled_policy, dict):
         raise ValueError("legacy adoption blocked: complete policy_at_adoption snapshot is required")
+    supplied_metadata = payload.get("metadata")
+    metadata = dict(supplied_metadata) if isinstance(supplied_metadata, dict) else {}
+    metadata.update(
+        {
+            "policy_at_adoption": True,
+            "legacy_source_id": str(payload.get("group_id") or ""),
+            "compiled_management_policy": dict(compiled_policy),
+        }
+    )
     return LifecycleState(
         lifecycle_id=lifecycle_id,
         opportunity_id=str(payload.get("opportunity_id") or f"legacy:{lifecycle_id}"),
@@ -206,11 +215,7 @@ def adopt_legacy_position(payload: dict[str, Any], *, lifecycle_id: str, adopted
         opened_at=adopted_at,
         updated_at=adopted_at,
         policy_hash=policy_hash,
-        metadata={
-            "policy_at_adoption": True,
-            "legacy_source_id": str(payload.get("group_id") or ""),
-            "compiled_management_policy": dict(compiled_policy),
-        },
+        metadata=metadata,
     )
 
 
