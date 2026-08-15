@@ -20,6 +20,7 @@ from kamandal_v2.intelligence.transcripts import CONTROLLED_THESIS_TAGS
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.schemas import MY_IDEAS_HEADER
 from kamandal_v2.sheets import GoogleSheetClient
+from kamandal_v2.stores.sqlite import LocalStore
 
 SOURCE_NAME = "operator_sheet"
 
@@ -59,6 +60,7 @@ def import_my_ideas(
     write_sheet: bool = True,
     bootstrap: bool = False,
     client: Any | None = None,
+    store: LocalStore | None = None,
     today: date | None = None,
 ) -> dict[str, Any]:
     client = client or GoogleSheetClient.from_config(config)
@@ -73,6 +75,23 @@ def import_my_ideas(
 
     universe = _enabled_universe(client, tab_names)
     ideas, statuses = convert_rows(rows, universe_symbols=universe, today=today)
+    discovery_store = store or LocalStore()
+    discovery_recorded = 0
+    for row, status in zip(rows, statuses, strict=True):
+        if status.get("status") != "not_in_universe_add_to_universe_tab":
+            continue
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        record_id = f"{today.isoformat()}:{ticker}:{str(row.get('direction') or '').strip().lower()}"
+        if discovery_store.record_discovery_evidence(
+            symbol=ticker,
+            source_profile=SOURCE_NAME,
+            source_record_id=record_id,
+            exclusion_reason="outside_enabled_universe",
+            evidence_ref=f"my_ideas:{today.isoformat()}",
+        ):
+            discovery_recorded += 1
 
     ideas_path = None
     if ideas:
@@ -99,6 +118,7 @@ def import_my_ideas(
         "statuses": [status["status"] for status in statuses],
         "ideas_path": str(ideas_path) if ideas_path else None,
         "sheet_rows_written": rows_written,
+        "discovery_evidence_recorded": discovery_recorded,
     }
 
 

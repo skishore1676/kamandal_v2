@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import hashlib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +72,24 @@ class LocalStore:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     event_type TEXT NOT NULL,
                     payload TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS discovery_observations (
+                    identity TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    source_profile TEXT NOT NULL,
+                    source_record_id TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    exclusion_reason TEXT NOT NULL,
+                    evidence_ref TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS discovery_candidates (
+                    symbol TEXT PRIMARY KEY,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    mention_count INTEGER NOT NULL,
+                    source_profiles_json TEXT NOT NULL,
+                    evidence_refs_json TEXT NOT NULL,
+                    exclusion_reason TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS shadow_fills (
                     id TEXT PRIMARY KEY,
@@ -211,6 +231,85 @@ class LocalStore:
             )
             self._ensure_shadow_fill_columns(conn)
             self._backfill_shadow_fill_columns(conn)
+
+    def record_discovery_evidence(
+        self,
+        *,
+        symbol: str,
+        source_profile: str,
+        source_record_id: str,
+        exclusion_reason: str,
+        evidence_ref: str,
+        observed_at: str | None = None,
+    ) -> bool:
+        """Persist one replay-safe, non-tradable discovery observation.
+
+        The identity deliberately excludes free-form source text and credentials.
+        Replaying the same source-profile/record/symbol does not increase the
+        candidate count; a new source record updates last-seen and diversity.
+        """
+        normalized_symbol = str(symbol or "").strip().upper()
+        profile = str(source_profile or "").strip()
+        record_id = str(source_record_id or "").strip()
+        reason = str(exclusion_reason or "outside_enabled_universe").strip()
+        reference = str(evidence_ref or "").strip()
+        if not normalized_symbol or not profile or not record_id:
+            raise ValueError("discovery evidence requires symbol, source_profile, and source_record_id")
+        seen_at = observed_at or datetime.now(UTC).isoformat()
+        identity = hashlib.sha256(f"{profile}|{record_id}|{normalized_symbol}".encode("utf-8")).hexdigest()
+        with self._connect() as conn:
+            inserted = conn.execute(
+                """
+                INSERT OR IGNORE INTO discovery_observations
+                (identity, symbol, source_profile, source_record_id, observed_at, exclusion_reason, evidence_ref)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (identity, normalized_symbol, profile, record_id, seen_at, reason, reference),
+            ).rowcount > 0
+            if not inserted:
+                return False
+            existing = conn.execute(
+                "SELECT first_seen_at, mention_count, source_profiles_json, evidence_refs_json FROM discovery_candidates WHERE symbol=?",
+                (normalized_symbol,),
+            ).fetchone()
+            profiles = {profile}
+            references = {reference} if reference else set()
+            first_seen = seen_at
+            mentions = 1
+            if existing:
+                first_seen = str(existing["first_seen_at"])
+                mentions = int(existing["mention_count"]) + 1
+                profiles.update(json.loads(existing["source_profiles_json"]))
+                references.update(json.loads(existing["evidence_refs_json"]))
+            conn.execute(
+                """
+                INSERT INTO discovery_candidates
+                (symbol, first_seen_at, last_seen_at, mention_count, source_profiles_json, evidence_refs_json, exclusion_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    last_seen_at=excluded.last_seen_at,
+                    mention_count=excluded.mention_count,
+                    source_profiles_json=excluded.source_profiles_json,
+                    evidence_refs_json=excluded.evidence_refs_json,
+                    exclusion_reason=excluded.exclusion_reason
+                """,
+                (normalized_symbol, first_seen, seen_at, mentions, json.dumps(sorted(profiles)), json.dumps(sorted(references)), reason),
+            )
+        return True
+
+    def discovery_candidates(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT symbol, first_seen_at, last_seen_at, mention_count, source_profiles_json, evidence_refs_json, exclusion_reason FROM discovery_candidates ORDER BY mention_count DESC, symbol"
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "source_profiles": json.loads(row["source_profiles_json"]),
+                "evidence_refs": json.loads(row["evidence_refs_json"]),
+            }
+            for row in rows
+        ]
 
     def _ensure_shadow_fill_columns(self, conn: sqlite3.Connection) -> None:
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(shadow_fills)").fetchall()}
