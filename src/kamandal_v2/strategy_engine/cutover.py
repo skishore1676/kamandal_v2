@@ -45,6 +45,19 @@ class FixtureApplyReceipt:
     integrity_check: str
 
 
+@dataclass(frozen=True, slots=True)
+class CopiedCutoverReceipt:
+    """A production-shaped rehearsal which can mutate only a newly made copy."""
+
+    source_database_path: str
+    work_database_path: str
+    source_sha256: str
+    manifest: CutoverManifest
+    apply_receipt: FixtureApplyReceipt | None
+    verify_integrity_check: str
+    rollback_verified: bool
+
+
 _UNIFIED_PLAYBOOK_COLUMNS = (
     "mode",
     "management_delta_target",
@@ -351,24 +364,77 @@ def restore_cutover_fixture(receipt: FixtureApplyReceipt) -> None:
         raise RuntimeError(f"restored fixture integrity failed: {integrity}")
 
 
+def rehearse_cutover_on_copy(
+    source_database: str | Path,
+    *,
+    work_database: str | Path,
+    backup_dir: str | Path,
+    apply: bool,
+    verify_rollback: bool = True,
+) -> CopiedCutoverReceipt:
+    """Inventory and optionally migrate a fresh copy, never the source DB.
+
+    Phase 9 can supply an authorized runtime source path to this same runner,
+    but the runner refuses an in-place target and an already-existing work
+    path.  That makes the local rehearsal and the eventual protected command
+    share migration logic without giving a source audit write authority.
+    """
+    source = Path(source_database).resolve()
+    work = Path(work_database).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"cutover source database does not exist: {source}")
+    if source == work:
+        raise ValueError("cutover work database must be a distinct copy, never the source database")
+    if work.exists():
+        raise FileExistsError(f"cutover work database already exists: {work}")
+    work.parent.mkdir(parents=True, exist_ok=True)
+    source_sha = _sha256(source)
+    manifest = build_cutover_manifest(LocalStore(source))
+    if not manifest.ready:
+        return CopiedCutoverReceipt(str(source), str(work), source_sha, manifest, None, _integrity_check(source), False)
+    if not apply:
+        return CopiedCutoverReceipt(str(source), str(work), source_sha, manifest, None, _integrity_check(source), False)
+    shutil.copy2(source, work)
+    receipt = apply_cutover_fixture(work, backup_dir=backup_dir, allow_fixture_apply=True)
+    verified = _integrity_check(work)
+    rollback_verified = False
+    if verify_rollback:
+        restore_cutover_fixture(receipt)
+        rollback_verified = _sha256(work) == source_sha and _integrity_check(work) == "ok"
+        if not rollback_verified:
+            raise RuntimeError("cutover copy rollback did not restore exact source bytes")
+    return CopiedCutoverReceipt(str(source), str(work), source_sha, manifest, receipt, verified, rollback_verified)
+
+
 def _adoption_payload(group: dict[str, Any]) -> dict[str, Any]:
     candidate = dict(group.get("candidate") or {})
     structure = str(candidate.get("structure") or group.get("structure") or "").lower()
+    family = str(candidate.get("strategy_family") or group.get("strategy_family") or "").lower()
     lanes = {
         "short_strangle": LaneId.SHORT_STRANGLE,
         "strangle": LaneId.SHORT_STRANGLE,
         "call_spread": LaneId.CALL_VERTICAL,
         "call_diagonal": LaneId.DIRECTIONAL_DIAGONAL,
         "put_diagonal": LaneId.DIRECTIONAL_DIAGONAL,
-        "call_calendar": LaneId.EARNINGS_CALENDAR,
-        "put_calendar": LaneId.EARNINGS_CALENDAR,
+        "short_put": LaneId.GENERIC_CLOSE_ONLY,
+        "long_call": LaneId.GENERIC_CLOSE_ONLY,
+        "long_put": LaneId.GENERIC_CLOSE_ONLY,
+        "put_spread": LaneId.GENERIC_CLOSE_ONLY,
+        "iron_condor": LaneId.GENERIC_CLOSE_ONLY,
+        "jade_lizard": LaneId.GENERIC_CLOSE_ONLY,
+        "call_calendar": LaneId.GENERIC_CLOSE_ONLY,
+        "put_calendar": LaneId.GENERIC_CLOSE_ONLY,
     }
-    if structure not in lanes:
+    if family == "earnings_calendar" and structure in {"call_calendar", "put_calendar"}:
+        lane = LaneId.EARNINGS_CALENDAR
+    else:
+        lane = lanes.get(structure)
+    if lane is None:
         raise ValueError(f"legacy adoption blocked: unsupported structure {structure or '<missing>'}")
     return {
         "group_id": group.get("group_id"),
         "opportunity_id": str(candidate.get("idea_id") or group.get("group_id") or ""),
-        "lane": lanes[structure].value,
+        "lane": lane.value,
         "active_legs": candidate.get("legs") or (),
         "cashflow_ledger": group.get("cashflow_ledger") or (),
         "policy_hash": str(group.get("policy_hash") or "policy-at-adoption"),

@@ -189,6 +189,8 @@ def adopt_legacy_position(payload: dict[str, Any], *, lifecycle_id: str, adopted
         roles = {str(item.get("role")) for item in legs}
         if roles != {"long_far", "short_near"}:
             raise ValueError("legacy adoption blocked: directional diagonal requires a complete paired position")
+    if lane is LaneId.GENERIC_CLOSE_ONLY and not legs:
+        raise ValueError("legacy adoption blocked: generic close-only position requires active legs")
     policy_hash = str(payload.get("policy_hash") or "policy-at-adoption")
     return LifecycleState(
         lifecycle_id=lifecycle_id,

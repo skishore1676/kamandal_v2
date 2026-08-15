@@ -7,6 +7,7 @@ from kamandal_v2.strategy_engine.cutover import (
     apply_cutover_fixture,
     build_cutover_manifest,
     build_sheet_mapping_manifest,
+    rehearse_cutover_on_copy,
     restore_cutover_fixture,
     unified_schedule_manifest,
 )
@@ -28,7 +29,7 @@ def test_cutover_manifest_is_read_only_and_blocks_ambiguous_shapes(tmp_path) -> 
 
     assert [item.decision for item in manifest.decisions] == ["create", "block"]
     assert manifest.ready is False
-    assert "unsupported structure long_call" in manifest.decisions[1].reason
+    assert "generic close-only position requires active legs" in manifest.decisions[1].reason
 
 
 def test_target_schedule_has_one_planning_and_management_owner() -> None:
@@ -120,3 +121,27 @@ def test_fixture_cutover_apply_is_idempotent_and_restore_rehearses(tmp_path) -> 
     assert database.read_bytes() == before
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_production_shaped_runner_can_only_apply_to_a_fresh_copy(tmp_path) -> None:
+    source = tmp_path / "source.db"
+    store = LocalStore(source)
+    store.save_live_position_group(
+        "strangle-1",
+        {"candidate": {"structure": "short_strangle", "legs": [
+            {"side": "sell", "role": "short_put", "option_type": "put", "expiration": "2026-09-25", "strike": 90, "quantity": 1},
+            {"side": "sell", "role": "short_call", "option_type": "call", "expiration": "2026-09-25", "strike": 110, "quantity": 1},
+        ]}},
+    )
+
+    receipt = rehearse_cutover_on_copy(
+        source,
+        work_database=tmp_path / "work.db",
+        backup_dir=tmp_path / "backups",
+        apply=True,
+    )
+
+    assert receipt.apply_receipt is not None
+    assert receipt.verify_integrity_check == "ok"
+    assert receipt.rollback_verified is True
+    assert source.read_bytes() == (tmp_path / "work.db").read_bytes()
