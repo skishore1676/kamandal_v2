@@ -360,7 +360,7 @@ def test_combined_management_schedule_uses_final_pre_close_run() -> None:
     )
 
     assert expectation["status"] == "due"
-    assert expectation["expected_by"].startswith("2026-07-24T15:05:00")
+    assert expectation["expected_by"].startswith("2026-07-24T15:15:00")
 
 
 def test_expected_job_observation_suppresses_market_holiday(monkeypatch) -> None:  # noqa: ANN001
