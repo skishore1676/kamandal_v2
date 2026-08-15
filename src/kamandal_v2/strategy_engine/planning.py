@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,8 @@ from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_lanes.tickets import open_ticket_from_candidate
 from kamandal_v2.strategy_lanes.lane_common import propose_action
 from kamandal_v2.market.public import occ_symbol
+from kamandal_v2.strategy_engine.event_timing import entry_session_due
+from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +111,11 @@ def _run_book(
         mode_config = live_config(mode_config)
         live_renderer = (render_live_plan_rows, _live_candidate_policy)
     playbooks = [Playbook.from_row(policy.fields) for policy in selected]
+    def candidate_postprocessor(candidates: list[Any], current_store: LocalStore, current_config: dict[str, Any], portfolio: PortfolioState) -> None:
+        _gate_earnings_calendar_entries(candidates, selected, sqlite_path=current_store.sqlite_path, observed_at=_planning_observed_at(current_config))
+        if live_renderer is not None:
+            live_renderer[1](candidates, current_store, current_config, portfolio)
+
     try:
         result = run_plan(
             mode_config,
@@ -117,7 +125,7 @@ def _run_book(
             write_sheet=write_sheet if mode is ExecutionMode.SHADOW else False,
             store=store,
             audit=AuditWriter(Path(audit_root) / mode.value),
-            candidate_postprocessor=live_renderer[1] if live_renderer is not None else None,
+            candidate_postprocessor=candidate_postprocessor,
             universe_override=universe,
             playbooks_override=playbooks,
             source_groups_factory=lambda ideas, entries, selected_playbooks, portfolio: _source_groups(
@@ -286,6 +294,55 @@ def _candidate_quotes(candidate: Any) -> dict[str, dict[str, Any]]:
         occ_symbol(candidate.underlying, leg): {"bid": leg.bid, "ask": leg.ask, "fresh": True}
         for leg in candidate.legs
     }
+
+
+def _gate_earnings_calendar_entries(
+    candidates: list[Any],
+    policies: tuple[PlaybookPolicy, ...],
+    *,
+    sqlite_path: str | Path,
+    observed_at: str,
+) -> None:
+    """Make event-relative earnings entry a real optimizer eligibility gate."""
+    by_playbook = {policy.playbook_id: policy for policy in policies}
+    for candidate in candidates:
+        policy = by_playbook.get(candidate.playbook_id)
+        if policy is None or policy.capability.key != "earnings_calendar":
+            continue
+        snapshot = latest_earnings_snapshot(sqlite_path, candidate.underlying)
+        if snapshot is None or not snapshot.confirmed or not snapshot.next_earnings_date:
+            candidate.rejection_reason = "earnings_event_unconfirmed"
+            continue
+        try:
+            event_date = date.fromisoformat(snapshot.next_earnings_date)
+            entry_due = entry_session_due(event_date=event_date, time_of_day=snapshot.time_of_day, observed_at=observed_at)
+            near_expiry = min(date.fromisoformat(leg.expiration) for leg in candidate.legs)
+        except (TypeError, ValueError):
+            candidate.rejection_reason = "earnings_event_timing_invalid"
+            continue
+        if not entry_due:
+            candidate.rejection_reason = "earnings_entry_not_final_pre_event_session"
+            continue
+        if near_expiry <= event_date:
+            candidate.rejection_reason = "earnings_near_expiry_not_after_event"
+            continue
+        candidate.reasons.extend(
+            [
+                f"earnings_event_date={event_date.isoformat()}",
+                f"earnings_time_of_day={snapshot.time_of_day}",
+                "earnings_entry_session=final_pre_event",
+            ]
+        )
+
+
+def _planning_observed_at(config: dict[str, Any]) -> str:
+    runtime = config.get("runtime") or {}
+    value = runtime.get("observed_at")
+    if value:
+        return str(value)
+    from kamandal_v2.domain.models import utc_now
+
+    return utc_now()
 
 
 def _plan_time(result: PlanRunResult) -> str:

@@ -290,7 +290,11 @@ def _validate_earnings_calendar(capability: Capability, row: dict[str, Any], sou
         raise PolicyError(f"{playbook_id}: earnings calendar far leg must be 45-60 DTE")
     if _integer(row.get("dte_min"), default=0, field="dte_min", playbook_id=playbook_id) < 5 or _integer(row.get("dte_max"), default=0, field="dte_max", playbook_id=playbook_id) > 7:
         raise PolicyError(f"{playbook_id}: earnings calendar near leg must be 5-7 DTE")
-    if str(row.get("event_timing") or "").strip().lower() != "confirmed" or not _as_bool(row.get("near_expiry_after_event")):
+    timing = str(row.get("event_timing") or "").strip().lower()
+    after_event = _as_bool(row.get("near_expiry_after_event")) or _integer(
+        row.get("event_near_expiry_after_days"), default=0, field="event_near_expiry_after_days", playbook_id=playbook_id
+    ) > 0
+    if timing not in {"confirmed", "confirmed_bmo_or_amc_final_pre_event_session"} or not after_event:
         raise PolicyError(f"{playbook_id}: earnings calendar requires confirmed event timing and post-event near expiry")
 
 
