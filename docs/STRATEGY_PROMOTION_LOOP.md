@@ -1,6 +1,18 @@
 # Strategy Promotion Loop
 
-Status: source contract implemented; oldmac deployment tracked by release readback
+Status: current pre-convergence operating contract
+
+> This document describes the currently deployed baseline/CSA routing. It is not
+> the north-star architecture. The approved replacement is the single-engine
+> cutover in [ARCHITECTURE.md](ARCHITECTURE.md): one capability engine, one
+> lifecycle owner, and a per-playbook `shadow` or `live` execution mode. Until
+> that cutover is implemented and explicitly deployed, the routing below remains
+> operationally authoritative.
+>
+> The diagonal short-leg roll described below is therefore current scaffolding,
+> not target behavior. The frozen target makes diagonals paired open/full-close
+> while preserving short-strangle untested-side replacement as the one ordinary
+> side-adjustment capability.
 
 ## Ownership
 

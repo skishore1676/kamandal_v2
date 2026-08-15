@@ -6,6 +6,11 @@ Local-first live multileg options portfolio planning, execution, and management 
 
 Kamandal operates through a strictly bounded pipeline designed to keep the AI creative on idea extraction but mathematically rigorous on options execution.
 
+The canonical north-star and the bounded single-engine cutover are documented in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). CSA is temporary implementation
+scaffolding, not a permanent product lane: the target is one portfolio planner,
+one strategy lifecycle engine, and shadow/live execution adapters.
+
 1. **Intelligence Gathering**
    - Source content (YouTube video captions via `yt-dlp` and X/Twitter bookmarks/timelines) are fetched and ingested locally.
    - Raw texts are stored in `data/transcripts/` or staged in `data/digest/`.
@@ -35,7 +40,7 @@ Kamandal operates through a strictly bounded pipeline designed to keep the AI cr
 - **Runtime Rules:** Controlled locally via `config/control.yaml` and environment variables.
   - The active broker is Public; Tastytrade supplies selected market metrics.
   - The checked-in posture is live and trading-enabled. Oldmac environment overrides remain part of runtime truth.
-  - Configures BPR caps, concentration limits, live approval/submission, and retained shadow behavior.
+  - Configures BPR caps, concentration limits, automated live selection/submission, optional alternate approval modes, and retained shadow behavior.
 
 For undefined-risk short strangles, broker preflight BPR is authoritative. The
 local formula is retained only as a labeled fallback when the broker omits BPR.

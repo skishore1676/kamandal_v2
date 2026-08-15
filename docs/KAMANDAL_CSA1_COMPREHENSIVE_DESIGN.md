@@ -1,11 +1,22 @@
 # Kamandal Core Strategy Alignment Release (CSA-1)
 
-Status: Implementation-authoritative, shadow-only release design
+Status: Historical release design; implemented scaffolding, not the north star
 Version: 1.2
 Updated: 2026-08-08
 Repository: `skishore1676/kamandal_v2`
 Target branch: `codex/core-strategy-alignment-csa1`
 Source: operator-provided `KAMANDAL_CSA1_COMPREHENSIVE_DESIGN_V1_1.md`
+
+> CSA-1 was the safe additive release used to introduce typed strategy
+> lifecycles and shadow execution. It is not a permanent Kamandal subsystem.
+> The approved destination and bounded ownership cutover are defined in
+> [ARCHITECTURE.md](ARCHITECTURE.md). This document remains the historical proof
+> and rollback contract for the deployed CSA-1 scaffolding.
+>
+> Where this document describes diagonal short-leg roll/resale or an
+> approval-gated long-only diagonal, that behavior is historical and is not part
+> of the frozen target architecture. Its short-strangle untested-side replacement
+> machinery is retained and hardened under the frozen capability contract.
 
 ## Executive Summary
 

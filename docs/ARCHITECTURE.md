@@ -1,7 +1,7 @@
 # Kamandal V2 Architecture
 
-Date: 2026-04-25
-Status: Working architecture after PRD review
+Date: 2026-08-15
+Status: Architecture frozen; implementation Super Goal under review
 
 ## Purpose
 
@@ -13,6 +13,452 @@ This document reconciles:
 
 The goal is to preserve the good ideas without importing complexity that does
 not match the current vision.
+
+## Current Architecture Decision: One Strategy Engine
+
+Kamandal is one trading engine. It must not have a permanent "baseline" engine
+and a separate "CSA" engine.
+
+The stable model is:
+
+```mermaid
+flowchart LR
+    A["Input sources"] --> B["Normalized signals"]
+    B --> C["Sheet playbooks"]
+    C --> D["Strategy capabilities"]
+    D --> E["Portfolio selection"]
+    E --> F["Trade lifecycle"]
+    F --> G["Shadow adapter"]
+    F --> H["Guarded live adapter"]
+    F --> I["Canonical trade history"]
+    I --> J["TradeLab"]
+```
+
+The ownership rule is simple:
+
+- input sources produce normalized evidence and ideas;
+- Kamandal code owns executable strategy capabilities;
+- the Google Sheet composes a capability into a playbook and selects `shadow`
+  or `live`;
+- Kamandal owns each trade from candidate through final close;
+- the existing guarded live submitter and reconciliation path own broker
+  effects; and
+- TradeLab reads Kamandal facts and produces analysis. It does not manage trades.
+
+### Capability versus playbook
+
+A strategy capability is code that knows how to validate, construct, and manage
+one lifecycle shape. A playbook is a Sheet row that supplies parameters and
+deployment mode for that capability.
+
+The existing `strategy_family` field is the capability registry key. The
+`structure` field remains the concrete order shape. They are deliberately
+different: `earnings_calendar` and a generic low-IV calendar may both construct
+a `call_calendar`, while an `apple_strategy` may reuse an existing structure but
+have different eligibility and lifecycle behavior. Capability lookup must never
+be inferred from `structure` alone.
+
+The minimal operator contract is:
+
+| Field | Meaning |
+| --- | --- |
+| `playbook_id` | unique parameterized strategy row |
+| `strategy_family` | registered Kamandal capability |
+| `structure` | concrete option/order shape constructed by that capability |
+| `source_mode` | `idea`, `market_scan`, or `portfolio_hedge`; blank legacy values migrate to `idea` |
+| `mode` | `shadow` or `live` effect choice |
+| typed parameter columns and management JSON | entry, sizing, and lifecycle policy |
+
+At the initial cutover, the existing `call_calendar_low_iv` and
+`put_calendar_low_iv` rows remain generic low-IV calendar capabilities in live
+mode. Their fixed DTE windows and earnings blackout must be preserved. They are
+not earnings-calendar strategies merely because they construct calendar-shaped
+orders.
+
+A live `earnings_calendar` is a separate direction-aware playbook:
+
+- a bullish signal constructs a call calendar and a bearish signal constructs a
+  put calendar;
+- both legs use the same strike and are routed as one debit complex order;
+- at entry, buy the far option with 45-60 DTE and sell the near option with 5-7
+  DTE, with the near expiration strictly after the confirmed earnings event;
+- enter in the final eligible session before the announcement: the same trading
+  day for an after-close event or the prior trading day for a before-open event;
+- hold the paired spread through the announcement; and
+- close both legs together during the first eligible post-event session, using
+  fresh executable multileg quotes. Global emergency and broker-safety rules may
+  still force an earlier close.
+
+Unknown or conflicting event date/time blocks entry. This is a single-event,
+close-only lifecycle: it does not repeatedly sell new short options against the
+far option.
+
+For example, adding an `apple_strategy` means:
+
+1. implement and register the capability in Kamandal;
+2. add a Sheet row referencing `apple_strategy` with `mode=shadow`;
+3. validate every decision branch with deterministic replay and observe a few
+   natural sessions; and
+4. change that same row to `mode=live` when the operator authorizes it.
+
+Shadow and live use the same candidate, lifecycle, action, and ticket code. Only
+the final execution adapter differs.
+
+`mode` and edited Sheet parameters control future entries. When a trade opens,
+the lifecycle stores the complete compiled management policy and its hash.
+Later Sheet edits, disabling, or deletion do not silently rewrite or orphan that
+open trade. Current global safety, market-session, broker, reconciliation, and
+emergency rules may still override the stored strategy policy. Adopting a newer
+policy for an existing lifecycle is an explicit, versioned operation.
+
+The Sheet contains typed parameters, not executable strategy code. A parameter
+variant is another row. A genuinely new entry shape or lifecycle behavior is a
+new Kamandal capability.
+
+### Input sources are profiles, not trading lanes
+
+X, YouTube, My Ideas, correspondent profiles, market scans, and portfolio needs
+all normalize into a common signal contract. Adding another correspondent
+normally adds a collector/profile/translator, not another planner or manager.
+Once normalized, the signal is evaluated by every compatible enabled playbook.
+
+### Universe renewal is a governed feedback loop
+
+The enabled universe is a trading-safety allowlist, not an extraction filter.
+Kamandal must preserve a valid mention or thesis even when its symbol is not yet
+approved for trading. The universe check decides what happens next:
+
+```mermaid
+flowchart LR
+    A["My Ideas, X, YouTube, correspondents"] --> B["Normalized signal evidence"]
+    B --> C{"Enabled universe?"}
+    C -->|yes| D["Compatible playbooks and portfolio planner"]
+    C -->|no| E["Durable universe-candidate evidence"]
+    E --> F["Weekly ranked review"]
+    F --> G["Disabled proposed row in existing universe tab"]
+    G -->|operator approves and enables| D
+    G -->|hold or reject| H["Remains ineligible for trading"]
+```
+
+This is intentionally a one-way human gate. The watchdog may collect, dedupe,
+rank, and propose a symbol, but it may never make that symbol tradable. An
+approved symbol becomes eligible only after the operator completes its universe
+policy (profile, playbook permissions, and risk fields) and changes
+`enabled=TRUE` in the existing `universe` tab. No new Sheet tab or approval
+application is required.
+
+Activation is fail closed. Blank `enabled` never means true. A proposed row can
+enter planning only when it has literal `enabled=TRUE`, a reviewed tier other
+than `proposed`, `held`, or `rejected`, and explicit valid values for profile,
+IV eligibility, maximum BPR, maximum positions, earnings sensitivity/event
+windows, and allowed playbooks. A flip on an incomplete proposal fails config
+validation rather than inheriting permissive model defaults.
+
+The minimum durable candidate record contains the symbol, first and last seen
+times, mention count, distinct source profiles, evidence references, and the
+reason it was excluded from planning. Each observation has a stable identity
+derived from the source profile, immutable source-record identity, and symbol,
+so replaying the same packet cannot inflate counts. Source normalization writes
+this evidence transactionally; it does not wait for a separate daily collector.
+
+The Friday review uses the half-open interval after the last successfully
+committed universe review through the current review cutoff. The first run uses
+the previous five completed trading sessions. A missed/holiday week is therefore
+recovered without double counting. Before publication, deterministic market
+checks add price, average dollar volume, optionability/options-liquidity facts,
+and market capitalization when available. A default maximum of five ranked new
+proposals per review keeps the operator surface useful. Ranking is transparent:
+recurrence, then source diversity, then recency, then tradability. These are
+discovery facts, not an alpha score.
+
+The existing five-tab Sheet remains the operator surface. Proposed rows use
+`tier=proposed` and `enabled=FALSE`; the operator may change the tier to `held`
+or `rejected`, still disabled. The publisher never recreates held/rejected
+symbols and may update only machine-owned proposal fields, never operator policy
+or notes. Any automatic append must be a bounded row operation that preserves
+headers, formulas, formatting, and validation and then reads back the exact
+rows. It must not clear and rewrite the entire universe tab.
+
+The Friday universe projection is deterministic and failure-isolated from the
+existing LLM rejection review. Both may share the Friday launchd wrapper, but
+one component cannot silently suppress or duplicate the other. Status reports
+four outcome counts separately from process health: evidence observations,
+unique outside-universe candidates, candidates passing tradability checks, and
+rows published.
+
+The current implementation is scheduled but not effective. On deployed oldmac,
+the universe proposer naturally returned `status=ok` with zero proposals on
+every weekday from August 7 through August 14, 2026. The Sheet still contained
+85 enabled rows and no proposed rows, and the 780 stored ideas contained no
+out-of-universe symbol. This is explained by the code path:
+
+- My Ideas rejects a non-universe ticker before materializing an `Idea`;
+- the active X and YouTube jobs explicitly filter extraction to enabled symbols;
+- correspondent translation records an outside-universe blocker but publishes
+  only planner-eligible ideas to the active idea store;
+- the proposer advertises a three-day lookback but reads one overwriteable
+  `latest_plan_run.json`, then falls back to the already-filtered idea store; and
+- the Friday rejection reviewer does not aggregate or project universe
+  candidates for operator review.
+
+Therefore a green proposer job proves only that its schedule and process worked;
+it does not prove that the universe-renewal loop produced useful evidence.
+
+The existing playbook field `universe_expansion_enabled` is unrelated to this
+feedback loop. Today it only lets the short-strangle playbook scan more broadly
+inside the already enabled universe by bypassing per-symbol playbook allowlists.
+The unified policy should rename or clearly alias that meaning (for example,
+`universe_wide_scan`) so it cannot be mistaken for permission to add symbols.
+
+### Entry and management use different time permissions
+
+Session policy is shared platform behavior, not strategy-specific logic:
+
+| Central time | New entries | Existing-position actions |
+| --- | --- | --- |
+| 08:30-09:45 | blocked | closes and explicitly risk-reducing actions allowed |
+| 09:45-14:40 | allowed | normal lifecycle management allowed |
+| 14:40-14:55 | blocked | regular-option closes allowed until broker cutoff |
+
+Extended-session symbols retain their configured close time and buffer. The
+broker-facing submission guard, not only the wake-up schedule, enforces these
+permissions.
+
+### Management permissions are capability-specific
+
+One lifecycle engine does not mean every strategy may perform every action.
+Each registered capability declares the actions and ticket shapes it permits:
+
+| Capability | Open | Ordinary management | Exit |
+| --- | --- | --- | --- |
+| Short strangle | sell short put and short call together | bounded replacement of the untested short side; optional separately configured duration/inversion branches | buy back both currently active short legs together |
+| Call vertical | open both spread legs together | hold or close only | close both current legs together |
+| Directional diagonal | open far long and near short together | hold or close only; no ordinary short-leg resale/roll | close both current legs together |
+| Generic calendar | open far long and near short together | established close-only rules | close both current legs together |
+| Earnings calendar | open event-relative far long and near short together | hold through the confirmed event | close both current legs together after the event |
+
+The short strangle is the deliberate exception to close-only multileg
+management. It has two short options, not a “long leg” and a “short leg.” When
+one strike is breached, the other option is the *untested side*. Replacing that
+side is economically a one-side adjustment but operationally a paired roll:
+
+- if the short put is tested, buy to close the current short call and sell to
+  open a new short call closer to the stock;
+- if the short call is tested, buy to close the current short put and sell to
+  open a new short put closer to the stock;
+- submit those close/open effects as one complex replacement ticket with the
+  same option type, expiration, quantity, and lifecycle role;
+- leave the tested leg unchanged; and
+- after a complete fill, reconcile exactly two active short legs and no increase
+  in short-contract count. A one-leg fill/state is an execution incident, not a
+  valid strategy state.
+
+For the initial `short_strangle_high_iv` shadow policy, a side is tested when the
+underlying is at or beyond its short strike for two consecutive management
+observations on the **same side**. A side change or return inside both active
+strikes resets confirmation. One filled replacement consumes that tested
+episode; the same continuing breach cannot walk the untested leg inward again.
+The capability re-arms only after two consecutive observations back inside the
+active strikes or after a later distinct tested episode.
+
+The replacement selector uses management policy, not the 0.14-0.20 entry-delta
+range. It chooses the closest liquid non-crossing strike to absolute 0.30 delta,
+never above the Sheet-configured 0.40 management maximum, strictly inward from
+the current untested strike, and only for a net credit of at least $0.10 per
+share. It observes a 30-minute cooldown after a filled adjustment. A maximum of
+two successfully filled side replacements across the lifecycle is the initial
+operator safety/experiment limit; rejected, cancelled, expired, or unfilled
+tickets do not count. Two is not asserted as a universal tastylive rule.
+
+Working-order or ownership ambiguity blocks action. Emergency, mandatory event,
+profit, configured loss, and DTE exits outrank an adjustment. Adjustments are
+risk-changing trades and run only during the normal entry/management window;
+they are not allowed in opening or closing exit-only windows.
+
+At initial cutover, `dte_action=close` at 21 DTE. The existing duration-roll
+branch must not compete with that close. A future Sheet policy may instead
+select a whole-position duration roll, but only with its own limit and an atomic
+four-effect ticket that closes both current legs and opens both later-dated
+legs. Bounded inversion remains a supported but initially disabled policy branch
+until its remaining-profit and adjusted-target economics pass deterministic
+proof and the operator explicitly enables it.
+
+Ordinary adjustment economics retain the Sheet's 40% target as a dollar target
+based on the original opening credit. Filled roll credits update cumulative
+cashflow, breakevens, and the required closing debit; they do not silently turn
+40% into tastylive's commonly discussed 50% target. Final exit always closes the
+two legs that are active after all filled replacements.
+
+## Merge Decision
+
+The current implementations each contain one part worth keeping. Neither should
+replace the other wholesale.
+
+| Current component | Keep | Replace or absorb |
+| --- | --- | --- |
+| Established planner | idea matching, candidate construction, portfolio-bundle optimization | baseline-only policy routing |
+| CSA strategy lanes | typed opportunity, lifecycle, action arbitration, mixed-leg tickets, shadow/live adapters | CSA identity, independent scan/management ownership |
+| Existing live pipeline | health, account risk, BPR, broker preflight, submission windows, serialization, reconciliation | close-only strategy management |
+
+The resulting engine has three parts:
+
+1. **Selection brain:** the established portfolio planner evaluates all enabled
+   playbooks and chooses separate live and shadow plans. One invocation may run
+   both books, but they have independent candidate sets, portfolio state,
+   results, and failure receipts. Shadow cannot consume or veto live capacity.
+2. **Lifecycle brain:** the generalized strategy-lane machinery owns opens,
+   holds, adjustments, rolls, and closes for every selected trade.
+3. **Effect boundary:** shadow simulation or the existing guarded live ledger,
+   submitter, and reconciliation path.
+
+This direction matters because the CSA scanner currently selects the best
+candidate inside each opportunity; it does not replace the established
+portfolio-bundle optimizer. Conversely, the established live manager mainly
+constructs full closes and cannot be the extensible home for mixed-leg
+adjustments without recreating the lifecycle machinery.
+
+## Smallest Coherent Cutover
+
+This is one bounded cutover, not a long-lived hybrid. The implementation may be
+split into reviewable commits, but it is deployed as one ownership change after
+the complete cutover test passes.
+
+| Change | Value now | Future value | Required? |
+| --- | --- | --- | --- |
+| Compile every enabled Sheet row into one playbook policy with `mode=shadow|live` | removes baseline/CSA routing ambiguity | every new capability gets the same switch | yes |
+| Put the existing portfolio optimizer in front of all capability builders | preserves current live selection quality | new strategies automatically compete at portfolio level | yes |
+| Generalize the typed CSA lifecycle/action/ticket contracts and remove CSA from public names | one manager dispatches only the actions permitted by each capability | Apple-like capabilities plug into one interface without inheriting unrelated roll behavior | yes |
+| Route every lifecycle ticket through either the shadow adapter or existing guarded live ledger | live and shadow exercise the same logic | promotion is one Sheet change | yes |
+| Backfill every currently open Kamandal position into a lifecycle with one proven owner | prevents unmanaged or double-managed positions at cutover | one canonical history | yes |
+| Replace separate baseline/CSA scan and management jobs with unified planning and management jobs | eliminates duplicate clocks and ownership | simpler operations | yes |
+| Add the authoritative entry/exit time permissions above | captures opening/closing exits without opening new risk | applies automatically to future strategies | yes |
+| Preserve out-of-universe evidence and produce a bounded weekly proposal queue in the existing `universe` tab | lets current idea flow refresh a three-year-old allowlist without making unapproved trades | every future source profile contributes to universe discovery automatically | yes |
+| Expose canonical lifecycle history through read-only JSON | TradeLab can report what Kamandal did and how it ended | transport can later become an API without changing semantics | yes |
+| Rename existing persisted `csa_*` tables immediately | no trading or diagnostic improvement | cosmetic consistency only | no |
+
+The final row is an explicit non-change. Existing table names may remain as a
+legacy physical-storage detail if rewriting them adds migration risk. Public
+commands, types, reports, and operational ownership must use the generic
+strategy language after cutover.
+
+"Unified jobs" means one planning owner and one lifecycle-management owner. It
+does not mean Kamandal has only two launchd jobs. Source collectors, market-data
+refreshes, policy snapshots, the guarded order executor, reconciliation, health,
+and reporting remain separate operational responsibilities. The jobs retired by
+the ownership cutover are the competing established advisory/management and CSA
+scan/management runners, not those supporting responsibilities.
+
+### Implementation surface
+
+The cutover changes existing seams; it does not add another subsystem:
+
+- `strategy_lanes/policy.py` becomes the one compiler for every enabled
+  playbook row. `planner/config_loader.py` stops dividing rows into baseline
+  versus CSA ownership.
+- `planner/engine.py` keeps portfolio-bundle generation and calls the registered
+  capability builders for both modes. The per-opportunity winner loop in
+  `strategy_lanes/runtime.py` no longer acts as an independent planner.
+- The typed contracts in `strategy_lanes/models.py` become generic strategy
+  contracts. The existing four lane modules implement the common capability
+  interface rather than being special CSA routes.
+- `strategy_lanes/management_runtime.py` becomes the only lifecycle manager.
+  Fresh-quote marking, profit/event/DTE/loss behavior, and working-order checks
+  from `live/management.py` are preserved as shared context/rules; the separate
+  close-only runner is retired.
+- `live/orders.py` exposes one translation from a typed strategy ticket to the
+  existing live ledger. It retains per-leg open/close effects for adjustments.
+- `ops/launchd_registry.py` schedules one planning command and one management
+  command at the required entry/exit cadences. Start management checks every
+  five minutes; increase frequency later only from measured need. Mode is read
+  from each playbook and lifecycle, not encoded in the job name. One broken
+  lifecycle is isolated from the others, and live lifecycles are processed
+  before shadow lifecycles.
+- Source normalizers persist both tradable ideas and non-tradable discovery
+  evidence transactionally. The existing Friday reviewer emits the bounded
+  ranked universe queue, reusing proposer filtering/publishing code where
+  useful. The redundant daily proposer schedule is retired, and the Sheet
+  publisher uses targeted append/readback rather than `replace_tab`.
+- The existing experiment/economics facts are exposed as generic lifecycle
+  history for TradeLab. No new transport or scheduler is added.
+
+### Atomic ownership migration
+
+The cutover must not leave two managers running for days. Before deployment:
+
+1. replay frozen inputs through old and new candidate construction and prove
+   that the unified planner preserves intended live eligibility and ranking;
+2. run every capability's entry, hold, adjustment, event, profit, loss, and time
+   branch that its contract permits through deterministic fixtures;
+3. create a dry-run migration for all currently open live position groups and
+   prove exact leg, playbook, cost-basis, and ownership correspondence; migrated
+   records whose historical entry policy is unavailable must say `policy at
+   adoption` rather than claiming a reconstructed entry-time policy;
+4. verify that every resulting ticket still passes the existing live health,
+   risk, session, preflight, idempotency, and reconciliation gates; and
+5. test the complete job topology with broker, Sheet-write, and external-send
+   effects disabled.
+
+At the approved deployment boundary:
+
+1. allow any in-flight Kamandal job to finish;
+2. back up and integrity-check the runtime database;
+3. deploy code and migrate open positions into canonical lifecycles;
+4. replace the old and CSA schedules with the unified schedules;
+5. read back exactly one owner for every open position and working order; and
+6. let the next natural cycles prove planning, management, and reporting.
+
+Rollback restores the prior code, database backup, and prior schedules as one
+unit. It never runs the old and new managers against the same position.
+
+## Deliberate Non-Goals
+
+This decision does not add:
+
+- a strategy rules language in Google Sheets;
+- a plugin framework outside the small in-process capability registry;
+- an event bus or new service for TradeLab;
+- separate applications per strategy or correspondent;
+- a second risk manager, order ledger, or reconciliation system; or
+- automatic strategy promotion or automatic universe activation based on a
+  report.
+
+The design is complete when a new capability can be added in code, referenced by
+one Sheet row, exercised in shadow, changed to live, managed end-to-end, and
+reported from the same canonical lifecycle without introducing another runtime
+lane.
+
+No live playbook may compile with a normal management branch that requires an
+operator approval. A directional diagonal is a paired lifecycle, not a long
+option plus a reusable short-premium program:
+
+- a bullish signal constructs a call diagonal and a bearish signal constructs a
+  put diagonal;
+- the farther long and nearer short legs enter together as one complex debit
+  order;
+- for calls, the far long is closer to the money at a lower strike than the near
+  short; for puts, the far long is closer to the money at a higher strike than
+  the near short;
+- the net debit must not exceed the Sheet-configured cap, initially 75% of strike
+  width, and the paired profit target remains a Sheet value within the 25-50%
+  tastylive reference range;
+- ordinary profit, thesis, loss, or time exit closes both legs together as one
+  complex order; and
+- no short-leg roll, resale, or intentional long-only state is part of this
+  capability.
+
+A partial quantity fill may create fewer complete two-leg packages than ordered;
+it must not create a one-leg strategy position. If broker/reconciliation state
+ever shows only one leg because of assignment, expiration, manual activity, or
+state mismatch, Kamandal treats that as an execution incident: block new action,
+reconcile authoritative broker state, and never reinterpret the residue as the
+directional-diagonal strategy.
+
+Likewise, a capability compiler must not silently reinterpret irrelevant legacy
+management fields. The current generic calendar rows carry an
+`event_expiration` object that their established entry path does not use. The
+compatibility compiler records that field as ignored for those rows, preserves
+their fixed-DTE behavior, and the authorized Sheet migration removes the
+misleading field. It must never switch them to event-relative construction.
 
 ## Core Product Decision
 
@@ -27,7 +473,10 @@ It is:
 > Given my current portfolio, buying power, approved universe, playbooks, and
 > ideas on the table, which portfolio plan should I choose?
 
-Therefore `daily_plan` is one row per ranked plan. Details about individual
+Therefore `daily_plan` is one row per ranked plan. A healthy planning run with
+zero eligible plans must still replace or visibly clear that mode's current-day
+projection; stale prior-day plans must never masquerade as today's result.
+Details about individual
 candidates, legs, preflight responses, and Greek contributions stay local in
 SQLite/audit artifacts.
 
@@ -122,11 +571,13 @@ Reject for now.
 The PRD adds `idea`, `positions`, `tags`, `structure_types`, and read-only
 mirrors. That is not aligned with the current cockpit design.
 
-Keep the sheet lean:
+Keep the current five-tab operator surface lean:
 
 - `universe`
 - `playbooks`
 - `daily_plan`
+- `live_book`
+- `my_ideas`
 
 Keep everything else local until there is a repeated operator need.
 
@@ -218,10 +669,18 @@ audit artifacts.
 
 Ideas can come from:
 
-- scraper/LLM
-- manual file
-- future sheet import
+- the operator-authored `my_ideas` Google Sheet tab
+- X, YouTube, and correspondent imports
 - universe scan without a source idea
+- portfolio state without a source idea
+
+`my_ideas` is the canonical manual idea-entry surface. The existing scheduled
+importer translates today's rows into the common signal-evidence contract and
+writes import status back to the Sheet. Enabled-universe signals materialize as
+dated planner files under `data/ideas/active/`; out-of-universe signals remain
+durable candidate evidence for the weekly universe review and never reach trade
+planning. The local planner file is a processing artifact, not a second manual
+authoring surface.
 
 Normalized idea fields:
 
@@ -384,7 +843,12 @@ Future agent role:
 
 But the deterministic engine remains the source of executable truth.
 
-## Revised Internal Package Structure
+## Historical Reference: Original Internal Package Proposal
+
+This section records the pre-unified-engine scaffold proposal. It is not a
+pending refactor checklist. The merge decision and implementation surface above
+are normative when this historical layout conflicts with the code that now
+exists.
 
 The code should grow toward this layout:
 
@@ -448,7 +912,10 @@ shape. It separates the core risks:
 - LLM intelligence
 - local persistence
 
-## First Implementation After Scaffold
+## Historical Reference: Original First Implementation
+
+The following smoke-test milestone has already been implemented. It remains as
+design history, not as the next work queue.
 
 The next useful build is not an agent. It is a deterministic planner smoke test.
 
@@ -470,14 +937,39 @@ Build:
 
 Only after this works should we wire Public chain/preflight live.
 
-## Open Questions
+## Resolved Operating Decisions
 
-Resolved product choices:
+### Manual ideas
 
-1. Where should human-approved ideas live first?
-   - Recommendation: local `data/ideas/*.yaml` for now, not a sheet tab.
-2. Should approval happen at idea level, plan level, or both?
-   - Decision: plan-level approval first. Idea-level approval can come later if
-     scraper noise becomes painful.
+Manual ideas are entered in the Google Sheet `my_ideas` tab. Kamandal already
+imports them into the common idea pipeline. No new manual idea store, tab, or
+approval surface is needed.
 
-No blocking open questions remain for the deterministic planner smoke test.
+The imported idea's internal `operator_status=approved` means that the row is
+eligible for deterministic planning. It is not a separate trade authorization.
+Universe, playbook, market, portfolio, risk, preflight, and session gates remain
+authoritative.
+
+### Plan selection and execution
+
+Normal operation has no per-idea or per-plan human approval step. In the active
+automatic mode:
+
+1. Kamandal builds feasible portfolio plans.
+2. `auto_top_plan` selects the rank-one eligible plan.
+3. The guarded submitter rechecks health, risk, freshness, broker preflight, and
+   the option-session window.
+4. Eligible entries submit automatically.
+5. `auto_rules` manages and submits eligible exits automatically.
+
+Some internal fields and ledger statuses retain the word `approval` because the
+code also supports optional manual modes. In `auto_top_plan` and `auto_rules`,
+those states are machine-owned authorization plumbing and must not be described
+as operator review.
+
+The operator still authorizes changes to live capability mode, risk policy,
+deployment, and other protected configuration. That is system-level authority,
+not trade-by-trade approval.
+
+No blocking product questions remain about manual idea ownership or ordinary
+plan selection.
