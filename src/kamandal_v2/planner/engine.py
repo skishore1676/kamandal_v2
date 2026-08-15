@@ -64,11 +64,18 @@ def run_plan(
     candidate_postprocessor: Callable[[list[Candidate], LocalStore, dict[str, Any], PortfolioState], None] | None = None,
     plan_top_n: int = 5,
     plan_max_new_positions: int | None = None,
+    universe_override: list[Any] | None = None,
+    playbooks_override: list[Any] | None = None,
 ) -> PlanRunResult:
     plan_run_id = "run_" + utc_now().replace(":", "").replace("-", "")
     store = store or LocalStore()
     audit = audit or AuditWriter()
-    universe, playbooks = load_planner_config(config, source=config_source)
+    if universe_override is None or playbooks_override is None:
+        loaded_universe, loaded_playbooks = load_planner_config(config, source=config_source)
+        universe = loaded_universe if universe_override is None else universe_override
+        playbooks = loaded_playbooks if playbooks_override is None else playbooks_override
+    else:
+        universe, playbooks = universe_override, playbooks_override
     ideas = annotate_structural_breaks(load_ideas(idea_paths), config)
     market = _market_provider(config, provider=provider, store=store)
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
