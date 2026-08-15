@@ -29,6 +29,7 @@ def test_proposer_reads_plan_diagnostics_dedupes_sheet_and_records_evidence(tmp_
         store,
         existing_symbols={"EXIST"},
         audit_path=audit,
+        cutoff=datetime.now(UTC),
         market_facts_loader=lambda _symbol: {
             "price": 75.0,
             "avg_dollar_volume": 40_000_000.0,
@@ -48,8 +49,26 @@ def test_proposer_prefers_replay_safe_durable_discovery_over_overwriteable_audit
 
     proposals = collect_out_of_universe_symbols(
         store,
+        cutoff=datetime.now(UTC),
         market_facts_loader=lambda _symbol: {"price": 75.0, "avg_dollar_volume": 40_000_000.0, "market_cap": 4_000_000_000.0},
     )
 
     assert [proposal["symbol"] for proposal in proposals] == ["DURABLE"]
     assert proposals[0]["proposal_source"] == "durable_discovery"
+
+
+def test_proposer_uses_committed_review_window_and_ranks_recency_deterministically(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    store.record_universe_review_commit(review_id="week-1", committed_at="2026-08-07T18:00:00Z")
+    store.record_discovery_evidence(symbol="OLDER", source_profile="x", source_record_id="1", exclusion_reason="outside", evidence_ref="x:1", observed_at="2026-08-10T12:00:00Z")
+    store.record_discovery_evidence(symbol="NEWER", source_profile="x", source_record_id="2", exclusion_reason="outside", evidence_ref="x:2", observed_at="2026-08-12T12:00:00Z")
+    store.record_discovery_evidence(symbol="BEFORE", source_profile="x", source_record_id="3", exclusion_reason="outside", evidence_ref="x:3", observed_at="2026-08-07T17:59:59Z")
+
+    proposals = collect_out_of_universe_symbols(
+        store,
+        cutoff=datetime(2026, 8, 14, 18, tzinfo=UTC),
+        market_facts_loader=lambda _symbol: {"price": 75.0, "avg_dollar_volume": 40_000_000.0, "market_cap": 4_000_000_000.0},
+    )
+
+    assert [proposal["symbol"] for proposal in proposals] == ["NEWER", "OLDER"]
+    assert "2026-08-07 through 2026-08-14" in proposals[0]["proposal_reason"]

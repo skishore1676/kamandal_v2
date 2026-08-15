@@ -91,6 +91,11 @@ class LocalStore:
                     evidence_refs_json TEXT NOT NULL,
                     exclusion_reason TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS universe_review_commits (
+                    id TEXT PRIMARY KEY,
+                    committed_at TEXT NOT NULL,
+                    payload TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS shadow_fills (
                     id TEXT PRIMARY KEY,
                     plan_run_id TEXT NOT NULL,
@@ -310,6 +315,29 @@ class LocalStore:
             }
             for row in rows
         ]
+
+    def record_universe_review_commit(self, *, review_id: str, committed_at: str, payload: dict[str, Any] | None = None) -> None:
+        """Record the committed review boundary used by discovery ranking.
+
+        A proposal run is not a review: this record is deliberately written only
+        by the eventual operator-approved review workflow.  Keeping the boundary
+        separate prevents an automatic daily proposer from erasing the weekly
+        evidence interval it is meant to summarize.
+        """
+        if not str(review_id).strip() or not str(committed_at).strip():
+            raise ValueError("universe review commit requires review_id and committed_at")
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO universe_review_commits (id, committed_at, payload) VALUES (?, ?, ?)",
+                (str(review_id), str(committed_at), json.dumps(payload or {}, sort_keys=True)),
+            )
+
+    def latest_universe_review_commit_at(self) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT committed_at FROM universe_review_commits ORDER BY committed_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return str(row["committed_at"]) if row is not None else None
 
     def _ensure_shadow_fill_columns(self, conn: sqlite3.Connection) -> None:
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(shadow_fills)").fetchall()}

@@ -24,7 +24,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 MICRO_DENYLIST = {"", "USD", "USDT", "BTC", "ETH"}
 
 DEFAULT_MAX_PROPOSALS_PER_DAY = 5
-DEFAULT_LOOKBACK_DAYS = 3
+DEFAULT_BOOTSTRAP_COMPLETED_SESSIONS = 5
 DEFAULT_MIN_PRICE = 10.0
 DEFAULT_MIN_AVG_DOLLAR_VOLUME = 20_000_000.0
 DEFAULT_MIN_MARKET_CAP = 2_000_000_000.0
@@ -33,21 +33,24 @@ DEFAULT_MIN_MARKET_CAP = 2_000_000_000.0
 def collect_out_of_universe_symbols(
     store: LocalStore,
     *,
-    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    lookback_days: int | None = None,
     limit: int = DEFAULT_MAX_PROPOSALS_PER_DAY,
     existing_symbols: set[str] | None = None,
     market_facts_loader: Callable[[str], dict[str, float | None]] | None = None,
     audit_path: str | Path = "data/audit/live/latest_plan_run.json",
+    cutoff: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Return up to `limit` candidate symbols from recent plan diagnostics.
+    """Return a deterministic, bounded weekly discovery queue.
 
-    Strategy: inspect recent plan idea_diagnostics where status == out_of_universe,
-    count frequency over lookback_days, exclude already-in-universe, denylist,
-    and obvious micro tickers (< 3 chars, numeric). Dedup, rank by frequency.
+    The interval starts immediately after the last committed weekly review.  On
+    bootstrap it covers the five most recently *completed* weekday sessions.
+    ``lookback_days`` is retained only as an explicit compatibility override for
+    historical callers; production ranking never infers a moving three-day
+    window.  ``cutoff`` makes fixture replays independent of wall-clock time.
     """
-    lookback_days = max(1, int(lookback_days))
     limit = max(1, min(int(limit), DEFAULT_MAX_PROPOSALS_PER_DAY))
-    cutoff = datetime.now(UTC) - timedelta(days=lookback_days)
+    cutoff = _as_utc(cutoff or datetime.now(UTC))
+    window_start = _discovery_window_start(store, cutoff=cutoff, compatibility_lookback_days=lookback_days)
 
     universe_symbols = {str(symbol).upper() for symbol in (existing_symbols or set())}
     universe_symbols.update({
@@ -61,7 +64,9 @@ def collect_out_of_universe_symbols(
         row for row in store.discovery_candidates()
         if str(row.get("symbol") or "").upper() not in universe_symbols
         and _parse_time(str(row.get("last_seen_at") or "")) is not None
-        and _parse_time(str(row.get("last_seen_at") or "")) >= cutoff
+        and _parse_time(str(row.get("last_seen_at") or "")) is not None
+        and _parse_time(str(row.get("last_seen_at") or "")) > window_start
+        and _parse_time(str(row.get("last_seen_at") or "")) <= cutoff
     ]
     for row in discovery:
         symbol = str(row.get("symbol") or "").upper()
@@ -71,11 +76,11 @@ def collect_out_of_universe_symbols(
     # source normalizers write discovery evidence, but never replace ledger rows.
     # store events; scan store's recent ideas and plan diagnostics
     try:
-        for row in _recent_plan_diagnostics(audit_path, cutoff=cutoff):
+        for row in _recent_plan_diagnostics(audit_path, cutoff=window_start):
             idea_underlying = str(row.get("underlying") or "").upper().strip()
             status = str(row.get("status") or "")
             seen_at = _parse_time(row.get("seen_at") or row.get("created_at") or "")
-            if seen_at is not None and seen_at < cutoff:
+            if seen_at is not None and (seen_at <= window_start or seen_at > cutoff):
                 continue
             if status == "out_of_universe" and idea_underlying:
                 if idea_underlying in universe_symbols:
@@ -96,7 +101,7 @@ def collect_out_of_universe_symbols(
             for idea in _stored_ideas(store, limit=200):
                 underlying = str(idea.get("underlying") or idea.get("ticker") or "").upper().strip()
                 seen_at = _parse_time(idea.get("created_at") or idea.get("updated_at") or "")
-                if seen_at is not None and seen_at < cutoff:
+                if seen_at is not None and (seen_at <= window_start or seen_at > cutoff):
                     continue
                 if not underlying or underlying in universe_symbols or underlying in MICRO_DENYLIST:
                     continue
@@ -112,13 +117,13 @@ def collect_out_of_universe_symbols(
         key=lambda symbol: (
             -counter[symbol],
             -len(discovery_by_symbol.get(symbol, {}).get("source_profiles") or []),
-            str(discovery_by_symbol.get(symbol, {}).get("last_seen_at") or ""),
+            -_timestamp_sort_value(discovery_by_symbol.get(symbol, {}).get("last_seen_at")),
             symbol,
         ),
         reverse=False,
     )
     results: list[dict[str, Any]] = []
-    today = datetime.now(UTC).date().isoformat()
+    today = cutoff.date().isoformat()
     facts_loader = market_facts_loader or _yfinance_market_facts
     for symbol in ranked:
         try:
@@ -134,7 +139,10 @@ def collect_out_of_universe_symbols(
                 "profile": "satellite",
                 "tier": "proposed",
                 "proposal_source": "durable_discovery" if symbol in discovery_by_symbol else "recent_plans",
-                "proposal_reason": f"out_of_universe {counter[symbol]}x in last {lookback_days}d",
+                "proposal_reason": (
+                    f"out_of_universe {counter[symbol]}x from {window_start.date().isoformat()} "
+                    f"through {cutoff.date().isoformat()}"
+                ),
                 "proposal_date": today,
                 "notes": (
                     f"auto-proposed {today}: verified price={market_facts['price']:.2f}, "
@@ -271,3 +279,35 @@ def _parse_time(value: str | None) -> datetime | None:
         return parsed
     except Exception:
         return None
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _discovery_window_start(
+    store: LocalStore,
+    *,
+    cutoff: datetime,
+    compatibility_lookback_days: int | None,
+) -> datetime:
+    if compatibility_lookback_days is not None:
+        return cutoff - timedelta(days=max(1, int(compatibility_lookback_days)))
+    committed_at = store.latest_universe_review_commit_at()
+    if committed_at:
+        parsed = _parse_time(committed_at)
+        if parsed is None:
+            raise ValueError("latest universe review commit has an invalid committed_at timestamp")
+        return parsed
+    sessions: list[datetime] = []
+    cursor = cutoff.date() - timedelta(days=1)
+    while len(sessions) < DEFAULT_BOOTSTRAP_COMPLETED_SESSIONS:
+        if cursor.weekday() < 5:
+            sessions.append(datetime.combine(cursor, datetime.min.time(), tzinfo=UTC))
+        cursor -= timedelta(days=1)
+    return sessions[-1]
+
+
+def _timestamp_sort_value(value: Any) -> float:
+    parsed = _parse_time(str(value or ""))
+    return parsed.timestamp() if parsed is not None else float("-inf")
