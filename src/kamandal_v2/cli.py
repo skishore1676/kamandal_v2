@@ -83,6 +83,9 @@ def main() -> None:
     csa_migrate_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_migrate_parser.add_argument("--backup-dir", default="")
     csa_migrate_parser.add_argument("--apply", action="store_true", help="Apply migration; default is a non-mutating dry run")
+    csa_history_parser = subparsers.add_parser("csa-lifecycle-history", help="Read versioned lifecycle history without external effects")
+    csa_history_parser.add_argument("--db", default="data/kamandal_v2.db")
+    csa_history_parser.add_argument("--lifecycle-id", default="")
     csa_scan_parser = subparsers.add_parser("csa-shadow-scan", help="Run the broker-inert CSA discovery and entry shadow cycle")
     csa_scan_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_scan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
@@ -468,6 +471,13 @@ def main() -> None:
             backup_dir=args.backup_dir or None,
         )
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        return
+    if args.command == "csa-lifecycle-history":
+        from kamandal_v2.strategy_engine.history import lifecycle_history
+        from kamandal_v2.strategy_lanes.store import CsaStore
+
+        records = lifecycle_history(CsaStore(args.db, read_only=True), lifecycle_id=args.lifecycle_id or None)
+        print(json.dumps({"schema_version": "kamandal.lifecycle-history.v1", "records": records}, indent=2, sort_keys=True))
         return
     if args.command == "csa-shadow-scan":
         from kamandal_v2.planner.idea_loader import load_ideas
