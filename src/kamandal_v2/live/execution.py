@@ -122,7 +122,14 @@ def execute_live_approved(
             is_management = str(ticket.get("intent_type") or "") in {"close", "adjust"}
             if is_management:
                 adapter = broker_adapter(config)
-                result = _execute_ticket(config, adapter, store, ticket, submit=submit, close=True)
+                result = _execute_ticket(
+                    config,
+                    adapter,
+                    store,
+                    ticket,
+                    submit=submit,
+                    close=str(ticket.get("intent_type") or "") == "close",
+                )
                 return {
                     "action": action,
                     "submit": submit,

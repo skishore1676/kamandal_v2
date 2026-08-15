@@ -21,7 +21,10 @@ def test_late_day_sequence_preserves_dependency_order_and_submission_window() ->
     assert JOB_SCHEDULES["youtube"].fixed_times[-1] == time(14, 0)
     assert JOB_SCHEDULES["live-reconciliation"].fixed_times[-1] == time(14, 20)
     assert JOB_SCHEDULES["unified-planning"].fixed_times[-1] == time(14, 30)
-    assert time(14, 50) in JOB_SCHEDULES["unified-lifecycle-management"].fixed_times
+    lifecycle = JOB_SCHEDULES["unified-lifecycle-management"]
+    assert lifecycle.cadence_minutes == 5
+    assert lifecycle.window_start == time(8, 30)
+    assert lifecycle.window_end == time(15, 15)
 
     config = load_control()
     allowed = submission_window(
@@ -83,8 +86,8 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
     assert weekday_one_times("youtube") == {(9, 15), (11, 45), (14, 0)}
     assert weekday_one_times("live_reconciliation") == {(8, 35), (10, 30), (12, 30), (14, 20)}
     assert weekday_one_times("unified_planning") == {(9, 25), (11, 55), (14, 30)}
-    assert (14, 35) in weekday_one_times("live_approved_orders")
-    assert {(14, 45), (14, 50), (15, 5)}.issubset(weekday_one_times("unified_lifecycle_management"))
+    assert {(8, 30), (14, 35)}.issubset(weekday_one_times("live_approved_orders"))
+    assert {(8, 30), (9, 45), (14, 40), (15, 15)}.issubset(weekday_one_times("unified_lifecycle_management"))
     rendered = {path.name for path in launchd_dir.glob("*.plist")}
     assert not any("csa_" in item or "live_advisory" in item or "live_management" in item for item in rendered)
     assert DISABLED_BY_DEFAULT == set()

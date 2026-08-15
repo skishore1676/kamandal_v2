@@ -1,8 +1,8 @@
 """Single management invocation for the unified strategy-engine topology.
 
 This is an orchestration boundary, not a second decision engine.  It invokes
-the established close-only manager and the typed lifecycle manager in a fixed
-live-before-shadow order, while making each receipt independently auditable.
+the one typed lifecycle owner in fixed live-before-shadow order, while making
+each receipt independently auditable.
 """
 
 from __future__ import annotations
@@ -39,33 +39,22 @@ def run_unified_lifecycle_management(
     *,
     sqlite_path: str,
     provider: str,
-    established_live_manager: Manager | None = None,
-    typed_live_manager: Manager | None = None,
-    typed_shadow_manager: Manager | None = None,
+    live_lifecycle_manager: Manager | None = None,
+    shadow_lifecycle_manager: Manager | None = None,
 ) -> UnifiedManagementReceipt:
-    """Evaluate all lifecycle ownership in deterministic live-first order.
-
-    The injectable callbacks make ordering and failure isolation explicit in
-    source tests.  Defaults preserve the existing decision functions; only the
-    schedule owner changes at cutover.
-    """
-    if established_live_manager is None or typed_live_manager is None or typed_shadow_manager is None:
-        from kamandal_v2.live.management import run_live_management_plan
+    """Evaluate all canonical lifecycle ownership in deterministic order."""
+    if live_lifecycle_manager is None or shadow_lifecycle_manager is None:
         from kamandal_v2.strategy_lanes.management_runtime import run_csa_live_management, run_csa_shadow_management
 
-        established_live_manager = established_live_manager or (
-            lambda: run_live_management_plan(config, config_source="sheet", write_sheet=True)
-        )
-        typed_live_manager = typed_live_manager or (
+        live_lifecycle_manager = live_lifecycle_manager or (
             lambda: run_csa_live_management(config, sqlite_path=sqlite_path, provider=provider)
         )
-        typed_shadow_manager = typed_shadow_manager or (
+        shadow_lifecycle_manager = shadow_lifecycle_manager or (
             lambda: run_csa_shadow_management(config, sqlite_path=sqlite_path, provider=provider)
         )
     branches = (
-        _run_branch("established_live", established_live_manager),
-        _run_branch("typed_live", typed_live_manager),
-        _run_branch("typed_shadow", typed_shadow_manager),
+        _run_branch("live_lifecycle", live_lifecycle_manager),
+        _run_branch("shadow_lifecycle", shadow_lifecycle_manager),
     )
     return UnifiedManagementReceipt(branches)
 

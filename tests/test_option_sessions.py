@@ -109,6 +109,18 @@ def test_strangle_replacement_uses_the_entry_window() -> None:
     assert verdict["reason"] == "entry_not_open"
 
 
+def test_adjustment_cannot_inherit_close_permission_from_management_queue() -> None:
+    verdict = submission_window(
+        _config(),
+        {"underlying": "AAPL", "intent_type": "adjust", "csa_action_type": "adjust"},
+        close=True,
+        now=datetime(2026, 7, 24, 8, 30, tzinfo=CENTRAL),
+    )
+
+    assert verdict["allowed"] is False
+    assert verdict["reason"] == "entry_not_open"
+
+
 def test_early_close_override_moves_spy_cutoff() -> None:
     verdict = submission_window(
         _config(),
