@@ -52,6 +52,15 @@ class PlanRunResult:
         }
 
 
+@dataclass(slots=True)
+class PlanningSourceGroup:
+    """A normalized opportunity input routed to a bounded playbook subset."""
+
+    source_name: str
+    ideas: list[Idea]
+    playbooks: list[Any]
+
+
 def run_plan(
     config: dict[str, Any],
     *,
@@ -66,6 +75,7 @@ def run_plan(
     plan_max_new_positions: int | None = None,
     universe_override: list[Any] | None = None,
     playbooks_override: list[Any] | None = None,
+    source_groups_factory: Callable[[list[Idea], list[Any], list[Any], PortfolioState], list[PlanningSourceGroup]] | None = None,
 ) -> PlanRunResult:
     plan_run_id = "run_" + utc_now().replace(":", "").replace("-", "")
     store = store or LocalStore()
@@ -76,7 +86,7 @@ def run_plan(
         playbooks = loaded_playbooks if playbooks_override is None else playbooks_override
     else:
         universe, playbooks = universe_override, playbooks_override
-    ideas = annotate_structural_breaks(load_ideas(idea_paths), config)
+    loaded_ideas = annotate_structural_breaks(load_ideas(idea_paths), config)
     market = _market_provider(config, provider=provider, store=store)
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
     portfolio_raw = market.account_state()
@@ -87,22 +97,43 @@ def run_plan(
     match_gate_mode = _match_gate_mode(config)
     candidate_filter_mode = _candidate_filter_mode(config)
 
+    source_groups = (
+        source_groups_factory(loaded_ideas, universe, playbooks, portfolio)
+        if source_groups_factory is not None
+        else [PlanningSourceGroup("idea", loaded_ideas, playbooks)]
+    )
+    ideas = [idea for group in source_groups for idea in group.ideas]
     store.save_ideas(ideas)
     store.save_account_snapshot(plan_run_id, portfolio)
-    candidates = build_candidates(
-        ideas,
-        universe,
-        playbooks,
-        market,
-        preflight,
-        match_gate_mode=match_gate_mode,
-        candidate_filter_mode=candidate_filter_mode,
-        config=config,
-    )
+    candidates = [
+        candidate
+        for group in source_groups
+        for candidate in build_candidates(
+            group.ideas,
+            universe,
+            group.playbooks,
+            market,
+            preflight,
+            match_gate_mode=match_gate_mode,
+            candidate_filter_mode=candidate_filter_mode,
+            config=config,
+        )
+    ]
     if candidate_postprocessor is not None:
         candidate_postprocessor(candidates, store, config, portfolio)
     _reject_open_shadow_candidates(candidates, store, config)
-    idea_diagnostics = diagnose_idea_matches(ideas, universe, playbooks, market, match_gate_mode=match_gate_mode, config=config)
+    idea_diagnostics = [
+        diagnostic
+        for group in source_groups
+        for diagnostic in diagnose_idea_matches(
+            group.ideas,
+            universe,
+            group.playbooks,
+            market,
+            match_gate_mode=match_gate_mode,
+            config=config,
+        )
+    ]
     plans = generate_plans(candidates, portfolio, config, top_n=plan_top_n, max_new_positions=plan_max_new_positions)
     rejection_summary = _rejection_summary(ideas, candidates, idea_diagnostics)
     metrics = _plan_metrics(

@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from kamandal_v2.domain.models import Playbook, UniverseEntry
-from kamandal_v2.planner.engine import PlanRunResult, run_plan
+from kamandal_v2.domain.models import Idea, Playbook, PortfolioState, UniverseEntry
+from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, run_plan
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_engine.policy import ExecutionMode, PlaybookPolicy, PolicyCompilation, compile_playbook_policies
@@ -99,7 +99,90 @@ def _run_book(
             audit=AuditWriter(Path(audit_root) / mode.value),
             universe_override=universe,
             playbooks_override=playbooks,
+            source_groups_factory=lambda ideas, entries, selected_playbooks, portfolio: _source_groups(
+                ideas,
+                entries,
+                selected_playbooks,
+                policies=selected,
+                portfolio=portfolio,
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - report failure-isolated book receipt.
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (f"{type(exc).__name__}: {exc}",))
     return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, ())
+
+
+def _source_groups(
+    idea_inputs: list[Idea],
+    universe: list[UniverseEntry],
+    playbooks: list[Playbook],
+    *,
+    policies: tuple[PlaybookPolicy, ...],
+    portfolio: PortfolioState,
+) -> list[PlanningSourceGroup]:
+    """Normalize every supported source mode before one candidate/plan pass."""
+    policy_by_id = {policy.playbook_id: policy for policy in policies}
+    groups: list[PlanningSourceGroup] = []
+    for source_mode in ("idea", "market_scan", "portfolio_hedge"):
+        selected = [playbook for playbook in playbooks if policy_by_id[playbook.playbook_id].source_mode == source_mode]
+        if not selected:
+            continue
+        if source_mode == "idea":
+            inputs = list(idea_inputs)
+        elif source_mode == "market_scan":
+            inputs = _market_scan_ideas(universe)
+        else:
+            inputs = _portfolio_hedge_ideas(selected, policy_by_id, portfolio)
+        groups.append(PlanningSourceGroup(source_mode, inputs, selected))
+    return groups
+
+
+def _market_scan_ideas(universe: list[UniverseEntry]) -> list[Idea]:
+    return [
+        Idea.from_dict(
+            {
+                "idea_id": f"market_scan:{entry.symbol}",
+                "source": "market_scan",
+                "underlying": entry.symbol,
+                "direction": "neutral",
+                "horizon_days": 45,
+                "operator_status": "approved",
+            }
+        )
+        for entry in sorted(universe, key=lambda item: item.symbol)
+        if entry.enabled
+    ]
+
+
+def _portfolio_hedge_ideas(
+    playbooks: list[Playbook],
+    policy_by_id: dict[str, PlaybookPolicy],
+    portfolio: PortfolioState,
+) -> list[Idea]:
+    ideas: list[Idea] = []
+    for playbook in playbooks:
+        lifecycle = (policy_by_id[playbook.playbook_id].management.get("lifecycle") or {})
+        trigger = lifecycle.get("portfolio_delta_trigger")
+        underlyings = lifecycle.get("hedge_underlyings")
+        if isinstance(trigger, bool) or trigger in (None, ""):
+            continue
+        if portfolio.greeks.delta <= float(trigger):
+            continue
+        if not isinstance(underlyings, list):
+            continue
+        direction = "bearish" if playbook.structure in {"put_spread", "put_diagonal", "long_put"} else "bullish"
+        for raw_symbol in sorted(str(value).strip().upper() for value in underlyings if str(value).strip()):
+            ideas.append(
+                Idea.from_dict(
+                    {
+                        "idea_id": f"portfolio_hedge:{playbook.playbook_id}:{raw_symbol}",
+                        "source": "portfolio_hedge",
+                        "underlying": raw_symbol,
+                        "direction": direction,
+                        "strategy_hint": playbook.structure,
+                        "horizon_days": 45,
+                        "operator_status": "approved",
+                    }
+                )
+            )
+    return ideas

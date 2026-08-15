@@ -78,3 +78,39 @@ def test_one_book_failure_does_not_erase_other_book(tmp_path, monkeypatch) -> No
     assert result.live.errors == ()
     assert result.shadow.result is None
     assert result.shadow.errors == ("RuntimeError: shadow fixture failure",)
+
+
+def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> None:
+    universe, playbooks = _rows()
+    for row in playbooks:
+        if row["playbook_id"] == "short_strangle_shadow":
+            row["source_mode"] = "market_scan"
+    playbooks.append(
+        {
+            "playbook_id": "hedge_call_spread",
+            "enabled": "TRUE",
+            "strategy_family": "call_spread",
+            "structure": "call_spread",
+            "mode": "live",
+            "source_mode": "portfolio_hedge",
+            "dte_min": "30",
+            "dte_max": "45",
+            "short_delta_min": "0.20",
+            "short_delta_max": "0.30",
+            "spread_width": "5",
+            "management_policy_json": json.dumps({"lifecycle": {"portfolio_delta_trigger": -999, "hedge_underlyings": ["SPY"]}}),
+        }
+    )
+
+    result = run_unified_books(
+        load_control(),
+        universe_rows=universe,
+        playbook_rows=playbooks,
+        idea_paths=["tests/fixtures/sample_ideas.yaml"],
+        store=LocalStore(tmp_path / "kamandal.db"),
+        audit_root=tmp_path / "audit",
+    )
+
+    assert result.compilation.ok
+    assert any(idea.source == "market_scan" for idea in result.shadow.result.ideas)
+    assert any(idea.source == "portfolio_hedge" for idea in result.live.result.ideas)
