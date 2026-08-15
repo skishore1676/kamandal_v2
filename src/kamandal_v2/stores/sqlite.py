@@ -1024,6 +1024,7 @@ class LocalStore:
         groups = []
         for row in group_rows:
             payload = json.loads(row["payload"])
+            payload["group_id"] = str(row["group_id"])
             payload["opened_at"] = row["opened_at"]
             payload["positions"] = positions_by_group.get(str(row["group_id"]), [])
             groups.append(payload)
