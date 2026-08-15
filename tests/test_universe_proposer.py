@@ -39,3 +39,17 @@ def test_proposer_reads_plan_diagnostics_dedupes_sheet_and_records_evidence(tmp_
     assert [proposal["symbol"] for proposal in proposals] == ["GOOD"]
     assert "verified price=75.00" in proposals[0]["notes"]
     assert proposals[0]["enabled"] == "FALSE"
+
+
+def test_proposer_prefers_replay_safe_durable_discovery_over_overwriteable_audit(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    store.record_discovery_evidence(symbol="DURABLE", source_profile="x", source_record_id="1", exclusion_reason="outside", evidence_ref="x:1")
+    store.record_discovery_evidence(symbol="DURABLE", source_profile="youtube", source_record_id="2", exclusion_reason="outside", evidence_ref="youtube:2")
+
+    proposals = collect_out_of_universe_symbols(
+        store,
+        market_facts_loader=lambda _symbol: {"price": 75.0, "avg_dollar_volume": 40_000_000.0, "market_cap": 4_000_000_000.0},
+    )
+
+    assert [proposal["symbol"] for proposal in proposals] == ["DURABLE"]
+    assert proposals[0]["proposal_source"] == "durable_discovery"

@@ -57,7 +57,18 @@ def collect_out_of_universe_symbols(
     })
 
     counter: Counter[str] = Counter()
-    # Recent plan diagnostics are persisted in audit/latest_plan_run.json and
+    discovery = [
+        row for row in store.discovery_candidates()
+        if str(row.get("symbol") or "").upper() not in universe_symbols
+        and _parse_time(str(row.get("last_seen_at") or "")) is not None
+        and _parse_time(str(row.get("last_seen_at") or "")) >= cutoff
+    ]
+    for row in discovery:
+        symbol = str(row.get("symbol") or "").upper()
+        if symbol and symbol not in MICRO_DENYLIST:
+            counter[symbol] = max(counter[symbol], int(row.get("mention_count") or 0))
+    # Recent plan diagnostics are retained as compatibility input until all
+    # source normalizers write discovery evidence, but never replace ledger rows.
     # store events; scan store's recent ideas and plan diagnostics
     try:
         for row in _recent_plan_diagnostics(audit_path, cutoff=cutoff):
@@ -95,7 +106,17 @@ def collect_out_of_universe_symbols(
         except Exception:
             pass
 
-    ranked = [symbol for symbol, _ in counter.most_common()]
+    discovery_by_symbol = {str(row.get("symbol") or "").upper(): row for row in discovery}
+    ranked = sorted(
+        counter,
+        key=lambda symbol: (
+            -counter[symbol],
+            -len(discovery_by_symbol.get(symbol, {}).get("source_profiles") or []),
+            str(discovery_by_symbol.get(symbol, {}).get("last_seen_at") or ""),
+            symbol,
+        ),
+        reverse=False,
+    )
     results: list[dict[str, Any]] = []
     today = datetime.now(UTC).date().isoformat()
     facts_loader = market_facts_loader or _yfinance_market_facts
@@ -112,7 +133,7 @@ def collect_out_of_universe_symbols(
                 "enabled": "FALSE",
                 "profile": "satellite",
                 "tier": "proposed",
-                "proposal_source": "recent_plans",
+                "proposal_source": "durable_discovery" if symbol in discovery_by_symbol else "recent_plans",
                 "proposal_reason": f"out_of_universe {counter[symbol]}x in last {lookback_days}d",
                 "proposal_date": today,
                 "notes": (
