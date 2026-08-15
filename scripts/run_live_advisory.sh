@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+echo "retired: live-advisory has no independent owner; use run_unified_planning.sh" >&2
+exit 64
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/common.sh"

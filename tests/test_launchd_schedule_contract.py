@@ -143,3 +143,22 @@ def test_installer_can_render_only_unified_ownership_jobs(tmp_path: Path) -> Non
         "com.kamandal.v2.unified_planning.plist",
         "com.kamandal.v2.unified_lifecycle_management.plist",
     }
+
+
+def test_retired_competing_entrypoints_fail_closed() -> None:
+    for script, unified_owner in (
+        ("run_live_advisory.sh", "run_unified_planning.sh"),
+        ("run_csa_shadow_scan.sh", "run_unified_planning.sh"),
+        ("run_csa_live_scan.sh", "run_unified_planning.sh"),
+        ("run_live_management.sh", "run_unified_lifecycle_management.sh"),
+        ("run_csa_shadow_management.sh", "run_unified_lifecycle_management.sh"),
+        ("run_csa_live_management.sh", "run_unified_lifecycle_management.sh"),
+    ):
+        result = subprocess.run(
+            ["bash", str(REPO_ROOT / "scripts" / script)],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 64
+        assert unified_owner in result.stderr

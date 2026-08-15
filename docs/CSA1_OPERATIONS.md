@@ -1,4 +1,9 @@
-# CSA-1 Shadow Operations
+# CSA-1 Shadow Operations (historical compatibility reference)
+
+> Superseded as an execution topology by the unified strategy engine. The
+> `csa_stage` fields and CSA tables remain readable compatibility evidence until
+> the protected Phase 9 cutover; no CSA-specific launchd script is a target
+> runtime owner. See `UNIFIED_STRATEGY_ENGINE_CUTOVER_RUNBOOK.md`.
 
 Status: implementation runbook; protected runtime steps require exact approval
 
