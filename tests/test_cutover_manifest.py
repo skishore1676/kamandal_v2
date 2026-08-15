@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kamandal_v2.stores.sqlite import LocalStore
-from kamandal_v2.strategy_engine.cutover import build_cutover_manifest
+from kamandal_v2.strategy_engine.cutover import build_cutover_manifest, unified_schedule_manifest
 
 
 def test_cutover_manifest_is_read_only_and_blocks_ambiguous_shapes(tmp_path) -> None:
@@ -20,3 +20,12 @@ def test_cutover_manifest_is_read_only_and_blocks_ambiguous_shapes(tmp_path) -> 
     assert [item.decision for item in manifest.decisions] == ["create", "block"]
     assert manifest.ready is False
     assert "unsupported structure long_call" in manifest.decisions[1].reason
+
+
+def test_target_schedule_has_one_planning_and_management_owner() -> None:
+    schedule = unified_schedule_manifest()
+
+    assert "universe-proposer" in schedule["retire"]
+    assert "csa-live-management" in schedule["retire"]
+    assert "live-management" in schedule["retire"]
+    assert schedule["add"] == ("unified-planning", "unified-lifecycle-management", "unified-lifecycle-history")

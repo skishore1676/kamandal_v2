@@ -44,6 +44,22 @@ def build_cutover_manifest(store: LocalStore) -> CutoverManifest:
     return CutoverManifest(tuple(decisions))
 
 
+def unified_schedule_manifest() -> dict[str, tuple[str, ...]]:
+    """Describe, but never render or load, the target single-owner topology."""
+    retain = (
+        "x-bookmarks", "youtube", "my-ideas", "live-reconciliation",
+        "live-approved-orders", "live-health-report", "scheduled-job-health",
+        "daily-report", "earnings", "iv", "iv-afternoon", "weekly-reviewer",
+    )
+    retire = (
+        "universe-proposer", "live-advisory", "live-management", "csa-policy-snapshot",
+        "csa-shadow-scan", "csa-live-scan", "csa-shadow-management",
+        "csa-live-management", "csa-shadow-scorecard",
+    )
+    add = ("unified-planning", "unified-lifecycle-management", "unified-lifecycle-history")
+    return {"retain": retain, "retire": retire, "add": add}
+
+
 def _adoption_payload(group: dict[str, Any]) -> dict[str, Any]:
     candidate = dict(group.get("candidate") or {})
     structure = str(candidate.get("structure") or group.get("structure") or "").lower()
