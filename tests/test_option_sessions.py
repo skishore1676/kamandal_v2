@@ -74,6 +74,41 @@ def test_entry_cutoff_is_earlier_than_close_cutoff() -> None:
     assert verdict["retryable_next_session"] is False
 
 
+@pytest.mark.parametrize(
+    ("close", "hour", "minute", "allowed", "reason"),
+    [
+        (False, 8, 29, False, "market_not_open"),
+        (True, 8, 29, False, "market_not_open"),
+        (False, 8, 30, False, "entry_not_open"),
+        (True, 8, 30, True, "within_submission_window"),
+        (False, 9, 44, False, "entry_not_open"),
+        (False, 9, 45, True, "within_submission_window"),
+    ],
+)
+def test_open_and_close_windows_have_distinct_morning_boundaries(close: bool, hour: int, minute: int, allowed: bool, reason: str) -> None:
+    verdict = submission_window(
+        _config(),
+        {"underlying": "AAPL", "intent_type": "close" if close else "open"},
+        close=close,
+        now=datetime(2026, 7, 24, hour, minute, tzinfo=CENTRAL),
+    )
+
+    assert verdict["allowed"] is allowed
+    assert verdict["reason"] == reason
+
+
+def test_strangle_replacement_uses_the_entry_window() -> None:
+    verdict = submission_window(
+        _config(),
+        {"underlying": "AAPL", "intent_type": "adjust", "csa_action_type": "adjust"},
+        close=False,
+        now=datetime(2026, 7, 24, 9, 44, tzinfo=CENTRAL),
+    )
+
+    assert verdict["allowed"] is False
+    assert verdict["reason"] == "entry_not_open"
+
+
 def test_early_close_override_moves_spy_cutoff() -> None:
     verdict = submission_window(
         _config(),

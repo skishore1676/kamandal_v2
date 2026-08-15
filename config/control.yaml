@@ -88,6 +88,8 @@ live:
   option_submission:
     # The broker-facing guard is authoritative; launchd timing is only a wake-up schedule.
     enabled: true
+    market_open_time: "08:30"
+    entry_not_before_time: "09:45"
     regular_close_time: "15:00"
     extended_close_time: "15:15"
     extended_close_symbols: [SPY]

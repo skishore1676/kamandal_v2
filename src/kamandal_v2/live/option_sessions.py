@@ -18,6 +18,8 @@ DEFAULT_EXTENDED_CLOSE = time(15, 15)
 DEFAULT_EXTENDED_SYMBOLS = frozenset({"SPY"})
 DEFAULT_ENTRY_BUFFER_MINUTES = 30
 DEFAULT_CLOSE_BUFFER_MINUTES = 5
+DEFAULT_MARKET_OPEN = time(8, 30)
+DEFAULT_ENTRY_NOT_BEFORE = time(9, 45)
 
 
 def submission_window(
@@ -41,7 +43,8 @@ def submission_window(
     else:
         current = current.astimezone(market_tz)
 
-    intent_type = "close" if close else "open"
+    action_type = str(ticket.get("csa_action_type") or ticket.get("intent_type") or ("close" if close else "open")).strip().lower()
+    intent_type = "close" if close else action_type
     underlying = str(ticket.get("underlying") or ticket.get("symbol") or "").upper()
     entry_buffer = int(policy.get("entry_buffer_minutes", DEFAULT_ENTRY_BUFFER_MINUTES))
     close_buffer = int(policy.get("close_buffer_minutes", DEFAULT_CLOSE_BUFFER_MINUTES))
@@ -63,14 +66,21 @@ def submission_window(
 
     close_at = datetime.combine(current.date(), session_close, market_tz)
     cutoff_at = close_at - timedelta(minutes=buffer_minutes)
+    market_open = datetime.combine(current.date(), _parse_time(policy.get("market_open_time"), DEFAULT_MARKET_OPEN), market_tz)
+    entry_not_before = datetime.combine(current.date(), _parse_time(policy.get("entry_not_before_time"), DEFAULT_ENTRY_NOT_BEFORE), market_tz)
     enabled = _as_bool(policy.get("enabled"), True)
     non_trading_day = is_non_trading_day(current.date())
-    allowed = enabled and not non_trading_day and current < cutoff_at
+    requires_entry_window = not close and action_type in {"open", "adjust", "duration_roll"}
+    allowed = enabled and not non_trading_day and current >= market_open and current < cutoff_at and (not requires_entry_window or current >= entry_not_before)
 
     if not enabled:
         reason = "option_submission_disabled"
     elif non_trading_day:
         reason = "market_closed_non_trading_day"
+    elif current < market_open:
+        reason = "market_not_open"
+    elif requires_entry_window and current < entry_not_before:
+        reason = "entry_not_open"
     elif current >= cutoff_at:
         reason = "entry_cutoff_reached" if not close else "close_cutoff_reached"
     else:
@@ -84,6 +94,8 @@ def submission_window(
         "market_timezone": timezone_name,
         "uses_extended_session": uses_extended_session,
         "session_close_at": close_at.isoformat(),
+        "market_open_at": market_open.isoformat(),
+        "entry_not_before_at": entry_not_before.isoformat(),
         "submission_cutoff_at": cutoff_at.isoformat(),
         "evaluated_at": current.isoformat(),
         "buffer_minutes": buffer_minutes,
