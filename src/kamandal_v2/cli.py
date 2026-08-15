@@ -732,6 +732,7 @@ def main() -> None:
             ideas_dir=args.ideas_dir,
             output_prefix=args.output_prefix,
             allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
+            store=LocalStore(),
         )
         print(json.dumps(result.to_dict(), indent=2))
         return
@@ -783,6 +784,7 @@ def main() -> None:
             ideas_dir=args.ideas_dir,
             output_prefix=args.output_prefix,
             allowed_symbols=_universe_symbols(config, args.config_source),
+            store=LocalStore(),
         )
         plan_result = None
         if import_result.ideas_path is not None:

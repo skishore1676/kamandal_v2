@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -13,6 +14,7 @@ import yaml
 from kamandal_v2.intelligence.llm_client import JsonLlmClient, build_llm_client
 from kamandal_v2.intelligence.transcripts import CONTROLLED_THESIS_TAGS, STRATEGY_HINTS, _clean_transcript_text, _summary, _transcript_files
 from kamandal_v2.paths import resolve_path
+from kamandal_v2.stores.sqlite import LocalStore
 
 
 DIRECTIONS = {"bullish", "bearish", "neutral", "vol_up", "vol_down"}
@@ -49,6 +51,7 @@ def extract_ideas_llm(
     run_date: date | None = None,
     allowed_symbols: set[str] | None = None,
     client: JsonLlmClient | None = None,
+    store: LocalStore | None = None,
 ) -> LlmExtractionResult:
     client = client or build_llm_client(config, actor="thesis_extractor")
     source_path = resolve_path(source_dir)
@@ -81,6 +84,15 @@ def extract_ideas_llm(
                 continue
             if allowed_symbols is not None and idea["underlying"] not in allowed_symbols:
                 skipped_symbol_count += 1
+                if store is not None:
+                    record_id = hashlib.sha256(f"{transcript_file}:{idea_index}".encode("utf-8")).hexdigest()
+                    store.record_discovery_evidence(
+                        symbol=str(idea["underlying"]),
+                        source_profile=_discovery_profile(transcript_file),
+                        source_record_id=record_id,
+                        exclusion_reason="outside_enabled_universe",
+                        evidence_ref=f"llm_extract:{transcript_file.name}:{idea_index}",
+                    )
                 continue
             normalized.append(idea)
         all_ideas.extend(normalized)
@@ -107,6 +119,16 @@ def extract_ideas_llm(
         ideas_path=output_ideas_file,
         raw_path=raw_file,
     )
+
+
+def _discovery_profile(path: Path) -> str:
+    """Classify the shared extractor's source without creating a planner lane."""
+    parts = {part.lower() for part in path.parts}
+    if "x_bookmarks" in parts or "x_digest" in parts:
+        return "x"
+    if "transcripts" in parts or "youtube" in parts:
+        return "youtube"
+    return "llm_source"
 
 
 def _system_prompt(allowed_symbols: set[str] | None) -> str:
