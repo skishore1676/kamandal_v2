@@ -140,9 +140,14 @@ def _run_book(
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (f"{type(exc).__name__}: {exc}",))
     if mode is ExecutionMode.LIVE:
         rows = live_renderer[0](result, mode_config, store=store, mode="live_advisory")
+        try:
+            handoffs = _bind_selected_live_lifecycle(result, selected, store=store)
+        except Exception as exc:  # noqa: BLE001 - no live intent may lack an adoptable lifecycle.
+            return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (f"live handoff failed: {type(exc).__name__}: {exc}",))
         result.daily_plan_rows[:] = rows
         if write_sheet:
             write_daily_plan(mode_config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_advisory"})
+        return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (), tuple(handoffs))
     elif result.plans and result.plans[0].operator_action == "approve":
         try:
             handoffs = _materialize_shadow_handoff(result, selected, sqlite_path=store.sqlite_path)
@@ -152,6 +157,87 @@ def _run_book(
         store.event("unified_shadow_plan_auto_approved", {"plan_run_id": result.plan_run_id, "plan_id": result.plans[0].plan_id, "handoffs": handoffs})
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (), tuple(handoffs))
     return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, ())
+
+
+def _bind_selected_live_lifecycle(
+    result: PlanRunResult,
+    policies: tuple[PlaybookPolicy, ...],
+    *,
+    store: LocalStore,
+) -> list[dict[str, Any]]:
+    """Attach the frozen selected-entry lifecycle to its existing guarded ticket."""
+    if not result.plans:
+        return []
+    selected_plan = result.plans[0]
+    policy_by_id = {policy.playbook_id: policy for policy in policies}
+    csa_store = CsaStore(store.sqlite_path)
+    handoffs: list[dict[str, Any]] = []
+    for candidate in selected_plan.candidates:
+        policy = policy_by_id.get(candidate.playbook_id)
+        if policy is None:
+            raise ValueError(f"selected candidate {candidate.candidate_id} has no unified policy")
+        compiled = _shadow_csa_policy(policy, stage=CsaStage.LIVE)
+        lifecycle_id = stable_csa_id("unified-live-lifecycle", [selected_plan.plan_id, candidate.candidate_id])
+        lifecycle = freeze_lifecycle_policy(
+            LifecycleState(
+                lifecycle_id=lifecycle_id,
+                opportunity_id=stable_csa_id("unified-opportunity", [policy.playbook_id, candidate.idea_id, candidate.underlying]),
+                lane=compiled.lane,
+                version=1,
+                status="pending_live_submission",
+                active_legs=(),
+                cashflow_ledger=(),
+                opened_at=_plan_time(result),
+                updated_at=_plan_time(result),
+                policy_hash=compiled.policy_hash,
+                metadata={
+                    "playbook_id": compiled.playbook_id,
+                    "underlying": candidate.underlying,
+                    "candidate_id": candidate.candidate_id,
+                    "unified_plan_id": selected_plan.plan_id,
+                    "execution_mode": "live",
+                    "policy_snapshot_hash": compiled.policy_hash,
+                    "policy_snapshot_date": _plan_time(result)[:10],
+                    "source_identity": {"idea_id": candidate.idea_id, "plan_run_id": result.plan_run_id},
+                },
+            ),
+            compiled_policy=compiled.to_dict(),
+        )
+        existing = csa_store.lifecycle(lifecycle_id)
+        if existing is None:
+            csa_store.save_lifecycle(lifecycle)
+        elif existing.policy_hash != lifecycle.policy_hash:
+            raise ValueError(f"replayed live candidate policy differs for {candidate.candidate_id}")
+        else:
+            lifecycle = existing
+        tickets = [
+            ticket
+            for ticket in store.live_order_intents_by_status({"pending_approval", "stage_approved_pending_submit"})
+            if str(ticket.get("plan_id") or "") == selected_plan.plan_id
+            and str(ticket.get("candidate_id") or "") == candidate.candidate_id
+        ]
+        if len(tickets) != 1:
+            raise ValueError(f"selected live candidate {candidate.candidate_id} has {len(tickets)} guarded intents")
+        ticket = dict(tickets[0])
+        action = arbitrate_actions((propose_action(lifecycle, ActionType.OPEN, "unified_plan_selected", arbiter_class="routine_management", proposed_at=_plan_time(result)),)).selected
+        strategy_ticket = open_ticket_from_candidate(candidate, action, compiled, created_at=_plan_time(result), limit_price=candidate.net_credit)
+        ticket.update(
+            {
+                "csa_policy_hash": compiled.policy_hash,
+                "csa_playbook_id": compiled.playbook_id,
+                "csa_stage": compiled.stage.value,
+                "csa_lifecycle_id": lifecycle_id,
+                "csa_strategy_ticket": strategy_ticket.to_dict(),
+                "csa_policy_snapshot_date": str(lifecycle.metadata["policy_snapshot_date"]),
+                "csa_policy_snapshot_hash": str(lifecycle.metadata["policy_snapshot_hash"]),
+                "stage_authorized": True,
+            }
+        )
+        store.save_live_order_intent(ticket, status=str(ticket["_ledger_status"]))
+        handoffs.append(
+            {"source_id": candidate.idea_id, "plan_id": selected_plan.plan_id, "candidate_id": candidate.candidate_id, "playbook_id": compiled.playbook_id, "capability": policy.capability.key, "mode": "live", "lifecycle_id": lifecycle_id, "ticket_id": strategy_ticket.ticket_id, "adapter_state": str(ticket["_ledger_status"])}
+        )
+    return handoffs
 
 
 def _materialize_shadow_handoff(
@@ -252,7 +338,7 @@ def _materialize_shadow_handoff(
     return handoffs
 
 
-def _shadow_csa_policy(policy: PlaybookPolicy) -> CsaPolicy:
+def _shadow_csa_policy(policy: PlaybookPolicy, *, stage: CsaStage = CsaStage.SHADOW) -> CsaPolicy:
     capability = policy.capability.key
     if capability == "short_strangle":
         lane = LaneId.SHORT_STRANGLE
@@ -271,7 +357,7 @@ def _shadow_csa_policy(policy: PlaybookPolicy) -> CsaPolicy:
     return CsaPolicy(
         playbook_id=policy.playbook_id,
         lane=lane,
-        stage=CsaStage.SHADOW,
+        stage=stage,
         source_mode=source_mode,
         management=dict(policy.management),
         resolved_fields=dict(policy.fields),

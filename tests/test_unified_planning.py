@@ -207,6 +207,7 @@ def test_selected_shadow_plan_persists_one_typed_lifecycle_ticket_and_fill(tmp_p
 def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     database = tmp_path / "kamandal.db"
     store = LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
     live_row = {
         "playbook_id": "live_call_spread",
         "enabled": "TRUE",
@@ -256,7 +257,10 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
     )
 
     assert unified.live.errors == ()
-    assert store.live_order_intents_by_status({"pending_approval"})[0]["intent_type"] == "open"
+    live_intent = store.live_order_intents_by_status({"pending_approval"})[0]
+    assert live_intent["intent_type"] == "open"
+    assert live_intent["csa_lifecycle_id"]
+    assert CsaStore(database, read_only=True).lifecycle(live_intent["csa_lifecycle_id"]).status == "pending_live_submission"
     detail = json.loads(dict(zip(seed_headers()["daily_plan"], unified.live.result.daily_plan_rows[0], strict=False))["plan_detail_json"])
     assert detail["lane"] == "live_advisory"
     assert detail["order_ticket_json"]["ticket_hash"]
