@@ -120,11 +120,13 @@ def test_unified_books_only_project_when_explicitly_requested(tmp_path, monkeypa
     universe, playbooks = _rows()
     writes: list[set[str]] = []
     from kamandal_v2.planner import engine
+    from kamandal_v2.strategy_engine import planning
 
     def write_daily_plan(_config, _rows, _header, *, replace_lanes):  # noqa: ANN001
         writes.append(replace_lanes)
         return 0
 
+    monkeypatch.setattr(planning, "write_daily_plan", write_daily_plan)
     monkeypatch.setattr(engine, "write_daily_plan", write_daily_plan)
     run_unified_books(
         load_control(),

@@ -15,6 +15,8 @@ from typing import Any
 
 from kamandal_v2.domain.models import Idea, Playbook, PortfolioState, UniverseEntry
 from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, run_plan
+from kamandal_v2.schemas import DAILY_PLAN_HEADER
+from kamandal_v2.sheets import write_daily_plan
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_engine.policy import ExecutionMode, PlaybookPolicy, PolicyCompilation, compile_playbook_policies
@@ -87,8 +89,14 @@ def _run_book(
         return PlanningBook(mode, (), None, ())
     mode_config = deepcopy(config)
     mode_config.setdefault("runtime", {})["mode"] = mode.value
+    live_renderer = None
     if mode is ExecutionMode.SHADOW:
         mode_config.setdefault("execution", {})["approval_mode"] = "shadow_auto_top_plan"
+    else:
+        from kamandal_v2.live.advisory import _live_candidate_policy, live_config, render_live_plan_rows
+
+        mode_config = live_config(mode_config)
+        live_renderer = (render_live_plan_rows, _live_candidate_policy)
     playbooks = [Playbook.from_row(policy.fields) for policy in selected]
     try:
         result = run_plan(
@@ -96,9 +104,10 @@ def _run_book(
             idea_paths=idea_paths,
             config_source="seed",
             provider=provider,
-            write_sheet=write_sheet,
+            write_sheet=write_sheet if mode is ExecutionMode.SHADOW else False,
             store=store,
             audit=AuditWriter(Path(audit_root) / mode.value),
+            candidate_postprocessor=live_renderer[1] if live_renderer is not None else None,
             universe_override=universe,
             playbooks_override=playbooks,
             source_groups_factory=lambda ideas, entries, selected_playbooks, portfolio: _source_groups(
@@ -111,6 +120,14 @@ def _run_book(
         )
     except Exception as exc:  # noqa: BLE001 - report failure-isolated book receipt.
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (f"{type(exc).__name__}: {exc}",))
+    if mode is ExecutionMode.LIVE:
+        rows = live_renderer[0](result, mode_config, store=store, mode="live")
+        result.daily_plan_rows[:] = rows
+        if write_sheet:
+            write_daily_plan(mode_config, rows, DAILY_PLAN_HEADER, replace_lanes={"live"})
+    elif result.plans and result.plans[0].operator_action == "approve":
+        store.save_shadow_fills(result.plan_run_id, result.plans[0])
+        store.event("unified_shadow_plan_auto_approved", {"plan_run_id": result.plan_run_id, "plan_id": result.plans[0].plan_id})
     return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, ())
 
 

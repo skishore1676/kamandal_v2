@@ -1662,7 +1662,7 @@ def _live_advisory_ticket_hashes(rows: list[dict[str, Any]], config: dict[str, A
     today = _market_today(config)
     for row in rows:
         detail = _loads(row.get("plan_detail_json"))
-        if str(detail.get("lane") or row.get("mode") or "") != "live_advisory":
+        if str(detail.get("lane") or row.get("mode") or "") not in {"live_advisory", "live"}:
             continue
         if str(row.get("plan_date") or "") != today:
             continue
@@ -1707,13 +1707,13 @@ def _approved_rows(
 ) -> list[dict[str, str]]:
     rows = (tables if tables is not None else pull_sheet_tables(config)).get("daily_plan") or []
     action = APPROVE_LIVE_CLOSE if close else APPROVE_LIVE
-    lane = "live_close_advisory" if close else "live_advisory"
+    lanes = {"live_close_advisory"} if close else {"live_advisory", "live"}
     approved = []
     for row in rows:
         if str(row.get("operator_action") or "").strip().upper() != action:
             continue
         detail = _loads(row.get("plan_detail_json"))
-        if str(detail.get("lane") or row.get("mode") or "") != lane:
+        if str(detail.get("lane") or row.get("mode") or "") not in lanes:
             continue
         approved.append(row)
     return approved

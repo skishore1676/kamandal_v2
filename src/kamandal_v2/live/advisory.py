@@ -93,8 +93,15 @@ def run_live_advisory_plan(
     return result
 
 
-def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, store: LocalStore, persist_order_intents: bool = True) -> list[list[Any]]:
-    rows = render_daily_plan_rows(result.plans, mode="live_advisory")
+def render_live_plan_rows(
+    result: PlanRunResult,
+    config: dict[str, Any],
+    *,
+    store: LocalStore,
+    persist_order_intents: bool = True,
+    mode: str = "live_advisory",
+) -> list[list[Any]]:
+    rows = render_daily_plan_rows(result.plans, mode=mode)
     entry_mode = _entry_approval_mode(config)
     if entry_mode == "disabled":
         return []
@@ -117,7 +124,7 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
         metrics = _loads(row.get("plan_metrics_json"))
         detail = _loads(row.get("plan_detail_json"))
         metrics["real_account_json"] = account_json
-        detail["lane"] = "live_advisory"
+        detail["lane"] = mode
         detail["live_gate_status"] = "eligible"
         detail["live_blockers"] = []
         detail["order_ticket_json"] = ticket
@@ -130,7 +137,7 @@ def render_live_plan_rows(result: PlanRunResult, config: dict[str, Any], *, stor
         }
         detail["public_preflight_json"] = candidate.preflight.to_dict() if candidate.preflight else None
         detail["real_account_json"] = account_json
-        row["mode"] = "live_advisory"
+        row["mode"] = mode
         row["operator_action"] = APPROVE_LIVE if entry_mode == "auto_top_plan" and index == 0 else ""
         row["plan_metrics_json"] = json.dumps(metrics, sort_keys=True)
         row["plan_detail_json"] = json.dumps(detail, sort_keys=True)
