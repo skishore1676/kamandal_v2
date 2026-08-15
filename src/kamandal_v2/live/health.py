@@ -741,7 +741,7 @@ def _risk_reason_attention(
             "attention_deferred_reason": "non_trading_day",
         }
 
-    advisory_times = JOB_SCHEDULES["live-advisory"].fixed_times
+    advisory_times = JOB_SCHEDULES["unified-planning"].fixed_times
     if not advisory_times:
         return {"operator_state": "operator_needed"}
     first_refresh = datetime.combine(local_now.date(), min(advisory_times), CENTRAL)

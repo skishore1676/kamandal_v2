@@ -300,20 +300,18 @@ def test_scheduled_health_deduplicates_same_failure_until_clear(tmp_path) -> Non
     assert reopened["notify"] is True
 
 
-def test_watchdog_includes_new_report_and_universe_jobs() -> None:
+def test_watchdog_includes_unified_ownership_jobs() -> None:
     assert "daily-report" in launchd_job.MONITORED_JOBS
-    assert "universe-proposer" in launchd_job.MONITORED_JOBS
-    assert {"csa-shadow-scan", "csa-live-scan", "csa-shadow-management", "csa-shadow-scorecard"}.issubset(
-        launchd_job.MONITORED_JOBS
-    )
+    assert {"unified-planning", "unified-lifecycle-management"}.issubset(launchd_job.MONITORED_JOBS)
+    assert "universe-proposer" not in launchd_job.MONITORED_JOBS
 
 
 def test_scheduled_job_health_detects_stale_frequent_job(tmp_path) -> None:
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
-    label = "com.kamandal.v2.live_management"
+    label = "com.kamandal.v2.unified_lifecycle_management"
     log_path = log_dir / f"{label}.out.log"
-    log_path.write_text(launchd_job.RESULT_PREFIX + json.dumps({"job": "live-management", "status": "ok"}) + "\n")
+    log_path.write_text(launchd_job.RESULT_PREFIX + json.dumps({"job": "unified-lifecycle-management", "status": "ok"}) + "\n")
     stale = datetime(2026, 6, 30, 9, 0, tzinfo=launchd_job.CENTRAL).timestamp()
     os.utime(log_path, (stale, stale))
 
@@ -324,8 +322,8 @@ def test_scheduled_job_health_detects_stale_frequent_job(tmp_path) -> None:
         now=datetime(2026, 6, 30, 10, 0, tzinfo=launchd_job.CENTRAL),
     )
 
-    live_management = [issue for issue in report["issues"] if issue["job"] == "live-management"][0]
-    assert live_management["reason"] == "stale_last_run"
+    management = [issue for issue in report["issues"] if issue["job"] == "unified-lifecycle-management"][0]
+    assert management["reason"] == "stale_last_run"
 
 
 def test_expected_job_observation_suppresses_weekend_fixed_time_job() -> None:
@@ -341,7 +339,7 @@ def test_expected_job_observation_suppresses_weekend_fixed_time_job() -> None:
 
 
 def test_expected_job_observation_suppresses_weekend_cadence_job() -> None:
-    schedule = launchd_job.JOB_SCHEDULES["live-management"]
+    schedule = launchd_job.JOB_SCHEDULES["unified-lifecycle-management"]
 
     expectation = launchd_job.expected_job_observation(
         schedule,
@@ -353,7 +351,7 @@ def test_expected_job_observation_suppresses_weekend_cadence_job() -> None:
 
 
 def test_combined_management_schedule_uses_final_pre_close_run() -> None:
-    schedule = launchd_job.JOB_SCHEDULES["live-management"]
+    schedule = launchd_job.JOB_SCHEDULES["unified-lifecycle-management"]
 
     expectation = launchd_job.expected_job_observation(
         schedule,
@@ -392,12 +390,12 @@ def test_expected_job_observation_honors_disabled_holiday_calendar(monkeypatch) 
 
 
 def test_scheduled_job_health_accepts_recent_frequent_job(tmp_path, monkeypatch) -> None:  # noqa: ANN001
-    monkeypatch.setattr(launchd_job, "MONITORED_JOBS", ["live-management"])
+    monkeypatch.setattr(launchd_job, "MONITORED_JOBS", ["unified-lifecycle-management"])
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
-    label = "com.kamandal.v2.live_management"
+    label = "com.kamandal.v2.unified_lifecycle_management"
     log_path = log_dir / f"{label}.out.log"
-    log_path.write_text(launchd_job.RESULT_PREFIX + json.dumps({"job": "live-management", "status": "ok"}) + "\n")
+    log_path.write_text(launchd_job.RESULT_PREFIX + json.dumps({"job": "unified-lifecycle-management", "status": "ok"}) + "\n")
     recent = datetime(2026, 6, 30, 9, 55, tzinfo=launchd_job.CENTRAL).timestamp()
     os.utime(log_path, (recent, recent))
 
