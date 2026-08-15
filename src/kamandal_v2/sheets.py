@@ -119,6 +119,34 @@ class GoogleSheetClient:
             rows.append({header[index]: str(padded[index]).strip() for index in range(len(header)) if header[index]})
         return rows
 
+    def append_tab_rows(self, title: str, *, header: Sequence[str], rows: Sequence[Sequence[Any]]) -> int:
+        """Append a bounded range without clearing existing cells or formatting."""
+        if not rows:
+            return 0
+        worksheet = self._worksheet(title, rows=100, cols=max(len(header), 26))
+        values = self._retry(worksheet.get_all_values, operation=f"read worksheet {title!r} before append") or []
+        if values:
+            actual_header = [str(cell).strip() for cell in values[0][: len(header)]]
+            if actual_header != list(header):
+                raise ValueError(f"worksheet {title!r} header does not match bounded append contract")
+        else:
+            raise ValueError(f"worksheet {title!r} has no header; bounded append refuses to bootstrap it")
+        start = len(values) + 1
+        normalized = []
+        for row in rows:
+            padded = list(row) + [""] * (len(header) - len(row))
+            normalized.append([_cell(value) for value in padded[: len(header)]])
+        end = start + len(normalized) - 1
+        self._retry(
+            lambda: worksheet.update(
+                range_name=f"A{start}:{_col_letter(len(header))}{end}",
+                values=normalized,
+                value_input_option="USER_ENTERED",
+            ),
+            operation=f"append worksheet {title!r}",
+        )
+        return len(normalized)
+
     def _worksheet(self, title: str, *, rows: int, cols: int) -> Any:
         try:
             return self._retry(
@@ -275,8 +303,9 @@ def write_live_book(config: dict[str, Any], header: list[str], rows: list[list[A
 def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, str]]) -> int:
     """Append up to 5/day tier=proposed rows to the existing universe tab.
 
-    Does not clear the tab; reads existing rows, appends new proposal rows,
-    and replaces the tab atomically. Caller must enforce the 5/day cap.
+    Does not clear or rewrite the tab.  Existing rows (including their formulas,
+    formatting, validation, tier, and operator notes) are untouched; this
+    function may append only previously unseen proposed symbols.
     """
     if not proposals:
         return 0
@@ -284,23 +313,26 @@ def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, s
     tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
     title = str(tab_names.get("universe") or "universe")
     existing = client.read_tab(title)
-    # Build header from existing tab if it has proposal columns, else canonical
     from kamandal_v2.schemas import UNIVERSE_HEADER
 
     header = UNIVERSE_HEADER
-    # Preserve existing header order if tab already has proposal columns
     if existing:
         existing_headers = list(existing[0].keys()) if existing and isinstance(existing[0], dict) else []
-        # If existing has proposal columns, keep its header; otherwise use canonical
-        if all(col in existing_headers for col in ("tier", "proposal_source", "proposal_reason")):
+        if existing_headers == UNIVERSE_HEADER:
             header = existing_headers
-
-    rows: list[list[Any]] = []
-    for row in existing:
-        rows.append([row.get(col, "") for col in header])
-    for proposal in proposals:
-        rows.append([proposal.get(col, "") for col in header])
-    return client.replace_tab(title, header=header, rows=rows)
+    existing_by_symbol = {str(row.get("symbol") or "").upper(): row for row in existing}
+    appendable = [
+        proposal
+        for proposal in proposals
+        if str(proposal.get("symbol") or "").upper() not in existing_by_symbol
+    ]
+    rows = [[proposal.get(col, "") for col in header] for proposal in appendable]
+    written = client.append_tab_rows(title, header=header, rows=rows)
+    readback = {str(row.get("symbol") or "").upper(): row for row in client.read_tab(title)}
+    missing = [str(row.get("symbol") or "") for row in appendable if str(row.get("symbol") or "").upper() not in readback]
+    if missing:
+        raise RuntimeError(f"universe proposal append readback missing: {', '.join(missing)}")
+    return written
 
 
 def _cell(value: Any) -> Any:
