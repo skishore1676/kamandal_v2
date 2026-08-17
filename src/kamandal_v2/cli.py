@@ -404,8 +404,6 @@ def main() -> None:
         store = LocalStore()
         existing = []
         if args.write_sheet and not args.dry_run:
-            from kamandal_v2.sheets import pull_sheet_tables
-
             existing = pull_sheet_tables(load_control()).get("universe") or []
         existing_symbols = {str(row.get("symbol") or "").upper() for row in existing}
         proposals = collect_out_of_universe_symbols(

@@ -76,6 +76,7 @@ def run_plan(
     universe_override: list[Any] | None = None,
     playbooks_override: list[Any] | None = None,
     source_groups_factory: Callable[[list[Idea], list[Any], list[Any], PortfolioState], list[PlanningSourceGroup]] | None = None,
+    market_override: MarketDataProvider | None = None,
 ) -> PlanRunResult:
     plan_run_id = "run_" + utc_now().replace(":", "").replace("-", "")
     store = store or LocalStore()
@@ -87,7 +88,7 @@ def run_plan(
     else:
         universe, playbooks = universe_override, playbooks_override
     loaded_ideas = annotate_structural_breaks(load_ideas(idea_paths), config)
-    market = _market_provider(config, provider=provider, store=store)
+    market = market_override or _market_provider(config, provider=provider, store=store)
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
     portfolio_raw = market.account_state()
     portfolio = _shadow_portfolio_override(portfolio_raw, config)
@@ -253,7 +254,13 @@ class _SnapshottingFixtureMarket:
         return self.inner.event_status(underlying)
 
 
-def _market_provider(config: dict[str, Any], *, provider: str, store: LocalStore) -> MarketDataProvider:
+def _market_provider(
+    config: dict[str, Any],
+    *,
+    provider: str,
+    store: LocalStore,
+    required_expiration_dates: list[str] | tuple[str, ...] = (),
+) -> MarketDataProvider:
     volatility_config = config.get("volatility") or {}
     metric = str(volatility_config.get("metric") or "atm_30_45_mean_iv")
     lookback = int(volatility_config.get("lookback_days") or 252)
@@ -264,6 +271,13 @@ def _market_provider(config: dict[str, Any], *, provider: str, store: LocalStore
 
     if provider == "public":
         public_market = PublicAdapter(config)
+        if required_expiration_dates:
+            public_market.expiration_dates = sorted(
+                {
+                    *public_market.expiration_dates,
+                    *(str(value) for value in required_expiration_dates if str(value)),
+                }
+            )
         iv_market = _iv_market(
             config,
             public_market,

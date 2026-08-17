@@ -510,11 +510,25 @@ class LocalStore:
 
     def open_shadow_candidate_ids(self) -> set[str]:
         with self._connect() as conn:
+            typed = _typed_shadow_lifecycles(conn, statuses={"proposed", "open"})
+            if typed is not None:
+                return {
+                    str((item.get("metadata") or {}).get("candidate_id") or "")
+                    for item in typed
+                    if str((item.get("metadata") or {}).get("candidate_id") or "")
+                }
             rows = conn.execute("SELECT candidate_id FROM shadow_fills WHERE status = 'open'").fetchall()
         return {str(row["candidate_id"]) for row in rows}
 
     def open_shadow_idea_ids(self) -> set[str]:
         with self._connect() as conn:
+            typed = _typed_shadow_lifecycles(conn, statuses={"proposed", "open"})
+            if typed is not None:
+                return {
+                    str(((item.get("metadata") or {}).get("source_identity") or {}).get("idea_id") or "")
+                    for item in typed
+                    if str(((item.get("metadata") or {}).get("source_identity") or {}).get("idea_id") or "")
+                }
             rows = conn.execute("SELECT idea_id FROM shadow_fills WHERE status = 'open' AND idea_id IS NOT NULL AND idea_id != ''").fetchall()
             if rows:
                 return {str(row["idea_id"]) for row in rows}
@@ -536,6 +550,13 @@ class LocalStore:
 
     def shadow_idea_ids_opened_since(self, opened_since: str) -> set[str]:
         with self._connect() as conn:
+            typed = _typed_shadow_lifecycles(conn, opened_since=opened_since)
+            if typed is not None:
+                return {
+                    str(((item.get("metadata") or {}).get("source_identity") or {}).get("idea_id") or "")
+                    for item in typed
+                    if str(((item.get("metadata") or {}).get("source_identity") or {}).get("idea_id") or "")
+                }
             rows = conn.execute(
                 """
                 SELECT idea_id, candidate_id, payload
@@ -561,27 +582,38 @@ class LocalStore:
 
     def shadow_portfolio_state(self, base: PortfolioState) -> PortfolioState:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT underlying, estimated_bpr, delta, gamma, theta, vega
-                FROM shadow_fills
-                WHERE status = 'open'
-                """
-            ).fetchall()
-        bpr_used = round(sum(float(row["estimated_bpr"] or 0.0) for row in rows), 2)
+            typed = _typed_shadow_lifecycles(conn, statuses={"open"})
+            if typed is None:
+                rows = [
+                    dict(row)
+                    for row in conn.execute(
+                        """
+                        SELECT underlying, estimated_bpr, delta, gamma, theta, vega
+                        FROM shadow_fills
+                        WHERE status = 'open'
+                        """
+                    ).fetchall()
+                ]
+            else:
+                candidate_payloads = {
+                    str(row["id"]): json.loads(row["payload"])
+                    for row in conn.execute("SELECT id, payload FROM candidates").fetchall()
+                }
+                rows = [_typed_shadow_portfolio_row(item, candidate_payloads) for item in typed]
+        bpr_used = round(sum(float(row.get("estimated_bpr") or 0.0) for row in rows), 2)
         greeks = Greeks()
         per_underlying_bpr: dict[str, float] = {}
         for row in rows:
             greeks = greeks + Greeks(
-                delta=float(row["delta"] or 0.0),
-                gamma=float(row["gamma"] or 0.0),
-                theta=float(row["theta"] or 0.0),
-                vega=float(row["vega"] or 0.0),
+                delta=float(row.get("delta") or 0.0),
+                gamma=float(row.get("gamma") or 0.0),
+                theta=float(row.get("theta") or 0.0),
+                vega=float(row.get("vega") or 0.0),
             )
-            underlying = str(row["underlying"] or "")
+            underlying = str(row.get("underlying") or "")
             if underlying:
                 per_underlying_bpr[underlying] = round(
-                    per_underlying_bpr.get(underlying, 0.0) + float(row["estimated_bpr"] or 0.0),
+                    per_underlying_bpr.get(underlying, 0.0) + float(row.get("estimated_bpr") or 0.0),
                     2,
                 )
         return PortfolioState(
@@ -1415,6 +1447,65 @@ class LocalStore:
             return None
         payload = json.loads(str(row["payload"]))
         return {**payload, "_created_at": str(row["created_at"])}
+
+
+def _typed_shadow_lifecycles(
+    conn: sqlite3.Connection,
+    *,
+    statuses: set[str] | None = None,
+    opened_since: str = "",
+) -> list[dict[str, Any]] | None:
+    """Return canonical shadow lifecycle rows, or None for pre-migration stores.
+
+    Once a database has any typed shadow lifecycle, the legacy shadow_fills
+    table is historical evidence only.  Returning an empty list is therefore
+    meaningful and must not fall back to stale legacy rows.
+    """
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'csa_lifecycles'"
+    ).fetchone()
+    if table is None:
+        return None
+    has_typed_shadow = conn.execute(
+        """
+        SELECT 1
+        FROM csa_lifecycles
+        WHERE json_extract(payload, '$.metadata.execution_mode') = 'shadow'
+        LIMIT 1
+        """
+    ).fetchone()
+    if has_typed_shadow is None:
+        return None
+    query = "SELECT payload FROM csa_lifecycles WHERE json_extract(payload, '$.metadata.execution_mode') = 'shadow'"
+    params: list[Any] = []
+    if statuses:
+        placeholders = ",".join("?" for _ in statuses)
+        query += f" AND status IN ({placeholders})"
+        params.extend(sorted(statuses))
+    if opened_since:
+        query += " AND opened_at >= ?"
+        params.append(opened_since)
+    return [json.loads(row["payload"]) for row in conn.execute(query, tuple(params)).fetchall()]
+
+
+def _typed_shadow_portfolio_row(
+    lifecycle: dict[str, Any],
+    candidate_payloads: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    metadata = lifecycle.get("metadata") or {}
+    candidate = candidate_payloads.get(str(metadata.get("candidate_id") or ""), {})
+    greeks = metadata.get("greeks") if isinstance(metadata.get("greeks"), dict) else candidate.get("greeks") or {}
+    estimated_bpr = metadata.get("bpr")
+    if estimated_bpr in (None, ""):
+        estimated_bpr = candidate.get("estimated_bpr") or 0.0
+    return {
+        "underlying": str(metadata.get("underlying") or candidate.get("underlying") or ""),
+        "estimated_bpr": float(estimated_bpr or 0.0),
+        "delta": float(greeks.get("delta") or 0.0),
+        "gamma": float(greeks.get("gamma") or 0.0),
+        "theta": float(greeks.get("theta") or 0.0),
+        "vega": float(greeks.get("vega") or 0.0),
+    }
 
 
 def _candidate_greeks(candidate: dict[str, Any]) -> Greeks:

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState
+from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, OptionLeg, OptionQuote, Plan, PortfolioState
 from kamandal_v2.planner.engine import PlanRunResult
 from kamandal_v2.seed import build_seed_tables, seed_headers
 from kamandal_v2.stores.sqlite import LocalStore
@@ -59,6 +60,40 @@ def _migrated_store(tmp_path) -> LocalStore:  # noqa: ANN001
     store = LocalStore(database)
     migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
     return store
+
+
+def test_sheet_backed_unified_cli_reaches_planner_without_import_shadowing(tmp_path, monkeypatch, capsys) -> None:  # noqa: ANN001
+    universe, playbooks = _rows()
+    from kamandal_v2 import cli
+    from kamandal_v2.strategy_engine import planning
+    from kamandal_v2.strategy_lanes import daily_policy
+
+    snapshot = SimpleNamespace(
+        tables={"universe": universe, "playbooks": playbooks},
+        snapshot_hash="snapshot-hash",
+        trading_date="2026-08-17",
+    )
+    called = []
+    monkeypatch.setattr(cli, "pull_sheet_tables", lambda _config: snapshot.tables)
+    monkeypatch.setattr(daily_policy, "capture_daily_policy_snapshot", lambda _config, tables: snapshot)
+    monkeypatch.setattr(
+        planning,
+        "run_unified_books",
+        lambda *_args, **_kwargs: called.append(True) or SimpleNamespace(
+            compilation=SimpleNamespace(errors=[], ok=True),
+            live=SimpleNamespace(policy_ids=("live",), result=SimpleNamespace(plans=[]), errors=()),
+            shadow=SimpleNamespace(policy_ids=("shadow",), result=SimpleNamespace(plans=[]), errors=()),
+        ),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["kamandal", "unified-plan", "--db", str(tmp_path / "kamandal.db"), "--provider", "fixture", "--config-source", "sheet"],
+    )
+
+    cli.main()
+
+    assert called == [True]
+    assert json.loads(capsys.readouterr().out)["policy_errors"] == []
 
 
 def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) -> None:
@@ -236,6 +271,82 @@ def test_selected_shadow_plan_persists_one_typed_lifecycle_ticket_and_fill(tmp_p
     assert len(typed.rows("csa_lifecycles")) == 1
     assert len(typed.rows("csa_shadow_order_intents")) == 1
     assert len(typed.rows("csa_shadow_fills")) == 1
+
+
+def test_selected_shadow_working_entry_advances_and_legacy_rows_are_not_canonical(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    universe, playbooks = _rows()
+    shadow_rows = [row for row in playbooks if row["playbook_id"] == "short_strangle_shadow"]
+    database = tmp_path / "kamandal.db"
+    store = LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    candidate = Candidate(
+        candidate_id="working-strangle",
+        idea_id="market_scan:XYZ",
+        underlying="XYZ",
+        playbook_id="short_strangle_shadow",
+        structure="short_strangle",
+        legs=[
+            OptionLeg("short_put", "sell", "put", 90, "2026-10-16", 1, 1.05, 1.0, 1.1, -0.15, 0, 0, 0, 100),
+            OptionLeg("short_call", "sell", "call", 110, "2026-10-16", 1, 1.05, 1.0, 1.1, 0.15, 0, 0, 0, 100),
+        ],
+        net_credit=2.05,
+        estimated_bpr=1000,
+        greeks=Greeks(delta=1, theta=2),
+        liquidity_score=1,
+        score=1,
+    )
+    portfolio = PortfolioState(100_000, 100_000, 0, 0)
+    result = PlanRunResult(
+        plan_run_id="run_2026-08-17T12:00:00Z",
+        ideas=[],
+        candidates=[candidate],
+        plans=[Plan("working-plan", 1, "eligible", [candidate], 1, 1000, 1, 99_000, portfolio, portfolio, operator_action="approve")],
+        daily_plan_rows=[],
+        metrics={"observed_at": "2026-08-17T12:00:00Z"},
+        idea_diagnostics=[],
+        rejection_summary=[],
+    )
+
+    class WorkingMarket:
+        def chain_snapshot(self, underlying):  # noqa: ANN001
+            return ChainSnapshot(
+                chain_snapshot_id="working-chain",
+                underlying=underlying,
+                captured_at="2026-08-17T12:05:00Z",
+                underlying_price=100,
+                quotes=[
+                    OptionQuote("XYZ", "2026-10-16", "put", 90, 1.0, 1.1, -0.15, 0, 0, 0, 0.2, 100),
+                    OptionQuote("XYZ", "2026-10-16", "call", 110, 1.0, 1.1, 0.15, 0, 0, 0, 0.2, 100),
+                ],
+                source="fixture",
+            )
+
+    from kamandal_v2.strategy_engine import planning
+
+    monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: WorkingMarket())
+
+    first = run_unified_books(
+        load_control(), universe_rows=universe, playbook_rows=shadow_rows,
+        idea_paths=[], store=store, audit_root=tmp_path / "audit",
+    )
+    assert first.shadow.handoffs[0]["adapter_state"] == "working"
+    assert CsaStore(database, read_only=True).open_lifecycles()[0].status == "proposed"
+    with store._connect() as conn:
+        assert conn.execute("SELECT count(*) FROM shadow_fills").fetchone()[0] == 0
+
+    second = run_unified_books(
+        load_control(), universe_rows=universe, playbook_rows=shadow_rows,
+        idea_paths=[], store=store, audit_root=tmp_path / "audit-2",
+    )
+    assert second.shadow.handoffs[0]["adapter_state"] == "filled"
+    assert CsaStore(database, read_only=True).open_lifecycles()[0].status == "open"
+    assert store.open_shadow_candidate_ids() == {"working-strangle"}
+    assert store.open_shadow_idea_ids() == {"market_scan:XYZ"}
+    typed_portfolio = store.shadow_portfolio_state(portfolio)
+    assert typed_portfolio.bpr_used == 1000
+    assert typed_portfolio.greeks.delta == 1
+    assert typed_portfolio.greeks.theta == 2
 
 
 def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection(tmp_path, monkeypatch) -> None:  # noqa: ANN001

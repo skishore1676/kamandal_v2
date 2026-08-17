@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from kamandal_v2.domain.models import Idea, Playbook, PortfolioState, UniverseEntry
-from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, run_plan
+from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, _market_provider, run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import write_daily_plan
 from kamandal_v2.stores.audit import AuditWriter
@@ -33,6 +33,7 @@ from kamandal_v2.strategy_lanes.lane_common import propose_action
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.strategy_engine.event_timing import entry_session_due
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
+from kamandal_v2.strategy_lanes.runtime import _advance_working_orders
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +143,28 @@ def _run_book(
         mode_config = live_config(mode_config)
         live_renderer = (render_live_plan_rows, _live_candidate_policy)
     playbooks = [Playbook.from_row(policy.fields) for policy in selected]
+    market_override = None
+    if mode is ExecutionMode.SHADOW:
+        working_orders = CsaStore(store.sqlite_path).working_shadow_orders()
+        if working_orders:
+            market_override = _market_provider(mode_config, provider=provider, store=store)
+            snapshots = {}
+            errors: list[str] = []
+            for symbol in sorted({ticket.underlying for ticket, _attempt in working_orders}):
+                try:
+                    snapshots[symbol] = market_override.chain_snapshot(symbol)
+                except Exception as exc:  # noqa: BLE001 - the book receipt owns the failure.
+                    errors.append(f"{symbol}: working shadow market unavailable: {type(exc).__name__}: {exc}")
+            _advance_working_orders(
+                CsaStore(store.sqlite_path),
+                working_orders,
+                snapshots,
+                active_policy_hashes={_shadow_csa_policy(policy).policy_hash for policy in selected},
+                observed_at=_planning_observed_at(mode_config),
+                errors=errors,
+            )
+            if errors:
+                return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, tuple(errors))
     def candidate_postprocessor(candidates: list[Any], current_store: LocalStore, current_config: dict[str, Any], portfolio: PortfolioState) -> None:
         _gate_earnings_calendar_entries(candidates, selected, sqlite_path=current_store.sqlite_path, observed_at=_planning_observed_at(current_config))
         if live_renderer is not None:
@@ -166,6 +189,7 @@ def _run_book(
                 policies=selected,
                 portfolio=portfolio,
             ),
+            market_override=market_override,
         )
     except Exception as exc:  # noqa: BLE001 - report failure-isolated book receipt.
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (f"{type(exc).__name__}: {exc}",))
@@ -189,7 +213,6 @@ def _run_book(
             handoffs = _materialize_shadow_handoff(result, selected, sqlite_path=store.sqlite_path)
         except Exception as exc:  # noqa: BLE001 - a missing typed handoff is an unhealthy book.
             return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (f"shadow handoff failed: {type(exc).__name__}: {exc}",))
-        store.save_shadow_fills(result.plan_run_id, result.plans[0])
         store.event("unified_shadow_plan_auto_approved", {"plan_run_id": result.plan_run_id, "plan_id": result.plans[0].plan_id, "handoffs": handoffs})
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (), tuple(handoffs))
     return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, ())
@@ -233,6 +256,8 @@ def _bind_selected_live_lifecycle(
                     "playbook_id": compiled.playbook_id,
                     "underlying": candidate.underlying,
                     "candidate_id": candidate.candidate_id,
+                    "bpr": candidate.estimated_bpr,
+                    "greeks": candidate.greeks.to_dict(),
                     "unified_plan_id": selected_plan.plan_id,
                     "execution_mode": "live",
                     # This is the daily Sheet snapshot identity, not the
@@ -359,6 +384,8 @@ def _materialize_shadow_handoff(
                     "playbook_id": compiled.playbook_id,
                     "underlying": candidate.underlying,
                     "candidate_id": candidate.candidate_id,
+                    "bpr": candidate.estimated_bpr,
+                    "greeks": candidate.greeks.to_dict(),
                     "unified_plan_id": selected_plan.plan_id,
                     "execution_mode": "shadow",
                     "policy_snapshot_hash": compiled.policy_hash,

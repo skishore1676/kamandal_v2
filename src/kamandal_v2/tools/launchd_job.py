@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -53,6 +54,11 @@ OPERATOR_ACTIONS = {
 }
 LIVE_HEALTH_ATTENTION_STATE_EVENT = "live_health_attention_state"
 SCHEDULED_HEALTH_ATTENTION_STATE_EVENT = "scheduled_health_attention_state"
+SCRIPT_JOB_FAILURE_STATE_PREFIX = "launchd_job_failure_state"
+HIGH_FREQUENCY_FAILURE_THRESHOLDS = {
+    "live-approved-orders": 3,
+    "unified-lifecycle-management": 3,
+}
 LOCK_ALREADY_RUNNING = 75
 LOCK_UNVERIFIABLE = 76
 LIVE_RECONCILIATION_TIMEOUT_SECONDS = 300.0
@@ -128,6 +134,12 @@ def script_job(args: argparse.Namespace, *, repo_root: Path) -> int:
         "stderr_tail": tail(completed.stderr),
     }
     if completed.returncode == 0:
+        recovery_alert = clear_script_failure_attention(
+            LocalStore(repo_root / "data" / "kamandal_v2.db"),
+            args,
+        )
+        if recovery_alert is not None:
+            result["recovery_alert"] = recovery_alert.to_dict()
         print_result(result)
         return 0
     if completed.returncode in {LOCK_ALREADY_RUNNING, LOCK_UNVERIFIABLE}:
@@ -139,8 +151,13 @@ def script_job(args: argparse.Namespace, *, repo_root: Path) -> int:
         )
         return 0 if completed.returncode == LOCK_ALREADY_RUNNING else 2
 
-    alert = failure_alert(args, title=f"Kamandal launchd job failed: {args.job}", detail=command_failure_detail(completed))
-    print_result({**result, "alert": alert.to_dict()})
+    store = LocalStore(repo_root / "data" / "kamandal_v2.db")
+    attention = script_failure_attention(store, args.job, completed)
+    alert: AlertResult | None = None
+    if attention["notify"]:
+        alert = failure_alert(args, title=f"Kamandal launchd job failed: {args.job}", detail=command_failure_detail(completed))
+        record_script_failure_notification(store, args.job, attention, delivered=alert.ok or args.alert_mode == "off")
+    print_result({**result, "attention": attention, "alert": alert.to_dict() if alert else None})
     return 2
 
 
@@ -239,16 +256,17 @@ def daily_report_job(args: argparse.Namespace) -> int:
 
 def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path) -> int:
     report = scheduled_job_health(repo_root=repo_root)
-    attention = {"notify": bool(report["issues"]), "level": "error" if report["issues"] else "info", "reason": "scheduled_job_failure" if report["issues"] else "all_scheduled_jobs_healthy"}
     store = LocalStore()
+    uncovered_issues = [issue for issue in report["issues"] if not script_failure_issue_covered(store, issue)]
+    attention = {"notify": bool(uncovered_issues), "level": "error" if uncovered_issues else "info", "reason": "scheduled_job_failure" if uncovered_issues else "all_scheduled_jobs_healthy"}
     if args.alert_mode == "live":
-        attention = dedupe_scheduled_health_attention(store, attention, report["issues"])
+        attention = dedupe_scheduled_health_attention(store, attention, uncovered_issues)
     alert: AlertResult | None = None
     ok = True
     if attention["notify"]:
         alert = send_lathi_alert(
             title="Kamandal scheduled job health",
-            body=render_scheduled_job_health_summary(report),
+            body=render_scheduled_job_health_summary({**report, "issues": uncovered_issues}),
             level=str(attention["level"]),
             mode=args.alert_mode,
             profile=args.alert_profile,
@@ -262,6 +280,7 @@ def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path
             "status": "ok" if ok else "failed",
             "checked_at": report["checked_at"],
             "issues": report["issues"],
+            "uncovered_issues": uncovered_issues,
             "attention": attention,
             "alert": alert.to_dict() if alert else None,
         }
@@ -348,6 +367,128 @@ def command_failure_detail(completed: subprocess.CompletedProcess[str]) -> str:
             tail(completed.stderr, max_lines=18, max_chars=1600),
         ]
     )
+
+
+def script_failure_attention(
+    store: LocalStore,
+    job: str,
+    completed: subprocess.CompletedProcess[str],
+) -> dict[str, Any]:
+    event_type = _script_failure_event_type(job)
+    previous = store.latest_event(event_type) or {}
+    summary = stable_failure_summary(completed)
+    fingerprint = hashlib.sha256(f"{job}\n{summary}".encode("utf-8")).hexdigest()
+    same_open = previous.get("status") == "open" and previous.get("fingerprint") == fingerprint
+    consecutive = int(previous.get("consecutive") or 0) + 1 if same_open else 1
+    notified = bool(previous.get("notified")) if same_open else False
+    threshold = HIGH_FREQUENCY_FAILURE_THRESHOLDS.get(job, 1)
+    attention = {
+        "status": "open",
+        "job": job,
+        "fingerprint": fingerprint,
+        "summary": summary,
+        "consecutive": consecutive,
+        "threshold": threshold,
+        "notified": notified,
+        "notify": consecutive >= threshold and not notified,
+        "reason": "operator_incident" if consecutive >= threshold else "retrying_before_operator_page",
+    }
+    store.event(event_type, attention)
+    return attention
+
+
+def record_script_failure_notification(
+    store: LocalStore,
+    job: str,
+    attention: dict[str, Any],
+    *,
+    delivered: bool,
+) -> None:
+    store.event(
+        _script_failure_event_type(job),
+        {
+            **attention,
+            "notify": False,
+            "notified": delivered,
+            "reason": "operator_notified" if delivered else "operator_delivery_failed",
+        },
+    )
+
+
+def clear_script_failure_attention(store: LocalStore, args: argparse.Namespace) -> AlertResult | None:
+    event_type = _script_failure_event_type(args.job)
+    previous = store.latest_event(event_type) or {}
+    if previous.get("status") != "open":
+        return None
+    store.event(
+        event_type,
+        {
+            "status": "cleared",
+            "job": args.job,
+            "fingerprint": previous.get("fingerprint") or "",
+            "consecutive": int(previous.get("consecutive") or 0),
+            "notified": bool(previous.get("notified")),
+        },
+    )
+    if not previous.get("notified"):
+        return None
+    return send_lathi_alert(
+        title=f"KAMANDAL RECOVERED: {args.job}",
+        body=f"Kamandal job {args.job} recovered after {int(previous.get('consecutive') or 0)} failed run(s).",
+        level="info",
+        mode=args.alert_mode,
+        profile=args.alert_profile,
+    )
+
+
+def script_failure_issue_covered(store: LocalStore, issue: dict[str, Any]) -> bool:
+    if str(issue.get("reason") or "") != "last_run_failed":
+        return False
+    job = str(issue.get("job") or "")
+    state = store.latest_event(_script_failure_event_type(job)) or {}
+    if state.get("status") != "open":
+        return False
+    if state.get("notified"):
+        return True
+    return int(state.get("consecutive") or 0) < int(state.get("threshold") or HIGH_FREQUENCY_FAILURE_THRESHOLDS.get(job, 1))
+
+
+def stable_failure_summary(completed: subprocess.CompletedProcess[str]) -> str:
+    signals: list[str] = []
+    stdout = completed.stdout or ""
+    start = stdout.find("{")
+    if start >= 0:
+        try:
+            _collect_failure_signals(json.loads(stdout[start:]), signals)
+        except json.JSONDecodeError:
+            pass
+    if not signals:
+        lines = [line.strip() for line in (completed.stderr or "").splitlines() if line.strip()]
+        if not lines:
+            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+        signals = lines[-2:]
+    normalized = " | ".join(signals) or f"return_code={completed.returncode}"
+    normalized = re.sub(r"20\d\d-\d\d-\d\d[T ][0-9:.+-]+Z?", "<timestamp>", normalized)
+    normalized = re.sub(r"run_[0-9TZ:-]+", "run_<timestamp>", normalized)
+    return normalized[:2000]
+
+
+def _collect_failure_signals(value: Any, signals: list[str]) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "errors" and isinstance(item, list):
+                signals.extend(str(entry) for entry in item if str(entry))
+            elif key == "error" and isinstance(item, str) and item:
+                signals.append(item)
+            elif isinstance(item, (dict, list)):
+                _collect_failure_signals(item, signals)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_failure_signals(item, signals)
+
+
+def _script_failure_event_type(job: str) -> str:
+    return f"{SCRIPT_JOB_FAILURE_STATE_PREFIX}:{job}"
 
 
 def alert_level_for_health(report: dict[str, Any]) -> str:

@@ -47,6 +47,54 @@ def test_script_job_failure_sends_alert(monkeypatch, tmp_path, capsys) -> None: 
     assert payload["alert"]["ok"] is True
 
 
+def test_frequent_script_failure_pages_once_after_retry_threshold(monkeypatch, tmp_path, capsys) -> None:  # noqa: ANN001
+    args = SimpleNamespace(job="unified-lifecycle-management", force=False, alert_mode="spool", alert_profile="test")
+    completed = subprocess.CompletedProcess(
+        ["run"], 1,
+        stdout=json.dumps({"ok": False, "branches": [{"result": {"errors": ["active leg quote missing"]}}]}),
+        stderr="",
+    )
+    alerts = []
+    monkeypatch.setattr(launchd_job, "run_script", lambda *_args, **_kwargs: completed)
+    monkeypatch.setattr(
+        launchd_job,
+        "failure_alert",
+        lambda *_args, **_kwargs: alerts.append("failure") or AlertResult(attempted=True, ok=True, mode="spool"),
+    )
+
+    payloads = []
+    for _ in range(5):
+        assert launchd_job.script_job(args, repo_root=tmp_path) == 2
+        payloads.append(json.loads(capsys.readouterr().out.split("=", 1)[1]))
+
+    assert alerts == ["failure"]
+    assert [item["attention"]["notify"] for item in payloads] == [False, False, True, False, False]
+    assert payloads[-1]["attention"]["consecutive"] == 5
+
+
+def test_success_clears_paged_script_failure_with_one_recovery(monkeypatch, tmp_path, capsys) -> None:  # noqa: ANN001
+    args = SimpleNamespace(job="unified-lifecycle-management", force=False, alert_mode="spool", alert_profile="test")
+    failed = subprocess.CompletedProcess(["run"], 1, stdout="", stderr="stable failure")
+    monkeypatch.setattr(launchd_job, "run_script", lambda *_args, **_kwargs: failed)
+    monkeypatch.setattr(launchd_job, "failure_alert", lambda *_args, **_kwargs: AlertResult(attempted=True, ok=True, mode="spool"))
+    for _ in range(3):
+        launchd_job.script_job(args, repo_root=tmp_path)
+        capsys.readouterr()
+
+    recoveries = []
+    monkeypatch.setattr(launchd_job, "run_script", lambda *_args, **_kwargs: subprocess.CompletedProcess(["run"], 0, stdout="ok", stderr=""))
+    monkeypatch.setattr(
+        launchd_job,
+        "send_lathi_alert",
+        lambda **kwargs: recoveries.append(kwargs["title"]) or AlertResult(attempted=True, ok=True, mode="spool"),
+    )
+
+    assert launchd_job.script_job(args, repo_root=tmp_path) == 0
+    payload = json.loads(capsys.readouterr().out.split("=", 1)[1])
+    assert recoveries == ["KAMANDAL RECOVERED: unified-lifecycle-management"]
+    assert payload["recovery_alert"]["ok"] is True
+
+
 @pytest.mark.parametrize(
     ("return_code", "expected_status", "expected_code"),
     [(75, "skipped_already_running", 0), (76, "blocked_unverifiable_lock", 2)],

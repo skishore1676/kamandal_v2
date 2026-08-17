@@ -4,8 +4,13 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from kamandal_v2.domain.models import ChainSnapshot, OptionQuote
+from types import SimpleNamespace
+
 from kamandal_v2.live.management import _refresh_live_group_quotes
+from kamandal_v2.planner.engine import _market_provider
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_lanes.management_runtime import _active_lifecycle_expirations
+from kamandal_v2.market.public import PublicAdapter
 
 
 class _Broker:
@@ -69,3 +74,29 @@ def test_live_quote_refresh_includes_existing_position_expirations(tmp_path: Pat
 
     assert refreshed == {"DELL"}
     assert broker.calls == [("DELL", [position_expiration, listed_expiration])]
+
+
+def test_unified_manager_expirations_extend_public_new_entry_window(tmp_path: Path) -> None:
+    near_expiration = (date.today() + timedelta(days=18)).isoformat()
+    lifecycle = SimpleNamespace(active_legs=({"expiration": near_expiration},))
+
+    required = _active_lifecycle_expirations([lifecycle])
+    market = _market_provider(
+        {
+            "broker": {
+                "public": {
+                    "option_chain_start_dte": 21,
+                    "option_chain_end_dte": 90,
+                    "option_chain_max_expirations": 8,
+                }
+            }
+        },
+        provider="public",
+        store=LocalStore(tmp_path / "kamandal.db"),
+        required_expiration_dates=required,
+    )
+    current = market
+    while not isinstance(current, PublicAdapter):
+        current = current.inner
+
+    assert near_expiration in current.expiration_dates

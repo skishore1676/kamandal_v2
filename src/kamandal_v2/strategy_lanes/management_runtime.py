@@ -123,7 +123,12 @@ def _run_csa_management(
     policy_snapshot_hash = "frozen_lifecycle"
     errors: list[str] = []
     if market is None:
-        wrapper = _market_provider(config, provider=provider, store=baseline_store)
+        wrapper = _market_provider(
+            config,
+            provider=provider,
+            store=baseline_store,
+            required_expiration_dates=_active_lifecycle_expirations(lifecycles),
+        )
         market = getattr(wrapper, "inner", wrapper)
     active_statuses = {
         *PENDING_TICKET_STATUSES,
@@ -220,6 +225,22 @@ def _run_csa_management(
     )
     store.save_run_receipt({"id": run_id, "command": f"csa-{execution_mode}-management", "status": "completed" if result.ok else "completed_with_errors", "started_at": started_at, "completed_at": completed_at, "result": result.to_dict()})
     return result
+
+
+def _active_lifecycle_expirations(lifecycles: list[LifecycleState]) -> tuple[str, ...]:
+    """Keep management quotes independent from the new-entry DTE window."""
+    observed_date = date.today()
+    expirations: set[str] = set()
+    for lifecycle in lifecycles:
+        for leg in lifecycle.active_legs:
+            raw = str(leg.get("expiration") or "")
+            try:
+                expiration = date.fromisoformat(raw)
+            except ValueError:
+                continue
+            if expiration >= observed_date:
+                expirations.add(expiration.isoformat())
+    return tuple(sorted(expirations))
 
 
 def _frozen_lifecycle_policy(lifecycle: LifecycleState) -> CsaPolicy:
