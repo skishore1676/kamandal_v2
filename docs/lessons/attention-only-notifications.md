@@ -4,7 +4,7 @@ type: decision
 area: live operations and Telegram notifications
 date: 2026-07-16
 tags: [alerts, reconciliation, lathi, operations]
-refs: [scripts/run_live_management.sh:19, scripts/run_live_approved_orders.sh:17, src/kamandal_v2/live/execution.py:252, src/kamandal_v2/live/reconciliation.py:575, src/kamandal_v2/stores/sqlite.py:664, src/kamandal_v2/tools/launchd_job.py:265]
+refs: [commit:9ea9f1e, scripts/run_live_management.sh:19, scripts/run_live_approved_orders.sh:17, src/kamandal_v2/live/execution.py:252, src/kamandal_v2/live/reconciliation.py:575, src/kamandal_v2/stores/sqlite.py:664, src/kamandal_v2/tools/launchd_job.py]
 ---
 
 # Page on Exhausted Recovery, Not Workflow Status
@@ -48,6 +48,11 @@ and operator-state metadata rather than color or lifecycle milestones alone.
   (`src/kamandal_v2/tools/launchd_job.py:265`).
 - A stable reason/group/order fingerprint suppresses an unchanged incident until
   it clears or materially changes (`src/kamandal_v2/tools/launchd_job.py:310`).
+- High-frequency launchd jobs persist a stable failure fingerprint, absorb the
+  first two identical failures as bounded retry evidence, page once on the
+  third, and send one recovery notice only if an incident was previously paged.
+  Scheduled health excludes failures already owned by this direct incident
+  state instead of projecting the same problem a second time.
 - A broker-confirmed terminal unfilled entry sends one informational summary of
   its attempts, reprices, limit path, and expiration while keeping intermediate
   submit and reprice milestones silent (`src/kamandal_v2/live/execution.py:252`).
