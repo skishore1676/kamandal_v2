@@ -131,7 +131,6 @@ _LANE_REQUIRED_FIELDS = {
         "long_delta_min",
         "long_delta_max",
         "profit_target_pct",
-        "exit_pre_event_days",
         "live_max_bpr_per_order",
     ),
 }
@@ -338,13 +337,7 @@ def _validate_lifecycle_shape(management: dict[str, Any], *, lane: LaneId, sourc
         if source_mode is SourceMode.PORTFOLIO_HEDGE:
             paths.extend([("lifecycle", "portfolio_delta_trigger"), ("lifecycle", "hedge_underlyings")])
     elif lane is LaneId.EARNINGS_CALENDAR:
-        paths.extend(
-            [
-                ("lifecycle", "event_expiration", "near_before_days"),
-                ("lifecycle", "event_expiration", "far_after_days"),
-                ("lifecycle", "close_only"),
-            ]
-        )
+        paths.append(("lifecycle", "close_only"))
     missing = [".".join(path) for path in paths if _path_value(management, path) in (None, "", {}, [])]
     if missing:
         raise PolicyError(f"{row_name}: management_policy_json missing required fields: {', '.join(missing)}")
@@ -430,8 +423,6 @@ def _validate_numeric_policy(row: dict[str, Any], *, lane: LaneId, management: d
         numeric_paths.append(("lifecycle", "short_leg", "roll_dte"))
     elif lane is LaneId.GENERIC_CLOSE_ONLY and source_mode_is_portfolio(management, row):
         numeric_paths.append(("lifecycle", "portfolio_delta_trigger"))
-    elif lane is LaneId.EARNINGS_CALENDAR:
-        numeric_paths.extend([("lifecycle", "event_expiration", "near_before_days"), ("lifecycle", "event_expiration", "far_after_days")])
     for path in numeric_paths:
         number = _finite_number(_path_value(management, path), label=f"{row_name}: {'.'.join(path)}")
         if number < 0:

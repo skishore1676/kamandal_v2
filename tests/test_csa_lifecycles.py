@@ -110,7 +110,11 @@ def _row(structure: str):  # noqa: ANN202
             "long_dte_max": 50,
             "long_delta_min": 0.4,
             "long_delta_max": 0.6,
-            "exit_pre_event_days": 1,
+            "exit_pre_event_days": "",
+            "event_timing": "confirmed_bmo_or_amc_final_pre_event_session",
+            "event_near_expiry_after_days": 1,
+            "paired_order_required": "TRUE",
+            "post_event_exit": "first_eligible_post_event_session",
             "lifecycle": {"event_expiration": {"near_before_days": 7, "far_after_days": 21}, "close_only": True, "fill": {"max_attempts": 2, "price_increment": 0.05}},
         }
     else:
@@ -125,6 +129,19 @@ def _policy(structure: str):  # noqa: ANN202
     result = compile_csa_policy(_row(structure), source="google_sheet", read_at=NOW)
     assert result is not None
     return result
+
+
+def test_earnings_policy_requires_post_event_contract_not_legacy_pre_event_exit() -> None:
+    row = _row("call_calendar")
+    row["management_policy_json"] = json.dumps(
+        {"lifecycle": {"close_only": True, "fill": {"max_attempts": 4, "price_increment": 0.05}}}
+    )
+
+    policy = compile_csa_policy(row, source="google_sheet", read_at=NOW)
+
+    assert policy is not None
+    assert "exit_pre_event_days" not in policy.resolved_fields
+    assert policy.resolved_fields["post_event_exit"] == "first_eligible_post_event_session"
 
 
 def _opportunity(policy, *, event_state: str = "not_applicable"):  # noqa: ANN001, ANN202

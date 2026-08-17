@@ -38,6 +38,11 @@ ACTIONABLE_HEALTH_REASONS = {
 NON_PAGING_OPERATOR_STATES = {"self_handled", "self_healing"}
 OPERATOR_ATTENTION_STATES = {"operator_needed", "blocked_self_healing"}
 DELEGATED_ATTENTION_SURFACES = {"external_review"}
+DERIVED_OWNER_REASONS = {
+    # The planner job owns snapshot refresh and pages on failure. Entry safety
+    # already fails closed while this derived health condition is present.
+    "risk_account_snapshot_stale",
+}
 OPERATOR_ACTIONS = {
     "close_order_stale": "Check the working close at the broker; cancel or reprice it if it is no longer progressing.",
     "urgent_close_order_stale": "Check the urgent close at the broker now; cancel or reprice it so Kamandal can continue.",
@@ -208,7 +213,6 @@ def live_health_report_job(args: argparse.Namespace) -> int:
 
 def daily_report_job(args: argparse.Namespace) -> int:
     from kamandal_v2.ops.daily_report import (
-        render_daily_report_ryg_telegram_html,
         write_daily_report,
     )
     from kamandal_v2.paths import resolve_path
@@ -218,40 +222,25 @@ def daily_report_job(args: argparse.Namespace) -> int:
     store_path = resolve_path("data/kamandal_v2.db")
     output_dir = resolve_path("data/reports")
     result = write_daily_report(store_path, output_dir=output_dir, config=config)
-    html = render_daily_report_ryg_telegram_html(result.report)
     level = "info" if result.report.get("status", {}).get("level") in ("GREEN", "YELLOW") else "error"
-    # Always send via Lathi Bus (BHIKsha parity: 3 intraday reports) — template status = HTML <b><pre>
-    alert = send_lathi_alert(
-        title=f"Kamandal daily report — {result.report.get('trading_date')}",
-        body=html,
-        level=level,
-        mode=args.alert_mode,
-        profile=args.alert_profile,
-        template="status",
-        link_preview="disabled",
-    )
-    # Also project full markdown to Obsidian via Lathi Bus passive shelf if configured
-    # (graceful no-op when bus unreachable)
-    try:
-        from kamandal_v2.ops.alerts import send_lathi_bus_obsidian  # type: ignore
-
-        send_lathi_bus_obsidian(result.markdown_path, result.report)  # type: ignore
-    except Exception:
-        pass
+    # Reports are passive evidence, not operator attention. The JSON/Markdown
+    # artifacts remain available to TradeLab and operator surfaces; Telegram is
+    # reserved for the incident owner.
     print_result(
         {
             "job": args.job,
-            "status": "ok" if alert.ok or args.alert_mode in ("off", "spool") else "failed",
+            "status": "ok",
             "report_date": result.report.get("trading_date"),
             "report_status": result.report.get("status", {}).get("level"),
             "json_path": str(result.json_path),
             "markdown_path": str(result.markdown_path),
             "ryg_path": str(result.ryg_markdown_path),
-            "alert": alert.to_dict(),
+            "alert": None,
+            "delivery_status": "local_artifact_only",
             "level": level,
         }
     )
-    return 0 if alert.ok or args.alert_mode in ("off", "spool") else 2
+    return 0
 
 
 def scheduled_job_health_report_job(args: argparse.Namespace, *, repo_root: Path) -> int:
@@ -512,6 +501,8 @@ def health_attention(report: dict[str, Any]) -> dict[str, Any]:
         if operator_state in NON_PAGING_OPERATOR_STATES:
             continue
         reason = str(event.get("reason") or "")
+        if reason in DERIVED_OWNER_REASONS:
+            continue
         severity = str(event.get("severity") or "").lower()
         if operator_state in OPERATOR_ATTENTION_STATES or severity == "red" or reason in actionable_reasons:
             attention_events.append(event)

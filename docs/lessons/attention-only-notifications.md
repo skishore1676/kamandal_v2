@@ -53,6 +53,12 @@ and operator-state metadata rather than color or lifecycle milestones alone.
   third, and send one recovery notice only if an incident was previously paged.
   Scheduled health excludes failures already owned by this direct incident
   state instead of projecting the same problem a second time.
+- Derived health conditions do not create a second owner. In particular, a
+  stale account snapshot blocks entries fail-closed, while the planner job owns
+  the refresh failure and its one incident page.
+- Intraday daily reports are passive JSON/Markdown evidence for TradeLab and
+  operator surfaces. They do not send Telegram status or repeat an incident
+  already owned by planning, execution, reconciliation, or live health.
 - A broker-confirmed terminal unfilled entry sends one informational summary of
   its attempts, reprices, limit path, and expiration while keeping intermediate
   submit and reprice milestones silent (`src/kamandal_v2/live/execution.py:252`).

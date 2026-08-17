@@ -20,7 +20,7 @@ _LIFECYCLE_KEYS = {
     LaneId.CALL_VERTICAL: ("close_only",),
     LaneId.DIRECTIONAL_DIAGONAL: ("short_leg", "long_only"),
     LaneId.GENERIC_CLOSE_ONLY: ("close_only",),
-    LaneId.EARNINGS_CALENDAR: ("event_expiration", "close_only"),
+    LaneId.EARNINGS_CALENDAR: ("close_only",),
 }
 
 

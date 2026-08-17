@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -268,6 +269,54 @@ def test_health_attention_suppresses_self_handled_red_state() -> None:
 
     assert attention["notify"] is False
     assert attention["reason"] == "no_operator_attention_required"
+
+
+def test_health_attention_leaves_stale_snapshot_to_planner_failure_owner() -> None:
+    attention = launchd_job.health_attention(
+        {
+            "overall": "RED",
+            "events": [
+                {
+                    "severity": "red",
+                    "reason": "risk_account_snapshot_stale",
+                    "operator_state": "operator_needed",
+                },
+            ],
+        },
+    )
+
+    assert attention["notify"] is False
+    assert attention["reason"] == "no_operator_attention_required"
+
+
+def test_daily_report_stays_passive_without_telegram(monkeypatch, capsys, tmp_path) -> None:  # noqa: ANN001
+    from kamandal_v2.ops import daily_report
+
+    args = SimpleNamespace(job="daily-report", alert_mode="live", alert_profile="kamandal-northstar")
+    report = {
+        "trading_date": "2026-08-17",
+        "status": {"level": "RED"},
+    }
+    result = SimpleNamespace(
+        report=report,
+        json_path=Path(tmp_path / "report.json"),
+        markdown_path=Path(tmp_path / "report.md"),
+        ryg_markdown_path=Path(tmp_path / "report_ryg.md"),
+    )
+    monkeypatch.setattr(launchd_job, "load_control", lambda: {})
+    monkeypatch.setattr(daily_report, "write_daily_report", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(
+        launchd_job,
+        "send_lathi_alert",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("daily report must stay off Telegram")),
+    )
+
+    assert launchd_job.daily_report_job(args) == 0
+
+    payload = json.loads(capsys.readouterr().out.split("=", 1)[1])
+    assert payload["status"] == "ok"
+    assert payload["alert"] is None
+    assert payload["delivery_status"] == "local_artifact_only"
 
 
 def test_health_attention_leaves_external_review_to_lathi() -> None:
