@@ -4,7 +4,7 @@ type: decision
 area: live operations and Telegram notifications
 date: 2026-07-16
 tags: [alerts, reconciliation, lathi, operations]
-refs: [commit:9ea9f1e, scripts/run_live_management.sh:19, scripts/run_live_approved_orders.sh:17, src/kamandal_v2/live/execution.py:252, src/kamandal_v2/live/reconciliation.py:575, src/kamandal_v2/stores/sqlite.py:664, src/kamandal_v2/tools/launchd_job.py]
+refs: [commit:9ea9f1e, commit:a12655e, scripts/run_live_management.sh:19, scripts/run_live_approved_orders.sh:17, src/kamandal_v2/live/execution.py:252, src/kamandal_v2/live/reconciliation.py:575, src/kamandal_v2/stores/sqlite.py:664, src/kamandal_v2/tools/launchd_job.py, tests/test_live_lane.py:32]
 ---
 
 # Page on Exhausted Recovery, Not Workflow Status
@@ -64,6 +64,9 @@ and operator-state metadata rather than color or lifecycle milestones alone.
   submit and reprice milestones silent (`src/kamandal_v2/live/execution.py:252`).
 - The ledger status transition is an atomic claim, so overlapping sync cycles
   cannot both send the terminal summary (`src/kamandal_v2/stores/sqlite.py:664`).
+- Production-host tests must default every notification capability to effect-off
+  instead of inheriting the host's live or spool posture. A test may opt in only
+  after replacing the external sender with a fake (`tests/test_live_lane.py:32`).
 
 ## Apply It Next Time
 
@@ -72,7 +75,9 @@ human can take. If either is missing, store the event but do not add a Telegram
 send. Give actionable incidents a stable identity so scheduled checks update one
 incident rather than generating repeated pages. For a non-actionable receipt,
 require a terminal state, a concrete visibility gap it closes, and an idempotent
-claim before sending.
+claim before sending. Before running tests on oldmac, prove notification settings
+are forced off by the fixture rather than merely assuming `spool` is harmless;
+spool still mutates the operator outbox even when it performs no network call.
 
 ## Dead Ends
 
@@ -85,3 +90,5 @@ claim before sending.
 - Sending every submit, reprice, cancel, and expiration step recreates the noisy
   execution feed. Summarize the lineage once, after the broker confirms the entry
   ended without a position.
+- Treating sandbox spool as effect-free is incorrect on an operator host: it can
+  leave realistic fixture receipts in the real outbox and confuse later audits.
