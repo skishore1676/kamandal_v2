@@ -341,6 +341,45 @@ legacy physical-storage detail if rewriting them adds migration risk. Public
 commands, types, reports, and operational ownership must use the generic
 strategy language after cutover.
 
+## Legacy Retirement Boundary
+
+The unified engine is not complete if a generic command merely wraps the old
+baseline and CSA decision engines. A wrapper may be useful during an atomic
+cutover, but it is not an acceptable steady state. The final runtime has one
+policy compiler, one planning path, one lifecycle-management path, and one
+effect boundary. `shadow` and `live` are inputs to those paths, not separate
+implementations.
+
+Legacy material is treated in three different ways:
+
+| Kind | Target treatment | Reason |
+| --- | --- | --- |
+| Active legacy behavior | remove | Old validators, defaults, routing, scanners, managers, and CLI branches can contradict current Sheet policy or create a second owner. |
+| Proven reusable mechanics | generalize and absorb | Lifecycle state, action arbitration, mixed-leg tickets, strangle replacement, shadow fills, and reconciliation-aware execution are capabilities the unified engine needs. Their behavior stays; CSA-specific public identity does not. |
+| Historical or migration state | isolate and retain while needed | Existing lifecycles, cashflows, lineage, and physical `csa_*` tables protect open-position ownership and TradeLab evidence. They may be read through generic store interfaces, but they do not interpret current policy. |
+
+The active scheduled commands must not import or dispatch to deprecated CSA
+scanner or management entry points. In particular:
+
+- unified lifecycle management performs one generic pass over canonical
+  lifecycles, with failure-isolated `live` and `shadow` receipts;
+- unified planning owns working-order continuation rather than borrowing a
+  helper from an old scanner;
+- current Sheet compilation requires the generic `mode` and capability
+  contract; `csa_stage` and old management defaults are accepted only by an
+  explicit, effect-free migration tool;
+- reusable runtime types and functions use generic strategy-engine names;
+- retired CSA commands and scripts contain no dormant implementation that can
+  be called accidentally; and
+- migration/adoption readers are unreachable from normal planning and
+  management except for an explicit, audited adoption operation.
+
+This is a behavioral retirement, not a cosmetic source rewrite. A remaining
+physical table name is acceptable. A remaining active decision branch,
+validator, default, or second manager is not. Compatibility code must name the
+specific persisted dependency it protects and the evidence-based condition
+under which it can be deleted.
+
 "Unified jobs" means one planning owner and one lifecycle-management owner. It
 does not mean Kamandal has only two launchd jobs. Source collectors, market-data
 refreshes, policy snapshots, the guarded order executor, reconciliation, health,

@@ -17,6 +17,13 @@ from kamandal_v2.strategy_engine.planning import run_unified_books
 from kamandal_v2.live.execution import execute_live_approved
 
 
+def test_unified_planner_does_not_import_deprecated_scanner_runtime() -> None:
+    from kamandal_v2.strategy_engine import planning
+
+    source = Path(planning.__file__).read_text(encoding="utf-8")
+    assert "kamandal_v2.strategy_lanes.runtime" not in source
+
+
 def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     tables = build_seed_tables(load_control())
     headers = seed_headers()
@@ -331,22 +338,105 @@ def test_selected_shadow_working_entry_advances_and_legacy_rows_are_not_canonica
         idea_paths=[], store=store, audit_root=tmp_path / "audit",
     )
     assert first.shadow.handoffs[0]["adapter_state"] == "working"
-    assert CsaStore(database, read_only=True).open_lifecycles()[0].status == "proposed"
+    typed = CsaStore(database, read_only=True)
+    assert typed.open_lifecycles()[0].status == "proposed"
+    frozen_policy_hash = typed.working_shadow_orders()[0][0].policy_hash
     with store._connect() as conn:
         assert conn.execute("SELECT count(*) FROM shadow_fills").fetchone()[0] == 0
 
+    # A later Sheet edit recompiles the playbook, but the already-working ticket
+    # must continue with the policy and price path frozen when it was created.
+    shadow_rows[0]["exit_dte_min"] = "20"
+    empty_result = PlanRunResult(
+        plan_run_id="run_2026-08-17T12:05:00Z",
+        ideas=[], candidates=[], plans=[], daily_plan_rows=[],
+        metrics={"observed_at": "2026-08-17T12:05:00Z"},
+        idea_diagnostics=[], rejection_summary=[],
+    )
+    monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: empty_result)
     second = run_unified_books(
         load_control(), universe_rows=universe, playbook_rows=shadow_rows,
         idea_paths=[], store=store, audit_root=tmp_path / "audit-2",
     )
-    assert second.shadow.handoffs[0]["adapter_state"] == "filled"
+    assert second.shadow.errors == ()
     assert CsaStore(database, read_only=True).open_lifecycles()[0].status == "open"
+    assert CsaStore(database, read_only=True).open_lifecycles()[0].policy_hash == frozen_policy_hash
     assert store.open_shadow_candidate_ids() == {"working-strangle"}
     assert store.open_shadow_idea_ids() == {"market_scan:XYZ"}
     typed_portfolio = store.shadow_portfolio_state(portfolio)
     assert typed_portfolio.bpr_used == 1000
     assert typed_portfolio.greeks.delta == 1
     assert typed_portfolio.greeks.theta == 2
+
+
+def test_working_shadow_entry_retires_when_playbook_leaves_shadow(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    universe, playbooks = _rows()
+    shadow_rows = [row for row in playbooks if row["playbook_id"] == "short_strangle_shadow"]
+    store = _migrated_store(tmp_path)
+    database = store.sqlite_path
+    candidate = Candidate(
+        candidate_id="retired-working-strangle",
+        idea_id="market_scan:XYZ",
+        underlying="XYZ",
+        playbook_id="short_strangle_shadow",
+        structure="short_strangle",
+        legs=[
+            OptionLeg("short_put", "sell", "put", 90, "2026-10-16", 1, 1.05, 1.0, 1.1, -0.15, 0, 0, 0, 100),
+            OptionLeg("short_call", "sell", "call", 110, "2026-10-16", 1, 1.05, 1.0, 1.1, 0.15, 0, 0, 0, 100),
+        ],
+        net_credit=2.05,
+        estimated_bpr=1000,
+        greeks=Greeks(),
+        liquidity_score=1,
+        score=1,
+    )
+    portfolio = PortfolioState(100_000, 100_000, 0, 0)
+    working_result = PlanRunResult(
+        plan_run_id="run_2026-08-17T12:00:00Z",
+        ideas=[], candidates=[candidate],
+        plans=[Plan("retire-working-plan", 1, "eligible", [candidate], 1, 1000, 1, 99_000, portfolio, portfolio, operator_action="approve")],
+        daily_plan_rows=[], metrics={"observed_at": "2026-08-17T12:00:00Z"},
+        idea_diagnostics=[], rejection_summary=[],
+    )
+
+    class WorkingMarket:
+        def chain_snapshot(self, underlying):  # noqa: ANN001
+            return ChainSnapshot(
+                chain_snapshot_id="retire-working-chain",
+                underlying=underlying,
+                captured_at="2026-08-17T12:00:00Z",
+                underlying_price=100,
+                quotes=[
+                    OptionQuote("XYZ", "2026-10-16", "put", 90, 1.0, 1.1, -0.15, 0, 0, 0, 0.2, 100),
+                    OptionQuote("XYZ", "2026-10-16", "call", 110, 1.0, 1.1, 0.15, 0, 0, 0, 0.2, 100),
+                ],
+                source="fixture",
+            )
+
+    from kamandal_v2.strategy_engine import planning
+
+    monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: working_result)
+    monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: WorkingMarket())
+    first = run_unified_books(
+        load_control(), universe_rows=universe, playbook_rows=shadow_rows,
+        idea_paths=[], store=store, audit_root=tmp_path / "audit",
+    )
+    assert first.shadow.handoffs[0]["adapter_state"] == "working"
+
+    shadow_rows[0]["mode"] = "live"
+    second = run_unified_books(
+        load_control(), universe_rows=universe, playbook_rows=shadow_rows,
+        idea_paths=[], store=store, audit_root=tmp_path / "audit-2",
+    )
+
+    assert second.shadow.errors == ()
+    typed = CsaStore(database, read_only=True)
+    assert typed.working_shadow_orders() == []
+    assert typed.rows("csa_shadow_order_intents")[0]["status"] == "missed"
+    lifecycle = typed.rows("csa_lifecycles")[0]
+    assert lifecycle["status"] == "entry_missed"
+    fill = json.loads(typed.rows("csa_shadow_fills")[-1]["payload"])
+    assert fill["quote_evidence"]["blocking"]["reason"] == "playbook_no_longer_routed_to_shadow"
 
 
 def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection(tmp_path, monkeypatch) -> None:  # noqa: ANN001

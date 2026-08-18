@@ -9,12 +9,12 @@ with this source-level entry point.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
 
-from kamandal_v2.domain.models import Idea, Playbook, PortfolioState, UniverseEntry
+from kamandal_v2.domain.models import ChainSnapshot, Idea, OptionLeg, Playbook, PortfolioState, UniverseEntry
 from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, _market_provider, run_plan
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import write_daily_plan
@@ -24,7 +24,7 @@ from kamandal_v2.strategy_engine.lifecycle import freeze_lifecycle_policy
 from kamandal_v2.strategy_engine.policy import ExecutionMode, PlaybookPolicy, PolicyCompilation, compile_playbook_policies
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, policy_tables_hash
-from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode, stable_csa_id
+from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, ShadowFill, SourceMode, stable_csa_id
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
 from kamandal_v2.strategy_lanes.store import CsaStore
@@ -33,7 +33,6 @@ from kamandal_v2.strategy_lanes.lane_common import propose_action
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.strategy_engine.event_timing import entry_session_due
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
-from kamandal_v2.strategy_lanes.runtime import _advance_working_orders
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +121,40 @@ def _run_book(
     supplied_policy_hash: str = "",
 ) -> PlanningBook:
     selected = tuple(policy for policy in policies if policy.mode is mode)
+    mode_config = deepcopy(config)
+    mode_config.setdefault("runtime", {})["mode"] = mode.value
+    live_renderer = None
+    market_override = None
+    if mode is ExecutionMode.SHADOW:
+        mode_config.setdefault("execution", {})["approval_mode"] = "shadow_auto_top_plan"
+        working_store = CsaStore(store.sqlite_path)
+        working_orders = working_store.working_shadow_orders()
+        if working_orders:
+            active_playbook_ids = {policy.playbook_id for policy in selected}
+            active_symbols = {
+                ticket.underlying
+                for ticket, _attempt in working_orders
+                if _working_shadow_playbook_id(working_store, ticket) in active_playbook_ids
+            }
+            snapshots: dict[str, ChainSnapshot] = {}
+            errors: list[str] = []
+            if active_symbols:
+                market_override = _market_provider(mode_config, provider=provider, store=store)
+                for symbol in sorted(active_symbols):
+                    try:
+                        snapshots[symbol] = market_override.chain_snapshot(symbol)
+                    except Exception as exc:  # noqa: BLE001 - the book receipt owns the failure.
+                        errors.append(f"{symbol}: working shadow market unavailable: {type(exc).__name__}: {exc}")
+            _advance_working_shadow_orders(
+                working_store,
+                working_orders,
+                snapshots,
+                active_playbook_ids=active_playbook_ids,
+                observed_at=_planning_observed_at(mode_config),
+                errors=errors,
+            )
+            if errors:
+                return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, tuple(errors))
     if not selected:
         return PlanningBook(mode, (), None, ())
     if mode is ExecutionMode.LIVE:
@@ -132,39 +165,12 @@ def _run_book(
         )
         if snapshot_error:
             return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (snapshot_error,))
-    mode_config = deepcopy(config)
-    mode_config.setdefault("runtime", {})["mode"] = mode.value
-    live_renderer = None
-    if mode is ExecutionMode.SHADOW:
-        mode_config.setdefault("execution", {})["approval_mode"] = "shadow_auto_top_plan"
-    else:
+    if mode is ExecutionMode.LIVE:
         from kamandal_v2.live.advisory import _live_candidate_policy, live_config, render_live_plan_rows
 
         mode_config = live_config(mode_config)
         live_renderer = (render_live_plan_rows, _live_candidate_policy)
     playbooks = [Playbook.from_row(policy.fields) for policy in selected]
-    market_override = None
-    if mode is ExecutionMode.SHADOW:
-        working_orders = CsaStore(store.sqlite_path).working_shadow_orders()
-        if working_orders:
-            market_override = _market_provider(mode_config, provider=provider, store=store)
-            snapshots = {}
-            errors: list[str] = []
-            for symbol in sorted({ticket.underlying for ticket, _attempt in working_orders}):
-                try:
-                    snapshots[symbol] = market_override.chain_snapshot(symbol)
-                except Exception as exc:  # noqa: BLE001 - the book receipt owns the failure.
-                    errors.append(f"{symbol}: working shadow market unavailable: {type(exc).__name__}: {exc}")
-            _advance_working_orders(
-                CsaStore(store.sqlite_path),
-                working_orders,
-                snapshots,
-                active_policy_hashes={_shadow_csa_policy(policy).policy_hash for policy in selected},
-                observed_at=_planning_observed_at(mode_config),
-                errors=errors,
-            )
-            if errors:
-                return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, tuple(errors))
     def candidate_postprocessor(candidates: list[Any], current_store: LocalStore, current_config: dict[str, Any], portfolio: PortfolioState) -> None:
         _gate_earnings_calendar_entries(candidates, selected, sqlite_path=current_store.sqlite_path, observed_at=_planning_observed_at(current_config))
         if live_renderer is not None:
@@ -216,6 +222,158 @@ def _run_book(
         store.event("unified_shadow_plan_auto_approved", {"plan_run_id": result.plan_run_id, "plan_id": result.plans[0].plan_id, "handoffs": handoffs})
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (), tuple(handoffs))
     return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, ())
+
+
+def _advance_working_shadow_orders(
+    store: CsaStore,
+    working_orders: list[tuple[Any, int]],
+    snapshots: dict[str, ChainSnapshot],
+    *,
+    active_playbook_ids: set[str],
+    observed_at: str,
+    errors: list[str],
+) -> int:
+    """Continue frozen shadow entry tickets without consulting current policy details.
+
+    The current Sheet controls whether a playbook remains routed to shadow.  A
+    working ticket's price path and fill policy were frozen when it was created;
+    recompiling the same playbook must not rewrite or strand that in-flight
+    decision.  Ineligible or structurally orphaned shadow tickets are retired as
+    missed evidence instead of failing the entire planning invocation.
+    """
+
+    filled_count = 0
+    adapter = ShadowExecutionAdapter()
+    for ticket, last_attempt in working_orders:
+        lifecycle = store.lifecycle(ticket.lifecycle_id)
+        playbook_id = _working_shadow_playbook_id(store, ticket, lifecycle=lifecycle)
+        if playbook_id not in active_playbook_ids:
+            _retire_working_shadow_order(
+                store,
+                ticket,
+                lifecycle,
+                last_attempt=last_attempt,
+                observed_at=observed_at,
+                reason="playbook_no_longer_routed_to_shadow",
+                playbook_id=playbook_id,
+            )
+            continue
+        if lifecycle is None:
+            _retire_working_shadow_order(
+                store,
+                ticket,
+                lifecycle,
+                last_attempt=last_attempt,
+                observed_at=observed_at,
+                reason="lifecycle_missing",
+                playbook_id=playbook_id,
+            )
+            continue
+        if lifecycle.version != ticket.lifecycle_version or lifecycle.status != "proposed":
+            _retire_working_shadow_order(
+                store,
+                ticket,
+                lifecycle,
+                last_attempt=last_attempt,
+                observed_at=observed_at,
+                reason="lifecycle_no_longer_proposed",
+                playbook_id=playbook_id,
+            )
+            continue
+        snapshot = snapshots.get(ticket.underlying)
+        if snapshot is None:
+            # A provider failure is retryable and remains an honest shadow-book
+            # failure.  Do not silently consume the ticket without market data.
+            if not any(error.startswith(f"{ticket.underlying}:") for error in errors):
+                errors.append(f"{ticket.ticket_id}: working shadow order lacks fresh market state")
+            continue
+        fill_policy = ticket.metadata.get("fill_policy") or {}
+        try:
+            fill = adapter.simulate_fill(
+                ticket,
+                _working_ticket_quotes(ticket, snapshot),
+                fill_policy,
+                observed_at=observed_at,
+                attempt=last_attempt + 1,
+            )
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{ticket.ticket_id}: working shadow attempt failed: {type(exc).__name__}: {exc}")
+            continue
+        store.save_shadow_fill(fill)
+        if fill.status == "filled":
+            store.save_lifecycle(adapter.adopt_fill(lifecycle, ticket, fill))
+            filled_count += 1
+        elif fill.status == "missed":
+            store.save_lifecycle(replace(lifecycle, status="entry_missed", updated_at=observed_at))
+    return filled_count
+
+
+def _working_shadow_playbook_id(
+    store: CsaStore,
+    ticket: Any,
+    *,
+    lifecycle: LifecycleState | None = None,
+) -> str:
+    lifecycle = lifecycle if lifecycle is not None else store.lifecycle(ticket.lifecycle_id)
+    return str(
+        ticket.metadata.get("playbook_id")
+        or ((lifecycle.metadata if lifecycle is not None else {}).get("playbook_id"))
+        or ""
+    )
+
+
+def _retire_working_shadow_order(
+    store: CsaStore,
+    ticket: Any,
+    lifecycle: LifecycleState | None,
+    *,
+    last_attempt: int,
+    observed_at: str,
+    reason: str,
+    playbook_id: str,
+) -> None:
+    attempt = max(last_attempt + 1, 0)
+    fill = ShadowFill(
+        fill_id=stable_csa_id("shadow-fill", [ticket.ticket_id, attempt, observed_at, "missed", reason]),
+        ticket_id=ticket.ticket_id,
+        lifecycle_id=ticket.lifecycle_id,
+        status="missed",
+        attempt=attempt,
+        natural_price=0.0,
+        working_price=float(ticket.limit_price),
+        filled_price=None,
+        filled_at=observed_at,
+        quote_evidence={
+            "blocking": {
+                "reason": reason,
+                "playbook_id": playbook_id,
+                "resolution": "retired_without_effect",
+            }
+        },
+    )
+    store.save_shadow_fill(fill)
+    if (
+        lifecycle is not None
+        and lifecycle.version == ticket.lifecycle_version
+        and lifecycle.status == "proposed"
+    ):
+        store.save_lifecycle(replace(lifecycle, status="entry_missed", updated_at=observed_at))
+
+
+def _working_ticket_quotes(ticket: Any, snapshot: ChainSnapshot) -> dict[str, dict[str, Any]]:
+    by_instrument = {
+        occ_symbol(snapshot.underlying, OptionLeg.from_quote(quote, role="quote", side="buy")): quote
+        for quote in snapshot.quotes
+    }
+    return {
+        leg.instrument_id: {
+            "bid": by_instrument[leg.instrument_id].bid,
+            "ask": by_instrument[leg.instrument_id].ask,
+            "fresh": True,
+        }
+        for leg in ticket.legs
+        if leg.instrument_id in by_instrument
+    }
 
 
 def _bind_selected_live_lifecycle(
