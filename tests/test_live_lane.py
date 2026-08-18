@@ -950,6 +950,7 @@ def test_live_execute_blocks_stage_ticket_when_daily_snapshot_is_missing(tmp_pat
         "stage_authorized": True,
     })
     store.save_live_order_intent(ticket, status="stage_approved_pending_submit")
+    monkeypatch.setenv("KAMANDAL_STRATEGY_POLICY_SNAPSHOT_DIR", str(tmp_path / "missing-policy-snapshots"))
     monkeypatch.setattr("kamandal_v2.live.execution.pull_sheet_tables", lambda _config: {"daily_plan": [], "playbooks": []})
 
     executed = execute_live_approved(_live_control(), submit=False, store=store)
