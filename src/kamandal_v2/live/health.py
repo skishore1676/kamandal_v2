@@ -124,7 +124,10 @@ def run_live_health(
         group_id = str(group.get("group_id") or "")
         if not group_id:
             continue
-        mark = store.latest_live_position_mark(group_id)
+        mark = (
+            store.latest_canonical_live_lifecycle_mark(group_id)
+            or store.latest_live_position_mark(group_id)
+        )
         if not mark:
             continue
         group_mark = _mark_overview(group_id, mark, config=config)
@@ -466,6 +469,8 @@ def _mark_overview(
     return {
         "group_id": group_id,
         "underlying": str(mark.get("underlying") or ""),
+        "mark_source": str(mark.get("mark_source") or "legacy_live_position_mark"),
+        "profit_pct": float(mark.get("profit_pct") or 0.0),
         "target_progress_pct": float(mark.get("target_progress_pct") or 0.0),
         "trigger_progress_pct": float(mark.get("trigger_progress_pct") or 0.0),
         "target_reached": profit_target_reached(mark, config),
@@ -629,7 +634,7 @@ def _scale_summary(status: str, events: list[dict[str, Any]]) -> str:
 
 
 def _risk_overview(store: LocalStore, config: dict[str, Any]) -> dict[str, Any]:
-    snapshot = store.latest_account_snapshot()
+    snapshot = store.latest_account_snapshot(mode="live")
     portfolio = config.get("portfolio") or {}
     target_pct = _optional_float(portfolio.get("target_max_bpr_utilization_pct"))
     hard_pct = _optional_float(portfolio.get("hard_max_bpr_utilization_pct"))

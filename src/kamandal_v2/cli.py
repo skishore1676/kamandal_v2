@@ -477,6 +477,7 @@ def main() -> None:
         result = activate_correspondent_sources(
             settings,
             universe_symbols=[entry.symbol for entry in universe if entry.enabled],
+            store=LocalStore(),
         )
         print(json.dumps(result.to_dict(), indent=2))
         return

@@ -11,6 +11,7 @@ from typing import Any
 from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.live.health import entry_health_gate, run_live_health
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
 
 
 def _make_open_group_with_mark(
@@ -68,6 +69,52 @@ def test_live_health_green_for_clean_book(tmp_path: Path) -> None:
     assert report["counts"]["reconciliation_blockers"] == 0
     assert report["counts"]["loss_watch_groups"] == 0
     assert report["reasons"] == []
+
+
+def test_live_health_prefers_fresh_canonical_lifecycle_mark(tmp_path: Path) -> None:
+    database = tmp_path / "kamandal_v2.db"
+    store = LocalStore(database)
+    _make_open_group_with_mark(store, "group_canonical", target_progress=150.0, trigger_progress=100.0)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    lifecycle = {
+        "lifecycle_id": "adopt:group_canonical",
+        "opportunity_id": "fixture",
+        "lane": "generic_close_only",
+        "version": 1,
+        "status": "open",
+        "active_legs": [],
+        "cashflow_ledger": [{"amount": -2.0}],
+        "opened_at": "2026-08-18T14:00:00Z",
+        "updated_at": "2026-08-18T20:15:00Z",
+        "policy_hash": "fixture-policy",
+        "metadata": {
+            "execution_mode": "live",
+            "legacy_source_id": "group_canonical",
+            "underlying": "AAPL",
+            "active_cost_basis": 2.0,
+            "contract_multiplier": 100,
+            "mark_pnl_price": 0.1,
+            "mark_profit_pct": 5.0,
+            "last_marked_at": "2026-08-18T20:15:00Z",
+            "compiled_management_policy": {"resolved_fields": {"profit_target_pct": "50"}},
+        },
+    }
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO csa_lifecycles (id, opportunity_id, lane, version, status, opened_at, updated_at, policy_hash, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                lifecycle["lifecycle_id"], lifecycle["opportunity_id"], lifecycle["lane"],
+                lifecycle["version"], lifecycle["status"], lifecycle["opened_at"],
+                lifecycle["updated_at"], lifecycle["policy_hash"], json.dumps(lifecycle),
+            ),
+        )
+
+    report = run_live_health(store)
+
+    assert report["counts"]["target_reached_groups"] == 0
+    assert report["group_marks"][0]["mark_source"] == "canonical_lifecycle"
+    assert report["group_marks"][0]["profit_pct"] == 5.0
+    assert report["group_marks"][0]["target_progress_pct"] == 10.0
 
 
 def test_live_health_does_not_page_for_midpoint_only_profit_target(tmp_path: Path) -> None:

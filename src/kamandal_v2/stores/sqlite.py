@@ -409,35 +409,58 @@ class LocalStore:
                 (snapshot.chain_snapshot_id, snapshot.underlying, json.dumps(snapshot.to_dict(), sort_keys=True)),
             )
 
-    def save_account_snapshot(self, snapshot_id: str, portfolio: PortfolioState) -> None:
+    def save_account_snapshot(
+        self,
+        snapshot_id: str,
+        portfolio: PortfolioState,
+        *,
+        mode: str = "live",
+    ) -> None:
+        book_mode = _account_book_mode(mode)
+        payload = portfolio.to_dict()
+        payload["_book_mode"] = book_mode
+        payload["_source_snapshot_id"] = snapshot_id
+        storage_id = f"{book_mode}:{snapshot_id}"
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO account_snapshots VALUES (?, ?)",
-                (snapshot_id, json.dumps(portfolio.to_dict(), sort_keys=True)),
+                (storage_id, json.dumps(payload, sort_keys=True)),
             )
 
-    def latest_account_snapshot(self) -> dict[str, Any] | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT id, payload FROM account_snapshots ORDER BY rowid DESC LIMIT 1",
-            ).fetchone()
-        if not row:
-            return None
-        payload = json.loads(row["payload"])
-        payload["_snapshot_id"] = row["id"]
-        return payload
-
-    def recent_account_snapshots(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+    def latest_account_snapshot(self, *, mode: str | None = None) -> dict[str, Any] | None:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT id, payload FROM account_snapshots ORDER BY rowid DESC LIMIT ?",
-                (int(limit),),
+                "SELECT id, payload FROM account_snapshots ORDER BY rowid DESC",
             ).fetchall()
+        wanted = _account_book_mode(mode) if mode is not None else None
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if wanted is not None and payload.get("_book_mode") != wanted:
+                continue
+            payload["_snapshot_id"] = row["id"]
+            return payload
+        return None
+
+    def recent_account_snapshots(
+        self,
+        *,
+        limit: int = 1000,
+        mode: str | None = None,
+    ) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, payload FROM account_snapshots ORDER BY rowid DESC",
+            ).fetchall()
+        wanted = _account_book_mode(mode) if mode is not None else None
         snapshots = []
         for row in rows:
             payload = json.loads(row["payload"])
+            if wanted is not None and payload.get("_book_mode") != wanted:
+                continue
             payload["_snapshot_id"] = row["id"]
             snapshots.append(payload)
+            if len(snapshots) >= int(limit):
+                break
         return snapshots
 
     def save_candidates(self, plan_run_id: str, candidates: list[Candidate]) -> None:
@@ -1026,6 +1049,70 @@ class LocalStore:
             return None
         return json.loads(row["payload"])
 
+    def latest_canonical_live_lifecycle_mark(self, group_id: str) -> dict[str, Any] | None:
+        """Project the canonical lifecycle mark for a reconciled live group.
+
+        During convergence, adopted lifecycle rows retain the pre-cutover live
+        group id in metadata.  Reporting should prefer their five-minute mark
+        over the retired manager's older ``live_position_marks`` projection.
+        """
+
+        if not group_id:
+            return None
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT payload FROM csa_lifecycles "
+                    "WHERE lower(status) IN ('open','pending_live_submission') "
+                    "ORDER BY updated_at DESC, rowid DESC"
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return None
+        for row in rows:
+            payload = json.loads(row["payload"])
+            metadata = payload.get("metadata") or {}
+            if str(metadata.get("execution_mode") or "") != "live":
+                continue
+            owner_ids = {
+                str(metadata.get("legacy_source_id") or ""),
+                str(metadata.get("live_group_id") or ""),
+                str(metadata.get("group_id") or ""),
+            }
+            if group_id not in owner_ids:
+                continue
+            marked_at = str(metadata.get("last_marked_at") or "")
+            if not marked_at:
+                return None
+            compiled = metadata.get("compiled_management_policy") or {}
+            fields = compiled.get("resolved_fields") if isinstance(compiled, dict) else {}
+            fields = fields if isinstance(fields, dict) else {}
+            target_pct = _float(fields.get("profit_target_pct"), 0.0)
+            profit_pct = _float(metadata.get("mark_profit_pct"), 0.0)
+            entry_price = abs(_float(metadata.get("active_cost_basis"), 0.0))
+            if entry_price <= 0:
+                cashflows = payload.get("cashflow_ledger") or []
+                if cashflows:
+                    entry_price = abs(_float(cashflows[0].get("amount"), 0.0))
+            multiplier = max(_float(metadata.get("contract_multiplier"), 100.0), 1.0)
+            pnl = _float(metadata.get("mark_pnl_price"), 0.0) * multiplier
+            target_profit = entry_price * (target_pct / 100.0) * multiplier
+            target_progress = (pnl / target_profit * 100.0) if target_profit > 0 else 0.0
+            return {
+                "underlying": str(metadata.get("underlying") or ""),
+                "pnl_mid": pnl,
+                "pnl_natural": pnl,
+                "target_profit": target_profit,
+                "target_progress_pct": target_progress,
+                "trigger_progress_pct": target_progress,
+                "profit_pct": profit_pct,
+                "marked_at": marked_at,
+                "quote_fresh": True,
+                "mark_source": "canonical_lifecycle",
+                "loss_watch": False,
+                "max_loss_watch": False,
+            }
+        return None
+
     def live_position_mark_stats(self, group_id: str) -> dict[str, Any]:
         if not group_id:
             return {"mfe": None, "mae": None, "marks": 0}
@@ -1556,3 +1643,10 @@ def _float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _account_book_mode(value: str | None) -> str:
+    mode = str(value or "").strip().lower()
+    if mode not in {"live", "shadow"}:
+        raise ValueError(f"account snapshot mode must be live or shadow, got {value!r}")
+    return mode

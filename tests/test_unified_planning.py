@@ -5,15 +5,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, OptionLeg, OptionQuote, Plan, PortfolioState
+from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, Idea, OptionLeg, OptionQuote, Plan, Playbook, PortfolioState, UniverseEntry
+from kamandal_v2.planner.candidate_builder import _match_rejections
 from kamandal_v2.planner.engine import PlanRunResult
 from kamandal_v2.seed import build_seed_tables, seed_headers
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
 from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, capture_daily_policy_snapshot, current_trading_date, policy_tables_hash
 from kamandal_v2.strategy_lanes.operator_policy import OperatorPolicyBundle
+from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
 from kamandal_v2.strategy_lanes.store import CsaStore
-from kamandal_v2.strategy_engine.planning import run_unified_books
+from kamandal_v2.strategy_engine.planning import _retire_orphaned_pending_live_lifecycles, run_unified_books
 from kamandal_v2.live.execution import execute_live_approved
 
 
@@ -22,6 +24,35 @@ def test_unified_planner_does_not_import_deprecated_scanner_runtime() -> None:
 
     source = Path(planning.__file__).read_text(encoding="utf-8")
     assert "kamandal_v2.strategy_lanes.runtime" not in source
+
+
+def test_orphaned_pending_live_lifecycle_retires_before_next_plan(tmp_path) -> None:  # noqa: ANN001
+    store = _migrated_store(tmp_path)
+    typed = CsaStore(store.sqlite_path)
+    typed.save_lifecycle(
+        LifecycleState(
+            lifecycle_id="orphan-live-entry",
+            opportunity_id="orphan-opportunity",
+            lane=LaneId.GENERIC_CLOSE_ONLY,
+            version=1,
+            status="pending_live_submission",
+            active_legs=(),
+            cashflow_ledger=(),
+            opened_at="2026-08-17T14:30:00Z",
+            updated_at="2026-08-17T14:30:00Z",
+            policy_hash="fixture-policy",
+            metadata={
+                "execution_mode": "live",
+                "unified_plan_id": "old-plan",
+                "candidate_id": "old-candidate",
+            },
+        )
+    )
+
+    assert _retire_orphaned_pending_live_lifecycles(store) == 1
+    lifecycle = typed.lifecycle("orphan-live-entry")
+    assert lifecycle.status == "entry_missed"
+    assert lifecycle.metadata["entry_retirement_reason"] == "guarded_open_intent_not_active"
 
 
 def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
@@ -193,6 +224,46 @@ def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> 
     assert result.compilation.ok
     assert any(idea.source == "market_scan" for idea in result.shadow.result.ideas)
     assert any(idea.source == "portfolio_hedge" for idea in result.live.result.ideas)
+    assert result.shadow.result.metrics["match_gate_mode"] == result.live.result.metrics["match_gate_mode"] == "strict"
+    assert result.shadow.result.metrics["candidate_filter_mode"] == result.live.result.metrics["candidate_filter_mode"] == "strict"
+
+
+def test_market_scan_uses_quantitative_gates_without_invented_thesis_tags() -> None:
+    idea = Idea.from_dict(
+        {
+            "idea_id": "market_scan:XYZ",
+            "source": "market_scan",
+            "underlying": "XYZ",
+            "direction": "neutral",
+            "horizon_days": 45,
+            "operator_status": "approved",
+        }
+    )
+    entry = UniverseEntry.from_row({"symbol": "XYZ", "enabled": "TRUE", "profile": "large_stocks"})
+    playbook = Playbook.from_row(
+        {
+            "playbook_id": "short_strangle_shadow",
+            "enabled": "TRUE",
+            "strategy_family": "short_strangle",
+            "structure": "short_strangle",
+            "profiles": "large_stocks",
+            "applicable_direction": "neutral",
+            "applicable_thesis_tags": "vol_contraction, range_bound",
+            "applicable_horizon_min": "30",
+            "applicable_horizon_max": "60",
+            "iv_percentile_min": "40",
+            "iv_percentile_max": "100",
+            "iv_rank_min": "30",
+            "iv_rank_max": "100",
+        }
+    )
+
+    reasons = _match_rejections(
+        idea, entry, playbook, 55.0, 45.0, 0.35, "clear", underlying_price=100.0,
+    )
+
+    assert "thesis_tags_mismatch" not in reasons
+    assert reasons == []
 
 
 def test_unified_books_only_project_when_explicitly_requested(tmp_path, monkeypatch) -> None:  # noqa: ANN001

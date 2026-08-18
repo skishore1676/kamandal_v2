@@ -89,6 +89,32 @@ def test_drawdown_within_limit_allows(tmp_path: Path) -> None:
     assert decision.reasons == []
 
 
+def test_shadow_account_peak_cannot_trip_live_drawdown_breakers(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    store.save_account_snapshot(
+        f"run_{(NOW - timedelta(hours=2)).strftime('%Y%m%dT%H%M%S')}Z",
+        PortfolioState(account_size=20_000, buying_power=9_300, bpr_used=10_700, positions_count=3),
+        mode="shadow",
+    )
+    store.save_account_snapshot(
+        f"run_{(NOW - timedelta(hours=1)).strftime('%Y%m%dT%H%M%S')}Z",
+        PortfolioState(account_size=11_500, buying_power=9_250, bpr_used=2_250, positions_count=5),
+        mode="live",
+    )
+    store.save_account_snapshot(
+        f"run_{NOW.strftime('%Y%m%dT%H%M%S')}Z",
+        PortfolioState(account_size=11_600, buying_power=9_260, bpr_used=2_340, positions_count=5),
+        mode="live",
+    )
+
+    decision = evaluate_entry_risk(store, _enabled_config(max_account_snapshot_age_minutes=180), now=NOW)
+
+    assert decision.blocked is False
+    assert decision.reasons == []
+    assert store.latest_account_snapshot(mode="live")["account_size"] == 11_600
+    assert store.latest_account_snapshot(mode="shadow")["account_size"] == 20_000
+
+
 def test_stale_account_snapshot_blocks_entries_when_configured(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     _snapshot(store, NOW - timedelta(hours=4), 10_000)

@@ -122,6 +122,11 @@ all normalize into a common signal contract. Adding another correspondent
 normally adds a collector/profile/translator, not another planner or manager.
 Once normalized, the signal is evaluated by every compatible enabled playbook.
 
+Authored ideas may carry thesis tags. A `market_scan` is different: it is a
+quantitative search requested by an enabled playbook, so its IV, liquidity,
+event, price, structure, and portfolio gates determine eligibility. It must not
+invent human thesis tags merely to satisfy the playbook it is scanning for.
+
 ### Universe renewal is a governed feedback loop
 
 The enabled universe is a trading-safety allowlist, not an extraction filter.
@@ -186,7 +191,7 @@ four outcome counts separately from process health: evidence observations,
 unique outside-universe candidates, candidates passing tradability checks, and
 rows published.
 
-The current implementation is scheduled but not effective. On deployed oldmac,
+At the August 15 architecture review, the implementation was scheduled but not effective. On deployed oldmac,
 the universe proposer naturally returned `status=ok` with zero proposals on
 every weekday from August 7 through August 14, 2026. The Sheet still contained
 85 enabled rows and no proposed rows, and the 780 stored ideas contained no
@@ -305,7 +310,9 @@ The resulting engine has three parts:
 1. **Selection brain:** the established portfolio planner evaluates all enabled
    playbooks and chooses separate live and shadow plans. One invocation may run
    both books, but they have independent candidate sets, portfolio state,
-   results, and failure receipts. Shadow cannot consume or veto live capacity.
+   results, and failure receipts. Every persisted account snapshot carries an
+   explicit `live` or `shadow` book identity; live risk and health may read only
+   live history. Shadow cannot consume or veto live capacity.
 2. **Lifecycle brain:** the generalized strategy-lane machinery owns opens,
    holds, adjustments, rolls, and closes for every selected trade.
 3. **Effect boundary:** shadow simulation or the existing guarded live ledger,

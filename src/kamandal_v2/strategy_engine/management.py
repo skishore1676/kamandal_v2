@@ -44,13 +44,16 @@ def run_unified_lifecycle_management(
 ) -> UnifiedManagementReceipt:
     """Evaluate all canonical lifecycle ownership in deterministic order."""
     if live_lifecycle_manager is None or shadow_lifecycle_manager is None:
-        from kamandal_v2.strategy_lanes.management_runtime import run_csa_live_management, run_csa_shadow_management
+        from kamandal_v2.strategy_lanes.management_runtime import (
+            run_live_lifecycle_management,
+            run_shadow_lifecycle_management,
+        )
 
         live_lifecycle_manager = live_lifecycle_manager or (
-            lambda: run_csa_live_management(config, sqlite_path=sqlite_path, provider=provider)
+            lambda: run_live_lifecycle_management(config, sqlite_path=sqlite_path, provider=provider)
         )
         shadow_lifecycle_manager = shadow_lifecycle_manager or (
-            lambda: run_csa_shadow_management(config, sqlite_path=sqlite_path, provider=provider)
+            lambda: run_shadow_lifecycle_management(config, sqlite_path=sqlite_path, provider=provider)
         )
     branches = (
         _run_branch("live_lifecycle", live_lifecycle_manager),

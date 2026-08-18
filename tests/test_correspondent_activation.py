@@ -8,6 +8,7 @@ import yaml
 
 from kamandal_v2.intelligence.correspondent_activation import _chart_evaluation_paths, activate_correspondent_sources
 from kamandal_v2.planner.idea_loader import load_ideas
+from kamandal_v2.stores.sqlite import LocalStore
 
 
 PROFILE = Path("config/correspondents/greg_harmon.yaml").resolve()
@@ -92,6 +93,7 @@ def _settings(tmp_path: Path) -> dict:
 
 def test_activation_publishes_eligible_ideas_and_clears_them_when_no_longer_eligible(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
+    store = LocalStore(tmp_path / "kamandal.db")
     commands: list[list[str]] = []
 
     def actionable_runner(args: list[str], _cwd: Path) -> str:
@@ -102,6 +104,7 @@ def test_activation_publishes_eligible_ideas_and_clears_them_when_no_longer_elig
         settings,
         universe_symbols={"TSLA"},
         command_runner=actionable_runner,
+        store=store,
     )
 
     assert activated.status == "succeeded"
@@ -124,6 +127,7 @@ def test_activation_publishes_eligible_ideas_and_clears_them_when_no_longer_elig
         settings,
         universe_symbols={"TSLA"},
         command_runner=lambda _args, _cwd: json.dumps(_packet(actionable=False)),
+        store=store,
     )
 
     assert cleared.planner_idea_count == 0
@@ -147,6 +151,7 @@ def test_activation_failure_clears_previous_active_idea_and_writes_failure_recei
             settings,
             universe_symbols={"TSLA"},
             command_runner=failed_runner,
+            store=LocalStore(tmp_path / "kamandal.db"),
         )
 
     assert load_ideas([active_path]) == []
@@ -155,6 +160,23 @@ def test_activation_failure_clears_previous_active_idea_and_writes_failure_recei
     )
     assert receipt["status"] == "failed_closed"
     assert receipt["effects"]["orders"] is False
+
+
+def test_activation_records_outside_universe_mentions_for_weekly_review(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = LocalStore(tmp_path / "kamandal.db")
+
+    result = activate_correspondent_sources(
+        settings,
+        universe_symbols=set(),
+        command_runner=lambda _args, _cwd: json.dumps(_packet(actionable=True)),
+        store=store,
+    )
+
+    assert result.planner_idea_count == 0
+    candidates = store.discovery_candidates()
+    assert [item["symbol"] for item in candidates] == ["TSLA"]
+    assert candidates[0]["source_profiles"] == ["greg_harmon"]
 
 
 def test_production_x_job_invokes_correspondent_activation_before_llm_extraction() -> None:

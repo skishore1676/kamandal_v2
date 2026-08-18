@@ -77,6 +77,7 @@ def build_daily_report(
 
     event_counts = Counter(e["event_type"] for e in events)
     live_health = _safe_live_health(path, config, now=now)
+    portfolio_books = _portfolio_books(path)
     from kamandal_v2.strategy_lanes.reports import build_csa_scorecard
 
     csa_shadow = build_csa_scorecard(path, trading_date=day)
@@ -117,6 +118,7 @@ def build_daily_report(
         "total_events": len(events),
         "event_type_counts": dict(sorted(event_counts.items())),
         "live_health": live_health,
+        "portfolio_books": portfolio_books,
         "advisory": advisory_metrics,
         "trade_summary": trade_summary,
         "positions": positions[:20],
@@ -152,6 +154,7 @@ def _empty_report(day: date) -> dict[str, Any]:
         "total_events": 0,
         "event_type_counts": {},
         "live_health": {"overall": "NO_DATA", "reasons": []},
+        "portfolio_books": {"live": {}, "shadow": {}},
         "advisory": {},
         "trade_summary": {},
         "positions": [],
@@ -286,6 +289,39 @@ def _safe_live_health(db_path: Path, config: dict[str, Any], now: datetime | Non
         return {"overall": "NO_DATA", "reasons": ["live_health_failed"], "error": str(exc), "counts": {}}
 
 
+def _portfolio_books(db_path: Path) -> dict[str, dict[str, Any]]:
+    from kamandal_v2.stores.sqlite import LocalStore
+
+    store = LocalStore(sqlite_path=db_path, read_only=True)
+    books: dict[str, dict[str, Any]] = {}
+    for mode in ("live", "shadow"):
+        snapshot = store.latest_account_snapshot(mode=mode)
+        if not snapshot:
+            books[mode] = {"snapshot_id": "", "account_size": None, "bpr_used": None, "bpr_used_pct": None}
+            continue
+        account_size = _optional_number(snapshot.get("account_size"))
+        bpr_used = _optional_number(snapshot.get("bpr_used"))
+        bpr_pct = _optional_number(snapshot.get("bpr_used_pct"))
+        if bpr_pct is None and account_size and bpr_used is not None:
+            bpr_pct = bpr_used / account_size * 100.0
+        books[mode] = {
+            "snapshot_id": str(snapshot.get("_snapshot_id") or ""),
+            "account_size": account_size,
+            "bpr_used": bpr_used,
+            "bpr_used_pct": round(bpr_pct, 2) if bpr_pct is not None else None,
+        }
+    return books
+
+
+def _optional_number(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _idea_freshness(db_path: Path) -> dict[str, Any]:
     # Count active idea files + their mtime
     try:
@@ -361,11 +397,15 @@ def render_daily_report_markdown(report: dict[str, Any]) -> str:
     summary = report.get("trade_summary") or {}
     health = report.get("live_health") or {}
     advisory = report.get("advisory") or {}
+    books = report.get("portfolio_books") or {}
+    live_book = books.get("live") or {}
+    shadow_book = books.get("shadow") or {}
     lines = [
         f"# Kamandal Daily — {report.get('trading_date')}",
         "",
         f"- status: `{status.get('level','UNKNOWN')}` reason: `{status.get('reason','')}`",
         f"- health: `{health.get('overall','UNKNOWN')}` reasons: `{','.join(health.get('reasons',[])[:4])}`",
+        f"- live BPR: `{live_book.get('bpr_used_pct')}` shadow BPR: `{shadow_book.get('bpr_used_pct')}`",
         f"- open groups: `{summary.get('live_open_groups',0)}/{summary.get('total_groups',0)}` positions: `{summary.get('live_positions',0)}`",
         f"- intents today: `{summary.get('intents_today',0)}` by_status `{summary.get('intents_by_status',{})}`",
         f"- fills today: `{summary.get('fills_today',0)}` blocked_preflight_failed: `{summary.get('blocked_preflight_failed_today',0)}`",
@@ -409,6 +449,9 @@ def _build_ryg_tables(report: dict[str, Any]) -> dict[str, list[tuple[str, str, 
     counts = health.get("counts") or {}
     freshness = report.get("idea_freshness") or {}
     sheet = report.get("sheet_freshness") or {}
+    books = report.get("portfolio_books") or {}
+    live_book = books.get("live") or {}
+    shadow_book = books.get("shadow") or {}
 
     def ryg_for_level(lvl: str) -> str:
         if lvl == "GREEN": return "🟢"
@@ -438,13 +481,16 @@ def _build_ryg_tables(report: dict[str, Any]) -> dict[str, list[tuple[str, str, 
     live_rows.append(("Blocked preflight", str(blocked), "🟡" if blocked>0 else "🟢", "code 157 duplicates" if blocked else "none"))
     live_rows.append(("Fills today", str(summary.get("fills_today",0)), "🟢", "FILLED"))
     live_rows.append(("Recon open", str(summary.get("recon_open",0)), "🔴" if summary.get("recon_open",0)>0 else "🟢", "needs attention" if summary.get("recon_open",0)>0 else "clean"))
-    live_rows.append(("BPR/reasons", ",".join(health.get("reasons",[])[:2]), ryg_for_level(health_level), "health reasons"))
+    live_bpr = live_book.get("bpr_used_pct")
+    live_rows.append(("Live BPR", str(live_bpr) if live_bpr is not None else "missing", ryg_for_level(health_level), "live-scoped account snapshot"))
 
     # SHADOW: placeholder until shadow_eod wired
     shadow_rows: list[tuple[str, str, str, str]] = []
     shadow_rows.append(("Shadow open", str(summary.get("shadow_open",0)), "🟢", "shadow_fills open"))
     shadow_rows.append(("Shadow closed today", str(summary.get("shadow_closed_today",0)), "🟢", "shadow_fills closed"))
     shadow_rows.append(("Advisory runs", str((report.get("advisory") or {}).get("runs",0)), "🟢", "plan_run events"))
+    shadow_bpr = shadow_book.get("bpr_used_pct")
+    shadow_rows.append(("Shadow BPR", str(shadow_bpr) if shadow_bpr is not None else "missing", "⚪" if shadow_bpr is None else "🟢", "shadow-scoped paper snapshot"))
 
     return {"app": app_rows, "live": live_rows, "shadow": shadow_rows}
 

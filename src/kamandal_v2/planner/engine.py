@@ -97,6 +97,9 @@ def run_plan(
     preflight = _live_overlap_preflight_guard(preflight, store, config)
     match_gate_mode = _match_gate_mode(config)
     candidate_filter_mode = _candidate_filter_mode(config)
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").strip().lower()
+    if mode not in {"live", "shadow"}:
+        raise ValueError(f"runtime.mode must be live or shadow, got {mode!r}")
 
     source_groups = (
         source_groups_factory(loaded_ideas, universe, playbooks, portfolio)
@@ -105,7 +108,7 @@ def run_plan(
     )
     ideas = [idea for group in source_groups for idea in group.ideas]
     store.save_ideas(ideas)
-    store.save_account_snapshot(plan_run_id, portfolio)
+    store.save_account_snapshot(plan_run_id, portfolio, mode=mode)
     candidates = [
         candidate
         for group in source_groups
@@ -148,7 +151,6 @@ def run_plan(
         match_gate_mode,
         candidate_filter_mode,
     )
-    mode = str((config.get("runtime") or {}).get("mode") or "shadow")
     rows = render_daily_plan_rows(plans, mode=mode)
 
     store.save_candidates(plan_run_id, candidates)

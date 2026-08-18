@@ -1,4 +1,4 @@
-"""Shared shadow and guarded-live CSA lifecycle management orchestration."""
+"""Shared shadow and guarded-live lifecycle management orchestration."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ class ManagementRunResult:
         return {**asdict(self), "ok": self.ok}
 
 
-def run_csa_shadow_management(
+def run_shadow_lifecycle_management(
     config: dict[str, Any],
     *,
     sqlite_path: str = "data/kamandal_v2.db",
@@ -62,7 +62,7 @@ def run_csa_shadow_management(
     market: Any | None = None,
     observed_at: str | None = None,
 ) -> ManagementRunResult:
-    return _run_csa_management(
+    return _run_lifecycle_management(
         config,
         sqlite_path=sqlite_path,
         provider=provider,
@@ -73,7 +73,7 @@ def run_csa_shadow_management(
     )
 
 
-def run_csa_live_management(
+def run_live_lifecycle_management(
     config: dict[str, Any],
     *,
     sqlite_path: str = "data/kamandal_v2.db",
@@ -84,7 +84,7 @@ def run_csa_live_management(
 ) -> ManagementRunResult:
     """Stage reusable live close, roll, and adjustment tickets for guarded execution."""
 
-    return _run_csa_management(
+    return _run_lifecycle_management(
         config,
         sqlite_path=sqlite_path,
         provider=provider,
@@ -95,7 +95,7 @@ def run_csa_live_management(
     )
 
 
-def _run_csa_management(
+def _run_lifecycle_management(
     config: dict[str, Any],
     *,
     sqlite_path: str,
@@ -106,7 +106,7 @@ def _run_csa_management(
     execution_mode: str,
 ) -> ManagementRunResult:
     started_at = observed_at or utc_now()
-    run_id = f"csa:{execution_mode}-management:{started_at}"
+    run_id = f"lifecycle:{execution_mode}-management:{started_at}"
     store = CsaStore(sqlite_path)
     baseline_store = LocalStore(sqlite_path, read_only=True)
     writable_live_store = LocalStore(sqlite_path)
@@ -223,8 +223,14 @@ def _run_csa_management(
         policy_snapshot_date,
         policy_snapshot_hash,
     )
-    store.save_run_receipt({"id": run_id, "command": f"csa-{execution_mode}-management", "status": "completed" if result.ok else "completed_with_errors", "started_at": started_at, "completed_at": completed_at, "result": result.to_dict()})
+    store.save_run_receipt({"id": run_id, "command": f"unified-{execution_mode}-lifecycle-management", "status": "completed" if result.ok else "completed_with_errors", "started_at": started_at, "completed_at": completed_at, "result": result.to_dict()})
     return result
+
+
+# Explicit compatibility aliases for retired CLIs and historical tests.  Normal
+# scheduled operation imports the generic owners above.
+run_csa_shadow_management = run_shadow_lifecycle_management
+run_csa_live_management = run_live_lifecycle_management
 
 
 def _active_lifecycle_expirations(lifecycles: list[LifecycleState]) -> tuple[str, ...]:

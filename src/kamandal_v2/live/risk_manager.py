@@ -164,7 +164,7 @@ def _check_snapshot_freshness(
 ) -> None:
     if not max_age_minutes or max_age_minutes <= 0:
         return
-    snapshot = store.latest_account_snapshot()
+    snapshot = store.latest_account_snapshot(mode="live")
     if not snapshot:
         decision.blocked = True
         decision.reasons.append(
@@ -217,7 +217,7 @@ def _check_drawdown(
         return
     cutoff = now - timedelta(days=window_days)
     points: list[tuple[datetime, float]] = []
-    for snapshot in store.recent_account_snapshots(limit=2000):
+    for snapshot in store.recent_account_snapshots(limit=2000, mode="live"):
         stamp = _parse_snapshot_timestamp(str(snapshot.get("_snapshot_id") or ""))
         size = _float_value(snapshot.get("account_size"))
         if stamp is None or size is None or size <= 0:

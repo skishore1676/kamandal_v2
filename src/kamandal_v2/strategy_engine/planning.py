@@ -81,6 +81,7 @@ def run_unified_books(
         }
     )
     active_store = store or LocalStore()
+    _retire_orphaned_pending_live_lifecycles(active_store)
     universe = [UniverseEntry.from_row(row) for row in universe_rows if row.get("symbol")]
     if not compilation.ok:
         errors = compilation.errors
@@ -106,6 +107,60 @@ def run_unified_books(
     return UnifiedPlanningResult(compilation=compilation, live=live, shadow=shadow)
 
 
+def _retire_orphaned_pending_live_lifecycles(store: LocalStore) -> int:
+    """Retire pre-entry lifecycle rows that no longer own a guarded order.
+
+    The lifecycle and guarded intent are one ownership pair.  A pending row
+    without a non-terminal open intent can never fill or be managed, so leaving
+    it pending forever creates a false open owner in reporting.
+    """
+
+    typed = CsaStore(store.sqlite_path)
+    open_intents = store.live_order_intents_by_type("open")
+    active_statuses = {
+        "pending_approval",
+        "stage_approved_pending_submit",
+        "submitted",
+        "working",
+        "replace_pending_cancel",
+        "cancel_pending",
+    }
+    retired = 0
+    for row in typed.rows("csa_lifecycles"):
+        if str(row.get("status") or "") != "pending_live_submission":
+            continue
+        lifecycle = typed.lifecycle(str(row.get("id") or ""))
+        if lifecycle is None or str(lifecycle.metadata.get("execution_mode") or "") != "live":
+            continue
+        plan_id = str(lifecycle.metadata.get("unified_plan_id") or "")
+        candidate_id = str(lifecycle.metadata.get("candidate_id") or "")
+        matching = [
+            ticket
+            for ticket in open_intents
+            if str(ticket.get("plan_id") or "") == plan_id
+            and str(ticket.get("candidate_id") or "") == candidate_id
+        ]
+        if any(str(ticket.get("_ledger_status") or "") in active_statuses for ticket in matching):
+            continue
+        from kamandal_v2.domain.models import utc_now
+
+        typed.save_lifecycle(
+            replace(
+                lifecycle,
+                status="entry_missed",
+                updated_at=utc_now(),
+                metadata={
+                    **lifecycle.metadata,
+                    "entry_retirement_reason": "guarded_open_intent_not_active",
+                },
+            )
+        )
+        retired += 1
+    if retired:
+        store.event("orphaned_pending_live_lifecycles_retired", {"count": retired})
+    return retired
+
+
 def _run_book(
     mode: ExecutionMode,
     policies: tuple[PlaybookPolicy, ...],
@@ -127,6 +182,12 @@ def _run_book(
     market_override = None
     if mode is ExecutionMode.SHADOW:
         mode_config.setdefault("execution", {})["approval_mode"] = "shadow_auto_top_plan"
+        # Shadow is an execution adapter, not a looser strategy.  Promotion
+        # evidence is only comparable when admission uses the live gate policy.
+        live_gates = config.get("live") or {}
+        shadow_gates = mode_config.setdefault("shadow", {})
+        shadow_gates["match_gate_mode"] = str(live_gates.get("match_gate_mode") or "strict")
+        shadow_gates["candidate_filter_mode"] = str(live_gates.get("candidate_filter_mode") or "strict")
         working_store = CsaStore(store.sqlite_path)
         working_orders = working_store.working_shadow_orders()
         if working_orders:

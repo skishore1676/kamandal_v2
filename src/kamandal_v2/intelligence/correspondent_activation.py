@@ -20,6 +20,7 @@ from kamandal_v2.intelligence.correspondent_signals import (
     validate_correspondent_packet,
 )
 from kamandal_v2.paths import resolve_path
+from kamandal_v2.stores.sqlite import LocalStore
 
 
 ACTIVATION_SCHEMA = "kamandal.correspondent_activation.v1"
@@ -55,6 +56,7 @@ def activate_correspondent_sources(
     *,
     universe_symbols: Iterable[str],
     command_runner: CommandRunner | None = None,
+    store: LocalStore | None = None,
 ) -> CorrespondentActivationResult:
     """Translate configured Birdclaw correspondents and publish eligible ideas.
 
@@ -79,6 +81,7 @@ def activate_correspondent_sources(
     since_hours = max(1, int(settings.get("since_hours") or 336))
     limit = max(1, int(settings.get("limit") or 200))
     runner = command_runner or _run_command
+    discovery_store = store or LocalStore()
     universe = {str(symbol).strip().upper() for symbol in universe_symbols if str(symbol).strip()}
     chart_evaluation_paths = _chart_evaluation_paths(settings)
     activated_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -122,6 +125,7 @@ def activate_correspondent_sources(
                 universe_symbols=universe,
                 chart_evaluation_paths=chart_evaluation_paths,
                 output_dir=output_root,
+                store=discovery_store,
             )
             planner_text = imported.planner_ideas_path.read_text(encoding="utf-8")
             planner_payload = yaml.safe_load(planner_text) or {}

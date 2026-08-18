@@ -369,7 +369,15 @@ def _match_rejections(
         reasons.append(f"direction_mismatch:{idea.direction}")
     idea_tags = {tag.lower() for tag in idea.thesis_tags}
     mentioned_match = _mentioned_strategy_matches(idea, playbook)
-    if playbook.applicable_thesis_tags and not idea_tags.intersection(playbook.applicable_thesis_tags) and not mentioned_match:
+    # Market scans are quantitative opportunity searches, not authored theses.
+    # Their IV, liquidity, event, price, and structure gates carry eligibility;
+    # requiring prose tags makes a scan-created idea impossible to admit.
+    if (
+        idea.source != "market_scan"
+        and playbook.applicable_thesis_tags
+        and not idea_tags.intersection(playbook.applicable_thesis_tags)
+        and not mentioned_match
+    ):
         reasons.append("thesis_tags_mismatch")
     if playbook.strategy_family == "narrative_ignition" or playbook.playbook_id.startswith("narrative_ignition"):
         if "structural_break:pass" not in idea.notes:

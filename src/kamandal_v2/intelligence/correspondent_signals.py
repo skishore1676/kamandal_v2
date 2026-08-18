@@ -96,7 +96,7 @@ def import_correspondent_signals(
         record["record_id"] = _record_id(record, profile_text=profile_text)
     if store is not None:
         for record in translated:
-            if "outside_configured_universe" not in (record.get("blockers") or []):
+            if "outside_configured_universe" not in (record.get("planner_blockers") or []):
                 continue
             symbol = str(record.get("symbol") or "").strip().upper()
             if symbol:

@@ -7,6 +7,7 @@ from typing import Any
 from kamandal_v2.planner.idea_loader import load_ideas
 from kamandal_v2.schemas import MY_IDEAS_HEADER
 from kamandal_v2.sources.my_ideas import convert_rows, import_my_ideas
+from kamandal_v2.stores.sqlite import LocalStore
 
 TODAY = date(2026, 6, 12)
 UNIVERSE = {"AMZN", "TSLA", "SPY", "NVDA"}
@@ -112,7 +113,10 @@ def test_import_writes_yaml_loadable_by_planner_and_statuses_back(tmp_path: Path
         universe_rows=[{"symbol": "AMZN", "enabled": "TRUE"}, {"symbol": "TSLA", "enabled": "TRUE"}],
     )
 
-    result = import_my_ideas({}, ideas_dir=tmp_path / "active", client=client, today=TODAY)
+    result = import_my_ideas(
+        {}, ideas_dir=tmp_path / "active", client=client,
+        store=LocalStore(tmp_path / "kamandal.db"), today=TODAY,
+    )
 
     assert result["imported"] == 1
     assert result["statuses"] == ["imported", "not_in_universe_add_to_universe_tab"]
@@ -134,7 +138,10 @@ def test_import_writes_yaml_loadable_by_planner_and_statuses_back(tmp_path: Path
 def test_bootstrap_creates_tab_with_example_row(tmp_path: Path) -> None:
     client = FakeClient(rows=[], universe_rows=[])
 
-    result = import_my_ideas({}, ideas_dir=tmp_path, client=client, bootstrap=True, today=TODAY)
+    result = import_my_ideas(
+        {}, ideas_dir=tmp_path, client=client, bootstrap=True,
+        store=LocalStore(tmp_path / "kamandal.db"), today=TODAY,
+    )
 
     assert result["status"] == "bootstrapped"
     rows = client.replaced["my_ideas"]
@@ -148,7 +155,10 @@ def test_blank_date_gets_stamped_on_import_writeback(tmp_path: Path) -> None:
         universe_rows=[{"symbol": "AMZN", "enabled": "TRUE"}],
     )
 
-    import_my_ideas({}, ideas_dir=tmp_path, client=client, today=TODAY)
+    import_my_ideas(
+        {}, ideas_dir=tmp_path, client=client,
+        store=LocalStore(tmp_path / "kamandal.db"), today=TODAY,
+    )
 
     written = client.replaced["my_ideas"]
     assert written[0][MY_IDEAS_HEADER.index("date")] == "2026-06-12"

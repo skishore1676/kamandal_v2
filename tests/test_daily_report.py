@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import sqlite3
 
+from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.ops import daily_report
+from kamandal_v2.stores.sqlite import LocalStore
 
 
 def test_report_status_aggregates_live_reconciliation_and_idea_truth() -> None:
@@ -81,3 +83,25 @@ def test_local_store_read_only_mode_cannot_write(tmp_path) -> None:
         assert "readonly" in str(exc).lower()
     else:
         raise AssertionError("read-only LocalStore accepted a write")
+
+
+def test_daily_report_keeps_live_and_shadow_bpr_separate(tmp_path) -> None:
+    database = tmp_path / "store.sqlite"
+    store = LocalStore(database)
+    store.save_account_snapshot(
+        "run_20260818T193000Z",
+        PortfolioState(account_size=11_500, buying_power=9_250, bpr_used=2_250, positions_count=5),
+        mode="live",
+    )
+    store.save_account_snapshot(
+        "run_20260818T193500Z",
+        PortfolioState(account_size=20_000, buying_power=9_300, bpr_used=10_700, positions_count=3),
+        mode="shadow",
+    )
+
+    books = daily_report._portfolio_books(database)
+
+    assert books["live"]["bpr_used_pct"] == 19.57
+    assert books["shadow"]["bpr_used_pct"] == 53.5
+    assert books["live"]["snapshot_id"].startswith("live:")
+    assert books["shadow"]["snapshot_id"].startswith("shadow:")

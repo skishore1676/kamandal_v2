@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from kamandal_v2.strategy_engine.management import run_unified_lifecycle_management
+
+
+def test_scheduled_manager_imports_only_generic_lifecycle_owners() -> None:
+    source = Path("src/kamandal_v2/strategy_engine/management.py").read_text(encoding="utf-8")
+
+    assert "run_csa_live_management" not in source
+    assert "run_csa_shadow_management" not in source
+    assert "run_live_lifecycle_management" in source
+    assert "run_shadow_lifecycle_management" in source
 
 
 def test_unified_management_runs_live_before_shadow_and_isolates_failure() -> None:
