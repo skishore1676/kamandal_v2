@@ -32,6 +32,10 @@ from kamandal_v2.strategy_lanes.policy import CsaPolicy
 
 @pytest.fixture(autouse=True)
 def _isolate_fixture_plans_from_runtime_earnings(monkeypatch) -> None:
+    # Host-side verification must never inherit oldmac's live notification
+    # posture. Tests that exercise receipts opt in explicitly and replace the
+    # sender with a fake below.
+    monkeypatch.setenv("KAMANDAL_ENTRY_TERMINAL_RECEIPT_ENABLED", "false")
     monkeypatch.setattr(
         "kamandal_v2.events.earnings.EarningsStore.latest",
         lambda _self, _symbol, *, source=None: None,
