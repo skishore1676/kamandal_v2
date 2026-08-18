@@ -5,6 +5,7 @@ import sqlite3
 from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.ops import daily_report
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_lanes.reports import _runtime_error_summary
 
 
 def test_report_status_aggregates_live_reconciliation_and_idea_truth() -> None:
@@ -23,6 +24,42 @@ def test_report_status_aggregates_live_reconciliation_and_idea_truth() -> None:
     )
     assert yellow["level"] == "YELLOW"
     assert yellow["reason"] == "no_active_idea_files"
+
+    separated = daily_report._report_status(
+        {"overall": "GREEN", "reasons": []},
+        [],
+        {"active_files": 2},
+        csa_shadow={"runtime_status": "GREEN", "evidence_status": "RED"},
+    )
+    assert separated["level"] == "GREEN"
+    assert separated["domains"] == {
+        "current_live_operations": "GREEN",
+        "current_shadow_runtime": "GREEN",
+        "accumulated_shadow_evidence": "RED",
+    }
+
+
+def test_runtime_error_summary_distinguishes_recovered_from_active_failures() -> None:
+    receipts = [
+        {"started_at": "2026-08-18T14:00:00Z", "command": "manage", "result": {"execution_mode": "live", "errors": ["quote 429"]}},
+        {"started_at": "2026-08-18T14:05:00Z", "command": "manage", "result": {"execution_mode": "live", "errors": []}},
+        {"started_at": "2026-08-18T14:05:01Z", "command": "manage", "result": {"execution_mode": "shadow", "errors": []}},
+    ]
+
+    recovered = _runtime_error_summary(receipts)
+
+    assert recovered == {
+        "runtime_status": "GREEN",
+        "active_run_errors": [],
+        "recovered_run_error_count": 1,
+    }
+    receipts.append(
+        {"started_at": "2026-08-18T14:10:01Z", "command": "manage", "result": {"execution_mode": "shadow", "errors": ["missing quote"]}}
+    )
+    active = _runtime_error_summary(receipts)
+    assert active["runtime_status"] == "RED"
+    assert active["active_run_errors"] == ["missing quote"]
+    assert active["recovered_run_error_count"] == 1
 
 
 def test_live_position_report_excludes_historical_rows() -> None:

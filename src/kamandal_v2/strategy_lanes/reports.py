@@ -60,6 +60,9 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         "policy_hashes": [],
         "primary_blockers": {},
         "run_errors": [],
+        "active_run_errors": [],
+        "recovered_run_error_count": 0,
+        "runtime_status": "NO_DATA",
         "csa_live_intents": 0,
         "zero_broker_effect": True,
         "unexpected_broker_effects": 0,
@@ -105,6 +108,7 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         for receipt in receipts
         for error in ((receipt.get("result") or {}).get("errors") or [])
     ]
+    runtime_summary = _runtime_error_summary(receipts)
     decoded_live_intents = _decoded_payload_rows(live_intents)
     unexpected_broker_effects = sum(
         not bool(item.get("stage_authorized"))
@@ -137,12 +141,42 @@ def build_csa_scorecard(sqlite_path: str | Path, *, trading_date: date | str | N
         "policy_hashes": policy_hashes,
         "primary_blockers": dict(sorted(blockers.items())),
         "run_errors": run_errors,
+        "active_run_errors": runtime_summary["active_run_errors"],
+        "recovered_run_error_count": runtime_summary["recovered_run_error_count"],
+        "runtime_status": runtime_summary["runtime_status"],
         "csa_live_intents": len(decoded_live_intents),
         "zero_broker_effect": zero_broker_effect,
         "unexpected_broker_effects": unexpected_broker_effects,
         "zero_unexpected_broker_effect": zero_unexpected_broker_effect,
         "evidence_status": evidence_status,
         "experiments": experiments,
+    }
+
+
+def _runtime_error_summary(receipts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Separate current runtime state from accumulated evidence quality."""
+
+    if not receipts:
+        return {"runtime_status": "NO_DATA", "active_run_errors": [], "recovered_run_error_count": 0}
+    latest_by_owner: dict[str, dict[str, Any]] = {}
+    for receipt in sorted(receipts, key=lambda item: str(item.get("started_at") or "")):
+        result = receipt.get("result") or {}
+        owner = str(result.get("execution_mode") or receipt.get("command") or "unknown")
+        latest_by_owner[owner] = receipt
+    active_errors = [
+        str(error)
+        for receipt in latest_by_owner.values()
+        for error in (((receipt.get("result") or {}).get("errors")) or [])
+    ]
+    all_errors = [
+        str(error)
+        for receipt in receipts
+        for error in (((receipt.get("result") or {}).get("errors")) or [])
+    ]
+    return {
+        "runtime_status": "RED" if active_errors else "GREEN",
+        "active_run_errors": active_errors,
+        "recovered_run_error_count": max(len(all_errors) - len(active_errors), 0),
     }
 
 

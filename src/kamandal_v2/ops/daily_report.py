@@ -128,7 +128,7 @@ def build_daily_report(
         "idea_freshness": idea_freshness,
         "sheet_freshness": sheet_freshness,
         "csa_shadow": csa_shadow,
-        "status": _report_status(live_health, recon_issues, idea_freshness),
+        "status": _report_status(live_health, recon_issues, idea_freshness, csa_shadow=csa_shadow),
     }
 
 
@@ -367,7 +367,13 @@ def _advisory_metrics(events: list[dict[str, Any]]) -> dict[str, Any]:
     return {"runs": len(advisory), "last": last}
 
 
-def _report_status(live_health: dict[str, Any], recon_issues: list[dict[str, Any]], idea_freshness: dict[str, Any]) -> dict[str, Any]:
+def _report_status(
+    live_health: dict[str, Any],
+    recon_issues: list[dict[str, Any]],
+    idea_freshness: dict[str, Any],
+    *,
+    csa_shadow: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     overall = str(live_health.get("overall", "UNKNOWN")).upper()
     recon_open = [item for item in recon_issues if item.get("status") not in ("retired", "resolved")]
     idea_count = int(idea_freshness.get("active_files") or 0)
@@ -387,7 +393,17 @@ def _report_status(live_health: dict[str, Any], recon_issues: list[dict[str, Any
         reasons.append("open_reconciliation_issues")
     if idea_count == 0:
         reasons.append("no_active_idea_files")
-    return {"level": level, "reason": ",".join(reasons) or "ok", "components": components}
+    shadow = csa_shadow or {}
+    return {
+        "level": level,
+        "reason": ",".join(reasons) or "ok",
+        "components": components,
+        "domains": {
+            "current_live_operations": overall,
+            "current_shadow_runtime": str(shadow.get("runtime_status") or "NO_DATA"),
+            "accumulated_shadow_evidence": str(shadow.get("evidence_status") or "NO_DATA"),
+        },
+    }
 
 
 # -- Rendering ---------------------------------------------------------------
@@ -486,6 +502,12 @@ def _build_ryg_tables(report: dict[str, Any]) -> dict[str, list[tuple[str, str, 
 
     # SHADOW: placeholder until shadow_eod wired
     shadow_rows: list[tuple[str, str, str, str]] = []
+    shadow = report.get("csa_shadow") or {}
+    shadow_runtime = str(shadow.get("runtime_status") or "NO_DATA")
+    shadow_evidence = str(shadow.get("evidence_status") or "NO_DATA")
+    recovered = int(shadow.get("recovered_run_error_count") or 0)
+    shadow_rows.append(("Current runtime", shadow_runtime, ryg_for_level(shadow_runtime), f"active errors={len(shadow.get('active_run_errors') or [])}"))
+    shadow_rows.append(("Day evidence", shadow_evidence, ryg_for_level(shadow_evidence), f"recovered errors={recovered}"))
     shadow_rows.append(("Shadow open", str(summary.get("shadow_open",0)), "🟢", "shadow_fills open"))
     shadow_rows.append(("Shadow closed today", str(summary.get("shadow_closed_today",0)), "🟢", "shadow_fills closed"))
     shadow_rows.append(("Advisory runs", str((report.get("advisory") or {}).get("runs",0)), "🟢", "plan_run events"))
