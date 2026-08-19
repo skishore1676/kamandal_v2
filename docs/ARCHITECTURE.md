@@ -122,6 +122,15 @@ all normalize into a common signal contract. Adding another correspondent
 normally adds a collector/profile/translator, not another planner or manager.
 Once normalized, the signal is evaluated by every compatible enabled playbook.
 
+A correspondent translator asks the configured LLM one bounded question: is
+this post a new `enter`, an `update`, an `exit`, or `ignore`? The answer also
+contains symbol, direction, an optional strategy hint, and one short reason.
+Only `enter` may become a planner idea. The application already knows and
+attaches the source, post text, timestamp, correspondent, and interpreter
+identity; the model is not asked to reproduce an audit packet. Profiles select
+one posture: `explicit_only` or `inference_allowed`. This is prompt policy, not
+temperature tuning or a matrix of confidence thresholds.
+
 Authored ideas may carry thesis tags. A `market_scan` is different: it is a
 quantitative search requested by an enabled playbook, so its IV, liquidity,
 event, price, structure, and portfolio gates determine eligibility. It must not
@@ -525,6 +534,14 @@ projection; stale prior-day plans must never masquerade as today's result.
 Details about individual
 candidates, legs, preflight responses, and Greek contributions stay local in
 SQLite/audit artifacts.
+
+For a Public short strangle, broker error 159 is classified as live entitlement
+rather than invalid strategy construction. It remains a hard live blocker. In
+shadow, the complete Public quote snapshot may continue through the same
+strategy and liquidity gates while BPR is resolved from Tastytrade's exact-leg
+dry run, then a labeled local estimate if Tastytrade is unavailable. The
+candidate records quote and BPR provenance plus `live_eligible=false`; no
+fallback can authorize a Public order.
 
 The sheet may include JSON cells for visibility, especially `trade_bundle_json`,
 `plan_metrics_json`, and `plan_detail_json`. This gives the operator full

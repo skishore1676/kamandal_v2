@@ -2,6 +2,7 @@ schema: kamandal.correspondent_profile.v1
 profile_id: sample_person
 version: "1"
 source_profile_id: sample_person
+interpretation_posture: explicit_only
 
 families:
   swing_entry:

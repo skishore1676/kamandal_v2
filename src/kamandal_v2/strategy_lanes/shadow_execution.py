@@ -40,8 +40,11 @@ class ShadowExecutionAdapter:
             filled_price = None
             quote_evidence["blocking"] = {"missing": missing, "stale": stale, "attempt_exhausted": attempt > max_attempts}
         else:
-            natural_price = _natural_price(ticket, quotes)
-            working_price = _working_price(ticket, increment, attempt)
+            # Compare at the same precision persisted in the receipt. Binary
+            # float residue must not turn an executable 0.48 credit into a
+            # false working order against 0.48000000000000004.
+            natural_price = round(_natural_price(ticket, quotes), 6)
+            working_price = round(_working_price(ticket, increment, attempt), 6)
             fillable = natural_price >= working_price if ticket.order_kind == "credit" else natural_price <= working_price
             status = "filled" if fillable else ("missed" if attempt >= max_attempts else "working")
             filled_price = natural_price if fillable else None

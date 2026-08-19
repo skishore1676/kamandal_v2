@@ -20,6 +20,7 @@ from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.idea_loader import load_ideas
 from kamandal_v2.planner.plan_generator import generate_plans
+from kamandal_v2.planner.shadow_preflight import shadow_preflight_client
 from kamandal_v2.planner.structural_break_gates import annotate_structural_breaks
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import write_daily_plan
@@ -100,6 +101,7 @@ def run_plan(
     mode = str((config.get("runtime") or {}).get("mode") or "shadow").strip().lower()
     if mode not in {"live", "shadow"}:
         raise ValueError(f"runtime.mode must be live or shadow, got {mode!r}")
+    preflight = shadow_preflight_client(config, preflight, provider=provider, mode=mode)
 
     source_groups = (
         source_groups_factory(loaded_ideas, universe, playbooks, portfolio)

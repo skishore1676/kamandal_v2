@@ -2,6 +2,7 @@ schema: kamandal.correspondent_profile.v1
 profile_id: greg_harmon
 version: "1"
 source_profile_id: greg_harmon
+interpretation_posture: explicit_only
 
 families:
   weekly_ideas:

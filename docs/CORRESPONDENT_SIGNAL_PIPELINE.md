@@ -6,7 +6,8 @@ Harmon is the first profile, not a dedicated subsystem.
 ```text
 configured read-only Birdclaw acquisition
   -> sanitized canonical Birdclaw posts + coverage receipt
-  -> profile classification
+  -> one bounded LLM intent question
+  -> profile classification and deterministic validation
   -> durable Kamandal signal records
   -> optional Market Cartographer enrichment
   -> eligibility and lifecycle gates
@@ -15,6 +16,17 @@ configured read-only Birdclaw acquisition
 ```
 
 ## Greg's current semantics
+
+Greg uses `interpretation_posture: explicit_only`. The model returns only:
+
+```json
+{"action":"enter|update|exit|ignore","symbol":"AAPL","direction":"bullish|bearish|neutral","strategy_hint":"short_strangle","reason":"one short sentence"}
+```
+
+Only `enter` continues toward planner eligibility. Language such as "looks to
+expire", "holding", "rolled", "trimmed", or "closed" is an update or exit,
+not a fresh trade. The source record, text, time, profile, and interpreter
+provenance are attached by Kamandal and are not extra model questions.
 
 - `earnings_idea`: explicit strategy language outranks the numbered template. Idea 4
   may emit a fresh `short_strangle` planner input. Ideas 1–3 remain captured but parked
@@ -99,9 +111,10 @@ planner, and production activation is independently visible in
 
 1. Add a Birdclaw source profile identifying the author and post families; enable its
    bounded `acquisition` section when the account should be deliberately monitored.
-2. Add `config/correspondents/<profile>.yaml` mapping those family names to one of the
+2. Add `config/correspondents/<profile>.yaml`, choose
+   `interpretation_posture: explicit_only|inference_allowed`, and map family names to one of the
    supported modes: `chart_watch`, `numbered_template`, `trade_journal`, or `ignore`.
-3. Configure strategy regexes, action regexes, numbered templates, allowed structures,
+3. Configure strategy regexes, numbered templates, allowed structures,
    thesis tags, horizons, and recency windows.
 4. Add one Birdclaw fixture and one Kamandal fixture.
 5. Replay capture, translation, planner loading, and at least one parked case.

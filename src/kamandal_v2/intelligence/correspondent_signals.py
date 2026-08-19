@@ -14,6 +14,7 @@ import yaml
 from pydantic import TypeAdapter, ValidationError
 
 from kamandal_v2.intelligence.chart_seeds import validate_chart_seed_evaluation
+from kamandal_v2.intelligence.llm_client import JsonLlmClient
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -26,7 +27,11 @@ PLANNER_SCHEMA = "kamandal.correspondent_planner_ideas.v1"
 RECEIPT_SCHEMA = "kamandal.correspondent_signal_receipt.v1"
 LIFECYCLE_SCHEMA = "kamandal.correspondent_lifecycle_index.v1"
 ACQUISITION_REFERENCE_SCHEMA = "birdclaw.correspondent_acquisition_reference.v1"
-TRANSLATOR_VERSION = "correspondent-translator-v2"
+TRANSLATOR_VERSION = "correspondent-translator-v3"
+
+SOURCE_INTENT_ACTIONS = {"enter", "update", "exit", "ignore"}
+SOURCE_INTENT_POSTURES = {"explicit_only", "inference_allowed"}
+SOURCE_INTENT_DIRECTIONS = {"bullish", "bearish", "neutral"}
 
 _TIMESTAMP = TypeAdapter(datetime)
 _SYMBOL = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
@@ -72,6 +77,7 @@ def import_correspondent_signals(
     chart_evaluation_paths: Iterable[str | Path] = (),
     output_dir: str | Path = "data/research/correspondent_signals",
     store: LocalStore | None = None,
+    intent_client: JsonLlmClient | None = None,
 ) -> CorrespondentImportResult:
     source_path = resolve_path(input_path)
     source_text = source_path.read_text(encoding="utf-8")
@@ -82,7 +88,8 @@ def import_correspondent_signals(
 
     charts, chart_hashes = _load_chart_evaluations(chart_evaluation_paths)
     universe = {str(symbol).strip().upper() for symbol in universe_symbols if str(symbol).strip()}
-    translated = _translate_packet(packet, profile, universe=universe, charts=charts)
+    source_intents = _interpret_source_intents(packet, profile, intent_client)
+    translated = _translate_packet(packet, profile, universe=universe, charts=charts, source_intents=source_intents)
     identity = {
         "translator_version": TRANSLATOR_VERSION,
         "source_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
@@ -229,6 +236,9 @@ def load_correspondent_profile(path: str | Path) -> tuple[dict[str, Any], str]:
             _validate_regex_rule(direction_rule, "strategy direction")
     for rule in payload.get("journal_actions") or []:
         _validate_regex_rule(rule, "journal action")
+    posture = str(payload.get("interpretation_posture") or "").strip()
+    if posture not in SOURCE_INTENT_POSTURES:
+        raise ValueError("interpretation_posture must be explicit_only or inference_allowed")
     return payload, text
 
 
@@ -316,6 +326,7 @@ def _translate_packet(
     *,
     universe: set[str],
     charts: dict[tuple[str, str], dict[str, Any]],
+    source_intents: dict[str, dict[str, str]],
 ) -> list[dict[str, Any]]:
     as_of = _parse_timestamp(packet["generated_at"])
     records: list[dict[str, Any]] = []
@@ -331,6 +342,7 @@ def _translate_packet(
                 as_of=as_of,
                 universe=universe,
                 chart=charts.get((source_record["source"]["source_id"], symbol or "")),
+                source_intent=source_intents[source_record["signal_id"]],
             )
             records.append(translated)
     return records
@@ -345,6 +357,7 @@ def _translate_record(
     as_of: datetime,
     universe: set[str],
     chart: dict[str, Any] | None,
+    source_intent: dict[str, str],
 ) -> dict[str, Any]:
     tweet_type = str(source_record["classification"]["type"])
     family = (profile.get("families") or {}).get(tweet_type)
@@ -355,7 +368,8 @@ def _translate_record(
     allowed_structures: list[str] = []
     planner_supported = False
     planner = dict((family or {}).get("planner") or {})
-    lifecycle_action = "observe"
+    intent_action = source_intent["action"]
+    lifecycle_action = _lifecycle_action(intent_action)
     activation: dict[str, Any] = {"kind": "none", "status": "not_applicable"}
     construction_mode = "none"
     chart_run_id = None
@@ -390,11 +404,12 @@ def _translate_record(
                     blockers.append("chart_trigger_not_confirmed")
         elif mode == "numbered_template":
             explicit = _strategy_match(text, profile)
+            interpreted = _strategy_from_intent(source_intent, profile)
             idea_number = source_record["literal"].get("idea_number")
             mapped = (family.get("idea_number_map") or {}).get(str(idea_number))
-            selected = explicit or mapped
-            lifecycle_action = "open"
-            activation = {"kind": "source_activation", "status": "triggered"}
+            selected = explicit or interpreted or mapped
+            lifecycle_action = _lifecycle_action(intent_action)
+            activation = {"kind": "source_activation", "status": intent_action}
             construction_mode = "reconstruct_fresh"
             if not isinstance(selected, dict):
                 blockers.append("strategy_unresolved")
@@ -406,9 +421,9 @@ def _translate_record(
                 if not planner_supported:
                     blockers.append("planner_structure_unsupported")
         elif mode == "trade_journal":
-            selected = _strategy_match(text, profile)
-            lifecycle_action = _journal_action(text, profile)
-            activation = {"kind": "journal_event", "status": lifecycle_action}
+            selected = _strategy_match(text, profile) or _strategy_from_intent(source_intent, profile)
+            lifecycle_action = _lifecycle_action(intent_action)
+            activation = {"kind": "journal_event", "status": intent_action}
             construction_mode = "reconstruct_fresh_from_observed_structure"
             if not selected:
                 blockers.append("strategy_unresolved")
@@ -417,8 +432,9 @@ def _translate_record(
                 direction = str(selected.get("direction") or direction)
                 allowed_structures = _string_list(selected.get("allowed_structures"))
                 planner_supported = bool(planner.get("supported", True)) and bool(allowed_structures)
-            if lifecycle_action != "open":
-                blockers.append(f"journal_{lifecycle_action}_is_not_new_entry")
+
+    if family is not None and family.get("mode") != "ignore" and intent_action != "enter":
+        blockers.append(f"source_{intent_action}_is_not_new_entry")
 
     if symbol is None and tweet_type != "irrelevant":
         blockers.append("symbol_missing")
@@ -438,9 +454,7 @@ def _translate_record(
     status = "actionable" if planner_eligible else (
         "ignored" if tweet_type == "irrelevant" else "needs_review" if tweet_type == "unknown" else "parked"
     )
-    lifecycle_key = (
-        f"{profile['profile_id']}:{symbol}:{strategy_family or 'unresolved'}" if tweet_type == "trade_journal" and symbol else None
-    )
+    lifecycle_key = f"{profile['profile_id']}:{symbol}:{strategy_family}" if symbol and strategy_family else None
     return {
         "schema": RECORD_SCHEMA,
         "record_id": "pending",
@@ -449,6 +463,7 @@ def _translate_record(
         "source": dict(source_record["source"]),
         "tweet_type": tweet_type,
         "classification": dict(source_record["classification"]),
+        "source_intent": dict(source_intent),
         "symbol": symbol,
         "symbol_origin": symbol_origin,
         "strategy_family": strategy_family,
@@ -555,11 +570,150 @@ def _strategy_match(text: str, profile: dict[str, Any]) -> dict[str, Any] | None
     return None
 
 
+def _strategy_from_intent(intent: dict[str, str], profile: dict[str, Any]) -> dict[str, Any] | None:
+    hint = str(intent.get("strategy_hint") or "")
+    if not hint:
+        return None
+    for rule in profile.get("strategy_rules") or []:
+        if hint not in {str(rule.get("id") or ""), str(rule.get("strategy_family") or "")}:
+            continue
+        selected = dict(rule)
+        if intent.get("direction") in SOURCE_INTENT_DIRECTIONS and intent["direction"] != "neutral":
+            selected["direction"] = intent["direction"]
+        return selected
+    return None
+
+
 def _journal_action(text: str, profile: dict[str, Any]) -> str:
     for rule in profile.get("journal_actions") or []:
         if re.search(str(rule["regex"]), text, flags=re.IGNORECASE):
             return str(rule.get("action") or "observe")
     return "observe"
+
+
+def _interpret_source_intents(
+    packet: dict[str, Any],
+    profile: dict[str, Any],
+    client: JsonLlmClient | None,
+) -> dict[str, dict[str, str]]:
+    if client is None:
+        return {
+            record["signal_id"]: _deterministic_source_intent(record, profile)
+            for record in packet["records"]
+        }
+
+    interpreted: dict[str, dict[str, str]] = {}
+    records = list(packet["records"])
+    for start in range(0, len(records), 30):
+        chunk = records[start : start + 30]
+        response = client.chat_json(
+            _intent_system_prompt(profile),
+            _intent_user_prompt(chunk),
+        )
+        raw_items = response.get("results") or []
+        if not isinstance(raw_items, list):
+            raise ValueError("correspondent intent response results must be an array")
+        by_signal = {
+            str(item.get("signal_id") or ""): item
+            for item in raw_items
+            if isinstance(item, dict)
+        }
+        for record in chunk:
+            signal_id = record["signal_id"]
+            if signal_id not in by_signal:
+                raise ValueError(f"correspondent intent response missing signal_id: {signal_id}")
+            interpreted[signal_id] = _normalize_source_intent(by_signal[signal_id])
+    return interpreted
+
+
+def _deterministic_source_intent(record: dict[str, Any], profile: dict[str, Any]) -> dict[str, str]:
+    """Effect-free fallback for fixtures and historical replay."""
+
+    tweet_type = str(record["classification"]["type"])
+    family = (profile.get("families") or {}).get(tweet_type) or {}
+    mode = family.get("mode")
+    text = str(record["literal"]["text"])
+    if mode == "trade_journal":
+        legacy = _journal_action(text, profile)
+        action = {"open": "enter", "close": "exit", "adjust": "update"}.get(legacy, "ignore")
+    elif mode in {"numbered_template", "chart_watch"}:
+        action = "enter"
+    else:
+        action = "ignore"
+    symbols = record["literal"].get("symbols") or []
+    symbol = str((symbols[0] or {}).get("symbol") or "").upper() if symbols else ""
+    strategy = _strategy_match(text, profile) or {}
+    return {
+        "action": action,
+        "symbol": symbol,
+        "direction": str(strategy.get("direction") or family.get("direction") or "neutral"),
+        "strategy_hint": str(strategy.get("strategy_family") or ""),
+        "reason": "deterministic fixture or replay interpretation",
+    }
+
+
+def _normalize_source_intent(raw: dict[str, Any]) -> dict[str, str]:
+    action = str(raw.get("action") or "ignore").strip().lower()
+    if action not in SOURCE_INTENT_ACTIONS:
+        action = "ignore"
+    symbol = str(raw.get("symbol") or "").strip().upper()
+    if symbol and not _SYMBOL.fullmatch(symbol):
+        symbol = ""
+    direction = str(raw.get("direction") or "neutral").strip().lower()
+    if direction not in SOURCE_INTENT_DIRECTIONS:
+        direction = "neutral"
+    raw_strategy_hint = str(raw.get("strategy_hint") or "").strip()
+    strategy_hint = _slug(raw_strategy_hint)[:64] if raw_strategy_hint else ""
+    reason = " ".join(str(raw.get("reason") or "").split())[:200]
+    return {
+        "action": action,
+        "symbol": symbol,
+        "direction": direction,
+        "strategy_hint": strategy_hint,
+        "reason": reason,
+    }
+
+
+def _lifecycle_action(action: str) -> str:
+    return {"enter": "open", "update": "adjust", "exit": "close"}.get(action, "observe")
+
+
+def _intent_system_prompt(profile: dict[str, Any]) -> str:
+    posture = str(profile["interpretation_posture"])
+    posture_rule = (
+        "Classify enter only when the author explicitly recommends or reports opening a position now."
+        if posture == "explicit_only"
+        else "You may classify a current actionable market thesis as enter even when the author does not state a formal order."
+    )
+    return f"""\
+You interpret public posts from one configured market correspondent.
+
+Answer one question: is each post a new idea to enter now, an update to an
+existing idea, an exit, or none of those? Do not judge whether the trade is
+good, select option legs, or approve portfolio risk.
+
+Interpretation posture: {posture}
+{posture_rule}
+Retrospective performance, "looks to expire", holding, rolling, trimming,
+closing, and status language are not new entries. When uncertain, use ignore.
+
+Return JSON only:
+{{"results":[{{"signal_id":"source id","action":"enter|update|exit|ignore","symbol":"AAPL or empty","direction":"bullish|bearish|neutral","strategy_hint":"short_strangle or empty","reason":"one short sentence"}}]}}
+Return exactly one result for every supplied signal_id and no additional fields.
+"""
+
+
+def _intent_user_prompt(records: list[dict[str, Any]]) -> str:
+    compact = [
+        {
+            "signal_id": record["signal_id"],
+            "post_family": record["classification"]["type"],
+            "published_at": record["source"]["published_at"],
+            "text": str(record["literal"]["text"])[:1200],
+        }
+        for record in records
+    ]
+    return json.dumps({"posts": compact}, indent=2, sort_keys=True)
 
 
 def _build_lifecycle_index(root: Path, current: list[dict[str, Any]]) -> dict[str, Any]:

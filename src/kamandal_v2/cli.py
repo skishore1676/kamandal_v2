@@ -287,6 +287,11 @@ def main() -> None:
     )
     correspondent_parser.add_argument("--config-source", choices=["sheet", "seed"], default="seed")
     correspondent_parser.add_argument("--output-dir", default="data/research/correspondent_signals")
+    correspondent_parser.add_argument(
+        "--deterministic-intent",
+        action="store_true",
+        help="Use profile rules instead of an LLM; fixture and historical replay only",
+    )
 
     activate_correspondent_parser = subparsers.add_parser(
         "activate-correspondent-signals",
@@ -452,6 +457,8 @@ def main() -> None:
 
     if args.command == "import-correspondent-signals":
         correspondent_config = load_control()
+        from kamandal_v2.intelligence.llm_client import build_llm_client
+
         universe, _playbooks = load_planner_config(correspondent_config, source=args.config_source)
         result = import_correspondent_signals(
             args.input,
@@ -460,12 +467,19 @@ def main() -> None:
             chart_evaluation_paths=args.chart_evaluation,
             output_dir=args.output_dir,
             store=LocalStore(),
+            intent_client=(
+                None
+                if args.deterministic_intent
+                else build_llm_client(correspondent_config, actor="correspondent_intent")
+            ),
         )
         print(json.dumps(result.to_dict(), indent=2))
         return
 
     if args.command == "activate-correspondent-signals":
         correspondent_config = load_control()
+        from kamandal_v2.intelligence.llm_client import build_llm_client
+
         settings = dict(((correspondent_config.get("source_intelligence") or {}).get("correspondents") or {}))
         if args.active_ideas_dir:
             settings["active_ideas_dir"] = args.active_ideas_dir
@@ -478,6 +492,7 @@ def main() -> None:
             settings,
             universe_symbols=[entry.symbol for entry in universe if entry.enabled],
             store=LocalStore(),
+            intent_client=build_llm_client(correspondent_config, actor="correspondent_intent"),
         )
         print(json.dumps(result.to_dict(), indent=2))
         return

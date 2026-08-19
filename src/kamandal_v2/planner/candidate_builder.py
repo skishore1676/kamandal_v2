@@ -472,14 +472,15 @@ def _apply_preflight_bpr(candidate: Candidate, preflight: PreflightResult) -> No
     fallback_bpr = abs(float(candidate.estimated_bpr or 0.0))
     raw = preflight.raw if isinstance(preflight.raw, dict) else {}
     broker_provided = bool(raw.get("broker_bpr_provided")) or _raw_contains_broker_bpr(raw.get("response"))
+    resolved_source = str(raw.get("bpr_source") or "")
     if candidate.structure in {"short_strangle", "strangle"}:
         if broker_provided and broker_bpr > 0:
             candidate.estimated_bpr = round(broker_bpr, 2)
-            candidate.reasons.append("bpr_source=broker_preflight")
+            candidate.reasons.append(f"bpr_source={resolved_source or 'broker_preflight'}")
             candidate.reasons.append(f"local_bpr_fallback={round(fallback_bpr, 2)}")
             return
         candidate.estimated_bpr = round(max(fallback_bpr, broker_bpr), 2)
-        candidate.reasons.append("bpr_source=local_fallback")
+        candidate.reasons.append(f"bpr_source={resolved_source or 'local_fallback'}")
         candidate.reasons.append("broker_bpr_missing=true")
         return
     candidate.estimated_bpr = round(max(fallback_bpr, broker_bpr), 2)

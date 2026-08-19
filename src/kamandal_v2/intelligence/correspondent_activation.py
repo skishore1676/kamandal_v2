@@ -19,6 +19,7 @@ from kamandal_v2.intelligence.correspondent_signals import (
     import_correspondent_signals,
     validate_correspondent_packet,
 )
+from kamandal_v2.intelligence.llm_client import JsonLlmClient
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -57,6 +58,7 @@ def activate_correspondent_sources(
     universe_symbols: Iterable[str],
     command_runner: CommandRunner | None = None,
     store: LocalStore | None = None,
+    intent_client: JsonLlmClient | None = None,
 ) -> CorrespondentActivationResult:
     """Translate configured Birdclaw correspondents and publish eligible ideas.
 
@@ -126,6 +128,7 @@ def activate_correspondent_sources(
                 chart_evaluation_paths=chart_evaluation_paths,
                 output_dir=output_root,
                 store=discovery_store,
+                intent_client=intent_client,
             )
             planner_text = imported.planner_ideas_path.read_text(encoding="utf-8")
             planner_payload = yaml.safe_load(planner_text) or {}

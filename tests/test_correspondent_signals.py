@@ -157,7 +157,7 @@ def test_all_greg_families_are_preserved_and_only_openings_reach_planner(tmp_pat
     assert by_source["x-post:101"]["planner_eligible"] is True
     assert by_source["x-post:102"]["planner_blockers"] == ["chart_evaluation_missing"]
     assert by_source["x-post:103"]["planner_eligible"] is True
-    assert "journal_close_is_not_new_entry" in by_source["x-post:104"]["planner_blockers"]
+    assert "source_exit_is_not_new_entry" in by_source["x-post:104"]["planner_blockers"]
     assert by_source["x-post:105"]["status"] == "needs_review"
     assert by_source["x-post:106"]["status"] == "ignored"
     ideas = load_ideas([first.planner_ideas_path])
@@ -248,6 +248,7 @@ def test_second_correspondent_uses_profile_configuration_without_new_code(tmp_pa
             "profile_id": "sample_person",
             "version": "1",
             "source_profile_id": "sample_person",
+            "interpretation_posture": "explicit_only",
             "families": {
                 "swing_entry": {
                     "mode": "trade_journal",
@@ -307,6 +308,49 @@ def test_journal_direction_uses_profile_action_language(tmp_path: Path) -> None:
     by_symbol = {record["symbol"]: record for record in translation["records"]}
     assert by_symbol["IWM"]["direction"] == "bullish"
     assert by_symbol["QQQ"]["direction"] == "bearish"
+
+
+def test_llm_intent_keeps_greg_status_update_out_and_allows_explicit_entry(tmp_path: Path) -> None:
+    class IntentClient:
+        def chat_json(self, _system_prompt: str, user_prompt: str) -> dict:
+            supplied = json.loads(user_prompt)["posts"]
+            return {
+                "results": [
+                    {
+                        "signal_id": item["signal_id"],
+                        "action": "update" if "expire" in item["text"] else "enter",
+                        "symbol": "TSLA",
+                        "direction": "neutral",
+                        "strategy_hint": "short_strangle",
+                        "reason": "Status language" if "expire" in item["text"] else "Explicit new idea",
+                    }
+                    for item in supplied
+                ]
+            }
+
+    input_path = _write_json(
+        tmp_path / "signals.json",
+        _packet([
+            _record("701", "earnings_idea", "TSLA idea #4 looks to expire", ["TSLA"], idea_number=4),
+            _record("702", "earnings_idea", "Opening TSLA trade idea #4", ["TSLA"], idea_number=4),
+        ]),
+    )
+    result = import_correspondent_signals(
+        input_path,
+        profile_path=PROFILE,
+        universe_symbols={"TSLA"},
+        output_dir=tmp_path / "output",
+        intent_client=IntentClient(),
+    )
+
+    translation = json.loads(result.translation_path.read_text(encoding="utf-8"))
+    by_signal = {record["signal_id"]: record for record in translation["records"]}
+    assert by_signal["x-post:701"]["source_intent"]["action"] == "update"
+    assert by_signal["x-post:701"]["planner_eligible"] is False
+    assert by_signal["x-post:701"]["lifecycle"]["action"] == "adjust"
+    assert by_signal["x-post:702"]["source_intent"]["action"] == "enter"
+    assert by_signal["x-post:702"]["planner_eligible"] is True
+    assert result.planner_idea_count == 1
 
 
 def test_profile_revision_replaces_latest_lifecycle_projection_without_duplicate_event(tmp_path: Path) -> None:
