@@ -477,7 +477,11 @@ def _reject_open_shadow_candidates(candidates: list[Candidate], store: LocalStor
             candidate.rejection_reason = "shadow_candidate_already_open"
         elif candidate.idea_id in open_idea_ids and candidate.eligible:
             candidate.rejection_reason = "shadow_idea_already_open"
-        elif candidate.idea_id in traded_idea_ids and candidate.eligible:
+        # The cooldown is an idea-level lifecycle decision, not a candidate-level
+        # eligibility check.  Apply it consistently even when one shape already
+        # failed a construction guard so every sibling records the same reason
+        # the idea cannot be traded again during the cooldown window.
+        elif candidate.idea_id in traded_idea_ids:
             candidate.rejection_reason = "shadow_idea_already_traded_today"
 
 
