@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from kamandal_v2.config import load_control
+from kamandal_v2.market.fixture import FixtureMarketDataProvider
 from kamandal_v2.planner.engine import run_plan
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
@@ -191,6 +192,9 @@ def main() -> int:
         write_sheet=False,
         store=LocalStore(output_root / "planner" / "fixture.db"),
         audit=AuditWriter(output_root / "planner" / "audit"),
+        # A fixture replay must not inherit the host's IV or earnings stores.
+        # Inject the deterministic market directly so the proof is portable.
+        market_override=FixtureMarketDataProvider(),
     )
     eligible = sorted(
         {
