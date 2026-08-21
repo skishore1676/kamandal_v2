@@ -85,6 +85,10 @@ live:
   max_close_submits_per_run: 10
   max_new_plans_per_day: 3
   max_live_baskets_per_day: 3
+  plan_fallback:
+    enabled: false                  # explicit rollout gate; rank-one-only remains default
+    max_attempts: 2
+    auto_submit: true
   option_submission:
     # The broker-facing guard is authoritative; launchd timing is only a wake-up schedule.
     enabled: true
@@ -133,6 +137,15 @@ live:
     notification_mode: live
   entry_pricing:
     mode: liquidity_adjusted_mid       # liquidity_adjusted_mid | improved_mid | mid | disabled
+    campaign:
+      enabled: false                   # explicit source-ready gate; legacy pricing remains default
+      initial_improvement_multiplier: 0.50
+      allowance_pct_of_midpoint: 5.0
+      allowance_max_fraction_of_improvement: 0.50
+      # Set explicitly for a future rollout; zero suppresses the terminal attempt.
+      absolute_allowance_cap: 0.00
+      valid_tick: 0.01
+      absurd_bid_ask_pct: 3.0
     improvement_pct_of_spread: 10
     low_oi_improvement_pct_of_spread: 20
     very_low_oi_improvement_pct_of_spread: 35

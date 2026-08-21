@@ -53,11 +53,16 @@ def run_live_advisory_plan(
     notify_unplaced_selected: bool = True,
     store: LocalStore | None = None,
     audit: AuditWriter | None = None,
+    exclude_candidate_ids: set[str] | None = None,
+    exclude_contract_keys: set[str] | None = None,
+    register_plan_attempt: bool | None = None,
 ) -> PlanRunResult:
     store = store or LocalStore()
     audit = audit or AuditWriter("data/audit/live")
     config = live_config(config)
     live_cfg = config.get("live") or {}
+    excluded_candidate_ids = set(exclude_candidate_ids or set())
+    excluded_contract_keys = set(exclude_contract_keys or set())
     result = run_plan(
         config,
         idea_paths=idea_paths,
@@ -66,7 +71,14 @@ def run_live_advisory_plan(
         write_sheet=False,
         store=store,
         audit=audit,
-        candidate_postprocessor=_live_candidate_policy,
+        candidate_postprocessor=lambda candidates, candidate_store, candidate_config, portfolio: _live_candidate_policy(
+            candidates,
+            candidate_store,
+            candidate_config,
+            portfolio,
+            exclude_candidate_ids=excluded_candidate_ids,
+            exclude_contract_keys=excluded_contract_keys,
+        ),
         plan_top_n=int(live_cfg.get("max_new_plans_per_day") or live_cfg.get("top_n") or 1),
         plan_max_new_positions=int(live_cfg.get("max_new_positions_per_plan") or 1),
     )
@@ -158,13 +170,23 @@ def _entry_approval_mode(config: dict[str, Any]) -> str:
     return raw
 
 
-def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, config: dict[str, Any], portfolio: PortfolioState) -> None:
+def _live_candidate_policy(
+    candidates: list[Candidate],
+    store: LocalStore,
+    config: dict[str, Any],
+    portfolio: PortfolioState,
+    *,
+    exclude_candidate_ids: set[str] | None = None,
+    exclude_contract_keys: set[str] | None = None,
+) -> None:
     live_cfg = config.get("live") or {}
     max_contracts = int((config.get("execution") or {}).get("max_contracts_per_order") or 1)
     min_entry_legs = int(live_cfg.get("min_entry_legs") or 1)
     traded_ids = store.live_idea_ids_opened_since(_market_day_start())
     open_ids = store.open_live_idea_ids()
     open_contracts = _open_live_contract_keys(store)
+    excluded_candidate_ids = set(exclude_candidate_ids or set())
+    excluded_contract_keys = set(exclude_contract_keys or set())
     risk_decision = evaluate_entry_risk(store, config)
     risk_block_reason = ""
     cluster_capped = set[str]()
@@ -178,7 +200,11 @@ def _live_candidate_policy(candidates: list[Candidate], store: LocalStore, confi
         if not candidate.eligible:
             continue
         max_bpr = _candidate_bpr_cap(candidate, portfolio, live_cfg)
-        if risk_block_reason:
+        if candidate.candidate_id in excluded_candidate_ids:
+            candidate.rejection_reason = "live_fallback_attempted_candidate"
+        elif any(_contract_key(candidate.underlying, leg) in excluded_contract_keys for leg in candidate.legs):
+            candidate.rejection_reason = "live_fallback_contract_overlap"
+        elif risk_block_reason:
             candidate.rejection_reason = risk_block_reason
         elif candidate.underlying.upper() in underlying_capped:
             candidate.rejection_reason = f"live_risk_underlying_cap:{candidate.underlying.upper()}"

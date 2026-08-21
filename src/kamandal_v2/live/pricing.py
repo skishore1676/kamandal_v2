@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
+import math
 from typing import Any
 
 from kamandal_v2.domain.models import Candidate
@@ -37,6 +38,36 @@ class EntryPricingPolicy:
     apply_to_debit: bool = True
 
 
+@dataclass(frozen=True)
+class EntryCampaignPolicy:
+    """Opt-in midpoint-centred entry campaign controls.
+
+    The legacy entry-pricing policy still computes the full market-sensitive
+    improvement.  This policy only controls how that improvement is staged and
+    how much terminal concession is permitted.
+    """
+
+    enabled: bool = False
+    initial_improvement_multiplier: float = 0.50
+    allowance_pct_of_midpoint: float = 5.0
+    allowance_max_fraction_of_improvement: float = 0.50
+    absolute_allowance_cap: float | None = None
+    valid_tick: float = 0.01
+    absurd_bid_ask_pct: float = 3.0
+
+
+@dataclass(frozen=True)
+class EntryCampaign:
+    enabled: bool
+    side: str
+    midpoint: float
+    improvement: float
+    initial_improvement_multiplier: float
+    allowance: float
+    prices: tuple[str, ...]
+    metadata: dict[str, Any]
+
+
 def entry_pricing_policy(config: dict[str, Any] | None) -> EntryPricingPolicy:
     live_cfg = ((config or {}).get("live") or {})
     raw = live_cfg.get("entry_pricing") or {}
@@ -62,6 +93,147 @@ def entry_pricing_policy(config: dict[str, Any] | None) -> EntryPricingPolicy:
     )
 
 
+def entry_campaign_policy(config: dict[str, Any] | None) -> EntryCampaignPolicy:
+    live_cfg = ((config or {}).get("live") or {})
+    raw_pricing = live_cfg.get("entry_pricing") or {}
+    if not isinstance(raw_pricing, dict):
+        raw_pricing = {}
+    raw = raw_pricing.get("campaign") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    mode = str(raw_pricing.get("mode") or "").strip().lower()
+    enabled = _as_bool(raw.get("enabled"), mode in {"midpoint_campaign", "campaign"})
+    absolute = _optional_positive_float(raw.get("absolute_allowance_cap"))
+    return EntryCampaignPolicy(
+        enabled=enabled,
+        initial_improvement_multiplier=_clamp(_as_float(raw.get("initial_improvement_multiplier"), 0.50), 0.0, 1.0),
+        allowance_pct_of_midpoint=max(_as_float(raw.get("allowance_pct_of_midpoint"), 5.0), 0.0),
+        allowance_max_fraction_of_improvement=max(_as_float(raw.get("allowance_max_fraction_of_improvement"), 0.50), 0.0),
+        absolute_allowance_cap=absolute,
+        valid_tick=max(_as_float(raw.get("valid_tick"), 0.01), 0.0001),
+        absurd_bid_ask_pct=max(_as_float(raw.get("absurd_bid_ask_pct"), _as_float((live_cfg.get("liquidity_policy") or {}).get("absurd_bid_ask_pct"), 3.0)), 0.0),
+    )
+
+
+def entry_campaign(candidate: Candidate, config: dict[str, Any] | None) -> EntryCampaign:
+    """Build a frozen, bounded three-price campaign without broker effects."""
+
+    campaign_policy = entry_campaign_policy(config)
+    side = "credit" if candidate.net_credit > 0 else "debit"
+    disabled = EntryCampaign(False, side, 0.0, 0.0, campaign_policy.initial_improvement_multiplier, 0.0, (), {
+        "enabled": False,
+        "side": side,
+        "skip_reason": "campaign_disabled",
+    })
+    if not campaign_policy.enabled:
+        return disabled
+
+    pricing_policy = entry_pricing_policy(config)
+    if pricing_policy.mode in {"midpoint_campaign", "campaign"}:
+        pricing_policy = replace(pricing_policy, mode="liquidity_adjusted_mid")
+    base_mid = abs(float(candidate.net_credit or 0.0))
+    metrics, quote_reason = _campaign_quote_metrics(candidate, campaign_policy)
+    if quote_reason:
+        return _campaign_terminal(side, quote_reason, campaign_policy, base_mid)
+    if base_mid <= 0 or not math.isfinite(base_mid):
+        return _campaign_terminal(side, "invalid_midpoint", campaign_policy, base_mid)
+
+    # A broker-valid midpoint must stay on the operator's side of the true
+    # midpoint.  A credit rounded down (or a debit rounded up) has already
+    # conceded through M before the midpoint attempt even begins.
+    midpoint = (
+        _tick_ceil(base_mid, campaign_policy.valid_tick)
+        if side == "credit"
+        else _tick_floor(base_mid, campaign_policy.valid_tick)
+    )
+    improvement = _improvement(candidate, pricing_policy)
+    if improvement <= 0 or not math.isfinite(improvement):
+        return _campaign_terminal(side, "invalid_improvement", campaign_policy, midpoint)
+
+    economic_headroom = _campaign_economic_headroom(candidate, midpoint)
+    if economic_headroom is None:
+        return _campaign_terminal(side, "economic_bound_missing", campaign_policy, midpoint, improvement)
+    if economic_headroom <= 0 or not math.isfinite(economic_headroom):
+        return _campaign_terminal(
+            side,
+            "economic_headroom_exhausted",
+            campaign_policy,
+            midpoint,
+            improvement,
+            {"economic_headroom": economic_headroom},
+        )
+    bounds = {
+        "midpoint_pct": midpoint * campaign_policy.allowance_pct_of_midpoint / 100.0,
+        "improvement_fraction": improvement * campaign_policy.allowance_max_fraction_of_improvement,
+        "absolute_cap": campaign_policy.absolute_allowance_cap or 0.0,
+        "economic_headroom": economic_headroom,
+    }
+    if bounds["absolute_cap"] <= 0:
+        return _campaign_terminal(side, "absolute_allowance_cap_not_configured", campaign_policy, midpoint, improvement, bounds)
+    positive_bounds = {key: value for key, value in bounds.items() if value > 0 and math.isfinite(value)}
+    if len(positive_bounds) != len(bounds):
+        return _campaign_terminal(side, "allowance_bound_invalid", campaign_policy, midpoint, improvement, bounds)
+    allowance = min(positive_bounds.values())
+    allowance = _tick_floor(allowance, campaign_policy.valid_tick)
+    if allowance < campaign_policy.valid_tick:
+        return _campaign_terminal(side, "allowance_below_valid_tick", campaign_policy, midpoint, improvement, bounds)
+
+    if side == "credit":
+        raw_prices = (
+            midpoint + (campaign_policy.initial_improvement_multiplier * improvement),
+            midpoint,
+            midpoint - allowance,
+        )
+        prices = (
+            _campaign_price(_tick_ceil(raw_prices[0], campaign_policy.valid_tick), candidate),
+            _campaign_price(midpoint, candidate),
+            _campaign_price(_tick_ceil(raw_prices[2], campaign_policy.valid_tick), candidate),
+        )
+        p3_magnitude = abs(float(prices[2]))
+        if p3_magnitude >= abs(float(prices[1])):
+            return _campaign_terminal(side, "allowance_does_not_move_from_midpoint", campaign_policy, midpoint, improvement, bounds, allowance)
+    else:
+        raw_prices = (
+            midpoint - (campaign_policy.initial_improvement_multiplier * improvement),
+            midpoint,
+            midpoint + allowance,
+        )
+        prices = (
+            _campaign_price(_tick_floor(raw_prices[0], campaign_policy.valid_tick), candidate),
+            _campaign_price(midpoint, candidate),
+            _campaign_price(_tick_floor(raw_prices[2], campaign_policy.valid_tick), candidate),
+        )
+        p3_magnitude = abs(float(prices[2]))
+        if p3_magnitude <= abs(float(prices[1])):
+            return _campaign_terminal(side, "allowance_does_not_move_from_midpoint", campaign_policy, midpoint, improvement, bounds, allowance)
+
+    binding_cap = min(positive_bounds, key=positive_bounds.get)
+    metadata = {
+        "enabled": True,
+        "side": side,
+        "midpoint": midpoint,
+        "improvement": round(improvement, 6),
+        "initial_improvement_multiplier": campaign_policy.initial_improvement_multiplier,
+        "allowance": round(allowance, 6),
+        "allowance_bounds": {key: round(value, 6) for key, value in bounds.items()},
+        "allowance_binding_cap": binding_cap,
+        "valid_tick": campaign_policy.valid_tick,
+        "economic_bound_source": candidate.entry_economic_bound_source,
+        "economic_bound": round(
+            float(candidate.entry_credit_floor if side == "credit" else candidate.entry_debit_ceiling),
+            6,
+        ),
+        "liquidity_metrics": metrics,
+        "prices": list(prices),
+        "skip_reason": "",
+    }
+    return EntryCampaign(True, side, midpoint, improvement, campaign_policy.initial_improvement_multiplier, allowance, prices, metadata)
+
+
+def entry_campaign_metadata(candidate: Candidate, config: dict[str, Any] | None) -> dict[str, Any]:
+    return dict(entry_campaign(candidate, config).metadata)
+
+
 def candidate_entry_limit_price(candidate: Candidate, config: dict[str, Any] | None, *, nickel: bool = False) -> str:
     """Return the configured Public limit price for an opening candidate.
 
@@ -69,6 +241,17 @@ def candidate_entry_limit_price(candidate: Candidate, config: dict[str, Any] | N
     expects multileg credit orders as negative limit prices; existing single-leg
     order semantics stay positive.
     """
+
+    campaign = entry_campaign(candidate, config)
+    if campaign.enabled:
+        if not campaign.prices:
+            raise ValueError(f"entry campaign suppressed: {campaign.metadata.get('skip_reason') or 'invalid_campaign'}")
+        price = abs(float(campaign.prices[0]))
+        if nickel:
+            price = _nickel_entry_price(price, candidate.net_credit)
+        if len(candidate.legs) > 1 and candidate.net_credit > 0:
+            return f"-{price:.2f}"
+        return f"{price:.2f}"
 
     policy = entry_pricing_policy(config)
     base_price = abs(float(candidate.net_credit))
@@ -84,7 +267,7 @@ def entry_price_metadata(candidate: Candidate, config: dict[str, Any] | None) ->
     improved_price = _improved_price(candidate, base_price, policy)
     metrics = candidate_liquidity_metrics(candidate)
     cap = _max_improvement_cap(candidate, policy, metrics)
-    return {
+    metadata = {
         "mode": policy.mode,
         "base_mid_limit": round(base_price, 2),
         "improved_limit": round(improved_price, 2),
@@ -102,6 +285,54 @@ def entry_price_metadata(candidate: Candidate, config: dict[str, Any] | None) ->
         "min_open_interest": _min_open_interest(candidate),
         "side": "credit" if candidate.net_credit > 0 else "debit",
     }
+    campaign = entry_campaign(candidate, config)
+    if campaign.enabled or campaign.metadata.get("skip_reason") != "campaign_disabled":
+        metadata["campaign"] = campaign.metadata
+    return metadata
+
+
+def normalize_campaign_entry_metadata(
+    candidate: Candidate,
+    metadata: dict[str, Any],
+    *,
+    valid_tick: float,
+) -> dict[str, Any]:
+    """Freeze every campaign price to a broker-accepted tick after retry."""
+
+    result = dict(metadata)
+    campaign = dict(result.get("campaign") or {})
+    raw_prices = [str(value) for value in campaign.get("prices") or []]
+    if not campaign.get("enabled") or not raw_prices:
+        return result
+    tick = max(float(valid_tick), 0.0001)
+    side = str(campaign.get("side") or ("credit" if candidate.net_credit > 0 else "debit"))
+    normalized: list[str] = []
+    for raw in raw_prices:
+        magnitude = abs(float(raw))
+        # Every normalized price must be at least as favorable as the frozen
+        # cent-price campaign.  This keeps P2 on the operator's side of M and
+        # prevents P3 tick rounding from widening any allowance/economic cap.
+        rounding = ROUND_CEILING if side == "credit" else ROUND_FLOOR
+        snapped = float((Decimal(str(magnitude)) / Decimal(str(tick))).to_integral_value(rounding=rounding) * Decimal(str(tick)))
+        normalized.append(_campaign_price(snapped, candidate))
+    # A tick can collapse the terminal concession into the midpoint.  Preserve
+    # only distinct, monotone prices; never invent a wider economic envelope.
+    compact: list[str] = []
+    for price in normalized:
+        if not compact or price != compact[-1]:
+            compact.append(price)
+    # Favorable rounding preserves the original monotone ladder by
+    # construction.  Keep each distinct step: when P2 and P3 collapse to one
+    # broker tick, that shared price is still the valid midpoint attempt.
+    campaign["raw_prices"] = raw_prices
+    campaign["prices"] = compact
+    campaign["valid_tick"] = tick
+    campaign["accepted_tick"] = tick
+    campaign["tick_normalized"] = True
+    campaign["tick_normalization_reason"] = "broker_rejected_cent_increment"
+    result["campaign"] = campaign
+    result["accepted_limit_price"] = compact[0] if compact else ""
+    return result
 
 
 def _improved_price(candidate: Candidate, base_price: float, policy: EntryPricingPolicy) -> float:
@@ -238,3 +469,90 @@ def _as_bool(value: Any, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _campaign_quote_metrics(candidate: Candidate, policy: EntryCampaignPolicy) -> tuple[dict[str, Any], str]:
+    try:
+        metrics = candidate_liquidity_metrics(candidate)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return {}, "invalid_quote_metrics"
+    for reason in getattr(candidate, "reasons", []) or []:
+        normalized = str(reason).strip().lower()
+        if any(marker in normalized for marker in ("quote_stale", "stale_quote", "quote_unstable", "unstable_quote")):
+            return metrics, "quote_stale_or_unstable"
+    for leg in candidate.legs:
+        values = (leg.bid, leg.ask, leg.mid)
+        if any(not math.isfinite(float(value)) for value in values):
+            return metrics, "invalid_quote"
+        if float(leg.bid) < 0 or float(leg.ask) <= 0 or float(leg.ask) < float(leg.bid):
+            return metrics, "invalid_quote"
+    if float(metrics.get("max_bid_ask_pct") or 0.0) > policy.absurd_bid_ask_pct:
+        return metrics, "absurdly_wide_quote"
+    return metrics, ""
+
+
+def _campaign_economic_headroom(candidate: Candidate, midpoint: float) -> float | None:
+    """Return the bound produced at candidate construction, never a free-form reason."""
+
+    if candidate.net_credit > 0:
+        floor = candidate.entry_credit_floor
+        if floor is None or not math.isfinite(float(floor)):
+            return None
+        return float(midpoint) - max(float(floor), 0.0)
+    ceiling = candidate.entry_debit_ceiling
+    if ceiling is None or not math.isfinite(float(ceiling)):
+        return None
+    return max(float(ceiling), 0.0) - float(midpoint)
+
+
+def _campaign_terminal(
+    side: str,
+    reason: str,
+    policy: EntryCampaignPolicy,
+    midpoint: float,
+    improvement: float = 0.0,
+    bounds: dict[str, float] | None = None,
+    allowance: float = 0.0,
+) -> EntryCampaign:
+    metadata = {
+        "enabled": True,
+        "side": side,
+        "midpoint": round(midpoint, 6),
+        "improvement": round(improvement, 6),
+        "initial_improvement_multiplier": policy.initial_improvement_multiplier,
+        "allowance": round(allowance, 6),
+        "allowance_bounds": {key: round(value, 6) for key, value in (bounds or {}).items()},
+        "allowance_binding_cap": "",
+        "valid_tick": policy.valid_tick,
+        "prices": [],
+        "skip_reason": reason,
+    }
+    return EntryCampaign(True, side, midpoint, improvement, policy.initial_improvement_multiplier, allowance, (), metadata)
+
+
+def _campaign_price(magnitude: float, candidate: Candidate) -> str:
+    value = max(float(magnitude), 0.0)
+    if len(candidate.legs) > 1 and candidate.net_credit > 0:
+        return f"-{value:.2f}"
+    return f"{value:.2f}"
+
+
+def _tick_floor(value: float, tick: float) -> float:
+    return float((Decimal(str(round(value, 10))) / Decimal(str(tick))).to_integral_value(rounding=ROUND_FLOOR) * Decimal(str(tick)))
+
+
+def _tick_ceil(value: float, tick: float) -> float:
+    return float((Decimal(str(round(value, 10))) / Decimal(str(tick))).to_integral_value(rounding=ROUND_CEILING) * Decimal(str(tick)))
+
+
+def _tick_nearest(value: float, tick: float) -> float:
+    return float((Decimal(str(value)) / Decimal(str(tick))).to_integral_value() * Decimal(str(tick)))
+
+
+def _optional_positive_float(value: Any) -> float | None:
+    parsed = _as_float(value, 0.0)
+    return parsed if parsed > 0 else None
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(value, high))

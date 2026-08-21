@@ -1340,6 +1340,31 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
     avg_spread_pct = sum(((leg.ask - leg.bid) / max(leg.mid, 0.01)) for leg in legs) / max(len(legs), 1)
     expiry_quality = ",".join(sorted({_expiry_quality(leg.expiration) for leg in legs}))
     liquidity_metrics = candidate_liquidity_metrics({"legs": legs, "net_credit": net_credit})
+    width = _risk_width(
+        Candidate(
+            candidate_id="economic-bound-probe",
+            idea_id=idea.idea_id,
+            underlying=idea.underlying,
+            playbook_id=playbook.playbook_id,
+            structure=playbook.structure,
+            legs=legs,
+            net_credit=net_credit,
+            estimated_bpr=bpr,
+            greeks=greeks,
+            liquidity_score=liquidity_score,
+            score=0.0,
+        )
+    )
+    credit_floor = None
+    debit_ceiling = None
+    bound_source = ""
+    if net_credit > 0:
+        ratio = playbook.min_credit_to_width_ratio
+        credit_floor = round(max(width, 0.0) * max(float(ratio or 0.0), 0.0), 6)
+        bound_source = "playbook.min_credit_to_width_ratio" if ratio is not None else "structure_zero_credit_floor"
+    elif net_credit < 0 and playbook.max_debit_pct_bpr is not None and bpr > 0:
+        debit_ceiling = round(max(float(bpr), 0.0) * max(float(playbook.max_debit_pct_bpr), 0.0) / 10000.0, 6)
+        bound_source = "playbook.max_debit_pct_bpr"
     return Candidate(
         candidate_id=candidate_id,
         idea_id=idea.idea_id,
@@ -1352,6 +1377,9 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
         greeks=greeks,
         liquidity_score=round(liquidity_score, 4),
         score=0.0,
+        entry_credit_floor=credit_floor,
+        entry_debit_ceiling=debit_ceiling,
+        entry_economic_bound_source=bound_source,
         reasons=[
             f"built_from={idea.idea_id}",
             f"playbook={playbook.playbook_id}",
