@@ -23,6 +23,7 @@ from kamandal_v2.live.lineage import EntryLineage, resolve_entry_lineage
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
+from kamandal_v2.live.plan_fallback import PlanFallbackCoordinator, attempt_event_type, fallback_enabled, registered_campaign_ids
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.ops.stage_receipt import reconciliation_stage
@@ -518,7 +519,10 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
         with lock_path.open("a+", encoding="utf-8") as lock_handle:
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
             try:
-                return _sync_live_orders_locked(config, store=store, manage_entries=manage_entries)
+                result = _sync_live_orders_locked(config, store=store, manage_entries=manage_entries)
+                if manage_entries and fallback_enabled(config):
+                    result["plan_fallback"] = _advance_plan_fallbacks(config, store)
+                return result
             finally:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
@@ -647,6 +651,7 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
                 ticket,
                 response,
                 position_projection=position_projection,
+                filled_quantity=_filled_quantity(response),
             )
         activity_receipt = None
         terminal_fill_quantity = _filled_quantity(response)
@@ -678,6 +683,15 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
                 status="partially_filled_terminal",
                 order_status=response,
             )
+            if ticket.get("csa_lifecycle_id"):
+                csa_lifecycle_projection = _adopt_csa_live_fill(
+                    store,
+                    ticket,
+                    response,
+                    position_projection=position_projection,
+                    filled_quantity=terminal_fill_quantity,
+                    adopted_ticket_status="partially_filled_terminal",
+                )
             result = {
                 "ticket_hash": ticket["ticket_hash"],
                 "order_id": ticket["order_id"],
@@ -686,6 +700,7 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
                 "partial_fill_preserved": True,
                 "filled_quantity": terminal_fill_quantity,
                 "position_projection": position_projection,
+                "csa_lifecycle_projection": csa_lifecycle_projection,
             }
             results.append(result)
             continue
@@ -792,6 +807,213 @@ def _entry_ticket_lineage(store: LocalStore, ticket: dict[str, Any]) -> list[dic
         current = parent
     lineage.reverse()
     return lineage
+
+
+def _advance_plan_fallbacks(config: dict[str, Any], store: LocalStore) -> list[dict[str, Any]]:
+    coordinator = PlanFallbackCoordinator(store, config)
+    decisions: list[dict[str, Any]] = []
+    for campaign_id in registered_campaign_ids(store):
+        decision = coordinator.advance(
+            campaign_id,
+            replan=lambda context: _fresh_fallback_replan(config, store, context),
+        )
+        decision_payload = decision.to_dict()
+        policy = ((config.get("live") or {}).get("plan_fallback") or {})
+        if decision.status == "fallback_ready" and bool(policy.get("auto_submit", True)):
+            if not _fallback_basket_cap_allows(config, store, campaign_id, decision.plan_id):
+                decision_payload["submission_blocked"] = "max_live_baskets_per_day_reached"
+                store.event("live_plan_fallback_blocked", {"campaign_id": campaign_id, "reason": "max_live_baskets_per_day_reached", "plan_id": decision.plan_id})
+                decisions.append(decision_payload)
+                continue
+            gate = entry_health_gate(store, config)
+            if gate.get("blocked"):
+                decision_payload["submission_blocked"] = "blocked_live_health_red:" + ",".join(gate.get("reasons") or [])
+                decisions.append(decision_payload)
+                continue
+            tickets = [
+                ticket
+                for ticket_hash in decision.ticket_hashes
+                if (ticket := store.live_order_intent(ticket_hash)) is not None
+            ]
+            if len(tickets) != len(decision.ticket_hashes):
+                decision_payload["submission_blocked"] = "blocked_fallback_tickets_missing"
+                decisions.append(decision_payload)
+                continue
+            submission_gate = _fallback_submission_gate(config, tickets, gate=gate)
+            if submission_gate:
+                decision_payload["submission_blocked"] = submission_gate
+                store.event(
+                    "live_plan_fallback_blocked",
+                    {"campaign_id": campaign_id, "reason": submission_gate, "plan_id": decision.plan_id},
+                )
+                decisions.append(decision_payload)
+                continue
+            adapter = broker_adapter(config)
+            submission_results = []
+            submit_limit = _ticket_limit(config, submit=True, close=False)
+            for ticket_hash in decision.ticket_hashes[:submit_limit]:
+                ticket = store.live_order_intent(ticket_hash)
+                status = str((ticket or {}).get("_ledger_status") or "")
+                if not ticket or status not in PENDING_TICKET_STATUSES:
+                    continue
+                symbol = str(ticket.get("underlying") or "").upper()
+                risk_manager = gate.get("risk_manager") or {}
+                if symbol in {str(item).upper() for item in (risk_manager.get("underlyings_at_cap") or {})}:
+                    submission_results.append({"status": "blocked", "ticket_hash": ticket_hash, "reason": "blocked_risk_underlying_cap"})
+                    continue
+                try:
+                    submission_results.append(_execute_ticket(config, adapter, store, ticket, submit=True, close=False))
+                except Exception as exc:  # noqa: BLE001
+                    submission_results.append({"status": "blocked", "ticket_hash": ticket_hash, "reason": _safe_broker_error(exc)})
+            if submission_results:
+                coordinator.mark_submitted(decision, submission_results)
+                decision_payload["submission_results"] = submission_results
+        decisions.append(decision_payload)
+    return decisions
+
+
+def _fresh_fallback_replan(config: dict[str, Any], store: LocalStore, context: dict[str, Any]) -> dict[str, Any] | None:
+    """Re-enter the active unified planner with current portfolio truth."""
+
+    from kamandal_v2.strategy_engine.planning import run_unified_fallback_plan
+
+    idea_paths = [path for path in context.get("idea_paths") or [] if path]
+    if not idea_paths:
+        store.event("live_unified_fallback_replan_blocked", {"campaign_id": context.get("campaign_id"), "reason": "idea_paths_missing"})
+        return None
+    try:
+        unified = run_unified_fallback_plan(
+            config,
+            store=store,
+            idea_paths=idea_paths,
+            provider=str(context.get("provider") or "public"),
+            exclude_candidate_ids=set(str(item) for item in context.get("attempted_candidate_ids") or []),
+            exclude_contract_keys=set(str(item) for item in context.get("attempted_contract_keys") or []),
+            expected_policy_snapshot=dict(context.get("daily_policy_snapshot") or {}),
+        )
+    except (FileNotFoundError, ValueError, RuntimeError) as exc:
+        store.event(
+            "live_unified_fallback_replan_blocked",
+            {"campaign_id": context.get("campaign_id"), "reason": f"{type(exc).__name__}: {exc}"},
+        )
+        return None
+    book = unified.live
+    if book.result is None or book.errors or not book.result.plans or not book.result.plans[0].candidates:
+        store.event(
+            "live_unified_fallback_replan_blocked",
+            {
+                "campaign_id": context.get("campaign_id"),
+                "reason": "unified_live_book_unavailable",
+                "errors": list(book.errors),
+                "has_result": book.result is not None,
+            },
+        )
+        return None
+    plan = book.result.plans[0]
+    candidate_ids = {candidate.candidate_id for candidate in plan.candidates}
+    tickets = [
+        dict(ticket)
+        for ticket in store.live_order_intents_by_type("open")
+        if str(ticket.get("plan_id") or "") == plan.plan_id
+        and str(ticket.get("candidate_id") or "") in candidate_ids
+    ]
+    if {str(ticket.get("candidate_id") or "") for ticket in tickets} != candidate_ids:
+        store.event(
+            "live_unified_fallback_replan_blocked",
+            {"campaign_id": context.get("campaign_id"), "reason": "unified_ticket_handoff_missing", "candidate_ids": sorted(candidate_ids), "ticket_ids": sorted(str(ticket.get("candidate_id") or "") for ticket in tickets)},
+        )
+        return None
+    fresh_session = all(submission_window(config, ticket, close=False).get("allowed") is True for ticket in tickets)
+    fresh_quotes = all(
+        float(leg.get("bid") or 0.0) >= 0 and float(leg.get("ask") or 0.0) > 0 and float(leg.get("ask") or 0.0) >= float(leg.get("bid") or 0.0)
+        for candidate in plan.candidates
+        for leg in candidate.to_dict().get("legs") or []
+    )
+    broker_preflight_valid = all(candidate.preflight is not None and candidate.preflight.ok for candidate in plan.candidates)
+    unified_lifecycle_handoff_valid = all(
+        bool(ticket.get("csa_lifecycle_id"))
+        and bool(ticket.get("csa_compiled_policy_hash"))
+        and bool(ticket.get("stage_authorized"))
+        and bool(ticket.get("csa_policy_snapshot_hash"))
+        and bool(ticket.get("csa_policy_snapshot_date"))
+        for ticket in tickets
+    )
+    validation = {
+        "fresh_session": fresh_session,
+        "fresh_quotes": fresh_quotes,
+        "risk_valid": all(not candidate.rejection_reason for candidate in plan.candidates),
+        "bpr_valid": plan.total_bpr > 0 and plan.buying_power_after >= 0,
+        "concentration_valid": not plan.blocked_by,
+        "overlap_valid": all(candidate.eligible for candidate in plan.candidates),
+        "broker_preflight_valid": broker_preflight_valid,
+        "unified_lifecycle_handoff": unified_lifecycle_handoff_valid,
+    }
+    return {
+        "plan_id": plan.plan_id,
+        "candidate_ids": [candidate.candidate_id for candidate in plan.candidates],
+        "tickets": tickets,
+        "validation": validation,
+    }
+
+
+def _fallback_submission_gate(
+    config: dict[str, Any],
+    tickets: list[dict[str, Any]],
+    *,
+    gate: dict[str, Any],
+) -> str:
+    """Apply the canonical money and stage gates before inline Plan-2 submit."""
+
+    try:
+        _assert_submit_allowed(config, submit=True)
+    except RuntimeError as exc:
+        return "blocked_live_submit_gate:" + str(exc)
+    try:
+        daily_policy = load_daily_policy_snapshot(config)
+    except (FileNotFoundError, ValueError) as exc:
+        return f"blocked_daily_policy_snapshot:{type(exc).__name__}"
+    if not tickets:
+        return "blocked_fallback_tickets_missing"
+    for ticket in tickets:
+        authorized, reason = _stage_ticket_authorization(ticket, daily_policy)
+        if not authorized:
+            return reason
+    risk_manager = gate.get("risk_manager") or {}
+    underlyings = {str(ticket.get("underlying") or "").upper() for ticket in tickets}
+    at_cap = {str(symbol).upper() for symbol in (risk_manager.get("underlyings_at_cap") or {})}
+    blocked_underlying = sorted(underlyings & at_cap)
+    if blocked_underlying:
+        return "blocked_risk_underlying_cap:" + ",".join(blocked_underlying)
+    for cluster, symbols in (risk_manager.get("clusters_at_cap") or {}).items():
+        if underlyings & {str(symbol).upper() for symbol in symbols}:
+            return f"blocked_risk_cluster_cap:{cluster}"
+    return ""
+
+
+def _fallback_basket_cap_allows(config: dict[str, Any], store: LocalStore, campaign_id: str, plan_id: str) -> bool:
+    raw_cap = (config.get("live") or {}).get("max_live_baskets_per_day")
+    if raw_cap in (None, ""):
+        return True
+    cap = int(raw_cap)
+    if cap <= 0:
+        return False
+    used_plan_ids = store.live_entry_plan_ids_since(_market_day_start(config))
+    for registered_id in registered_campaign_ids(store):
+        state = store.latest_event(attempt_event_type(registered_id)) or {}
+        state_plan_id = str(state.get("plan_id") or "")
+        if str(state.get("status") or "") != "rank_one_active":
+            used_plan_ids.update(str(item) for item in state.get("attempted_plan_ids") or [] if item)
+        ticket_hashes = {str(item) for item in state.get("ticket_hashes") or [] if item}
+        tickets = [store.live_order_intent(ticket_hash) for ticket_hash in ticket_hashes]
+        tickets = [ticket for ticket in tickets if ticket]
+        submitted = any(
+            str(ticket.get("_ledger_status") or "") not in PENDING_TICKET_STATUSES | {"dry_run"}
+            or bool(store.live_order_attempts_for_ticket_hashes({str(ticket.get("ticket_hash") or "")}))
+            for ticket in tickets
+        )
+        if submitted and state_plan_id:
+            used_plan_ids.add(state_plan_id)
+    return str(plan_id or "") in used_plan_ids or len(used_plan_ids) < cap
 
 
 def _display_entry_limit(value: Any) -> str:
@@ -1019,6 +1241,31 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
             store.event("live_order_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_entry_cutoff", "submission_window": window}
         new_ticket = _repriced_open_ticket(ticket, config)
+        campaign_metadata = (((new_ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {}).get("campaign") or {}
+        if campaign_metadata.get("enabled"):
+            fresh_preflight = adapter.preflight_ticket(new_ticket)
+            if not fresh_preflight.ok:
+                store.record_live_order_attempt(
+                    new_ticket,
+                    action="campaign_reprice_preflight_open",
+                    submit=True,
+                    ok=False,
+                    request_payload=dict((fresh_preflight.raw or {}).get("request") or new_ticket.get("submit_payload") or {}),
+                    response_payload=fresh_preflight.to_dict(),
+                )
+                store.event(
+                    "live_order_campaign_reprice_blocked",
+                    {
+                        "ticket_hash": ticket.get("ticket_hash"),
+                        "order_id": ticket.get("order_id"),
+                        "attempt": new_ticket.get("reprice_attempt"),
+                        "reason": "fresh_preflight_failed",
+                        "message": fresh_preflight.message,
+                    },
+                )
+                return {"reprice_status": "campaign_preflight_blocked", "reprice_message": fresh_preflight.message}
+            new_ticket["preflight"] = _preflight_with_entry_pricing(fresh_preflight.to_dict(), new_ticket)
+            new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
         if _staged_replace_required(adapter, new_ticket):
             return _begin_staged_replacement(adapter, store, ticket, new_ticket, broker_status=broker_status, close=False)
         if _atomic_replace_supported(adapter, new_ticket):
@@ -1419,6 +1666,13 @@ def _entry_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status:
     max_reprices = int(policy.get("max_reprices") or 0)
     if int(ticket.get("reprice_attempt") or 0) >= max_reprices:
         return False
+    pricing_metadata = (((ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {})
+    campaign = pricing_metadata.get("campaign") or {}
+    if campaign.get("enabled"):
+        prices = campaign.get("prices") or []
+        next_index = int(ticket.get("reprice_attempt") or 0) + 1
+        if next_index >= len(prices):
+            return False
     after_minutes = max(int(policy.get("after_minutes") or 5), 1)
     age_minutes = _active_order_age_minutes(ticket, broker_status)
     if age_minutes is None:
@@ -1499,9 +1753,15 @@ def _repriced_close_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> di
 def _repriced_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str:
     metadata = (((ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {})
     current = abs(float(str(ticket.get("limit_price") or "0").replace("-", "")))
+    campaign = metadata.get("campaign") or {}
     base = float(metadata.get("base_mid_limit") or current)
     improved = float(metadata.get("improved_limit") or current)
     attempt = int(ticket.get("reprice_attempt") or 0) + 1
+    if campaign.get("enabled"):
+        prices = campaign.get("prices") or []
+        if attempt >= len(prices):
+            raise ValueError("entry campaign has no valid next price")
+        return str(prices[attempt])
     multiplier = _reprice_improvement_multiplier(config, attempt)
     multiplier = max(0.0, min(multiplier, 1.0))
     target = base + ((improved - base) * multiplier)
@@ -2105,8 +2365,10 @@ def _adopt_csa_live_fill(
     *,
     position_projection: dict[str, Any] | None = None,
     reconcile_current_version: bool = False,
+    filled_quantity: float | None = None,
+    adopted_ticket_status: str | None = None,
 ) -> dict[str, Any]:
-    """Advance the app-owned lifecycle exactly once after a complete broker fill."""
+    """Advance the app-owned lifecycle exactly once after a broker fill."""
 
     from kamandal_v2.strategy_lanes.models import ShadowFill, stable_csa_id
     from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
@@ -2137,6 +2399,15 @@ def _adopt_csa_live_fill(
             "lifecycle_version": lifecycle.version,
             "ticket_version": strategy_ticket.lifecycle_version,
         }
+    observed_quantity = filled_quantity
+    if observed_quantity in (None, 0):
+        observed_quantity = _filled_quantity(order_status)
+    if observed_quantity and observed_quantity > 0:
+        metadata = dict(lifecycle.metadata)
+        metadata["filled_quantity"] = float(observed_quantity)
+        metadata["requested_quantity"] = float(ticket.get("quantity") or 1.0)
+        metadata["partial_fill"] = bool(float(observed_quantity) < float(ticket.get("quantity") or 1.0))
+        lifecycle = replace(lifecycle, metadata=metadata)
     raw_price = order_status.get("averagePrice")
     if raw_price in (None, ""):
         raw_price = order_status.get("average-price")
@@ -2176,7 +2447,7 @@ def _adopt_csa_live_fill(
     committed = store.commit_canonical_lifecycle_fill(
         updated,
         ticket_hash=str(ticket.get("ticket_hash") or ""),
-        ticket_status="close_filled" if action_type == "close" else "filled",
+        ticket_status=adopted_ticket_status or ("close_filled" if action_type == "close" else "filled"),
         position_projection_id=projection_id,
         fill_evidence={
             "filled_at": observed_at,

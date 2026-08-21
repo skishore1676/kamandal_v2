@@ -449,6 +449,9 @@ class Candidate:
     reasons: list[str] = field(default_factory=list)
     rejection_reason: str = ""
     preflight: PreflightResult | None = None
+    entry_credit_floor: float | None = None
+    entry_debit_ceiling: float | None = None
+    entry_economic_bound_source: str = ""
 
     @property
     def eligible(self) -> bool:
@@ -470,6 +473,9 @@ class Candidate:
             "reasons": list(self.reasons),
             "rejection_reason": self.rejection_reason,
             "preflight": self.preflight.to_dict() if self.preflight else None,
+            "entry_credit_floor": self.entry_credit_floor,
+            "entry_debit_ceiling": self.entry_debit_ceiling,
+            "entry_economic_bound_source": self.entry_economic_bound_source,
         }
 
 

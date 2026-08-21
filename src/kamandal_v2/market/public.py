@@ -13,7 +13,7 @@ from typing import Any, Sequence
 import requests
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, OptionLeg, OptionQuote, PortfolioState, PreflightResult, utc_now
-from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_price_metadata
+from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_price_metadata, normalize_campaign_entry_metadata
 from kamandal_v2.paths import resolve_path
 
 
@@ -150,7 +150,18 @@ class PublicAdapter:
 
     def preflight(self, candidate: Candidate) -> PreflightResult:
         self._require_available()
-        payload = self._order_payload(candidate)
+        try:
+            payload = self._order_payload(candidate)
+        except Exception as exc:  # noqa: BLE001
+            return PreflightResult(
+                ok=False,
+                bpr=candidate.estimated_bpr,
+                message=f"Public preflight blocked by entry pricing: {_safe_public_error(exc)}",
+                raw={
+                    "source": "entry_pricing",
+                    "entry_pricing": entry_price_metadata(candidate, self._config),
+                },
+            )
         try:
             endpoint = "single-leg" if len(candidate.legs) == 1 else "multi-leg"
             response = self._post(
@@ -175,7 +186,15 @@ class PublicAdapter:
         except Exception as exc:  # noqa: BLE001
             if _is_nickel_increment_rejection(exc):
                 retry_payload = dict(payload)
-                retry_payload["limitPrice"] = candidate_entry_limit_price(candidate, self._config, nickel=True)
+                retry_entry_pricing = normalize_campaign_entry_metadata(
+                    candidate,
+                    entry_price_metadata(candidate, self._config),
+                    valid_tick=0.05,
+                )
+                retry_campaign = retry_entry_pricing.get("campaign") or {}
+                retry_payload["limitPrice"] = str(
+                    retry_campaign.get("prices", [candidate_entry_limit_price(candidate, self._config, nickel=True)])[0]
+                )
                 try:
                     response = self._post(
                         f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
@@ -191,7 +210,7 @@ class PublicAdapter:
                             "request": retry_payload,
                             "response": response,
                             "retry_reason": str(exc),
-                            "entry_pricing": entry_price_metadata(candidate, self._config),
+                            "entry_pricing": retry_entry_pricing,
                             "public_bpr_raw": raw_bpr,
                             "broker_bpr_provided": raw_bpr is not None and abs(raw_bpr) > 0,
                             "bpr_source": "broker_preflight" if raw_bpr is not None and abs(raw_bpr) > 0 else "local_fallback",
