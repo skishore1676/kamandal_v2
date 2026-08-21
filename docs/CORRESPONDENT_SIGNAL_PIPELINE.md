@@ -6,10 +6,10 @@ Harmon is the first profile, not a dedicated subsystem.
 ```text
 configured read-only Birdclaw acquisition
   -> sanitized canonical Birdclaw posts + coverage receipt
-  -> one bounded LLM intent question
+  -> one bounded LLM opportunity question
   -> profile classification and deterministic validation
+  -> optional source-neutral Cartographer question/answer
   -> durable Kamandal signal records
-  -> optional Market Cartographer enrichment
   -> eligibility and lifecycle gates
   -> constrained planner Idea artifact
   -> existing planner candidate and plan gates
@@ -17,27 +17,32 @@ configured read-only Birdclaw acquisition
 
 ## Greg's current semantics
 
-Greg uses `interpretation_posture: explicit_only`. The model returns only:
+Greg uses `interpretation_posture: inference_allowed`. The model returns only:
 
 ```json
 {"action":"enter|update|exit|ignore","symbol":"AAPL","direction":"bullish|bearish|neutral","strategy_hint":"short_strangle","reason":"one short sentence"}
 ```
 
-Only `enter` continues toward planner eligibility. Language such as "looks to
-expire", "holding", "rolled", "trimmed", or "closed" is an update or exit,
-not a fresh trade. The source record, text, time, profile, and interpreter
-provenance are attached by Kamandal and are not extra model questions.
+`enter` means a new opportunity to investigate now or retain as a conditional
+watch; it is not a broker instruction. Only `enter` continues toward planner
+eligibility. Language such as "looks to expire", "holding", "rolled", "trimmed",
+or "closed" is an update or exit, not a fresh trade. The source record, text,
+time, profile, and interpreter provenance are attached by Kamandal and are not
+extra model questions.
 
-- `earnings_idea`: explicit strategy language outranks the numbered template. Idea 4
-  may emit a fresh `short_strangle` planner input. Ideas 1–3 remain captured but parked
-  because the existing planner cannot construct their compound structures.
-- `weekly_ideas`: every symbol is retained. A symbol needs a supplied Market
-  Cartographer evaluation and a triggered confirmation before planner handoff. Missing
-  OHLCV, no actionable boundary, waiting triggers, and out-of-universe names are
-  explicit blockers.
-- `trade_journal`: strategy and action are derived from the Kamandal profile. Only an
-  opening event may become a new planner idea. Adjustments and closes stay in the
-  lifecycle index.
+- `earnings_idea`: explicit strategy language outranks the numbered template. A new
+  earnings announcement without a number defaults to Greg Trade Idea 4, a
+  `short_strangle`. Explicit Ideas 1–3 remain captured but parked because the existing
+  planner cannot construct their compound structures.
+- `weekly_ideas`: every symbol is retained for up to ten days. Kamandal asks the
+  source-neutral Cartographer contract for direction, trigger, and invalidation. A
+  triggered bullish answer permits call vertical/diagonal playbooks; a triggered
+  bearish answer permits put diagonal playbooks. Missing OHLCV, inconclusive direction,
+  waiting triggers, and out-of-universe names are explicit blockers.
+- `trade_journal`: strategy and action are derived from the Kamandal profile. A bullish
+  or bearish opening is handed to compatible directional vertical/diagonal playbooks;
+  Kamandal does not blindly reproduce Greg's exact long option. Adjustments and closes
+  remain source lifecycle facts and do not manage Kamandal positions.
 - `unknown` and `irrelevant`: preserved for audit/review and never sent to the planner.
 
 The planner artifact constrains `allowed_structures`. Existing candidate matching,
@@ -80,11 +85,12 @@ Eligible ideas therefore participate in the existing planner and live-advisory f
 The activation does not itself run the planner, write a Sheet, call a broker, admit a
 live order, or place an order; all existing downstream gates remain authoritative.
 
-When a pending `weekly_ideas` record needs chart confirmation, the same job invokes
-the sibling Market Cartographer. The `mala` provider always receives an explicit
-data root: `KAMANDAL_CHART_SEED_DATA_ROOT` when configured, otherwise the sibling
-`../mala_v2/data` directory. If either the Cartographer binary or Mala data root is
-missing, the request remains pending and is not mislabeled as evaluated.
+For each profile, activation exports the current Birdclaw packet first. It then builds
+questions from that same packet, invokes the sibling Market Cartographer, validates the
+all-effects-false response, and translates the packet once. The former path that built
+a request from the previous translation has been retired. If Cartographer or its data
+is unavailable, only the chart-dependent ideas remain parked; unrelated earnings or
+journal opportunities can still proceed through their normal gates.
 
 An empty translation replaces the active file with an empty idea list. Any acquisition
 or translation failure fails the scheduled job and also clears every configured
@@ -120,8 +126,8 @@ planner, and production activation is independently visible in
 2. Add `config/correspondents/<profile>.yaml`, choose
    `interpretation_posture: explicit_only|inference_allowed`, and map family names to one of the
    supported modes: `chart_watch`, `numbered_template`, `trade_journal`, or `ignore`.
-3. Configure strategy regexes, numbered templates, allowed structures,
-   thesis tags, horizons, and recency windows.
+3. Configure strategy regexes, numbered templates, direction-to-structure mappings,
+   thesis tags, horizons, recency windows, and whether a family asks Cartographer.
 4. Add one Birdclaw fixture and one Kamandal fixture.
 5. Replay capture, translation, planner loading, and at least one parked case.
 

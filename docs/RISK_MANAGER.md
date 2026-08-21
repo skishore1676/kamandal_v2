@@ -63,7 +63,7 @@ too approximate for always-on live authority:
 - The entry breaker remains fail-closed whenever that wall-clock limit is
   exceeded. Operator attention is calendar-aware: weekend/holiday staleness is
   `self_handled`, and a trading-day stale snapshot is `self_healing` until the
-  first 09:25 CT live-advisory refresh plus
+  first 08:50 CT unified-plan refresh plus
   `live.health.account_snapshot_refresh_grace_minutes`. It becomes
   `operator_needed` only if it remains stale after that deadline.
 - Daily new-position counting uses the configured market day instead of a raw

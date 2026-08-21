@@ -9,8 +9,6 @@ run_x_bookmark_extraction() {
   require_trading_day
 
   local today source_root digest_dir ideas_dir limit import_json source_doc_dir source_doc activation_json
-  local chart_output chart_provider chart_request chart_data_root generated_request chart_bin
-  local -a chart_args
   today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
   source_root="${KAMANDAL_X_SOURCE_DOC_DIR:-data/source_docs/x_digest}"
   digest_dir="${KAMANDAL_X_BOOKMARK_DIGEST_DIR:-data/digest/x_bookmarks/$today}"
@@ -46,59 +44,9 @@ run_x_bookmark_extraction() {
   fi
 
   if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then
-    # Market Cartographer enrichment for correspondent weekly_ideas — autonomous.
-    # Generates a seed request from the latest correspondent translation's pending
-    # weekly_ideas (chart_evaluation_missing), then evaluates it. No human input.
-    # Control surface remains Google Sheet / Telegram / Obsidian via Lathi on failure.
-    if [[ "${KAMANDAL_CHART_SEED_ENABLED:-0}" == "1" ]]; then
-      chart_output="${KAMANDAL_CHART_SEED_OUTPUT:-data/research/chart_seeds}"
-      chart_provider="${KAMANDAL_CHART_SEED_PROVIDER:-mala}"
-      chart_request="${KAMANDAL_CHART_SEED_REQUEST:-}"
-      chart_data_root="${KAMANDAL_CHART_SEED_DATA_ROOT:-$REPO_ROOT/../mala_v2/data}"
-      # Autonomously generate request if not provided explicitly
-      if [[ -z "$chart_request" || ! -f "$chart_request" ]]; then
-        generated_request="$("$KAMANDAL_PYTHON" -c "
-from kamandal_v2.tools.chart_seed_request import latest_translation_path, build_seed_request_from_translation
-from pathlib import Path
-import os
-output_root = os.environ.get('KAMANDAL_CHART_SEED_OUTPUT', 'data/research/chart_seeds')
-request_dir = os.environ.get('KAMANDAL_CHART_SEED_REQUEST_DIR', 'data/research/chart_seeds/requests')
-translation = latest_translation_path('data/research/correspondent_signals')
-if translation:
-    req = build_seed_request_from_translation(translation, output_dir=request_dir, max_symbols=8)
-    print(str(req) if req else '')
-else:
-    print('')
-" 2>&1)"
-        if [[ -n "$generated_request" && -f "$generated_request" ]]; then
-          chart_request="$generated_request"
-          log "Auto-generated chart seed request: $chart_request"
-        else
-          log "No pending weekly_ideas requiring chart evaluation; skipping cartographer."
-          chart_request=""
-        fi
-      fi
-      chart_bin="${KAMANDAL_MARKET_CARTOGRAPHER_BIN:-$REPO_ROOT/../market-cartographer/.venv/bin/market-cartographer}"
-      if [[ ! -x "$chart_bin" ]]; then
-        chart_bin="$(command -v market-cartographer 2>/dev/null || true)"
-      fi
-      chart_args=(evaluate-seeds --input "$chart_request" --provider "$chart_provider" --output "$chart_output")
-      if [[ "$chart_provider" == "mala" ]]; then
-        chart_args+=(--data-root "$chart_data_root")
-      fi
-      if [[ -n "$chart_request" && -f "$chart_request" && -n "$chart_bin" && "$chart_provider" == "mala" && ! -d "$chart_data_root" ]]; then
-        log "Chart request ready at $chart_request but Mala data root is unavailable: $chart_data_root; leaving the request pending without treating it as an evaluation."
-      elif [[ -n "$chart_request" && -f "$chart_request" && -n "$chart_bin" ]]; then
-        log "Running Market Cartographer seed evaluation: $chart_request -> $chart_output (provider=$chart_provider)"
-        if "$chart_bin" "${chart_args[@]}" 2>&1 | while IFS= read -r line; do log "chart: $line"; done; then
-          log "Chart seed evaluation succeeded."
-        else
-          log "Chart seed evaluation failed (non-fatal, Lathi will surface via health)."
-        fi
-      elif [[ -n "$chart_request" ]]; then
-        log "Chart request ready at $chart_request but Market Cartographer is unavailable; leaving the request pending without treating it as an evaluation."
-      fi
-    fi
+    # Correspondent activation exports the current Birdclaw packet, asks any
+    # profile-declared Cartographer questions, and then publishes planner ideas.
+    # The exchange is generic; this X job does not contain Greg-specific chart logic.
     log "Activating configured correspondent signals for the planner."
     activation_json="$("$KAMANDAL_BIN" activate-correspondent-signals \
       --config-source sheet \

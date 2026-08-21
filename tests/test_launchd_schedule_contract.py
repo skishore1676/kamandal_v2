@@ -19,8 +19,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 def test_late_day_sequence_preserves_dependency_order_and_submission_window() -> None:
     assert JOB_SCHEDULES["iv-afternoon"].fixed_times[-1] == time(13, 45)
     assert JOB_SCHEDULES["youtube"].fixed_times[-1] == time(14, 0)
-    assert JOB_SCHEDULES["live-reconciliation"].fixed_times[-1] == time(14, 20)
-    assert JOB_SCHEDULES["unified-planning"].fixed_times[-1] == time(14, 30)
+    assert JOB_SCHEDULES["live-reconciliation"].fixed_times[-1] == time(14, 10)
+    assert JOB_SCHEDULES["unified-planning"].fixed_times[-1] == time(14, 15)
     lifecycle = JOB_SCHEDULES["unified-lifecycle-management"]
     assert lifecycle.cadence_minutes == 5
     assert lifecycle.window_start == time(8, 30)
@@ -31,7 +31,7 @@ def test_late_day_sequence_preserves_dependency_order_and_submission_window() ->
         config,
         {"underlying": "AAPL"},
         close=False,
-        now=datetime(2026, 7, 30, 14, 35, tzinfo=CENTRAL),
+        now=datetime(2026, 7, 30, 14, 20, tzinfo=CENTRAL),
     )
     cutoff = submission_window(
         config,
@@ -84,8 +84,14 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
 
     assert weekday_one_times("iv_afternoon") == {(13, 45)}
     assert weekday_one_times("youtube") == {(9, 15), (11, 45), (14, 0)}
-    assert weekday_one_times("live_reconciliation") == {(8, 35), (10, 30), (12, 30), (14, 20)}
-    assert weekday_one_times("unified_planning") == {(9, 25), (11, 55), (14, 30)}
+    assert weekday_one_times("x_bookmarks") == {(8, 15)}
+    assert weekday_one_times("live_reconciliation") == {(8, 35), (10, 30), (12, 30), (14, 10)}
+    assert weekday_one_times("unified_planning") == {
+        (8, 50),
+        (9, 25),
+        (11, 55),
+        (14, 15),
+    }
     assert {(8, 30), (14, 35)}.issubset(weekday_one_times("live_approved_orders"))
     assert {(8, 30), (9, 45), (14, 40), (15, 15)}.issubset(weekday_one_times("unified_lifecycle_management"))
     rendered = {path.name for path in launchd_dir.glob("*.plist")}

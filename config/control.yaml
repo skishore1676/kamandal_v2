@@ -89,12 +89,12 @@ live:
     # The broker-facing guard is authoritative; launchd timing is only a wake-up schedule.
     enabled: true
     market_open_time: "08:30"
-    entry_not_before_time: "09:45"
+    entry_not_before_time: "09:00"
     regular_close_time: "15:00"
     extended_close_time: "15:15"
     extended_close_symbols: [SPY]
-    # The final 14:30 advisory is consumed by the 14:35 executor; stop new
-    # regular-session entries at 14:40, leaving 20 minutes before the close.
+    # The final 14:15 plan leaves several executor/reprice opportunities before
+    # regular-session entries stop at 14:40, 20 minutes before the close.
     entry_buffer_minutes: 20
     close_buffer_minutes: 5
     early_close_dates:
@@ -212,7 +212,7 @@ live:
   health:
     stale_close_order_minutes: 120
     # Keep the entry breaker fail-closed, but do not page until the first
-    # 09:25 live-advisory account snapshot has had time to refresh.
+    # 08:50 unified-plan account snapshot has had time to refresh.
     account_snapshot_refresh_grace_minutes: 20
     exit_pipeline_stalled_minutes: 20
     urgent_close_order_stale_minutes: 30
@@ -310,13 +310,13 @@ source_intelligence:
     active_ideas_dir: data/ideas/active
     since_hours: 336
     limit: 200
-    chart_seeds:
+    market_questions:
       enabled: true
-      evaluation_dir: data/research/chart_seeds
-      patterns: ["*.json", "**/*.json"]
-      auto_generate_request: true
-      request_dir: data/research/chart_seeds/requests
+      evaluation_dir: data/research/market_questions
+      request_dir: data/research/market_questions/requests
+      cartographer_bin: ../market-cartographer/.venv/bin/market-cartographer
       provider: mala
+      data_root: ../mala_v2/data
       max_symbols_per_request: 8
     profiles:
       - profile_id: greg_harmon

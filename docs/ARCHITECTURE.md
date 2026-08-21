@@ -122,14 +122,30 @@ all normalize into a common signal contract. Adding another correspondent
 normally adds a collector/profile/translator, not another planner or manager.
 Once normalized, the signal is evaluated by every compatible enabled playbook.
 
-A correspondent translator asks the configured LLM one bounded question: is
-this post a new `enter`, an `update`, an `exit`, or `ignore`? The answer also
-contains symbol, direction, an optional strategy hint, and one short reason.
-Only `enter` may become a planner idea. The application already knows and
-attaches the source, post text, timestamp, correspondent, and interpreter
-identity; the model is not asked to reproduce an audit packet. Profiles select
-one posture: `explicit_only` or `inference_allowed`. This is prompt policy, not
-temperature tuning or a matrix of confidence thresholds.
+A correspondent translator asks the configured LLM one bounded question: does
+this post introduce a new `enter` opportunity, an `update`, an `exit`, or
+`ignore`? Here `enter` means "investigate now or retain as a conditional watch,"
+not "place an order." The answer also contains symbol, direction, an optional
+strategy hint, and one short reason. Only `enter` may continue toward a planner
+idea. The application already knows and attaches the source, post text,
+timestamp, correspondent, and interpreter identity; the model is not asked to
+reproduce an audit packet. Profiles select one posture: `explicit_only` or
+`inference_allowed`. This is prompt policy, not temperature tuning or a matrix
+of confidence thresholds.
+
+A source profile also decides whether it needs external market evidence. When it
+does, Kamandal sends a small, versioned question to Market Cartographer. The
+question contains a symbol, source claim, provenance, and optional direction
+hint. Cartographer returns point-in-time direction, trigger, invalidation, and
+evidence with `planner_eligible=false`. Cartographer does not know Greg's trading
+rules, select an option structure, or manage a position. Kamandal stores the
+answer, applies the source profile, and chooses compatible Sheet-enabled
+playbooks through the ordinary portfolio planner.
+
+Therefore profiles understand people, Cartographer understands charts, and
+Kamandal understands strategies and the portfolio. A future correspondent can
+ask the same market question, ask none, or later use another source-neutral
+question type without creating another planner or lifecycle engine.
 
 Authored ideas may carry thesis tags. A `market_scan` is different: it is a
 quantitative search requested by an enabled playbook, so its IV, liquidity,
@@ -230,15 +246,15 @@ Session policy is shared platform behavior, not strategy-specific logic:
 
 | Central time | New entries | Existing-position actions |
 | --- | --- | --- |
-| 08:30-09:45 | blocked | closes and explicitly risk-reducing actions allowed |
-| 09:45-14:40 | allowed | normal lifecycle management allowed |
+| 08:30-09:00 | blocked | closes and explicitly risk-reducing actions allowed |
+| 09:00-14:40 | allowed | normal lifecycle management allowed |
 | 14:40-14:55 | blocked | regular-option closes allowed until broker cutoff |
 
 Extended-session symbols retain their configured close time and buffer. The
 broker-facing submission guard, not only the wake-up schedule, enforces these
 permissions.
 
-Planning may run before 09:45. A selected entry encountered before the entry
+Planning may run before 09:00. A selected entry encountered before the entry
 window remains in a retryable `waiting_entry_window` ledger state; this is normal
 machine-owned work, not a failure or operator alert. The executor picks it up on
 its next scheduled tick. Because the original ticket will then be stale, the

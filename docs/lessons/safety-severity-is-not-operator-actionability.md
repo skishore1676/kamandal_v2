@@ -35,7 +35,7 @@ actionable regardless of market hours.
 
 1. Preserve the breaker and severity.
 2. On weekends and market holidays, mark snapshot staleness `self_handled`.
-3. Before the first 09:25 CT live-advisory refresh plus grace, mark it
+3. Before the first 08:50 CT unified-plan refresh plus grace, mark it
    `self_healing`.
 4. After that deadline, escalate unchanged staleness to `operator_needed`.
 5. Test all four boundaries: weekend, holiday, pre-refresh, and post-grace.

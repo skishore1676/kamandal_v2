@@ -72,11 +72,13 @@ JOB_LABEL_SUFFIXES = {
 }
 
 JOB_SCHEDULES = {
-    "x-bookmarks": JobSchedule(fixed_times=(time(8, 55),)),
+    "x-bookmarks": JobSchedule(fixed_times=(time(8, 15),)),
     "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 0))),
     "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
-    "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 20))),
-    "unified-planning": JobSchedule(fixed_times=(time(9, 25), time(11, 55), time(14, 30))),
+    "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 10))),
+    "unified-planning": JobSchedule(
+        fixed_times=(time(8, 50), time(9, 25), time(11, 55), time(14, 15))
+    ),
     "live-approved-orders": JobSchedule(cadence_minutes=5, window_start=time(8, 30), window_end=time(15, 15)),
     "unified-lifecycle-management": JobSchedule(
         cadence_minutes=5,

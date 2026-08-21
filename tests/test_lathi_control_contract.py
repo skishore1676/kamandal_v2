@@ -326,7 +326,7 @@ def test_launchd_status_defers_stale_snapshot_attention_on_market_holiday(tmp_pa
 def test_launchd_status_waits_for_first_snapshot_refresh_on_trading_day(tmp_path: Path) -> None:
     payload = _stale_snapshot_status(
         tmp_path,
-        now=datetime(2026, 7, 27, 14, 30, tzinfo=UTC),  # 09:30 CT
+        now=datetime(2026, 7, 27, 14, 0, tzinfo=UTC),  # 09:00 CT
     )
 
     live_health = next(item for item in payload["units"] if item["unit_id"] == "kamandal:live-health")
@@ -334,7 +334,7 @@ def test_launchd_status_waits_for_first_snapshot_refresh_on_trading_day(tmp_path
     assert live_health["lifecycle"] == "running"
     assert live_health["operator_state"] == "self_healing"
     assert event["attention_deferred_reason"] == "awaiting_first_account_snapshot_refresh"
-    assert event["attention_actionable_after"] == "2026-07-27T09:45:00-05:00"
+    assert event["attention_actionable_after"] == "2026-07-27T09:10:00-05:00"
 
 
 def test_launchd_status_escalates_stale_snapshot_after_refresh_grace(tmp_path: Path) -> None:

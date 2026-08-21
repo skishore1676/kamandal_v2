@@ -9,6 +9,7 @@ import yaml
 from kamandal_v2.intelligence.correspondent_activation import _chart_evaluation_paths, activate_correspondent_sources
 from kamandal_v2.planner.idea_loader import load_ideas
 from kamandal_v2.stores.sqlite import LocalStore
+from tests.test_market_questions import _response as _market_response
 
 
 PROFILE = Path("config/correspondents/greg_harmon.yaml").resolve()
@@ -210,12 +211,73 @@ def test_chart_discovery_ignores_seed_requests_and_unrelated_json(tmp_path: Path
     assert paths == [evaluation]
 
 
-def test_production_x_job_uses_sibling_cartographer_venv() -> None:
+def test_production_x_job_delegates_current_post_enrichment_to_activation() -> None:
     script = Path("scripts/run_x_bookmark_extraction.sh").read_text(encoding="utf-8")
 
-    assert "KAMANDAL_MARKET_CARTOGRAPHER_BIN" in script
-    assert "$REPO_ROOT/../market-cartographer/.venv/bin/market-cartographer" in script
-    assert 'KAMANDAL_CHART_SEED_DATA_ROOT:-$REPO_ROOT/../mala_v2/data' in script
-    assert 'chart_args+=(--data-root "$chart_data_root")' in script
-    assert "Mala data root is unavailable" in script
-    assert "leaving the request pending without treating it as an evaluation" in script
+    assert "Activating configured correspondent signals" in script
+    assert "chart_seed_request" not in script
+    assert "evaluate-seeds" not in script
+
+
+def test_activation_asks_current_packet_then_publishes_bearish_diagonal(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    binary = tmp_path / "market-cartographer"
+    binary.write_text("fixture", encoding="utf-8")
+    settings["market_questions"] = {
+        "enabled": True,
+        "request_dir": str(tmp_path / "questions"),
+        "evaluation_dir": str(tmp_path / "answers"),
+        "cartographer_bin": str(binary),
+        "provider": "fixture",
+    }
+    packet = _packet(actionable=False)
+    packet["records"] = [
+        {
+            "schema": "birdclaw.correspondent_signal.v1",
+            "signal_id": "x-post:weekly-current",
+            "profile_id": "greg_harmon",
+            "source": {
+                "kind": "public_x_post",
+                "source_id": "x-post:weekly-current",
+                "source_url": "https://x.com/harmongreg/status/weekly-current",
+                "published_at": "2026-08-01T14:00:00Z",
+                "author_handle": "harmongreg",
+                "expanded_urls": [],
+                "observation_sources": ["timeline"],
+            },
+            "classification": {
+                "type": "weekly_ideas",
+                "rule_id": "weekly",
+                "interpretation_status": "deterministic_profile",
+            },
+            "literal": {
+                "text": "Five trade ideas $SPY",
+                "symbols": [{"symbol": "SPY", "origin": "literal_cashtag"}],
+                "idea_number": None,
+            },
+        }
+    ]
+
+    def market_runner(args: list[str], _cwd: Path) -> str:
+        request = json.loads(Path(args[args.index("--input") + 1]).read_text(encoding="utf-8"))
+        output = Path(args[args.index("--output") + 1])
+        output.mkdir(parents=True)
+        output.joinpath("question-response.json").write_text(
+            json.dumps(_market_response(request, direction="bearish")), encoding="utf-8"
+        )
+        return "{}"
+
+    result = activate_correspondent_sources(
+        settings,
+        universe_symbols={"SPY"},
+        command_runner=lambda _args, _cwd: json.dumps(packet),
+        market_command_runner=market_runner,
+        store=LocalStore(tmp_path / "kamandal.db"),
+    )
+
+    ideas = load_ideas([result.active_idea_paths[0]])
+    assert len(ideas) == 1
+    assert ideas[0].direction == "bearish"
+    assert ideas[0].allowed_structures == ["put_diagonal"]
+    receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
+    assert receipt["profiles"][0]["market_questions"]["status"] == "succeeded"

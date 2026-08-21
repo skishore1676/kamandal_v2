@@ -15,6 +15,10 @@ from pydantic import TypeAdapter, ValidationError
 
 from kamandal_v2.intelligence.chart_seeds import validate_chart_seed_evaluation
 from kamandal_v2.intelligence.llm_client import JsonLlmClient
+from kamandal_v2.intelligence.market_questions import (
+    QUESTION_RESPONSE_SCHEMA,
+    validate_market_question_response,
+)
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -392,6 +396,16 @@ def _translate_record(
             else:
                 chart_run_id = chart["run_id"]
                 activation = _chart_activation(chart["evaluation"])
+                chart_direction = str(
+                    chart["evaluation"].get("direction")
+                    or chart["evaluation"].get("bias")
+                    or direction
+                )
+                if chart_direction in {"bullish", "bearish"}:
+                    direction = chart_direction
+                    allowed_structures = _directional_structures(
+                        planner, direction, fallback=allowed_structures
+                    )
                 if chart["evaluation"].get("evaluation_status") != "evaluated":
                     reason = str((chart["evaluation"].get("reasons") or ["insufficient_evidence"])[0])
                     blockers.append(f"chart_{_slug(reason)}")
@@ -402,12 +416,16 @@ def _translate_record(
                     blockers.append("chart_no_actionable_boundary")
                 elif activation["status"] != "triggered":
                     blockers.append("chart_trigger_not_confirmed")
+                elif direction not in {"bullish", "bearish"}:
+                    blockers.append("chart_direction_unresolved")
         elif mode == "numbered_template":
             explicit = _strategy_match(text, profile)
             interpreted = _strategy_from_intent(source_intent, profile)
             idea_number = source_record["literal"].get("idea_number")
             mapped = (family.get("idea_number_map") or {}).get(str(idea_number))
-            selected = explicit or interpreted or mapped
+            default_number = family.get("default_idea_number")
+            default = (family.get("idea_number_map") or {}).get(str(default_number))
+            selected = explicit or interpreted or mapped or default
             lifecycle_action = _lifecycle_action(intent_action)
             activation = {"kind": "source_activation", "status": intent_action}
             construction_mode = "reconstruct_fresh"
@@ -431,6 +449,15 @@ def _translate_record(
                 strategy_family = str(selected.get("strategy_family") or "")
                 direction = str(selected.get("direction") or direction)
                 allowed_structures = _string_list(selected.get("allowed_structures"))
+                if planner.get("map_directional_to_planner") is True and direction in {
+                    "bullish",
+                    "bearish",
+                }:
+                    strategy_family = "directional_source_idea"
+                    allowed_structures = _directional_structures(
+                        planner, direction, fallback=allowed_structures
+                    )
+                    construction_mode = "planner_selects_from_directional_structures"
                 planner_supported = bool(planner.get("supported", True)) and bool(allowed_structures)
 
     if family is not None and family.get("mode") != "ignore" and intent_action != "enter":
@@ -446,7 +473,11 @@ def _translate_record(
             blockers.append("source_timestamp_in_future")
         elif age > float(family["max_age_hours"]):
             blockers.append("source_too_old")
-    if not allowed_structures and planner_supported:
+    directional_config = planner.get("allowed_structures_by_direction")
+    has_directional_config = isinstance(directional_config, dict) and any(
+        _string_list(value) for value in directional_config.values()
+    )
+    if not allowed_structures and planner_supported and not has_directional_config:
         blockers.append("allowed_structures_missing")
 
     blockers = list(dict.fromkeys(blockers))
@@ -530,18 +561,43 @@ def _load_chart_evaluations(
     for raw in paths:
         path = resolve_path(raw)
         text = path.read_text(encoding="utf-8")
-        payload = validate_chart_seed_evaluation(json.loads(text))
+        raw_payload = json.loads(text)
+        if raw_payload.get("schema") == QUESTION_RESPONSE_SCHEMA:
+            payload = validate_market_question_response(raw_payload)
+            hashes[f"questions:{payload['run_id']}"] = hashlib.sha256(text.encode()).hexdigest()
+            for answer in payload["answers"]:
+                source_id = str(answer["source_context"]["source_id"])
+                evaluation = _question_answer_as_evaluation(answer)
+                key = (source_id, str(answer["symbol"]).upper())
+                if key in result:
+                    raise ValueError(f"duplicate chart evaluation for {source_id} {key[1]}")
+                result[key] = {"run_id": payload["run_id"], "evaluation": evaluation}
+            continue
+        payload = validate_chart_seed_evaluation(raw_payload)
         source_id = str(payload["source"]["source_id"])
         hashes[f"{source_id}:{payload['run_id']}"] = hashlib.sha256(text.encode()).hexdigest()
         for evaluation in payload["evaluations"]:
             key = (source_id, str(evaluation["symbol"]).upper())
             if key in result:
                 raise ValueError(f"duplicate chart evaluation for {source_id} {key[1]}")
-            result[key] = {
-                "run_id": payload["run_id"],
-                "evaluation": evaluation,
-            }
+            result[key] = {"run_id": payload["run_id"], "evaluation": evaluation}
     return result, hashes
+
+
+def _question_answer_as_evaluation(answer: dict[str, Any]) -> dict[str, Any]:
+    evaluated = answer.get("answer_status") == "evaluated"
+    return {
+        "symbol": answer["symbol"],
+        "direction": answer["direction"],
+        "evaluation_status": "evaluated" if evaluated else "insufficient_evidence",
+        "observed_setup_family": "directional_setup" if evaluated else "insufficient_evidence",
+        "source_alignment": answer.get("source_alignment"),
+        "signal_state": answer.get("setup_state"),
+        "confirmation_trigger": answer.get("trigger"),
+        "failure_condition": answer.get("invalidation"),
+        "reasons": list(answer.get("reasons") or []),
+        "evidence_refs": list(answer.get("evidence_refs") or []),
+    }
 
 
 def _chart_activation(evaluation: dict[str, Any]) -> dict[str, Any]:
@@ -554,7 +610,19 @@ def _chart_activation(evaluation: dict[str, Any]) -> dict[str, Any]:
         "failure_condition": evaluation.get("failure_condition"),
         "observed_setup_family": evaluation.get("observed_setup_family"),
         "source_alignment": evaluation.get("source_alignment"),
+        "direction": evaluation.get("direction"),
     }
+
+
+def _directional_structures(
+    planner: dict[str, Any], direction: str, *, fallback: list[str]
+) -> list[str]:
+    configured = planner.get("allowed_structures_by_direction") or {}
+    if isinstance(configured, dict):
+        selected = _string_list(configured.get(direction))
+        if selected:
+            return selected
+    return list(fallback)
 
 
 def _strategy_match(text: str, profile: dict[str, Any]) -> dict[str, Any] | None:
@@ -688,9 +756,11 @@ def _intent_system_prompt(profile: dict[str, Any]) -> str:
     return f"""\
 You interpret public posts from one configured market correspondent.
 
-Answer one question: is each post a new idea to enter now, an update to an
-existing idea, an exit, or none of those? Do not judge whether the trade is
-good, select option legs, or approve portfolio risk.
+    Answer one question: does each post introduce a new opportunity that Kamandal
+    should investigate now or retain as a conditional watch, update a prior source
+    thesis, close a prior source thesis, or do none of those? `enter` means new
+    opportunity, not an instruction to place a broker order. Do not judge whether
+    the trade is good, select option legs, or approve portfolio risk.
 
 Interpretation posture: {posture}
 {posture_rule}

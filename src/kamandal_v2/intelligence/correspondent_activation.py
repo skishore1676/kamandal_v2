@@ -17,9 +17,11 @@ import yaml
 from kamandal_v2.intelligence.chart_seeds import SOURCE_SCHEMA as CHART_EVALUATION_SCHEMA
 from kamandal_v2.intelligence.correspondent_signals import (
     import_correspondent_signals,
+    load_correspondent_profile,
     validate_correspondent_packet,
 )
 from kamandal_v2.intelligence.llm_client import JsonLlmClient
+from kamandal_v2.intelligence.market_questions import run_market_question_exchange
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -57,6 +59,7 @@ def activate_correspondent_sources(
     *,
     universe_symbols: Iterable[str],
     command_runner: CommandRunner | None = None,
+    market_command_runner: CommandRunner | None = None,
     store: LocalStore | None = None,
     intent_client: JsonLlmClient | None = None,
 ) -> CorrespondentActivationResult:
@@ -86,6 +89,7 @@ def activate_correspondent_sources(
     discovery_store = store or LocalStore()
     universe = {str(symbol).strip().upper() for symbol in universe_symbols if str(symbol).strip()}
     chart_evaluation_paths = _chart_evaluation_paths(settings)
+    market_question_settings = settings.get("market_questions") or {}
     activated_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     output_root.mkdir(parents=True, exist_ok=True)
@@ -121,11 +125,22 @@ def activate_correspondent_sources(
             packet_path = output_root / "packets" / profile["profile_id"] / f"{packet_sha}.json"
             _atomic_write(packet_path, packet_text)
 
+            profile_payload, _profile_text = load_correspondent_profile(profile["profile_path"])
+            market_questions = run_market_question_exchange(
+                packet,
+                profile_payload,
+                market_question_settings if isinstance(market_question_settings, dict) else {},
+                command_runner=market_command_runner,
+            )
+            current_chart_paths = list(chart_evaluation_paths)
+            if market_questions.response_path is not None:
+                current_chart_paths.append(market_questions.response_path)
+
             imported = import_correspondent_signals(
                 packet_path,
                 profile_path=profile["profile_path"],
                 universe_symbols=universe,
-                chart_evaluation_paths=chart_evaluation_paths,
+                chart_evaluation_paths=current_chart_paths,
                 output_dir=output_root,
                 store=discovery_store,
                 intent_client=intent_client,
@@ -146,6 +161,7 @@ def activate_correspondent_sources(
                     "active_path": active_root / f"correspondent_{profile['profile_id']}.yaml",
                     "translation_path": str(imported.translation_path),
                     "source_acquisition": packet.get("acquisition") or {"status": "missing"},
+                    "market_questions": market_questions.to_dict(),
                 }
             )
     except Exception as exc:
@@ -183,6 +199,7 @@ def activate_correspondent_sources(
                     "active_path",
                     "translation_path",
                     "source_acquisition",
+                    "market_questions",
                 )
             }
             for item in staged

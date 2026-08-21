@@ -81,8 +81,8 @@ def test_entry_cutoff_is_earlier_than_close_cutoff() -> None:
         (True, 8, 29, False, "market_not_open"),
         (False, 8, 30, False, "entry_not_open"),
         (True, 8, 30, True, "within_submission_window"),
-        (False, 9, 44, False, "entry_not_open"),
-        (False, 9, 45, True, "within_submission_window"),
+        (False, 8, 59, False, "entry_not_open"),
+        (False, 9, 0, True, "within_submission_window"),
     ],
 )
 def test_open_and_close_windows_have_distinct_morning_boundaries(close: bool, hour: int, minute: int, allowed: bool, reason: str) -> None:
@@ -102,7 +102,7 @@ def test_strangle_replacement_uses_the_entry_window() -> None:
         _config(),
         {"underlying": "AAPL", "intent_type": "adjust", "csa_action_type": "adjust"},
         close=False,
-        now=datetime(2026, 7, 24, 9, 44, tzinfo=CENTRAL),
+        now=datetime(2026, 7, 24, 8, 59, tzinfo=CENTRAL),
     )
 
     assert verdict["allowed"] is False

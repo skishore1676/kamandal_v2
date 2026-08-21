@@ -92,6 +92,7 @@ def _chart(source_id: str, symbol: str, *, trigger_status: str = "triggered") ->
         "evaluations": [
             {
                 "symbol": symbol,
+                "bias": "bullish",
                 "evaluation_status": "evaluated",
                 "planner_eligible": False,
                 "source_context": {"source_id": source_id},
@@ -162,9 +163,16 @@ def test_all_greg_families_are_preserved_and_only_openings_reach_planner(tmp_pat
     assert by_source["x-post:106"]["status"] == "ignored"
     ideas = load_ideas([first.planner_ideas_path])
     assert {idea.underlying for idea in ideas} == {"TSLA", "IWM"}
-    assert {tuple(idea.allowed_structures) for idea in ideas} == {("short_strangle",), ("call_spread",)}
+    assert {tuple(idea.allowed_structures) for idea in ideas} == {
+        ("short_strangle",),
+        ("call_spread", "call_diagonal"),
+    }
     lifecycle = json.loads(first.lifecycle_path.read_text(encoding="utf-8"))
-    iwm = next(item for item in lifecycle["lifecycles"] if item["key"] == "greg_harmon:IWM:call_spread")
+    iwm = next(
+        item
+        for item in lifecycle["lifecycles"]
+        if item["key"] == "greg_harmon:IWM:directional_source_idea"
+    )
     assert [event["action"] for event in iwm["events"]] == ["open", "close"]
     assert iwm["events"][1]["linked"] is True
 
@@ -238,6 +246,33 @@ def test_unsupported_and_out_of_universe_signals_remain_visible_but_parked(tmp_p
     assert "outside_configured_universe" in by_symbol["OUT"]["planner_blockers"]
     assert result.planner_idea_count == 0
     assert len(load_ideas([result.planner_ideas_path])) == 0
+
+
+def test_earnings_announcement_defaults_to_greg_trade_idea_four(tmp_path: Path) -> None:
+    input_path = _write_json(
+        tmp_path / "signals.json",
+        _packet(
+            [
+                _record(
+                    "350",
+                    "earnings_idea",
+                    "Earnings options trade ideas for $TSLA",
+                    ["TSLA"],
+                    idea_number=None,
+                )
+            ]
+        ),
+    )
+    result = import_correspondent_signals(
+        input_path,
+        profile_path=PROFILE,
+        universe_symbols={"TSLA"},
+        output_dir=tmp_path / "output",
+    )
+
+    idea = load_ideas([result.planner_ideas_path])[0]
+    assert idea.allowed_structures == ["short_strangle"]
+    assert idea.direction == "neutral"
 
 
 def test_second_correspondent_uses_profile_configuration_without_new_code(tmp_path: Path) -> None:

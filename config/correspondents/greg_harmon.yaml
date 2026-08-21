@@ -2,22 +2,25 @@ schema: kamandal.correspondent_profile.v1
 profile_id: greg_harmon
 version: "1"
 source_profile_id: greg_harmon
-interpretation_posture: explicit_only
+interpretation_posture: inference_allowed
 
 families:
   weekly_ideas:
     mode: chart_watch
-    direction: bullish
+    direction: neutral
     max_age_hours: 240
     planner:
       supported: true
-      allowed_structures: [call_spread, call_diagonal]
+      allowed_structures_by_direction:
+        bullish: [call_spread, call_diagonal]
+        bearish: [put_diagonal]
       thesis_tags: [correspondent_weekly, breakout, momentum]
       horizon_days: 30
 
   earnings_idea:
     mode: numbered_template
     max_age_hours: 36
+    default_idea_number: 4
     idea_number_map:
       "1":
         strategy_family: put_ratio_1x2
@@ -48,6 +51,10 @@ families:
     max_age_hours: 24
     planner:
       supported: true
+      map_directional_to_planner: true
+      allowed_structures_by_direction:
+        bullish: [call_spread, call_diagonal]
+        bearish: [put_diagonal]
       thesis_tags: [correspondent_journal, source_trade]
       horizon_days: 30
 

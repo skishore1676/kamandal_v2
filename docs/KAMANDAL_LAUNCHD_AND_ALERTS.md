@@ -42,14 +42,13 @@ All times are oldmac local time, expected to be America/Chicago.
 
 | Label suffix | Job | Schedule |
 | --- | --- | --- |
-| `x_bookmarks` | `x-bookmarks` | Weekdays 08:55 |
-| `universe_proposer` | `universe-proposer` | Weekdays 08:50 |
+| `x_bookmarks` | `x-bookmarks` | Weekdays 08:15 |
 | `youtube` | `youtube` | Weekdays 09:15, 11:45, 14:00 |
 | `my_ideas` | `my-ideas` | Weekdays 08:05, 09:20 |
-| `live_reconciliation` | `live-reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:20 |
-| `live_advisory` | `live-advisory` | Weekdays 09:25, 11:55, 14:30 |
-| `live_approved_orders` | `live-approved-orders` | Weekdays every 5 minutes, 09:00-15:15 |
-| `live_management` | `live-management` | Weekdays every 15 minutes, 09:00-14:45; plus 14:50 and 15:05 |
+| `live_reconciliation` | `live-reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:10 |
+| `unified_planning` | `unified-planning` | Weekdays 08:50, 09:25, 11:55, 14:15 |
+| `live_approved_orders` | `live-approved-orders` | Weekdays every 5 minutes, 08:30-15:15 |
+| `unified_lifecycle_management` | `unified-lifecycle-management` | Weekdays every 5 minutes, 08:30-15:15 |
 | `live_health_report` | `live-health-report` | Weekdays 09:10, 11:45, 14:45, 15:20 |
 | `scheduled_job_health` | `scheduled-job-health` | Weekdays every 15 minutes, 09:15-15:45 |
 | `daily_report` | `daily-report` | Weekdays 09:10, 11:45, 14:45 |
@@ -57,9 +56,6 @@ All times are oldmac local time, expected to be America/Chicago.
 | `iv` | `iv` | Weekdays 08:45 |
 | `iv_afternoon` | `iv-afternoon` | Weekdays 13:45 |
 | `weekly_reviewer` | `weekly-reviewer` | Fridays 10:00 |
-| `csa_shadow_scan` | `csa-shadow-scan` | Weekdays 09:35, 12:05, 14:35; disabled by default |
-| `csa_shadow_management` | `csa-shadow-management` | Weekdays every 15 minutes, 09:45-14:45; disabled by default |
-| `csa_shadow_scorecard` | `csa-shadow-scorecard` | Weekdays 15:25; disabled by default |
 
 There is no `RunAtLoad` for live trading jobs. Manual smoke tests should use
 `--force` and `--alert-mode spool`.
@@ -69,11 +65,11 @@ that disabled state. Enabling the three sidecars is a separate protected
 deployment action after Sheet policy and database migration readback.
 
 The late-day dependency chain is deliberate: afternoon IV at 13:45, final
-YouTube intelligence at 14:00, reconciliation at 14:20, advisory at 14:30,
-and the first post-advisory executor pass at 14:35. Regular-session opening
+YouTube intelligence at 14:00, reconciliation at 14:10, unified planning at
+14:15, and the first post-plan executor pass at 14:20. Regular-session opening
 orders stop at 14:40, preserving a 20-minute buffer before the 15:00 close.
-The 14:45 and 14:50 management passes remain entry-independent and preserve
-the final pre-close exit evaluation.
+Lifecycle management remains entry-independent and continues every five minutes
+through the final pre-close exit evaluation.
 
 ### Shadow evidence status
 

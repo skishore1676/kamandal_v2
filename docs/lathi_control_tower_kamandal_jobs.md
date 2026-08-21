@@ -87,14 +87,13 @@ Kamandal already owns the active launchd schedule on oldmac.
 
 | Label | Schedule | Purpose |
 | --- | --- | --- |
-| `com.kamandal.v2.x_bookmarks` | Weekdays 08:55 CT | Import X bookmarks into the idea pipeline. |
-| `com.kamandal.v2.universe_proposer` | Weekdays 08:50 CT | Propose up to five disabled universe rows after sourced price/liquidity checks. |
+| `com.kamandal.v2.x_bookmarks` | Weekdays 08:15 CT | Import X and activate source profiles before the first plan. |
 | `com.kamandal.v2.youtube` | Weekdays 09:15, 11:45, 14:00 CT | Import YouTube/transcript intelligence before the final advisory. |
 | `com.kamandal.v2.my_ideas` | Weekdays 08:05, 09:20 CT | Import operator ideas. |
-| `com.kamandal.v2.live_reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:20 CT | Reconcile local live groups against Public broker state. |
-| `com.kamandal.v2.live_advisory` | Weekdays 09:25, 11:55, 14:30 CT | Build live advisory rows when health gates allow entries. |
-| `com.kamandal.v2.live_approved_orders` | Weekdays every 5 minutes, 09:00-15:15 CT | Submit approved live entry intents. |
-| `com.kamandal.v2.live_management` | Weekdays every 15 minutes, 09:00-14:45 CT; plus 14:50 and 15:05 CT | Evaluate exit policy and submit close intents. |
+| `com.kamandal.v2.live_reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:10 CT | Reconcile local live groups against Public broker state. |
+| `com.kamandal.v2.unified_planning` | Weekdays 08:50, 09:25, 11:55, 14:15 CT | Build isolated live and shadow books through one compiler. |
+| `com.kamandal.v2.live_approved_orders` | Weekdays every 5 minutes, 08:30-15:15 CT | Submit eligible live entry intents after the 09:00 entry gate. |
+| `com.kamandal.v2.unified_lifecycle_management` | Weekdays every 5 minutes, 08:30-15:15 CT | Evaluate strategy management and guarded exits. |
 | `com.kamandal.v2.live_health_report` | Weekdays 09:10, 11:45, 14:45, 15:20 CT | Summarize live health and notify only when attention is needed. |
 | `com.kamandal.v2.scheduled_job_health` | Weekdays every 15 minutes, 09:15-15:45 CT | Watch Kamandal launchd logs for stale, missing, or failed runs. |
 | `com.kamandal.v2.daily_report` | Weekdays 09:10, 11:45, 14:45 CT | Deliver the APP/LIVE/SHADOW RYG operational report. |

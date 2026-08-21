@@ -1,4 +1,10 @@
-# Greg weekly chart seeds
+# Greg weekly chart seeds (legacy research contract)
+
+Production correspondent activation now uses
+`market_cartographer.question_request.v1` and
+`market_cartographer.question_response.v1`. This seed importer remains available for
+historical fixture and research replay; production no longer builds a seed request
+from the previous Greg translation.
 
 This chart-enrichment seam is now consumed by the reusable correspondent pipeline. See
 `docs/CORRESPONDENT_SIGNAL_PIPELINE.md` for classification, lifecycle, and planner

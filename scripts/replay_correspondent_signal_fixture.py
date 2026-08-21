@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from kamandal_v2.config import load_control
+from kamandal_v2.intelligence.correspondent_signals import load_correspondent_profile
+from kamandal_v2.intelligence.market_questions import build_market_question_request
 from kamandal_v2.market.fixture import FixtureMarketDataProvider
 from kamandal_v2.planner.engine import run_plan
 from kamandal_v2.stores.audit import AuditWriter
@@ -88,42 +90,31 @@ def main() -> int:
     greg_packet_path = output_root / "greg-signals.json"
     _write_json(greg_packet_path, greg_packet)
 
-    weekly_request = _json_command(
-        [
-            "node",
-            str(birdclaw_root / "src" / "cli.mjs"),
-            "export",
-            "correspondent-chart-seeds",
-            "--profile",
-            "greg_harmon",
-            "--as-of",
-            "2026-08-01T15:00:00Z",
-            "--post-id",
-            "1001",
-            "--json",
-        ],
-        cwd=birdclaw_root,
-        env=common_env,
+    profile, _profile_text = load_correspondent_profile(
+        kamandal_root / "config" / "correspondents" / "greg_harmon.yaml"
     )
-    weekly_request_path = output_root / "greg-weekly-request.json"
-    _write_json(weekly_request_path, weekly_request)
+    market_request = build_market_question_request(greg_packet, profile)
+    if market_request is None:
+        raise RuntimeError("Greg fixture produced no source-neutral market questions")
+    market_request_path = output_root / "greg-market-questions.json"
+    _write_json(market_request_path, market_request)
 
     cartographer_cli = cartographer_root / ".venv" / "bin" / "market-cartographer"
     if not cartographer_cli.is_file():
-        raise RuntimeError("Market Cartographer environment missing; run `uv sync` in that repo")
+        raise RuntimeError(
+            "Market Cartographer environment missing; run `uv sync` in that repo"
+        )
     chart_dir = output_root / "cartographer"
     chart = _json_command(
         [
             str(cartographer_cli),
-            "evaluate-seeds",
+            "answer-questions",
             "--input",
-            str(weekly_request_path),
+            str(market_request_path),
             "--provider",
             "fixture",
             "--output",
             str(chart_dir),
-            "--format",
-            "json",
         ],
         cwd=cartographer_root,
     )
@@ -140,7 +131,7 @@ def main() -> int:
             "--profile",
             "config/correspondents/greg_harmon.yaml",
             "--chart-evaluation",
-            str(chart_dir / "seed-evaluation.json"),
+            str(chart_dir / "question-response.json"),
             "--config-source",
             "seed",
             "--deterministic-intent",
@@ -157,7 +148,12 @@ def main() -> int:
             "export",
             "correspondent-signals",
             "--profile",
-            str(birdclaw_root / "tests" / "fixtures" / "correspondent-profile-sample.json"),
+            str(
+                birdclaw_root
+                / "tests"
+                / "fixtures"
+                / "correspondent-profile-sample.json"
+            ),
             "--since-hours",
             "24",
             "--json",
@@ -186,7 +182,10 @@ def main() -> int:
 
     planner = run_plan(
         load_control(),
-        idea_paths=[greg_import["planner_ideas_path"], sample_import["planner_ideas_path"]],
+        idea_paths=[
+            greg_import["planner_ideas_path"],
+            sample_import["planner_ideas_path"],
+        ],
         config_source="seed",
         provider="fixture",
         write_sheet=False,
@@ -203,26 +202,53 @@ def main() -> int:
             if candidate.eligible
         }
     )
-    if not any(symbol == "IWM" and structure == "call_spread" for symbol, structure in eligible):
-        raise RuntimeError("Greg opening journal idea did not reach the existing call-spread planner")
-    if not any(symbol == "SPY" and structure == "call_spread" for symbol, structure in eligible):
-        raise RuntimeError("second profile did not reach the existing call-spread planner")
+    if not any(
+        symbol == "IWM" and structure == "call_spread" for symbol, structure in eligible
+    ):
+        raise RuntimeError(
+            "Greg opening journal idea did not reach the existing call-spread planner"
+        )
+    if not any(
+        symbol == "SPY" and structure == "call_spread" for symbol, structure in eligible
+    ):
+        raise RuntimeError(
+            "second profile did not reach the existing call-spread planner"
+        )
 
-    expected_greg_types = {"weekly_ideas", "earnings_idea", "trade_journal", "irrelevant"}
-    observed_greg_types = {record["classification"]["type"] for record in greg_packet["records"]}
+    expected_greg_types = {
+        "weekly_ideas",
+        "earnings_idea",
+        "trade_journal",
+        "irrelevant",
+    }
+    observed_greg_types = {
+        record["classification"]["type"] for record in greg_packet["records"]
+    }
     if not expected_greg_types.issubset(observed_greg_types):
         raise RuntimeError("Greg fixture did not cover every expected source family")
     if chart["data"]["mode"] != "DEMO DATA":
         raise RuntimeError("chart fixture must remain visibly DEMO DATA")
+    if any(answer["planner_eligible"] for answer in chart["answers"]):
+        raise RuntimeError(
+            "Cartographer question answer unexpectedly granted planner authority"
+        )
     for imported in (greg_import, sample_import):
         if any(imported["effects"].values()):
             raise RuntimeError("correspondent import reported a protected effect")
-    greg_translation = json.loads(Path(greg_import["translation_path"]).read_text(encoding="utf-8"))
-    sample_translation = json.loads(Path(sample_import["translation_path"]).read_text(encoding="utf-8"))
+    greg_translation = json.loads(
+        Path(greg_import["translation_path"]).read_text(encoding="utf-8")
+    )
+    sample_translation = json.loads(
+        Path(sample_import["translation_path"]).read_text(encoding="utf-8")
+    )
     if greg_translation["source_acquisition"]["status"] != "succeeded":
-        raise RuntimeError("Greg Birdclaw acquisition health did not reach Kamandal translation")
+        raise RuntimeError(
+            "Greg Birdclaw acquisition health did not reach Kamandal translation"
+        )
     if sample_translation["source_acquisition"]["status"] != "succeeded":
-        raise RuntimeError("second-profile Birdclaw acquisition health did not reach Kamandal translation")
+        raise RuntimeError(
+            "second-profile Birdclaw acquisition health did not reach Kamandal translation"
+        )
 
     receipt = {
         "schema": "kamandal.correspondent_signal_replay.v1",
@@ -246,7 +272,10 @@ def main() -> int:
         },
         "chart_run_id": chart["run_id"],
         "planner": {
-            "ideas": sorted((idea.underlying, tuple(idea.allowed_structures)) for idea in planner.ideas),
+            "ideas": sorted(
+                (idea.underlying, tuple(idea.allowed_structures))
+                for idea in planner.ideas
+            ),
             "eligible_candidates": eligible,
             "plans": len(planner.plans),
             "write_sheet": False,
@@ -254,8 +283,8 @@ def main() -> int:
         "artifacts": {
             "greg_packet": str(greg_packet_path),
             "birdclaw_acquisition": str(acquisition_receipt_path),
-            "weekly_request": str(weekly_request_path),
-            "chart_evaluation": str(chart_dir / "seed-evaluation.json"),
+            "market_question_request": str(market_request_path),
+            "market_question_response": str(chart_dir / "question-response.json"),
             "greg_translation": greg_import["translation_path"],
             "greg_review": greg_import["review_path"],
             "greg_planner_ideas": greg_import["planner_ideas_path"],
@@ -313,7 +342,11 @@ def _fixture_db(path: Path) -> None:
             """
         )
         rows = [
-            ("1001", "Dragonfly Capital: 5 Trade Ideas for Monday $SPY $QQQ", "harmongreg"),
+            (
+                "1001",
+                "Dragonfly Capital: 5 Trade Ideas for Monday $SPY $QQQ",
+                "harmongreg",
+            ),
             ("1002", "Took TSLA trade idea #4", "harmongreg"),
             ("1003", "Bought $IWM call spread for 1.25", "harmongreg"),
             ("1004", "Closed $IWM call spread", "harmongreg"),
@@ -372,13 +405,17 @@ def _json_command(
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"command returned invalid JSON: {' '.join(command)}") from exc
+        raise RuntimeError(
+            f"command returned invalid JSON: {' '.join(command)}"
+        ) from exc
     if not isinstance(payload, dict):
         raise RuntimeError(f"command returned non-object JSON: {' '.join(command)}")
     return payload
 
 
-def _write_json(path: Path, payload: dict[str, Any], *, idempotent: bool = False) -> None:
+def _write_json(
+    path: Path, payload: dict[str, Any], *, idempotent: bool = False
+) -> None:
     content = json.dumps(payload, indent=2) + "\n"
     if idempotent and path.exists() and path.read_text(encoding="utf-8") != content:
         raise RuntimeError(f"idempotent artifact collision: {path}")
