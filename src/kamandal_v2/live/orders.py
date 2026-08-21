@@ -86,6 +86,10 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
         "csa_action_type": str(ticket.metadata.get("action_type") or ""),
         "stage_authorized": True,
     }
+    projection_id = str(ticket.metadata.get("position_projection_id") or "")
+    if projection_id:
+        live_ticket["position_projection_id"] = projection_id
+        live_ticket["group_id"] = projection_id
     live_ticket["ticket_hash"] = ticket_hash(live_ticket)
     return live_ticket
 

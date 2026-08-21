@@ -409,13 +409,27 @@ def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot:
 
 def _management_ticket(action: Any, lifecycle: LifecycleState, policy: CsaPolicy, legs: tuple[OptionLeg, ...], plans: dict[str, Any], underlying: str, created_at: str):
     if action.action_type is ActionType.CLOSE:
-        return mixed_ticket(action, policy, underlying=underlying, close_legs=legs, open_legs=(), created_at=created_at, limit_price=float(plans["liquidation"]))
+        ticket = mixed_ticket(action, policy, underlying=underlying, close_legs=legs, open_legs=(), created_at=created_at, limit_price=float(plans["liquidation"]))
+        return _with_position_projection(ticket, lifecycle)
     if lifecycle.lane is LaneId.SHORT_STRANGLE and action.action_type is ActionType.ADJUST:
         plan = plans.get("roll")
         if not plan:
             raise ValueError("selected strangle adjustment has no executable roll plan")
-        return build_strangle_adjustment_ticket(lifecycle, action, policy, underlying=underlying, close_legs=(plan["old"],), open_legs=(plan["new"],), created_at=created_at, limit_price=float(plan["credit"]))
+        ticket = build_strangle_adjustment_ticket(lifecycle, action, policy, underlying=underlying, close_legs=(plan["old"],), open_legs=(plan["new"],), created_at=created_at, limit_price=float(plan["credit"]))
+        return _with_position_projection(ticket, lifecycle)
     raise ValueError(f"unsupported selected management action: {action.action_type.value}")
+
+
+def _with_position_projection(ticket: Any, lifecycle: LifecycleState) -> Any:
+    if not lifecycle.position_projection_id:
+        return ticket
+    return replace(
+        ticket,
+        metadata={
+            **ticket.metadata,
+            "position_projection_id": lifecycle.position_projection_id,
+        },
+    )
 
 
 def _parse_timestamp(value: str) -> datetime:

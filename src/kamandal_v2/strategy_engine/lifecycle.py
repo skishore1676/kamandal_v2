@@ -179,7 +179,10 @@ def finalize_strangle_replacement(lifecycle: LifecycleState, *, filled_at: str) 
 def adopt_legacy_position(payload: dict[str, Any], *, lifecycle_id: str, adopted_at: str) -> LifecycleState:
     """Map a legacy position fixture or fail before mutation with a blocker."""
     lane = LaneId(str(payload.get("lane") or ""))
-    legs = tuple(dict(item) for item in (payload.get("active_legs") or ()))
+    supplied_metadata = payload.get("metadata")
+    metadata = dict(supplied_metadata) if isinstance(supplied_metadata, dict) else {}
+    underlying = str(metadata.get("underlying") or payload.get("underlying") or "").upper()
+    legs = tuple(_canonical_adopted_leg(underlying, item) for item in (payload.get("active_legs") or ()))
     if lane is LaneId.SHORT_STRANGLE:
         shorts = [item for item in legs if str(item.get("side")) == "sell"]
         roles = {str(item.get("role")) for item in shorts}
@@ -195,12 +198,12 @@ def adopt_legacy_position(payload: dict[str, Any], *, lifecycle_id: str, adopted
     compiled_policy = payload.get("compiled_management_policy")
     if not isinstance(compiled_policy, dict):
         raise ValueError("legacy adoption blocked: complete policy_at_adoption snapshot is required")
-    supplied_metadata = payload.get("metadata")
-    metadata = dict(supplied_metadata) if isinstance(supplied_metadata, dict) else {}
+    projection_id = str(payload.get("group_id") or "")
     metadata.update(
         {
             "policy_at_adoption": True,
-            "legacy_source_id": str(payload.get("group_id") or ""),
+            "legacy_source_id": projection_id,
+            "position_projection_id": projection_id,
             "compiled_management_policy": dict(compiled_policy),
         }
     )
@@ -217,6 +220,20 @@ def adopt_legacy_position(payload: dict[str, Any], *, lifecycle_id: str, adopted
         policy_hash=policy_hash,
         metadata=metadata,
     )
+
+
+def _canonical_adopted_leg(underlying: str, raw: Any) -> dict[str, Any]:
+    leg = dict(raw)
+    if leg.get("instrument_id"):
+        return leg
+    expiration = str(leg.get("expiration") or "").replace("-", "")
+    option_type = str(leg.get("option_type") or "").lower()
+    if not underlying or len(expiration) != 8 or option_type not in {"call", "put"}:
+        raise ValueError("legacy adoption blocked: option leg lacks canonical contract identity")
+    flag = "C" if option_type == "call" else "P"
+    strike = int(round(float(leg.get("strike")) * 1000))
+    leg["instrument_id"] = f"{underlying}{expiration[2:]}{flag}{strike:08d}"
+    return leg
 
 
 def _active_shorts(lifecycle: LifecycleState) -> list[dict[str, Any]]:

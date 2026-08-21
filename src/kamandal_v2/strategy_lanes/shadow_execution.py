@@ -81,21 +81,19 @@ class ShadowExecutionAdapter:
             )
         active = list(lifecycle.active_legs)
         for leg in ticket.legs:
-            identity = (leg.instrument_id, leg.role)
             if leg.effect.value == "close":
-                active = [item for item in active if (item.get("instrument_id"), item.get("role")) != identity]
+                active = [item for item in active if not _same_contract_role(item, leg.to_dict())]
             else:
                 active.append(leg.to_dict())
         signed_cashflow = fill.filled_price if ticket.order_kind == "credit" else -fill.filled_price
-        cashflows = [
-            *lifecycle.cashflow_ledger,
-            {
+        cashflows = list(lifecycle.cashflow_ledger)
+        if not any(str(item.get("fill_id") or "") == fill.fill_id for item in cashflows):
+            cashflows.append({
                 "ticket_id": ticket.ticket_id,
                 "fill_id": fill.fill_id,
                 "amount": signed_cashflow,
                 "filled_at": fill.filled_at,
-            },
-        ]
+            })
         metadata = dict(lifecycle.metadata)
         cumulative_cashflow = sum(float(item.get("amount") or 0.0) for item in cashflows)
         metadata["cumulative_cashflow"] = round(cumulative_cashflow, 6)
@@ -140,6 +138,24 @@ class ShadowExecutionAdapter:
             metadata=metadata,
         )
         return finalize_strangle_replacement(adopted, filled_at=fill.filled_at) if is_strangle_replacement else adopted
+
+
+def _same_contract_role(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
+    left_instrument = str(left.get("instrument_id") or "")
+    right_instrument = str(right.get("instrument_id") or "")
+    if left_instrument and right_instrument:
+        return left_instrument == right_instrument and str(left.get("role") or "") == str(right.get("role") or "")
+    return (
+        str(left.get("expiration") or ""),
+        str(left.get("option_type") or "").lower(),
+        round(float(left.get("strike") or 0.0), 8),
+        str(left.get("role") or ""),
+    ) == (
+        str(right.get("expiration") or ""),
+        str(right.get("option_type") or "").lower(),
+        round(float(right.get("strike") or 0.0), 8),
+        str(right.get("role") or ""),
+    )
 
 
 def _natural_price(ticket: StrategyTicket, quotes: Mapping[str, Mapping[str, Any]]) -> float:

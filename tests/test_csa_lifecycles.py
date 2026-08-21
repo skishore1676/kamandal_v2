@@ -14,9 +14,14 @@ from kamandal_v2.strategy_lanes.models import (
     ActionType,
     CsaAction,
     LaneId,
+    LegEffect,
+    LegSide,
     LifecycleState,
+    ShadowFill,
     SourceMode,
     StrategyOpportunity,
+    StrategyTicket,
+    TicketLeg,
 )
 from kamandal_v2.strategy_lanes.policy import compile_csa_policy
 from kamandal_v2.strategy_lanes.registry import lifecycle_registry
@@ -511,6 +516,72 @@ def test_mixed_tickets_reverse_close_sides_and_shadow_restart_is_safe(tmp_path) 
     )
     assert all(leg.effect.value == "close" for leg in close_ticket.legs)
     assert {leg.side.value for leg in close_ticket.legs} == {"buy"}
+
+
+def test_close_fill_matches_adopted_leg_without_instrument_id_and_is_idempotent() -> None:
+    lifecycle = replace(
+        _lifecycle(LaneId.EARNINGS_CALENDAR, version=2),
+        active_legs=(
+            {
+                "side": "buy",
+                "effect": "open",
+                "quantity": 1,
+                "option_type": "call",
+                "expiration": "2026-10-16",
+                "strike": 290.0,
+                "role": "long_call",
+            },
+        ),
+    )
+    close_ticket = StrategyTicket(
+        ticket_id="close-adopted-calendar",
+        action_id="close-action",
+        lifecycle_id=lifecycle.lifecycle_id,
+        lifecycle_version=lifecycle.version,
+        lane=lifecycle.lane,
+        underlying="AMZN",
+        order_kind="credit",
+        limit_price=3.30,
+        legs=(
+            TicketLeg(
+                instrument_id="AMZN  261016C00290000",
+                side=LegSide.SELL,
+                effect=LegEffect.CLOSE,
+                quantity=1,
+                option_type="call",
+                expiration="2026-10-16",
+                strike=290.0,
+                role="long_call",
+            ),
+        ),
+        policy_hash="policy",
+        created_at=NOW,
+        metadata={"action_type": "close"},
+    )
+    fill = ShadowFill(
+        fill_id="broker-fill-1",
+        ticket_id=close_ticket.ticket_id,
+        lifecycle_id=lifecycle.lifecycle_id,
+        status="filled",
+        attempt=0,
+        natural_price=3.31,
+        working_price=3.30,
+        filled_price=3.31,
+        filled_at=NOW,
+        quote_evidence={"source": "broker_order_status"},
+    )
+
+    closed = ShadowExecutionAdapter().adopt_fill(lifecycle, close_ticket, fill)
+    replayed = ShadowExecutionAdapter().adopt_fill(
+        replace(closed, version=close_ticket.lifecycle_version),
+        close_ticket,
+        fill,
+    )
+
+    assert closed.status == "closed"
+    assert closed.active_legs == ()
+    assert len(closed.cashflow_ledger) == 1
+    assert len(replayed.cashflow_ledger) == 1
 
 
 def test_diagonal_partial_state_blocks_and_never_emits_a_short_leg_roll() -> None:

@@ -1,7 +1,7 @@
 # Kamandal V2 Architecture
 
 Date: 2026-08-15
-Status: Architecture frozen; implementation Super Goal under review
+Status: Architecture frozen; unified runtime deployed and under natural observation
 
 ## Purpose
 
@@ -445,7 +445,15 @@ The cutover changes existing seams; it does not add another subsystem:
   from `live/management.py` are preserved as shared context/rules; the separate
   close-only runner is retired.
 - `live/orders.py` exposes one translation from a typed strategy ticket to the
-  existing live ledger. It retains per-leg open/close effects for adjustments.
+  existing live ledger. It retains per-leg open/close effects for adjustments
+  and carries the canonical lifecycle's `position_projection_id` on every
+  management ticket.
+- A complete broker fill is one atomic state transition: advance the canonical
+  lifecycle, update the order ledger, and retire its live-book projection in a
+  single SQLite transaction. The projection is not a second manager and may
+  never remain open after its canonical lifecycle is closed. Reconciliation may
+  replay this transition only from a recorded complete broker fill plus an
+  aggregate broker-position match; it must never create a broker effect.
 - `ops/launchd_registry.py` schedules one planning command and one management
   command at the required entry/exit cadences. Start management checks every
   five minutes; increase frequency later only from measured need. Mode is read

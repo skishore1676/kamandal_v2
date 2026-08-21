@@ -18,10 +18,18 @@ from kamandal_v2.strategy_lanes.reports import (
     write_csa_weekly_economics,
 )
 from kamandal_v2.strategy_lanes.runtime import _resolve_preflight, run_csa_live_scan, run_csa_shadow_scan
-from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
+from kamandal_v2.strategy_lanes.models import (
+    LaneId,
+    LegEffect,
+    LegSide,
+    LifecycleState,
+    StrategyTicket,
+    TicketLeg,
+)
 from kamandal_v2.strategy_lanes.operator_policy import load_csa_operator_policy
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.live.execution import _adopt_csa_live_fill, execute_live_approved
+from kamandal_v2.live.orders import build_csa_live_ticket
 
 
 def _tables():  # noqa: ANN202
@@ -632,6 +640,119 @@ def test_live_fill_advances_same_lifecycle_and_management_stages_reusable_close(
     assert adjusted["management"] is True
     assert adjusted["source"] == "frozen_lifecycle_ledger"
     assert adjusted["results"][0]["status"] == "dry_run"
+
+
+def test_canonical_close_fill_atomically_retires_live_book_projection(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    store = LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    group_id = "live_group_amzn_calendar"
+    lifecycle = LifecycleState(
+        lifecycle_id="adopt:" + group_id,
+        opportunity_id="legacy:" + group_id,
+        lane=LaneId.EARNINGS_CALENDAR,
+        version=2,
+        status="open",
+        active_legs=(
+            {
+                "side": "buy",
+                "effect": "open",
+                "quantity": 1,
+                "option_type": "call",
+                "expiration": "2026-10-16",
+                "strike": 290.0,
+                "role": "long_call",
+            },
+        ),
+        cashflow_ledger=(),
+        opened_at="2026-08-03T14:30:00Z",
+        updated_at="2026-08-21T13:30:00Z",
+        policy_hash="policy",
+        metadata={
+            "execution_mode": "live",
+            "position_projection_id": group_id,
+            "underlying": "AMZN",
+        },
+    )
+    CsaStore(database).save_lifecycle(lifecycle)
+    store.save_live_position_group(
+        group_id,
+        {
+            "group_id": group_id,
+            "underlying": "AMZN",
+            "candidate": {
+                "underlying": "AMZN",
+                "legs": [
+                    {
+                        "expiration": "2026-10-16",
+                        "option_type": "call",
+                        "strike": 290.0,
+                        "quantity": 1,
+                        "side": "buy",
+                    }
+                ],
+            },
+        },
+    )
+    store.save_live_position(
+        "amzn-long-call",
+        group_id,
+        {
+            "underlying": "AMZN",
+            "structure": "call_calendar",
+            "option_type": "call",
+            "expiration": "2026-10-16",
+            "strike": 290.0,
+            "quantity": 1,
+            "side": "buy",
+        },
+    )
+    strategy_ticket = StrategyTicket(
+        ticket_id="close-amzn-calendar",
+        action_id="close-amzn",
+        lifecycle_id=lifecycle.lifecycle_id,
+        lifecycle_version=lifecycle.version,
+        lane=lifecycle.lane,
+        underlying="AMZN",
+        order_kind="credit",
+        limit_price=3.30,
+        legs=(
+            TicketLeg(
+                instrument_id="AMZN  261016C00290000",
+                side=LegSide.SELL,
+                effect=LegEffect.CLOSE,
+                quantity=1,
+                option_type="call",
+                expiration="2026-10-16",
+                strike=290.0,
+                role="long_call",
+            ),
+        ),
+        policy_hash="policy",
+        created_at="2026-08-21T13:30:00Z",
+        metadata={
+            "action_type": "close",
+            "position_projection_id": group_id,
+        },
+    )
+    live_ticket = build_csa_live_ticket(strategy_ticket)
+    store.save_live_order_intent(live_ticket, status="submitted")
+
+    result = _adopt_csa_live_fill(
+        store,
+        live_ticket,
+        {"averagePrice": "3.3103", "filledAt": "2026-08-21T13:30:05Z"},
+    )
+
+    assert live_ticket["position_projection_id"] == group_id
+    assert live_ticket["group_id"] == group_id
+    assert result["status"] == "closed"
+    assert result["projection_retired"] is True
+    assert CsaStore(database).lifecycle(lifecycle.lifecycle_id).status == "closed"
+    assert store.open_live_position_groups() == []
+    closed_group = store.closed_live_position_groups()[0]
+    assert closed_group["_status"] == "closed_by_canonical_lifecycle"
+    assert store.live_order_intent(live_ticket["ticket_hash"])["_ledger_status"] == "close_filled"
 
 
 def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_path) -> None:

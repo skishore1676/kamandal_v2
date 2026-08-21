@@ -1295,6 +1295,134 @@ class LocalStore:
                 (status, json.dumps(close_payload, sort_keys=True), group_id),
             )
 
+    def commit_canonical_lifecycle_fill(
+        self,
+        lifecycle: Any,
+        *,
+        ticket_hash: str,
+        ticket_status: str,
+        position_projection_id: str = "",
+        fill_evidence: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Commit a typed fill and its live-book projection as one transaction."""
+
+        if self.read_only:
+            raise RuntimeError("cannot commit a canonical lifecycle fill through a read-only store")
+        lifecycle_payload = lifecycle.to_dict()
+        evidence = dict(fill_evidence or {})
+        projection_id = str(position_projection_id or "")
+        projection_retired = False
+        with self._connect() as conn:
+            current = conn.execute(
+                "SELECT version FROM csa_lifecycles WHERE id = ?",
+                (lifecycle.lifecycle_id,),
+            ).fetchone()
+            if current and int(current["version"]) > int(lifecycle.version):
+                raise ValueError("cannot overwrite a newer canonical lifecycle version")
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO csa_lifecycles
+                (id, opportunity_id, lane, version, status, opened_at, updated_at, policy_hash, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    lifecycle.lifecycle_id,
+                    lifecycle.opportunity_id,
+                    lifecycle.lane.value,
+                    lifecycle.version,
+                    lifecycle.status,
+                    lifecycle.opened_at,
+                    lifecycle.updated_at,
+                    lifecycle.policy_hash,
+                    json.dumps(lifecycle_payload, sort_keys=True),
+                ),
+            )
+            ticket_row = conn.execute(
+                "SELECT payload FROM live_order_intents WHERE ticket_hash = ?",
+                (ticket_hash,),
+            ).fetchone()
+            if ticket_row is None:
+                raise ValueError(f"canonical lifecycle fill ticket is missing: {ticket_hash}")
+            ticket_payload = json.loads(ticket_row["payload"])
+            ticket_payload["csa_lifecycle_fill"] = {
+                "lifecycle_id": lifecycle.lifecycle_id,
+                "version": lifecycle.version,
+                "status": lifecycle.status,
+                **evidence,
+            }
+            if projection_id:
+                ticket_payload["position_projection_id"] = projection_id
+                ticket_payload["group_id"] = projection_id
+            conn.execute(
+                """
+                UPDATE live_order_intents
+                SET status = ?, updated_at = CURRENT_TIMESTAMP, payload = ?
+                WHERE ticket_hash = ?
+                """,
+                (ticket_status, json.dumps(ticket_payload, sort_keys=True), ticket_hash),
+            )
+            if lifecycle.status == "closed" and projection_id:
+                group_row = conn.execute(
+                    "SELECT payload FROM live_position_groups WHERE group_id = ?",
+                    (projection_id,),
+                ).fetchone()
+                group_payload = json.loads(group_row["payload"]) if group_row else {"group_id": projection_id}
+                group_payload["canonical_lifecycle_close"] = {
+                    "lifecycle_id": lifecycle.lifecycle_id,
+                    "lifecycle_version": lifecycle.version,
+                    "ticket_hash": ticket_hash,
+                    **evidence,
+                }
+                closed_payload = json.dumps(group_payload, sort_keys=True)
+                cursor = conn.execute(
+                    """
+                    UPDATE live_position_groups
+                    SET status = 'closed_by_canonical_lifecycle',
+                        closed_at = CURRENT_TIMESTAMP,
+                        payload = ?
+                    WHERE group_id = ? AND status = 'open'
+                    """,
+                    (closed_payload, projection_id),
+                )
+                projection_retired = cursor.rowcount > 0
+                conn.execute(
+                    """
+                    UPDATE live_positions
+                    SET status = 'closed_by_canonical_lifecycle',
+                        closed_at = CURRENT_TIMESTAMP,
+                        payload = ?
+                    WHERE group_id = ? AND status = 'open'
+                    """,
+                    (closed_payload, projection_id),
+                )
+            conn.execute(
+                "INSERT INTO events (event_type, payload) VALUES (?, ?)",
+                (
+                    "canonical_lifecycle_fill_committed",
+                    json.dumps(
+                        {
+                            "lifecycle_id": lifecycle.lifecycle_id,
+                            "lifecycle_version": lifecycle.version,
+                            "lifecycle_status": lifecycle.status,
+                            "ticket_hash": ticket_hash,
+                            "ticket_status": ticket_status,
+                            "position_projection_id": projection_id,
+                            "projection_retired": projection_retired,
+                            **evidence,
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            )
+        return {
+            "saved": True,
+            "lifecycle_id": lifecycle.lifecycle_id,
+            "version": lifecycle.version,
+            "status": lifecycle.status,
+            "position_projection_id": projection_id,
+            "projection_retired": projection_retired,
+        }
+
     def save_live_approval_request(self, request: dict[str, Any]) -> None:
         with self._connect() as conn:
             conn.execute(

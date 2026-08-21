@@ -123,6 +123,16 @@ class LifecycleState:
     policy_hash: str
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def position_projection_id(self) -> str:
+        """Return the live-book projection owned by this lifecycle."""
+
+        return str(
+            self.metadata.get("position_projection_id")
+            or self.metadata.get("legacy_source_id")
+            or ""
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 

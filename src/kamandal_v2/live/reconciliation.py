@@ -42,6 +42,11 @@ def reconcile_live_positions(
     stage_receipt.update("broker_positions", "completed")
     stage_receipt.update("local_reconciliation", "running")
     broker_index = _broker_position_index(broker_positions)
+    canonical_lifecycle_repairs = _repair_filled_canonical_lifecycle_projections(
+        store,
+        broker_index,
+        dry_run=dry_run,
+    )
     projection_repairs = _repair_duplicate_entry_lineage_projections(
         store,
         broker_index,
@@ -138,11 +143,103 @@ def reconcile_live_positions(
         "broker_option_positions": len(broker_positions),
         "local_open_groups": len(local_groups),
         "issues": issues,
+        "canonical_lifecycle_repairs": canonical_lifecycle_repairs,
         "projection_repairs": projection_repairs,
         "order_reconciliation": order_reconciliation,
         "daily_plan_rows": rows,
         "live_book_rows_written": live_book_rows_written,
     }
+
+
+def _repair_filled_canonical_lifecycle_projections(
+    store: LocalStore,
+    broker_index: dict[str, dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    """Finish a broker-filled canonical close whose projection commit was interrupted."""
+
+    from kamandal_v2.live.execution import _adopt_csa_live_fill
+    from kamandal_v2.strategy_lanes.migrations import csa_schema_ready
+    from kamandal_v2.strategy_lanes.store import CsaStore
+
+    if not csa_schema_ready(store.sqlite_path):
+        return []
+
+    open_groups = store.open_live_position_groups()
+    groups_by_id = {str(group.get("group_id") or ""): group for group in open_groups}
+    context = {
+        "broker_index": broker_index,
+        "local_index": _local_leg_index(open_groups),
+    }
+    filled_closes = store.live_order_intents_by_type("close", statuses={"close_filled"})
+    repairs: list[dict[str, Any]] = []
+    for lifecycle in CsaStore(store.sqlite_path, read_only=True).open_lifecycles():
+        if str(lifecycle.metadata.get("execution_mode") or "") != "live":
+            continue
+        projection_id = lifecycle.position_projection_id
+        group = groups_by_id.get(projection_id)
+        if not projection_id or group is None:
+            continue
+        tickets = [
+            ticket
+            for ticket in filled_closes
+            if str(ticket.get("csa_lifecycle_id") or "") == lifecycle.lifecycle_id
+        ]
+        if not tickets:
+            continue
+        ticket = max(
+            tickets,
+            key=lambda item: (
+                str(item.get("_ledger_updated_at") or item.get("created_at") or ""),
+                str(item.get("ticket_hash") or ""),
+            ),
+        )
+        group_legs = _group_leg_symbols(group)
+        affected_symbols = {str(leg.get("occ_symbol") or "") for leg in group_legs}
+        affected_symbols.discard("")
+        if not affected_symbols or not _aggregate_matches_after_removing_group(
+            affected_symbols,
+            group_legs,
+            context,
+        ):
+            continue
+        order_id = str(ticket.get("order_id") or "")
+        statuses = store.live_order_status_history({order_id}) if order_id else []
+        filled_statuses = [
+            status
+            for status in statuses
+            if str(status.get("_broker_status") or status.get("status") or "").upper() == "FILLED"
+        ]
+        if not filled_statuses:
+            continue
+        order_status = max(
+            filled_statuses,
+            key=lambda item: int(item.get("_status_id") or 0),
+        )
+        repair = {
+            "status": "dry_run" if dry_run else "applied",
+            "reason": "broker_filled_canonical_close_projection_incomplete",
+            "lifecycle_id": lifecycle.lifecycle_id,
+            "position_projection_id": projection_id,
+            "ticket_hash": ticket.get("ticket_hash"),
+            "order_id": order_id,
+            "affected_symbols": sorted(affected_symbols),
+        }
+        if not dry_run:
+            result = _adopt_csa_live_fill(
+                store,
+                ticket,
+                order_status,
+                reconcile_current_version=True,
+            )
+            repair["result"] = result
+            if str(result.get("status") or "") != "closed" or not result.get("projection_retired"):
+                raise RuntimeError(
+                    f"canonical close repair did not retire {lifecycle.lifecycle_id}: {result}"
+                )
+        repairs.append(repair)
+    return repairs
 
 
 def reconciliation_blockers_for_group(

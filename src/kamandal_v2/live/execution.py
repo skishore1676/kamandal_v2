@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+from dataclasses import replace
 from datetime import UTC, datetime, time
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -633,13 +634,20 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
         position_projection = None
         if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "open":
             position_projection = _save_live_position_from_ticket(store, ticket, status=status.lower(), order_status=response)
-        if status in {"FILLED", "PARTIALLY_FILLED"} and ticket.get("intent_type") == "close":
+        if (
+            status in {"FILLED", "PARTIALLY_FILLED"}
+            and ticket.get("intent_type") == "close"
+            and not ticket.get("csa_lifecycle_id")
+        ):
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "close_filled")
         csa_lifecycle_projection = None
         if status == "FILLED" and ticket.get("csa_lifecycle_id"):
-            csa_lifecycle_projection = _adopt_csa_live_fill(store, ticket, response)
-            if ticket.get("intent_type") == "adjust":
-                store.update_live_order_intent_status(str(ticket["ticket_hash"]), "filled")
+            csa_lifecycle_projection = _adopt_csa_live_fill(
+                store,
+                ticket,
+                response,
+                position_projection=position_projection,
+            )
         activity_receipt = None
         terminal_fill_quantity = _filled_quantity(response)
         filled_descendant = _filled_replacement_descendant(store, ticket) if intent_type == "open" else None
@@ -2094,6 +2102,9 @@ def _adopt_csa_live_fill(
     store: LocalStore,
     ticket: dict[str, Any],
     order_status: dict[str, Any],
+    *,
+    position_projection: dict[str, Any] | None = None,
+    reconcile_current_version: bool = False,
 ) -> dict[str, Any]:
     """Advance the app-owned lifecycle exactly once after a complete broker fill."""
 
@@ -2110,13 +2121,15 @@ def _adopt_csa_live_fill(
     if lifecycle is None:
         return {"saved": False, "reason": "csa_lifecycle_missing"}
     if lifecycle.version > strategy_ticket.lifecycle_version:
-        return {
-            "saved": True,
-            "idempotent": True,
-            "lifecycle_id": lifecycle.lifecycle_id,
-            "version": lifecycle.version,
-            "status": lifecycle.status,
-        }
+        if not reconcile_current_version:
+            return {
+                "saved": True,
+                "idempotent": True,
+                "lifecycle_id": lifecycle.lifecycle_id,
+                "version": lifecycle.version,
+                "status": lifecycle.status,
+            }
+        strategy_ticket = replace(strategy_ticket, lifecycle_version=lifecycle.version)
     if lifecycle.version != strategy_ticket.lifecycle_version:
         return {
             "saved": False,
@@ -2147,27 +2160,32 @@ def _adopt_csa_live_fill(
         filled_at=observed_at,
         quote_evidence={"source": "broker_order_status", "order_id": ticket.get("order_id")},
     )
+    projection_id = str(
+        (position_projection or {}).get("group_id")
+        or ticket.get("position_projection_id")
+        or ticket.get("group_id")
+        or lifecycle.position_projection_id
+        or ""
+    )
+    metadata = dict(lifecycle.metadata)
+    if projection_id:
+        metadata["position_projection_id"] = projection_id
+        lifecycle = replace(lifecycle, metadata=metadata)
     updated = ShadowExecutionAdapter().adopt_fill(lifecycle, strategy_ticket, fill)
-    csa_store.save_lifecycle(updated)
-    store.update_live_order_intent_status_with_payload(
-        str(ticket.get("ticket_hash") or ""),
-        "close_filled" if strategy_ticket.metadata.get("action_type") == "close" else "filled",
-        {
-            "csa_lifecycle_fill": {
-                "lifecycle_id": updated.lifecycle_id,
-                "version": updated.version,
-                "status": updated.status,
-                "filled_at": observed_at,
-            }
+    action_type = str(strategy_ticket.metadata.get("action_type") or "")
+    committed = store.commit_canonical_lifecycle_fill(
+        updated,
+        ticket_hash=str(ticket.get("ticket_hash") or ""),
+        ticket_status="close_filled" if action_type == "close" else "filled",
+        position_projection_id=projection_id,
+        fill_evidence={
+            "filled_at": observed_at,
+            "fill_id": fill.fill_id,
+            "order_id": str(ticket.get("order_id") or ""),
+            "action_type": action_type,
         },
     )
-    return {
-        "saved": True,
-        "idempotent": False,
-        "lifecycle_id": updated.lifecycle_id,
-        "version": updated.version,
-        "status": updated.status,
-    }
+    return {**committed, "idempotent": False}
 
 
 def _save_live_position_from_ticket(
@@ -2576,7 +2594,7 @@ def _notify_selected_entry_failure(
     result = _selected_entry_failure(execution, submit=submit)
     previous = store.latest_event(SELECTED_ENTRY_ATTENTION_STATE_EVENT) or {}
     if result is None:
-        if previous.get("status") == "open":
+        if previous.get("status") == "open" and previous.get("intent_type") != "close":
             store.event(
                 SELECTED_ENTRY_ATTENTION_STATE_EVENT,
                 {
@@ -2592,11 +2610,21 @@ def _notify_selected_entry_failure(
     underlying = str(result.get("underlying") or (ticket or {}).get("underlying") or "entry").upper()
     structure = str(result.get("structure") or (ticket or {}).get("structure") or "options entry").replace("_", " ")
     reason = str(result.get("failure_code") or result.get("reason") or result.get("status") or "placement_failed")
+    intent_type = str(result.get("intent_type") or (ticket or {}).get("intent_type") or "open")
+    operation_label = "close" if intent_type == "close" else "entry"
+    incident_subject = str(
+        (ticket or {}).get("position_projection_id")
+        or (ticket or {}).get("group_id")
+        or (ticket or {}).get("csa_lifecycle_id")
+        or ticket_hash
+        or f"{underlying}:{structure}"
+    )
     fingerprint = hashlib.sha256(
         json.dumps(
             {
-                "ticket_hash": ticket_hash,
+                "incident_subject": incident_subject,
                 "underlying": underlying,
+                "intent_type": intent_type,
                 "reason": reason,
                 "recovery_attempted": bool(recovery.get("attempted")),
                 "recovery_outcome": str(recovery.get("outcome") or ""),
@@ -2617,12 +2645,17 @@ def _notify_selected_entry_failure(
         if recovery.get("attempted")
         else "No stale-ticket rebuild applied to this failure."
     )
+    effect_line = (
+        "The position remains open; review is needed only if the next canonical management cycle cannot recover."
+        if intent_type == "close"
+        else "No new position was opened. Review is needed only if you want to override or investigate this failed entry."
+    )
     body = "\n".join(
         [
-            f"Selected entry: {underlying} {structure}.",
+            f"Selected {operation_label}: {underlying} {structure}.",
             f"Placement stopped at: {reason}.",
             recovery_line,
-            "No new position was opened. Review is needed only if you want to override or investigate this failed entry.",
+            effect_line,
         ]
     )
     raw_mode = str(
@@ -2630,7 +2663,7 @@ def _notify_selected_entry_failure(
     ).strip().lower()
     mode = raw_mode if raw_mode in {"off", "spool", "live"} else "live"
     alert = send_lathi_alert(
-        title=f"Kamandal selected entry not placed: {underlying}",
+        title=f"Kamandal selected {operation_label} not placed: {underlying}",
         body=body,
         level="error",
         mode=mode,
@@ -2643,7 +2676,9 @@ def _notify_selected_entry_failure(
             "fingerprint": fingerprint,
             "reason": reason,
             "ticket_hash": ticket_hash,
+            "incident_subject": incident_subject,
             "underlying": underlying,
+            "intent_type": intent_type,
             "notification_ok": alert.ok,
             "notification_mode": alert.mode,
         },

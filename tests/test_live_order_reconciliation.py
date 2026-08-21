@@ -5,9 +5,20 @@ from pathlib import Path
 from typing import Any
 
 from kamandal_v2.live.health import run_live_health
+from kamandal_v2.live.orders import build_csa_live_ticket
 from kamandal_v2.live.order_reconciliation import reconcile_live_orders
 from kamandal_v2.live.reconciliation import reconcile_live_positions
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
+from kamandal_v2.strategy_lanes.models import (
+    LaneId,
+    LegEffect,
+    LegSide,
+    LifecycleState,
+    StrategyTicket,
+    TicketLeg,
+)
+from kamandal_v2.strategy_lanes.store import CsaStore
 
 
 def _config() -> dict[str, Any]:
@@ -167,6 +178,107 @@ def test_position_reconciliation_runs_order_reconciliation(tmp_path: Path, monke
 
     assert result["order_reconciliation"]["expired_stale_close_approvals"] == 1
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "expired_stale_close_approval"
+
+
+def test_position_reconciliation_repairs_pre_fix_filled_canonical_close(tmp_path: Path, monkeypatch: Any) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    migrate_csa_database(store.sqlite_path, dry_run=False, backup_dir=tmp_path / "backups")
+    group_id = "live_group_amzn_calendar"
+    lifecycle = LifecycleState(
+        lifecycle_id="adopt:" + group_id,
+        opportunity_id="legacy:" + group_id,
+        lane=LaneId.EARNINGS_CALENDAR,
+        version=2,
+        status="open",
+        active_legs=(
+            {
+                "side": "buy",
+                "effect": "open",
+                "quantity": 1,
+                "option_type": "call",
+                "expiration": "2026-10-16",
+                "strike": 290.0,
+                "role": "long_call",
+            },
+        ),
+        cashflow_ledger=(),
+        opened_at="2026-08-03T14:30:00Z",
+        updated_at="2026-08-21T13:30:05Z",
+        policy_hash="policy",
+        metadata={
+            "execution_mode": "live",
+            "legacy_source_id": group_id,
+            "underlying": "AMZN",
+        },
+    )
+    CsaStore(store.sqlite_path).save_lifecycle(lifecycle)
+    group = {
+        "group_id": group_id,
+        "underlying": "AMZN",
+        "structure": "call_calendar",
+        "candidate": {
+            "underlying": "AMZN",
+            "structure": "call_calendar",
+            "legs": [
+                {
+                    "expiration": "2026-10-16",
+                    "option_type": "call",
+                    "strike": 290.0,
+                    "quantity": 1,
+                    "side": "buy",
+                }
+            ],
+        },
+    }
+    store.save_live_position_group(group_id, group)
+    store.save_live_position(group_id, group_id, group)
+    close_ticket = StrategyTicket(
+        ticket_id="close-amzn-calendar",
+        action_id="close-amzn",
+        lifecycle_id=lifecycle.lifecycle_id,
+        lifecycle_version=1,
+        lane=lifecycle.lane,
+        underlying="AMZN",
+        order_kind="credit",
+        limit_price=3.30,
+        legs=(
+            TicketLeg(
+                instrument_id="AMZN  261016C00290000",
+                side=LegSide.SELL,
+                effect=LegEffect.CLOSE,
+                quantity=1,
+                option_type="call",
+                expiration="2026-10-16",
+                strike=290.0,
+                role="long_call",
+            ),
+        ),
+        policy_hash="policy",
+        created_at="2026-08-21T13:30:00Z",
+        metadata={"action_type": "close"},
+    )
+    live_ticket = build_csa_live_ticket(close_ticket)
+    assert "group_id" not in live_ticket  # Exact shape emitted before the fix.
+    store.save_live_order_intent(live_ticket, status="close_filled")
+    store.record_live_order_status(
+        live_ticket["order_id"],
+        "FILLED",
+        {"status": "FILLED", "averagePrice": "3.3103", "filledAt": "2026-08-21T13:30:05Z"},
+        ticket_hash=live_ticket["ticket_hash"],
+    )
+
+    class Broker:
+        def broker_positions(self) -> list[dict[str, Any]]:
+            return []
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store)
+
+    assert result["canonical_lifecycle_repairs"][0]["status"] == "applied"
+    assert result["canonical_lifecycle_repairs"][0]["result"]["projection_retired"] is True
+    assert CsaStore(store.sqlite_path).lifecycle(lifecycle.lifecycle_id).status == "closed"
+    assert store.open_live_position_groups() == []
 
 
 def test_live_health_ignores_expired_stale_close_approval_as_actionable_failure(tmp_path: Path) -> None:
