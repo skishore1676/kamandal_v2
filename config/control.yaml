@@ -86,7 +86,7 @@ live:
   max_new_plans_per_day: 3
   max_live_baskets_per_day: 3
   plan_fallback:
-    enabled: false                  # explicit rollout gate; rank-one-only remains default
+    enabled: true                   # operator-approved 2026-08-21 canary; at most one fresh Plan-2 replan
     max_attempts: 2
     auto_submit: true
   option_submission:
@@ -138,12 +138,12 @@ live:
   entry_pricing:
     mode: liquidity_adjusted_mid       # liquidity_adjusted_mid | improved_mid | mid | disabled
     campaign:
-      enabled: false                   # explicit source-ready gate; legacy pricing remains default
+      enabled: true                    # operator-approved 2026-08-21 canary
       initial_improvement_multiplier: 0.50
       allowance_pct_of_midpoint: 5.0
       allowance_max_fraction_of_improvement: 0.50
-      # Set explicitly for a future rollout; zero suppresses the terminal attempt.
-      absolute_allowance_cap: 0.00
+      # Hard ceiling only; midpoint %, improvement fraction, and economic headroom may bind lower.
+      absolute_allowance_cap: 0.10
       valid_tick: 0.01
       absurd_bid_ask_pct: 3.0
     improvement_pct_of_spread: 10
