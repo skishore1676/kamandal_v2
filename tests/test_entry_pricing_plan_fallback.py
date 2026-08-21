@@ -10,8 +10,8 @@ from kamandal_v2.live.execution import _entry_reprice_due, _fallback_submission_
 from kamandal_v2.live.execution import _fallback_basket_cap_allows
 from kamandal_v2.live.execution import _sync_live_orders_locked
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket, ticket_hash
-from kamandal_v2.live.plan_fallback import PlanFallbackCoordinator, register_rank_one_attempt
-from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_campaign, entry_price_metadata, normalize_campaign_entry_metadata
+from kamandal_v2.live.plan_fallback import PlanFallbackCoordinator, fallback_enabled, register_rank_one_attempt
+from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_campaign, entry_campaign_policy, entry_price_metadata, normalize_campaign_entry_metadata
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.stores.sqlite import LocalStore
@@ -730,12 +730,20 @@ def test_integrated_credit_replay_reaches_one_fresh_rank_two_attempt(tmp_path) -
     assert store.latest_event("live_plan_attempt:integrated-campaign")["ticket_hashes"] == [second["ticket_hash"]]
 
 
-def test_default_configuration_keeps_legacy_policy_and_fallback_off(monkeypatch) -> None:
+def test_operator_approved_configuration_activates_campaign_and_fallback(monkeypatch) -> None:
     monkeypatch.delenv("KAMANDAL_ENTRY_CAMPAIGN_ENABLED", raising=False)
     monkeypatch.delenv("KAMANDAL_LIVE_PLAN_FALLBACK_ENABLED", raising=False)
     from kamandal_v2.config import load_control
 
     control = load_control()
 
-    assert control["live"]["entry_pricing"]["campaign"]["enabled"] is False
-    assert control["live"]["plan_fallback"]["enabled"] is False
+    assert control["live"]["entry_pricing"]["campaign"]["enabled"] is True
+    assert control["live"]["entry_pricing"]["campaign"]["absolute_allowance_cap"] == 0.10
+    assert control["live"]["entry_pricing"]["campaign"]["valid_tick"] == 0.01
+    assert control["live"]["plan_fallback"]["enabled"] is True
+    assert control["live"]["plan_fallback"]["max_attempts"] == 2
+
+
+def test_missing_activation_keys_remain_fail_closed() -> None:
+    assert entry_campaign_policy({"live": {"entry_pricing": {"mode": "liquidity_adjusted_mid"}}}).enabled is False
+    assert fallback_enabled({"live": {}}) is False

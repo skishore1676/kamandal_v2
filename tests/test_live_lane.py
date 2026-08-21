@@ -2010,7 +2010,7 @@ def test_sync_live_orders_serializes_cross_job_broker_mutation(tmp_path, monkeyp
 
     result = sync_live_orders(_live_control(), store=store)
 
-    assert result == {"synced": 0, "manage_entries": True, "orders": []}
+    assert result == {"synced": 0, "manage_entries": True, "orders": [], "plan_fallback": []}
     assert [operation for _, operation in lock_calls] == [live_execution.fcntl.LOCK_EX, live_execution.fcntl.LOCK_UN]
     assert (tmp_path / "runlocks" / "live_order_sync.lock").exists()
 
