@@ -15,7 +15,8 @@ from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, capture
 from kamandal_v2.strategy_lanes.operator_policy import OperatorPolicyBundle
 from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
 from kamandal_v2.strategy_lanes.store import CsaStore
-from kamandal_v2.strategy_engine.planning import _retire_orphaned_pending_live_lifecycles, run_unified_books
+from kamandal_v2.strategy_engine.ownership import retire_orphaned_pending_live_lifecycles
+from kamandal_v2.strategy_engine.planning import run_unified_books
 from kamandal_v2.live.execution import execute_live_approved
 
 
@@ -49,10 +50,11 @@ def test_orphaned_pending_live_lifecycle_retires_before_next_plan(tmp_path) -> N
         )
     )
 
-    assert _retire_orphaned_pending_live_lifecycles(store) == 1
+    repairs = retire_orphaned_pending_live_lifecycles(store)
+    assert len(repairs) == 1
     lifecycle = typed.lifecycle("orphan-live-entry")
     assert lifecycle.status == "entry_missed"
-    assert lifecycle.metadata["entry_retirement_reason"] == "guarded_open_intent_not_active"
+    assert lifecycle.metadata["entry_retirement_reason"] == "guarded_open_intent_lineage_terminal"
 
 
 def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:

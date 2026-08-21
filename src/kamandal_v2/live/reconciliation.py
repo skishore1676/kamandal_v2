@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -17,6 +18,7 @@ from kamandal_v2.ops.stage_receipt import StageReceipt
 from kamandal_v2.schemas import DAILY_PLAN_HEADER, LIVE_BOOK_HEADER
 from kamandal_v2.sheets import write_daily_plan, write_live_book
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_engine.ownership import retire_orphaned_pending_live_lifecycles
 
 
 RECONCILIATION_ACTIONS = ["retire_local", "adopt_broker_position", "hold", "dismiss"]
@@ -42,7 +44,17 @@ def reconcile_live_positions(
     stage_receipt.update("broker_positions", "completed")
     stage_receipt.update("local_reconciliation", "running")
     broker_index = _broker_position_index(broker_positions)
+    pending_lifecycle_repairs = retire_orphaned_pending_live_lifecycles(
+        store,
+        dry_run=dry_run,
+        retire_unmatched=False,
+    )
     canonical_lifecycle_repairs = _repair_filled_canonical_lifecycle_projections(
+        store,
+        broker_index,
+        dry_run=dry_run,
+    )
+    retired_projection_lifecycle_repairs = _repair_retired_projection_lifecycles(
         store,
         broker_index,
         dry_run=dry_run,
@@ -143,7 +155,9 @@ def reconcile_live_positions(
         "broker_option_positions": len(broker_positions),
         "local_open_groups": len(local_groups),
         "issues": issues,
+        "pending_lifecycle_repairs": pending_lifecycle_repairs,
         "canonical_lifecycle_repairs": canonical_lifecycle_repairs,
+        "retired_projection_lifecycle_repairs": retired_projection_lifecycle_repairs,
         "projection_repairs": projection_repairs,
         "order_reconciliation": order_reconciliation,
         "daily_plan_rows": rows,
@@ -238,6 +252,79 @@ def _repair_filled_canonical_lifecycle_projections(
                 raise RuntimeError(
                     f"canonical close repair did not retire {lifecycle.lifecycle_id}: {result}"
                 )
+        repairs.append(repair)
+    return repairs
+
+
+def _repair_retired_projection_lifecycles(
+    store: LocalStore,
+    broker_index: dict[str, dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    """Close canonical owners whose broker-flat projection was already retired."""
+
+    from kamandal_v2.strategy_lanes.migrations import csa_schema_ready
+    from kamandal_v2.strategy_lanes.store import CsaStore
+
+    if not csa_schema_ready(store.sqlite_path):
+        return []
+    retired_groups = {
+        str(group.get("group_id") or ""): group
+        for group in store.closed_live_position_groups(limit=1000)
+        if str(group.get("_status") or "") == "reconciled_retired"
+    }
+    local_index = _local_leg_index(store.open_live_position_groups())
+    typed = CsaStore(store.sqlite_path)
+    repairs: list[dict[str, Any]] = []
+    for lifecycle in typed.open_lifecycles():
+        if str(lifecycle.metadata.get("execution_mode") or "") != "live":
+            continue
+        projection_id = lifecycle.position_projection_id
+        group = retired_groups.get(projection_id)
+        if not projection_id or group is None:
+            continue
+        group_legs = _group_leg_symbols(group)
+        affected_symbols = {str(leg.get("occ_symbol") or "") for leg in group_legs}
+        affected_symbols.discard("")
+        if not affected_symbols:
+            continue
+        if any(
+            abs(
+                float((broker_index.get(symbol) or {}).get("quantity") or 0.0)
+                - float((local_index.get(symbol) or {}).get("quantity") or 0.0)
+            )
+            > 0.001
+            for symbol in affected_symbols
+        ):
+            continue
+        repair = {
+            "status": "dry_run" if dry_run else "applied",
+            "reason": "position_projection_reconciled_retired",
+            "lifecycle_id": lifecycle.lifecycle_id,
+            "position_projection_id": projection_id,
+            "projection_status": str(group.get("_status") or ""),
+            "affected_symbols": sorted(affected_symbols),
+        }
+        if not dry_run:
+            terminalized_at = _now()
+            typed.save_lifecycle(
+                replace(
+                    lifecycle,
+                    version=lifecycle.version + 1,
+                    status="closed",
+                    active_legs=(),
+                    updated_at=terminalized_at,
+                    metadata={
+                        **lifecycle.metadata,
+                        "lifecycle_terminal_reason": repair["reason"],
+                        "lifecycle_terminalized_at": terminalized_at,
+                        "terminal_active_legs_snapshot": [dict(leg) for leg in lifecycle.active_legs],
+                        "terminal_economics_status": "reconciled_without_fill",
+                    },
+                )
+            )
+            store.event("retired_projection_lifecycle_terminalized", repair)
         repairs.append(repair)
     return repairs
 

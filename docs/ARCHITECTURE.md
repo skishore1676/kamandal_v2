@@ -454,6 +454,11 @@ The cutover changes existing seams; it does not add another subsystem:
   never remain open after its canonical lifecycle is closed. Reconciliation may
   replay this transition only from a recorded complete broker fill plus an
   aggregate broker-position match; it must never create a broker effect.
+- Terminal ownership converges in the other direction too. A pending-entry
+  lifecycle becomes `entry_missed` once its complete guarded-order lineage is
+  terminal. If reconciliation has already retired a broker-flat position
+  projection, its canonical lifecycle becomes closed and preserves the old legs
+  as terminal evidence; absent close-fill economics remain explicitly unknown.
 - `ops/launchd_registry.py` schedules one planning command and one management
   command at the required entry/exit cadences. Start management checks every
   five minutes; increase frequency later only from measured need. Mode is read

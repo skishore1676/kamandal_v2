@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.tools.universe_proposer import collect_out_of_universe_symbols, micro_stock_guard, run_weekly_universe_review
@@ -114,3 +115,34 @@ def test_weekly_review_does_not_advance_boundary_when_publication_fails(tmp_path
     else:
         raise AssertionError("inexact proposal publication must fail")
     assert store.latest_universe_review_commit_at() is None
+
+
+def test_review_universe_cli_initializes_config_before_sheet_read(monkeypatch, capsys) -> None:  # noqa: ANN001
+    from kamandal_v2 import cli
+    from kamandal_v2.tools import universe_proposer
+
+    control = {"google_sheets": {"spreadsheet_id": "fixture"}}
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(cli, "load_control", lambda: control)
+    monkeypatch.setattr(
+        cli,
+        "pull_sheet_tables",
+        lambda config: observed.setdefault("config", config) and {"universe": []},
+    )
+    monkeypatch.setattr(cli, "LocalStore", lambda: object())
+    monkeypatch.setattr(
+        universe_proposer,
+        "run_weekly_universe_review",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            review_id="review-1",
+            proposal_count=0,
+            published_count=0,
+            committed=True,
+        ),
+    )
+    monkeypatch.setattr("sys.argv", ["kamandal", "review-universe", "--limit", "5"])
+
+    cli.main()
+
+    assert observed["config"] is control
+    assert json.loads(capsys.readouterr().out)["committed"] is True

@@ -54,6 +54,8 @@ def history_record(
         missing.append("cashflow_ledger")
     if not is_closed and mark is None:
         missing.append("open_mark")
+    if is_closed and metadata.get("terminal_economics_status") == "reconciled_without_fill":
+        missing.append("terminal_fill_economics")
     return {
         "schema_version": HISTORY_SCHEMA_VERSION,
         "lifecycle_id": lifecycle.lifecycle_id,
@@ -78,7 +80,7 @@ def history_record(
         "cashflow_ledger": ledger,
         "economics": {
             "cashflow_total": cashflow,
-            "state": "realized" if is_closed else "open_mark",
+            "state": metadata.get("terminal_economics_status") or ("realized" if is_closed else "open_mark"),
             "realized_pnl_price": realized,
             "mark_pnl_price": mark,
             "mark_source": metadata.get("mark_source") if not is_closed else None,

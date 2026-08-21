@@ -438,6 +438,7 @@ def main() -> None:
         from datetime import UTC, datetime
         from kamandal_v2.tools.universe_proposer import run_weekly_universe_review
 
+        config = load_control()
         tables = pull_sheet_tables(config)
         universe_rows = list(tables.get("universe") or [])
         publisher = None

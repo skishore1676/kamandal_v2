@@ -281,6 +281,131 @@ def test_position_reconciliation_repairs_pre_fix_filled_canonical_close(tmp_path
     assert store.open_live_position_groups() == []
 
 
+def test_position_reconciliation_terminalizes_broker_flat_retired_projection(tmp_path: Path, monkeypatch: Any) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    migrate_csa_database(store.sqlite_path, dry_run=False, backup_dir=tmp_path / "backups")
+    group_id = "live_group_gld_retired"
+    active_legs = (
+        {
+            "instrument_id": "GLD260918P00300000",
+            "side": "buy",
+            "effect": "open",
+            "quantity": 1,
+            "option_type": "put",
+            "expiration": "2026-09-18",
+            "strike": 300.0,
+            "role": "long_put",
+        },
+    )
+    lifecycle = LifecycleState(
+        lifecycle_id="adopt:" + group_id,
+        opportunity_id="legacy:" + group_id,
+        lane=LaneId.GENERIC_CLOSE_ONLY,
+        version=2,
+        status="open",
+        active_legs=active_legs,
+        cashflow_ledger=(),
+        opened_at="2026-08-10T14:30:00Z",
+        updated_at="2026-08-19T19:20:11Z",
+        policy_hash="policy",
+        metadata={
+            "execution_mode": "live",
+            "position_projection_id": group_id,
+            "underlying": "GLD",
+        },
+    )
+    CsaStore(store.sqlite_path).save_lifecycle(lifecycle)
+    group = {
+        "group_id": group_id,
+        "underlying": "GLD",
+        "structure": "put_spread",
+        "candidate": {
+            "underlying": "GLD",
+            "structure": "put_spread",
+            "legs": [
+                {
+                    "side": "buy",
+                    "quantity": 1,
+                    "option_type": "put",
+                    "expiration": "2026-09-18",
+                    "strike": 300.0,
+                }
+            ],
+        },
+    }
+    store.save_live_position_group(group_id, group, status="reconciled_retired")
+    store.save_live_position(group_id, group_id, group, status="reconciled_retired")
+
+    class Broker:
+        def broker_positions(self) -> list[dict[str, Any]]:
+            return []
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store)
+
+    repair = result["retired_projection_lifecycle_repairs"][0]
+    assert repair["status"] == "applied"
+    assert repair["position_projection_id"] == group_id
+    closed = CsaStore(store.sqlite_path).lifecycle(lifecycle.lifecycle_id)
+    assert closed.status == "closed"
+    assert closed.version == 3
+    assert closed.active_legs == ()
+    assert closed.metadata["terminal_active_legs_snapshot"] == list(active_legs)
+    assert closed.metadata["terminal_economics_status"] == "reconciled_without_fill"
+
+
+def test_position_reconciliation_terminalizes_exhausted_pending_entry(tmp_path: Path, monkeypatch: Any) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    migrate_csa_database(store.sqlite_path, dry_run=False, backup_dir=tmp_path / "backups")
+    lifecycle = LifecycleState(
+        lifecycle_id="pending-adbe",
+        opportunity_id="adbe-opportunity",
+        lane=LaneId.GENERIC_CLOSE_ONLY,
+        version=1,
+        status="pending_live_submission",
+        active_legs=(),
+        cashflow_ledger=(),
+        opened_at="2026-08-21T14:25:08Z",
+        updated_at="2026-08-21T14:25:08Z",
+        policy_hash="policy",
+        metadata={
+            "execution_mode": "live",
+            "unified_plan_id": "adbe-plan",
+            "candidate_id": "adbe-candidate",
+            "underlying": "ADBE",
+        },
+    )
+    CsaStore(store.sqlite_path).save_lifecycle(lifecycle)
+    ticket = {
+        "ticket_hash": "adbe-terminal-ticket",
+        "order_id": "adbe-terminal-order",
+        "plan_id": "adbe-plan",
+        "candidate_id": "adbe-candidate",
+        "idea_id": "adbe-idea",
+        "intent_type": "open",
+        "underlying": "ADBE",
+        "structure": "put_spread",
+        "csa_lifecycle_id": lifecycle.lifecycle_id,
+    }
+    store.save_live_order_intent(ticket, status="expired")
+
+    class Broker:
+        def broker_positions(self) -> list[dict[str, Any]]:
+            return []
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store)
+
+    repair = result["pending_lifecycle_repairs"][0]
+    assert repair["lifecycle_id"] == lifecycle.lifecycle_id
+    assert repair["terminal_ticket_statuses"] == ["expired"]
+    retired = CsaStore(store.sqlite_path).lifecycle(lifecycle.lifecycle_id)
+    assert retired.status == "entry_missed"
+    assert retired.metadata["entry_retirement_reason"] == "guarded_open_intent_lineage_terminal"
+
+
 def test_live_health_ignores_expired_stale_close_approval_as_actionable_failure(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     _open_group(store)
