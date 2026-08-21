@@ -100,6 +100,7 @@ def submission_window(
         "submission_cutoff_at": cutoff_at.isoformat(),
         "evaluated_at": current.isoformat(),
         "buffer_minutes": buffer_minutes,
+        "retryable_current_session": not is_close_action and reason == "entry_not_open",
         "retryable_next_session": is_close_action and reason in {"market_closed_non_trading_day", "close_cutoff_reached"},
     }
 

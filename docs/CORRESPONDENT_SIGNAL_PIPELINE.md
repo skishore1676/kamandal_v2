@@ -80,6 +80,12 @@ Eligible ideas therefore participate in the existing planner and live-advisory f
 The activation does not itself run the planner, write a Sheet, call a broker, admit a
 live order, or place an order; all existing downstream gates remain authoritative.
 
+When a pending `weekly_ideas` record needs chart confirmation, the same job invokes
+the sibling Market Cartographer. The `mala` provider always receives an explicit
+data root: `KAMANDAL_CHART_SEED_DATA_ROOT` when configured, otherwise the sibling
+`../mala_v2/data` directory. If either the Cartographer binary or Mala data root is
+missing, the request remains pending and is not mislabeled as evaluated.
+
 An empty translation replaces the active file with an empty idea list. Any acquisition
 or translation failure fails the scheduled job and also clears every configured
 correspondent active file before returning an error. A prior signal can therefore not
@@ -122,6 +128,12 @@ planner, and production activation is independently visible in
 No Python or JavaScript change is needed for a new person whose publishing grammar fits
 those modes. A genuinely new semantic family should add one reusable mode rather than
 an author-specific branch.
+
+Before changing a correspondent posture or prompt, replay a bounded recent production
+window and compare Kamandal's action, symbol, direction, and reason with operator
+labels. Treat that comparison as a calibration set: plumbing blockers and semantic
+disagreements are separate findings, and human labels inform a later profile change
+rather than silently changing the current run.
 
 ## Safety boundary
 

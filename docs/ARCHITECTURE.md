@@ -238,6 +238,14 @@ Extended-session symbols retain their configured close time and buffer. The
 broker-facing submission guard, not only the wake-up schedule, enforces these
 permissions.
 
+Planning may run before 09:45. A selected entry encountered before the entry
+window remains in a retryable `waiting_entry_window` ledger state; this is normal
+machine-owned work, not a failure or operator alert. The executor picks it up on
+its next scheduled tick. Because the original ticket will then be stale, the
+existing bounded recovery path rebuilds the current rank-one plan and repeats
+health, risk, session, quote, and broker preflight checks before any submission.
+Waiting entries from a prior market day are retired rather than carried forward.
+
 ### Management permissions are capability-specific
 
 One lifecycle engine does not mean every strategy may perform every action.
@@ -1024,6 +1032,12 @@ automatic mode:
    the option-session window.
 4. Eligible entries submit automatically.
 5. `auto_rules` manages and submits eligible exits automatically.
+
+For a working multileg entry, every repricing child retains the immutable
+pricing envelope captured at the original preflight. Public's multileg path may
+use cancel-confirm-submit instead of atomic replacement, but it must preserve
+that envelope across every staged child so successive limits advance from the
+same original market evidence rather than freezing after the first replacement.
 
 Some internal fields and ledger statuses retain the word `approval` because the
 code also supports optional manual modes. In `auto_top_plan` and `auto_rules`,

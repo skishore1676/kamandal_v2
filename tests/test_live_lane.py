@@ -1187,9 +1187,11 @@ def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_p
     keep_ticket = make_ticket("keep-order", "SPY")
     retire_ticket = make_ticket("retire-order", "JPM")
     old_sheet_ticket = make_ticket("old-sheet-order", "MSFT")
+    waiting_ticket = make_ticket("waiting-order", "GLD")
     store.save_live_order_intent(keep_ticket, status="pending_approval")
     store.save_live_order_intent(retire_ticket, status="pending_approval")
     store.save_live_order_intent(old_sheet_ticket, status="pending_approval")
+    store.save_live_order_intent(waiting_ticket, status="waiting_entry_window")
     with sqlite3.connect(store.sqlite_path) as conn:
         conn.execute(
             "UPDATE live_order_intents SET created_at = ?, updated_at = ?",
@@ -1221,14 +1223,21 @@ def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_p
     cleaned = cleanup_live_approvals(load_control(), store=store)
 
     assert cleaned["cleared"] == 0
-    assert cleaned["retired_stale_entry_approvals"] == 2
+    assert cleaned["retired_stale_entry_approvals"] == 3
     retired_hashes = {item["ticket_hash"] for item in cleaned["retired_rows"]}
-    assert retired_hashes == {retire_ticket["ticket_hash"], old_sheet_ticket["ticket_hash"]}
+    assert retired_hashes == {
+        retire_ticket["ticket_hash"],
+        old_sheet_ticket["ticket_hash"],
+        waiting_ticket["ticket_hash"],
+    }
     assert store.live_order_intent(keep_ticket["ticket_hash"])["_ledger_status"] == "pending_approval"
     retired = store.live_order_intent(retire_ticket["ticket_hash"])
     assert retired["_ledger_status"] == "retired_stale_entry_approval"
     assert retired["order_reconciliation"]["reason"] == "stale_entry_approval_not_in_current_daily_plan"
     assert store.live_order_intent(old_sheet_ticket["ticket_hash"])["_ledger_status"] == "retired_stale_entry_approval"
+    waiting = store.live_order_intent(waiting_ticket["ticket_hash"])
+    assert waiting["_ledger_status"] == "retired_stale_entry_approval"
+    assert waiting["order_reconciliation"]["prior_status"] == "waiting_entry_window"
     assert written == {}
 
 
@@ -2776,6 +2785,109 @@ def test_sync_live_orders_stages_signed_multileg_cancel_then_uses_portfolio_and_
     assert ("portfolio",) in calls
     assert ("preflight", "-0.40") in calls
     assert any(call[0] == "place" for call in calls)
+
+
+def test_two_staged_entry_replacements_preserve_original_pricing_envelope(tmp_path) -> None:
+    from kamandal_v2.live.orders import ticket_hash
+
+    store = LocalStore(tmp_path / "kamandal.db")
+    original = {
+        "order_id": "gld-order-0",
+        "plan_id": "gld-plan",
+        "plan_rank": 1,
+        "candidate_id": "gld-candidate",
+        "idea_id": "gld-idea",
+        "intent_type": "open",
+        "underlying": "GLD",
+        "playbook_id": "call_spread_default",
+        "structure": "call_spread",
+        "quantity": 1,
+        "limit_price": "-2.25",
+        "time_in_force": "DAY",
+        "created_at": "2026-08-20T19:00:00Z",
+        "preflight": {"raw": {"entry_pricing": {"base_mid_limit": 2.15, "improved_limit": 2.25}}},
+        "legs": [
+            {"role": "long_call", "side": "buy", "option_type": "call", "strike": 220, "expiration": "2026-10-16", "quantity": 1},
+            {"role": "short_call", "side": "sell", "option_type": "call", "strike": 225, "expiration": "2026-10-16", "quantity": 1},
+        ],
+        "submit_payload": {
+            "orderId": "gld-order-0",
+            "quantity": "1",
+            "type": "LIMIT",
+            "limitPrice": "-2.25",
+            "legs": [],
+        },
+    }
+    original["ticket_hash"] = ticket_hash(original)
+    store.save_live_order_intent(original, status="submitted")
+
+    class PublicStyleStagedBroker:
+        def cancel_order(self, order_id):
+            return {"orderId": order_id, "status": "CANCEL_REQUESTED"}
+
+        def preflight_ticket(self, replacement):
+            return PreflightResult(
+                ok=True,
+                bpr=200,
+                message="ok",
+                raw={"request": replacement["submit_payload"], "response": {"buyingPowerRequirement": "200"}},
+            )
+
+        def place_order_ticket(self, replacement):
+            return {"orderId": replacement["order_id"]}
+
+    config = _live_control()
+    config["live"]["entry_reprice"] = {
+        "enabled": True,
+        "max_reprices": 2,
+        "improvement_multipliers": [0.5, 0.0],
+    }
+    adapter = PublicStyleStagedBroker()
+
+    first_replacement = live_execution._repriced_open_ticket(original, config)
+    live_execution._begin_staged_replacement(
+        adapter,
+        store,
+        original,
+        first_replacement,
+        broker_status={"status": "NEW"},
+        close=False,
+    )
+    live_execution._advance_staged_replacement(
+        adapter,
+        store,
+        original,
+        {"status": "CANCELLED"},
+    )
+    first_submitted = store.live_order_child_intents(original["ticket_hash"])[0]
+    assert first_submitted["limit_price"] == "-2.20"
+    assert first_submitted["preflight"]["raw"]["entry_pricing"] == {
+        "base_mid_limit": 2.15,
+        "improved_limit": 2.25,
+    }
+
+    second_replacement = live_execution._repriced_open_ticket(first_submitted, config)
+    live_execution._begin_staged_replacement(
+        adapter,
+        store,
+        first_submitted,
+        second_replacement,
+        broker_status={"status": "NEW"},
+        close=False,
+    )
+    live_execution._advance_staged_replacement(
+        adapter,
+        store,
+        first_submitted,
+        {"status": "CANCELLED"},
+    )
+    second_submitted = store.live_order_child_intents(first_submitted["ticket_hash"])[0]
+    assert second_submitted["limit_price"] == "-2.15"
+    assert second_submitted["reprice_attempt"] == 2
+    assert second_submitted["preflight"]["raw"]["entry_pricing"] == {
+        "base_mid_limit": 2.15,
+        "improved_limit": 2.25,
+    }
 
 
 def test_sync_live_orders_profit_target_reprice_respects_floor(tmp_path, monkeypatch) -> None:

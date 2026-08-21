@@ -9,6 +9,8 @@ run_x_bookmark_extraction() {
   require_trading_day
 
   local today source_root digest_dir ideas_dir limit import_json source_doc_dir source_doc activation_json
+  local chart_output chart_provider chart_request chart_data_root generated_request chart_bin
+  local -a chart_args
   today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
   source_root="${KAMANDAL_X_SOURCE_DOC_DIR:-data/source_docs/x_digest}"
   digest_dir="${KAMANDAL_X_BOOKMARK_DIGEST_DIR:-data/digest/x_bookmarks/$today}"
@@ -52,6 +54,7 @@ run_x_bookmark_extraction() {
       chart_output="${KAMANDAL_CHART_SEED_OUTPUT:-data/research/chart_seeds}"
       chart_provider="${KAMANDAL_CHART_SEED_PROVIDER:-mala}"
       chart_request="${KAMANDAL_CHART_SEED_REQUEST:-}"
+      chart_data_root="${KAMANDAL_CHART_SEED_DATA_ROOT:-$REPO_ROOT/../mala_v2/data}"
       # Autonomously generate request if not provided explicitly
       if [[ -z "$chart_request" || ! -f "$chart_request" ]]; then
         generated_request="$("$KAMANDAL_PYTHON" -c "
@@ -79,9 +82,15 @@ else:
       if [[ ! -x "$chart_bin" ]]; then
         chart_bin="$(command -v market-cartographer 2>/dev/null || true)"
       fi
-      if [[ -n "$chart_request" && -f "$chart_request" && -n "$chart_bin" ]]; then
+      chart_args=(evaluate-seeds --input "$chart_request" --provider "$chart_provider" --output "$chart_output")
+      if [[ "$chart_provider" == "mala" ]]; then
+        chart_args+=(--data-root "$chart_data_root")
+      fi
+      if [[ -n "$chart_request" && -f "$chart_request" && -n "$chart_bin" && "$chart_provider" == "mala" && ! -d "$chart_data_root" ]]; then
+        log "Chart request ready at $chart_request but Mala data root is unavailable: $chart_data_root; leaving the request pending without treating it as an evaluation."
+      elif [[ -n "$chart_request" && -f "$chart_request" && -n "$chart_bin" ]]; then
         log "Running Market Cartographer seed evaluation: $chart_request -> $chart_output (provider=$chart_provider)"
-        if "$chart_bin" evaluate-seeds --input "$chart_request" --provider "$chart_provider" --output "$chart_output" 2>&1 | while IFS= read -r line; do log "chart: $line"; done; then
+        if "$chart_bin" "${chart_args[@]}" 2>&1 | while IFS= read -r line; do log "chart: $line"; done; then
           log "Chart seed evaluation succeeded."
         else
           log "Chart seed evaluation failed (non-fatal, Lathi will surface via health)."

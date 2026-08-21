@@ -12,6 +12,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 
 RETIRED_STALE_ENTRY_APPROVAL_STATUS = "retired_stale_entry_approval"
 DEFAULT_STALE_ENTRY_APPROVAL_MINUTES = 120
+RETRYABLE_ENTRY_STATUSES = {"pending_approval", "stage_approved_pending_submit", "waiting_entry_window"}
 
 
 def retire_stale_entry_approvals(
@@ -46,7 +47,7 @@ def retire_stale_entry_approvals(
             {
                 "order_reconciliation": {
                     "status": RETIRED_STALE_ENTRY_APPROVAL_STATUS,
-                    "prior_status": "pending_approval",
+                    "prior_status": item["prior_status"],
                     "reason": item["reason"],
                     "age_minutes": item["age_minutes"],
                     "stale_after_minutes": stale_entry_approval_minutes(config),
@@ -73,7 +74,7 @@ def stale_entry_approvals(
     stale_minutes = stale_entry_approval_minutes(config)
     market_start = market_day_start(config, now=now)
     stale = []
-    for ticket in store.live_order_intents_by_type("open", statuses={"pending_approval"}):
+    for ticket in store.live_order_intents_by_type("open", statuses=RETRYABLE_ENTRY_STATUSES):
         ticket_hash = str(ticket.get("ticket_hash") or "")
         if ticket_hash in active_hashes:
             continue
@@ -92,6 +93,7 @@ def stale_entry_approvals(
             "structure": ticket.get("structure"),
             "age_minutes": round(age_minutes, 2),
             "status": RETIRED_STALE_ENTRY_APPROVAL_STATUS,
+            "prior_status": str(ticket.get("_ledger_status") or "pending_approval"),
             "reason": reason,
             "source": source,
         }

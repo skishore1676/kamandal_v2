@@ -35,6 +35,7 @@ NONTERMINAL_INTENT_STATUSES = {
     "pending_close_approval",
     "approved_close_pending_submit",
     "stage_approved_pending_submit",
+    "waiting_entry_window",
     "submitted",
     "repriced",
     "partially_filled",

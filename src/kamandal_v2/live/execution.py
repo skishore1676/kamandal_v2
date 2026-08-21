@@ -44,7 +44,15 @@ COMPLETED_TICKET_STATUSES = {
 }
 APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
 EXPIRED_EOD_STATUS = "expired_eod"
-PENDING_TICKET_STATUSES = {"pending_approval", "pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT, "dry_run"}
+WAITING_ENTRY_WINDOW = "waiting_entry_window"
+PENDING_TICKET_STATUSES = {
+    "pending_approval",
+    "pending_close_approval",
+    APPROVED_CLOSE_PENDING_SUBMIT,
+    "stage_approved_pending_submit",
+    WAITING_ENTRY_WINDOW,
+    "dry_run",
+}
 ACTIVE_TICKET_STATUSES = {"submitted", "repriced", "partially_filled"}
 REPLACE_CANCEL_PENDING = "replace_cancel_pending"
 REPLACE_WAITING_CANCEL = "replace_waiting_cancel"
@@ -131,7 +139,7 @@ def execute_live_approved(
     rows = _approved_rows(config, close=close, tables=sheet_tables)
     if not rows and not close:
         staged = sorted(
-            store.live_order_intents_by_status({"stage_approved_pending_submit"}),
+            store.live_order_intents_by_status({"stage_approved_pending_submit", WAITING_ENTRY_WINDOW}),
             key=lambda ticket: (
                 0 if str(ticket.get("intent_type") or "") in {"close", "adjust"} else 1,
                 str(ticket.get("created_at") or ""),
@@ -419,7 +427,7 @@ def _execute_ticket(
     if intent.get("ticket_hash") != ticket.get("ticket_hash"):
         return _failure(ticket, "ticket_hash_mismatch")
     ledger_status = str(intent.get("_ledger_status") or "")
-    allowed_statuses = {"dry_run", "pending_approval", "stage_approved_pending_submit"}
+    allowed_statuses = {"dry_run", "pending_approval", "stage_approved_pending_submit", WAITING_ENTRY_WINDOW}
     if close:
         allowed_statuses = {
             "dry_run",
@@ -432,14 +440,14 @@ def _execute_ticket(
     if close and not ticket.get("csa_lifecycle_id") and _same_day_close_blocked(config, store, ticket):
         store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_same_day_close")
         return _failure(ticket, "same_day_live_exit_blocked")
-    if submit and not _ticket_fresh(config, ticket):
-        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_stale")
-        return _failure(ticket, "ticket_preflight_stale", failure_code="ticket_preflight_stale")
     request_payload = dict(ticket.get("submit_payload") or {})
     if submit:
         window = submission_window(config, ticket, close=close)
         if not window["allowed"]:
             return _defer_ticket_for_window(store, ticket, window)
+        if not _ticket_fresh(config, ticket):
+            store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_stale")
+            return _failure(ticket, "ticket_preflight_stale", failure_code="ticket_preflight_stale")
         fresh_preflight = adapter.preflight_ticket(ticket)
         if not fresh_preflight.ok:
             store.record_live_order_attempt(
@@ -809,7 +817,7 @@ def _ledger_approved_close_tickets(store: LocalStore, config: dict[str, Any]) ->
 def _staged_lifecycle_management_tickets(store: LocalStore, config: dict[str, Any]) -> list[dict[str, Any]]:
     tickets = [
         ticket
-        for ticket in store.live_order_intents_by_status({"stage_approved_pending_submit"})
+        for ticket in store.live_order_intents_by_status({"stage_approved_pending_submit", WAITING_ENTRY_WINDOW})
         if _is_lifecycle_management_ticket(ticket)
     ]
     tickets.sort(
@@ -1282,7 +1290,7 @@ def _advance_staged_replacement(
             "position_evidence": position_evidence,
             "reprice_message": fresh_preflight.message,
         }
-    replacement["preflight"] = fresh_preflight.to_dict()
+    replacement["preflight"] = _preflight_with_entry_pricing(fresh_preflight.to_dict(), replacement)
     response = adapter.place_order_ticket(replacement)
     response_order_id = str(response.get("orderId") or "")
     if not response_order_id:
@@ -2515,6 +2523,8 @@ def _selected_entry_failure(execution: dict[str, Any], *, submit: bool) -> dict[
             continue
         if status == "dry_run":
             continue
+        if status in {WAITING_ENTRY_WINDOW, "retired_stale_entry_approval"}:
+            continue
         if reason.startswith("basket_ticket_active:"):
             continue
         if reason == "basket_complete_or_no_pending_tickets":
@@ -2653,7 +2663,10 @@ def _defer_ticket_for_window(
     ticket: dict[str, Any],
     window: dict[str, Any],
 ) -> dict[str, Any]:
-    status = "deferred_market_closed" if str(window.get("intent_type")) == "close" else "deferred_entry_cutoff"
+    if str(window.get("reason") or "") == "entry_not_open":
+        status = WAITING_ENTRY_WINDOW
+    else:
+        status = "deferred_market_closed" if str(window.get("intent_type")) == "close" else "deferred_entry_cutoff"
     ticket_hash = str(ticket.get("ticket_hash") or "")
     store.update_live_order_intent_status_with_payload(
         ticket_hash,

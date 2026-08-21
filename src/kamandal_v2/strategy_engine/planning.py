@@ -498,7 +498,9 @@ def _bind_selected_live_lifecycle(
             lifecycle = existing
         tickets = [
             ticket
-            for ticket in store.live_order_intents_by_status({"pending_approval", "stage_approved_pending_submit"})
+            for ticket in store.live_order_intents_by_status(
+                {"pending_approval", "stage_approved_pending_submit", "waiting_entry_window"}
+            )
             if str(ticket.get("plan_id") or "") == selected_plan.plan_id
             and str(ticket.get("candidate_id") or "") == candidate.candidate_id
         ]

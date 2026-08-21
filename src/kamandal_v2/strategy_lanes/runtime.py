@@ -245,6 +245,7 @@ def _run_csa_scan(
     active_stage_intents = local_store.live_order_intents_by_status(
         {
             "stage_approved_pending_submit",
+            "waiting_entry_window",
             "submitted",
             "repriced",
             "partially_filled",

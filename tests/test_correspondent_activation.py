@@ -215,4 +215,7 @@ def test_production_x_job_uses_sibling_cartographer_venv() -> None:
 
     assert "KAMANDAL_MARKET_CARTOGRAPHER_BIN" in script
     assert "$REPO_ROOT/../market-cartographer/.venv/bin/market-cartographer" in script
+    assert 'KAMANDAL_CHART_SEED_DATA_ROOT:-$REPO_ROOT/../mala_v2/data' in script
+    assert 'chart_args+=(--data-root "$chart_data_root")' in script
+    assert "Mala data root is unavailable" in script
     assert "leaving the request pending without treating it as an evaluation" in script

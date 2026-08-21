@@ -107,6 +107,7 @@ def test_strangle_replacement_uses_the_entry_window() -> None:
 
     assert verdict["allowed"] is False
     assert verdict["reason"] == "entry_not_open"
+    assert verdict["retryable_current_session"] is True
 
 
 def test_adjustment_cannot_inherit_close_permission_from_management_queue() -> None:
@@ -190,7 +191,7 @@ def test_execute_ticket_defers_without_calling_broker(
         def place_order_ticket(self, _ticket):
             raise AssertionError("submission must not run after the cutoff")
 
-    result = execution._execute_ticket(  # noqa: SLF001
+    result = execution._execute_ticket(
         {},
         NoBrokerCalls(),
         store,
@@ -201,3 +202,57 @@ def test_execute_ticket_defers_without_calling_broker(
 
     assert result["status"] == deferred_status
     assert store.live_order_intent("ticket-1")["_ledger_status"] == deferred_status
+
+
+def test_pre_window_entry_waits_then_requires_fresh_rebuild(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = {
+        "ticket_hash": "ticket-waiting",
+        "order_id": "order-waiting",
+        "plan_id": "plan-waiting",
+        "candidate_id": "candidate-waiting",
+        "intent_type": "open",
+        "underlying": "GLD",
+        "submit_payload": {},
+    }
+    store.save_live_order_intent(ticket, status="stage_approved_pending_submit")
+    freshness_checks = []
+    monkeypatch.setattr(execution, "_ticket_fresh", lambda *_args, **_kwargs: freshness_checks.append(True) or False)
+    windows = iter(
+        [
+            {"allowed": False, "reason": "entry_not_open", "intent_type": "open"},
+            {"allowed": True, "reason": "within_submission_window", "intent_type": "open"},
+        ]
+    )
+    monkeypatch.setattr(execution, "submission_window", lambda *_args, **_kwargs: next(windows))
+
+    class NoBrokerCalls:
+        def preflight_ticket(self, _ticket):
+            raise AssertionError("stale waiting ticket must be rebuilt before broker preflight")
+
+        def place_order_ticket(self, _ticket):
+            raise AssertionError("stale waiting ticket must not submit")
+
+    waiting = execution._execute_ticket(
+        {}, NoBrokerCalls(), store, ticket, submit=True, close=False
+    )
+    assert waiting["status"] == "waiting_entry_window"
+    assert freshness_checks == []
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "waiting_entry_window"
+
+    retry_ticket = store.live_order_intent(ticket["ticket_hash"])
+    stale = execution._execute_ticket(
+        {}, NoBrokerCalls(), store, retry_ticket, submit=True, close=False
+    )
+    assert stale["failure_code"] == "ticket_preflight_stale"
+    assert freshness_checks == [True]
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "blocked_preflight_stale"
+
+
+def test_waiting_entry_is_not_an_operator_failure() -> None:
+    waiting = {
+        "processed": 1,
+        "results": [{"ticket_hash": "ticket-waiting", "status": "waiting_entry_window", "reason": "entry_not_open"}],
+    }
+
+    assert execution._selected_entry_failure(waiting, submit=True) is None
