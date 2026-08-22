@@ -4,6 +4,8 @@ import json
 from dataclasses import replace
 from datetime import date, timedelta
 
+import pytest
+
 from kamandal_v2.domain.models import ChainSnapshot, Idea, OptionLeg, OptionQuote
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
@@ -474,6 +476,96 @@ def test_all_lanes_have_deterministic_hold_and_earnings_has_expiry_close() -> No
     assert expiry.selected.reason_codes == ("near_leg_expiry_close",)
 
 
+@pytest.mark.parametrize(
+    ("structure", "context"),
+    [
+        (
+            "short_strangle",
+            {
+                "working_order_conflict": False,
+                "ownership_clear": True,
+                "hard_emergency": False,
+                "event_exit_due": False,
+                "half_time_exit_due": True,
+                "profit_pct": 0,
+                "loss_multiple": 0,
+                "dte": 29,
+                "tested_side": "",
+                "cooldown_elapsed": True,
+                "tested_side_confirmations": 0,
+                "adjustment_count": 0,
+                "same_expiry_roll_credit": 0,
+            },
+        ),
+        (
+            "call_spread",
+            {
+                "working_order_conflict": False,
+                "ownership_clear": True,
+                "hard_emergency": False,
+                "event_exit_due": False,
+                "half_time_exit_due": True,
+                "profit_pct": 0,
+                "loss_multiple": 0,
+                "dte": 29,
+            },
+        ),
+        (
+            "call_diagonal",
+            {
+                "working_order_conflict": False,
+                "ownership_clear": True,
+                "hard_emergency": False,
+                "event_exit_due": False,
+                "half_time_exit_due": True,
+                "profit_pct": 0,
+                "loss_multiple": 0,
+                "far_dte": 59,
+                "short_leg_present": True,
+                "paired_position_complete": True,
+            },
+        ),
+    ],
+)
+def test_half_time_exit_closes_the_complete_strategy_package(structure, context) -> None:  # noqa: ANN001
+    policy = _policy(structure)
+    selected = arbitrate_actions(
+        lifecycle_registry().resolve(policy.lane)(
+            _lifecycle(policy.lane),
+            policy,
+            context,
+            proposed_at=NOW,
+        )
+    ).selected
+
+    assert selected.action_type is ActionType.CLOSE
+    assert selected.reason_codes == ("half_time_exit",)
+
+
+def test_normal_pre_event_exit_has_priority_over_half_time() -> None:
+    policy = _policy("call_spread")
+    selected = arbitrate_actions(
+        lifecycle_registry().resolve(policy.lane)(
+            _lifecycle(policy.lane),
+            policy,
+            {
+                "working_order_conflict": False,
+                "ownership_clear": True,
+                "hard_emergency": False,
+                "event_exit_due": True,
+                "half_time_exit_due": True,
+                "profit_pct": 0,
+                "loss_multiple": 0,
+                "dte": 29,
+            },
+            proposed_at=NOW,
+        )
+    ).selected
+
+    assert selected.action_type is ActionType.CLOSE
+    assert selected.reason_codes == ("mandatory_event_exit",)
+
+
 def test_mixed_tickets_reverse_close_sides_and_shadow_restart_is_safe(tmp_path) -> None:
     policy = _policy("short_strangle")
     candidate = build_lane_candidates(
@@ -638,8 +730,6 @@ def test_strangle_adjustment_cannot_increase_short_contract_count() -> None:
         1,
         {"adjustment_kind": "untested_side_same_expiry_credit_roll"},
     )
-
-    import pytest
 
     with pytest.raises(ValueError, match="increase short contracts"):
         build_strangle_adjustment_ticket(

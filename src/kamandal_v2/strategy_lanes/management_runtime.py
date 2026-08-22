@@ -19,7 +19,7 @@ from kamandal_v2.planner.engine import _market_provider
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
-from kamandal_v2.strategy_lanes.lane_common import lifecycle_number
+from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, policy_bool
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.registry import lifecycle_registry
@@ -306,8 +306,22 @@ def _management_context(
     loss_multiple = (abs(liquidation) / entry) if entry > 0 else max(-pnl / max(abs(entry), 0.01), 0.0)
     observed_date = _parse_timestamp(observed_at).date()
     dtes = [max((date.fromisoformat(leg.expiration) - observed_date).days, 0) for leg in legs]
-    event_status = str(market.event_status(snapshot.underlying))
-    common = {"working_order_conflict": working_order_conflict, "ownership_clear": ownership_clear, "hard_emergency": False, "event_exit_due": False, "profit_pct": profit_pct, "loss_multiple": loss_multiple}
+    half_time = _half_time_state(lifecycle, policy, legs, remaining_dtes=dtes)
+    pre_event = _pre_event_exit_state(
+        policy,
+        sqlite_path=sqlite_path,
+        underlying=snapshot.underlying,
+        observed_date=observed_date,
+    )
+    common = {
+        "working_order_conflict": working_order_conflict,
+        "ownership_clear": ownership_clear,
+        "hard_emergency": False,
+        "event_exit_due": pre_event["due"],
+        "half_time_exit_due": half_time["due"],
+        "profit_pct": profit_pct,
+        "loss_multiple": loss_multiple,
+    }
     plans: dict[str, Any] = {"liquidation": liquidation}
     metadata = dict(lifecycle.metadata)
     metadata.update(
@@ -318,6 +332,13 @@ def _management_context(
             "mark_profit_pct": round(profit_pct, 6),
             "mark_source": "natural_close_quote",
             "contract_multiplier": 100,
+            "mark_entry_dte": half_time["entry_dte"],
+            "mark_remaining_dte": half_time["remaining_dte"],
+            "mark_half_time_threshold": half_time["threshold"],
+            "mark_half_time_exit_due": half_time["due"],
+            "mark_days_to_earnings": pre_event["days_to_event"],
+            "mark_earnings_date": pre_event["event_date"],
+            "mark_pre_event_exit_due": pre_event["due"],
         }
     )
     if lifecycle.lane is LaneId.SHORT_STRANGLE:
@@ -378,6 +399,82 @@ def _management_context(
             "near_leg_expired": min(dtes) <= 0,
         }
     return context, plans, replace(lifecycle, updated_at=observed_at, metadata=metadata)
+
+
+def _half_time_state(
+    lifecycle: LifecycleState,
+    policy: CsaPolicy,
+    legs: tuple[OptionLeg, ...],
+    *,
+    remaining_dtes: list[int],
+) -> dict[str, Any]:
+    """Reproduce the established half-time exit from immutable lifecycle facts."""
+
+    enabled = policy_bool(
+        policy.resolved_fields.get("half_time_exit", True),
+        label=f"{policy.playbook_id}.half_time_exit",
+    )
+    opened_at = lifecycle.opened_at
+    if lifecycle.cashflow_ledger:
+        opened_at = str(lifecycle.cashflow_ledger[0].get("filled_at") or opened_at)
+    opened_date = _parse_timestamp(opened_at).date()
+    entry_dtes = [max((date.fromisoformat(leg.expiration) - opened_date).days, 0) for leg in legs]
+    entry_dte = min(entry_dtes) if entry_dtes else None
+    remaining_dte = min(remaining_dtes) if remaining_dtes else None
+    threshold = entry_dte // 2 if entry_dte is not None else None
+    due = bool(
+        enabled
+        and remaining_dte is not None
+        and threshold is not None
+        and remaining_dte <= threshold
+    )
+    return {
+        "entry_dte": entry_dte,
+        "remaining_dte": remaining_dte,
+        "threshold": threshold,
+        "due": due,
+    }
+
+
+def _pre_event_exit_state(
+    policy: CsaPolicy,
+    *,
+    sqlite_path: str,
+    underlying: str,
+    observed_date: date,
+) -> dict[str, Any]:
+    """Evaluate the optional Sheet-owned pre-earnings risk exit.
+
+    This preserves the established live rule: use the latest captured earnings
+    date and calendar-day distance.  The specialised earnings-calendar lane
+    ignores this state and retains its confirmed post-announcement exit.
+    """
+
+    raw_days = policy.resolved_fields.get("exit_pre_event_days")
+    if isinstance(raw_days, bool) or raw_days in (None, ""):
+        return {"due": False, "days_to_event": None, "event_date": ""}
+    try:
+        numeric_threshold = float(raw_days)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{policy.playbook_id}.exit_pre_event_days must be an integer") from exc
+    if not numeric_threshold.is_integer():
+        raise ValueError(f"{policy.playbook_id}.exit_pre_event_days must be an integer")
+    threshold = int(numeric_threshold)
+    if threshold < 0:
+        raise ValueError(f"{policy.playbook_id}.exit_pre_event_days must be nonnegative")
+    snapshot = latest_earnings_snapshot(sqlite_path, underlying)
+    if snapshot is None or not snapshot.next_earnings_date:
+        return {"due": False, "days_to_event": None, "event_date": ""}
+    try:
+        event_date = date.fromisoformat(snapshot.next_earnings_date)
+    except ValueError as exc:
+        raise ValueError(f"{underlying}: invalid captured earnings date") from exc
+    days_to_event = (event_date - observed_date).days
+    return {
+        "due": days_to_event <= threshold,
+        "days_to_event": days_to_event,
+        "event_date": event_date.isoformat(),
+    }
 
 
 def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot: Any, policy: CsaPolicy):

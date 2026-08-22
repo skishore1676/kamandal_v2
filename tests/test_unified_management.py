@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
+from kamandal_v2.domain.models import OptionLeg
+from kamandal_v2.events.earnings import EarningsSnapshot, EarningsStore
 from kamandal_v2.strategy_engine.management import run_unified_lifecycle_management
+from kamandal_v2.strategy_lanes.management_runtime import _half_time_state, _pre_event_exit_state
+from kamandal_v2.strategy_lanes.models import CsaStage, LaneId, LifecycleState, SourceMode
+from kamandal_v2.strategy_lanes.policy import CsaPolicy
 
 
 def test_scheduled_manager_imports_only_generic_lifecycle_owners() -> None:
@@ -37,3 +43,86 @@ def test_unified_management_runs_live_before_shadow_and_isolates_failure() -> No
     assert receipt.ok is False
     assert receipt.branches[0].error == "RuntimeError: fixture live lifecycle failure"
     assert receipt.branches[1].result == {"ok": True, "managed": 2}
+
+
+def _policy(**fields) -> CsaPolicy:  # noqa: ANN003
+    return CsaPolicy(
+        playbook_id="fixture-playbook",
+        lane=LaneId.CALL_VERTICAL,
+        stage=CsaStage.SHADOW,
+        source_mode=SourceMode.IDEA,
+        management={"lifecycle": {"fill": {"max_attempts": 2, "price_increment": 0.05}}},
+        resolved_fields=fields,
+        policy_hash="fixture-policy",
+        source="fixture",
+        read_at="2026-08-01T14:30:00Z",
+    )
+
+
+def _lifecycle() -> LifecycleState:
+    return LifecycleState(
+        lifecycle_id="fixture-lifecycle",
+        opportunity_id="fixture-opportunity",
+        lane=LaneId.CALL_VERTICAL,
+        version=2,
+        status="open",
+        active_legs=(),
+        cashflow_ledger=(
+            {
+                "ticket_id": "entry",
+                "fill_id": "entry-fill",
+                "amount": 1.0,
+                "filled_at": "2026-08-03T14:30:00Z",
+            },
+        ),
+        opened_at="2026-08-01T14:30:00Z",
+        updated_at="2026-08-03T14:30:00Z",
+        policy_hash="fixture-policy",
+    )
+
+
+def _leg(expiration: str) -> OptionLeg:
+    return OptionLeg("short_call", "sell", "call", 100, expiration, 1, 1.0, 0.95, 1.05, 0.3, 0, 0, 0, 100)
+
+
+def test_half_time_uses_completed_entry_fill_date_and_sheet_switch() -> None:
+    lifecycle = _lifecycle()
+    policy = _policy(half_time_exit="TRUE")
+    leg = _leg("2026-09-02")
+
+    before = _half_time_state(lifecycle, policy, (leg,), remaining_dtes=[16])
+    due = _half_time_state(lifecycle, policy, (leg,), remaining_dtes=[15])
+    disabled = _half_time_state(lifecycle, _policy(half_time_exit="FALSE"), (leg,), remaining_dtes=[15])
+
+    assert before == {"entry_dte": 30, "remaining_dte": 16, "threshold": 15, "due": False}
+    assert due["due"] is True
+    assert disabled["due"] is False
+
+
+def test_pre_event_exit_uses_latest_captured_earnings_and_sheet_days(tmp_path) -> None:  # noqa: ANN001
+    database = tmp_path / "kamandal.db"
+    EarningsStore(database).save(
+        EarningsSnapshot(
+            symbol="XYZ",
+            fetched_date="2026-08-17",
+            next_earnings_date="2026-08-20",
+            source="fixture",
+            confirmed=True,
+        )
+    )
+
+    due = _pre_event_exit_state(
+        _policy(exit_pre_event_days="3"),
+        sqlite_path=str(database),
+        underlying="XYZ",
+        observed_date=date(2026, 8, 17),
+    )
+    not_due = _pre_event_exit_state(
+        _policy(exit_pre_event_days="2"),
+        sqlite_path=str(database),
+        underlying="XYZ",
+        observed_date=date(2026, 8, 17),
+    )
+
+    assert due == {"due": True, "days_to_event": 3, "event_date": "2026-08-20"}
+    assert not_due["due"] is False

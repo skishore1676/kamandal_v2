@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState, PreflightResult
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, Playbook, PortfolioState, PreflightResult
 from kamandal_v2.live.advisory import render_live_plan_rows
-from kamandal_v2.live.execution import _entry_reprice_due, _fallback_submission_gate, _repriced_open_ticket
+from kamandal_v2.live.execution import _entry_reprice_due, _fallback_submission_gate, _project_fallback_daily_plan, _repriced_open_ticket
 from kamandal_v2.live.execution import _fallback_basket_cap_allows
 from kamandal_v2.live.execution import _sync_live_orders_locked
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket, ticket_hash
 from kamandal_v2.live.plan_fallback import PlanFallbackCoordinator, fallback_enabled, register_rank_one_attempt
 from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_campaign, entry_campaign_policy, entry_price_metadata, normalize_campaign_entry_metadata
 from kamandal_v2.market.public import PublicAdapter
+from kamandal_v2.planner.candidate_builder import _entry_economic_bounds
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
@@ -155,6 +157,59 @@ def test_campaign_debit_mirrors_credit_geometry() -> None:
 
     assert campaign.prices == ("0.99", "1.00", "1.01")
     assert candidate_entry_limit_price(candidate, _campaign_config()) == "0.99"
+
+
+@pytest.mark.parametrize("legacy_value", ["0.05", "0.06", "60"])
+def test_debit_campaign_uses_sheet_money_cap_not_mixed_legacy_units(legacy_value: str) -> None:
+    playbook = Playbook.from_row(
+        {
+            "playbook_id": "calendar_live",
+            "enabled": "TRUE",
+            "strategy_family": "earnings_calendar",
+            "structure": "call_calendar",
+            "max_debit_pct_bpr": legacy_value,
+            "live_max_bpr_per_order": "1200",
+        }
+    )
+
+    floor, ceiling, source = _entry_economic_bounds(
+        playbook,
+        structure=playbook.structure,
+        width=0,
+        net_credit=-4.00,
+    )
+    candidate = _credit_candidate()
+    candidate.net_credit = -4.00
+    candidate.entry_credit_floor = floor
+    candidate.entry_debit_ceiling = ceiling
+    candidate.entry_economic_bound_source = source
+
+    assert floor is None
+    assert ceiling == 12.0
+    assert source == "playbook.live_max_bpr_per_order"
+    assert entry_campaign(candidate, _campaign_config()).prices
+
+
+def test_credit_campaign_preserves_jade_lizard_no_upside_risk_floor() -> None:
+    playbook = Playbook.from_row(
+        {
+            "playbook_id": "jade_lizard_live",
+            "enabled": "TRUE",
+            "strategy_family": "jade_lizard",
+            "structure": "jade_lizard",
+        }
+    )
+
+    floor, ceiling, source = _entry_economic_bounds(
+        playbook,
+        structure=playbook.structure,
+        width=3.0,
+        net_credit=3.20,
+    )
+
+    assert floor == 3.0
+    assert ceiling is None
+    assert source == "jade_lizard.call_width"
 
 
 def test_campaign_preserves_full_improvement_but_starts_at_half() -> None:
@@ -616,6 +671,45 @@ def _validated_rank_two(store: LocalStore) -> dict:
         "tickets": [ticket],
         "validation": {key: True for key in ("fresh_session", "fresh_quotes", "risk_valid", "bpr_valid", "concentration_valid", "overlap_valid", "broker_preflight_valid")},
     }
+
+
+def test_fallback_projection_replaces_only_live_lane_before_submission(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    row = {column: "" for column in DAILY_PLAN_HEADER}
+    row.update(
+        {
+            "plan_date": "2026-08-21",
+            "plan_rank": 1,
+            "plan_id": "rank-two-plan",
+            "plan_status": "eligible",
+            "mode": "live_advisory",
+            "plan_detail_json": json.dumps({"lane": "live_advisory"}),
+        }
+    )
+    decision = SimpleNamespace(
+        daily_plan_rows=(tuple(row[column] for column in DAILY_PLAN_HEADER),),
+        attempt=2,
+        campaign_id="campaign-one",
+        reason="zero_fill_terminal",
+        plan_id="rank-two-plan",
+    )
+    captured = {}
+
+    def write(_config, rows, header, *, replace_lanes):  # noqa: ANN001
+        captured.update(rows=rows, header=header, replace_lanes=replace_lanes)
+        return len(rows)
+
+    monkeypatch.setattr("kamandal_v2.live.execution.write_daily_plan", write)
+    receipt = _project_fallback_daily_plan({}, LocalStore(tmp_path / "projection.db"), decision)
+    projected = dict(zip(DAILY_PLAN_HEADER, captured["rows"][0], strict=False))
+    detail = json.loads(projected["plan_detail_json"])
+
+    assert receipt["ok"] is True
+    assert captured["header"] == DAILY_PLAN_HEADER
+    assert captured["replace_lanes"] == {"live_advisory"}
+    assert projected["operator_action"] == APPROVE_LIVE
+    assert projected["operator_notes"] == "automatic Plan 2 after zero_fill_terminal"
+    assert detail["fallback_campaign_id"] == "campaign-one"
+    assert detail["fallback_attempt"] == 2
 
 
 def test_fallback_blocks_working_orders_and_is_idempotent_after_zero_fill(tmp_path) -> None:

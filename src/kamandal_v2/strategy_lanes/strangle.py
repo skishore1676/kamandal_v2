@@ -34,8 +34,11 @@ def propose_strangle_actions(
     if profit_pct >= sheet_number(policy, "profit_target_pct"):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "profit_target", arbiter_class="executable_profit", proposed_at=proposed_at))
     dte = _context_number(context, "dte")
-    if dte <= sheet_number(policy, "exit_dte_min"):
+    time_exit_due = dte <= sheet_number(policy, "exit_dte_min")
+    if time_exit_due:
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "time_exit", arbiter_class="time_decision", proposed_at=proposed_at))
+    elif bool(context.get("half_time_exit_due")):
+        actions.append(propose_action(lifecycle, ActionType.CLOSE, "half_time_exit", arbiter_class="time_decision", proposed_at=proposed_at))
 
     loss_stages = lifecycle_value(policy, "loss_stages")
     if isinstance(loss_stages, dict) and loss_stages.get("close_multiple") not in (None, ""):

@@ -1,6 +1,6 @@
 # Kamandal V2 Architecture
 
-Date: 2026-08-15
+Date: 2026-08-22
 Status: Architecture frozen; unified runtime deployed and under natural observation
 
 ## Purpose
@@ -103,6 +103,16 @@ For example, adding an `apple_strategy` means:
 
 Shadow and live use the same candidate, lifecycle, action, and ticket code. Only
 the final execution adapter differs.
+
+The shadow adapter remains a conservative executable-quote simulation, not an
+automatic midpoint fill. A selected entry may be `working` across natural
+planning observations, become `open` after a bounded quote-based fill, or end
+as `entry_missed` when its frozen attempts are exhausted. Once open, management
+and full-position exits use the same lifecycle rules and ticket shapes as live,
+with broker-free shadow fills as the effect. Live Plan 2 is not a shadow retry
+mechanism and may never advance the shadow book. Reports must retain the complete
+selected -> working -> filled/missed -> managed -> closed funnel so executable
+fill friction is not hidden from alpha analysis.
 
 `mode` and edited Sheet parameters control future entries. When a trade opens,
 the lifecycle stores the complete compiled management policy and its hash.
@@ -261,6 +271,22 @@ its next scheduled tick. Because the original ticket will then be stale, the
 existing bounded recovery path rebuilds the current rank-one plan and repeats
 health, risk, session, quote, and broker preflight checks before any submission.
 Waiting entries from a prior market day are retired rather than carried forward.
+
+The unified manager also preserves the existing Sheet-owned exit clocks for
+every ordinary close-oriented capability, directional diagonal, and short
+strangle:
+
+- `half_time_exit=TRUE` closes the complete active package when the earliest
+  active expiration reaches half of its DTE at the completed opening fill;
+- `exit_pre_event_days=N` closes the complete active package when the latest
+  captured earnings date is within `N` calendar days; and
+- the explicit DTE exit reason wins when both DTE and half-time are due, while
+  the pre-event exit retains higher safety precedence than profit/time exits.
+
+These are shared context rules, so the same frozen lifecycle policy drives live
+and shadow. The specialised earnings-calendar capability is intentionally
+different: it holds through its confirmed event and uses its first eligible
+post-event exit contract rather than the ordinary pre-event rule.
 
 ### Management permissions are capability-specific
 
@@ -1067,6 +1093,31 @@ pricing envelope captured at the original preflight. Public's multileg path may
 use cancel-confirm-submit instead of atomic replacement, but it must preserve
 that envelope across every staged child so successive limits advance from the
 same original market evidence rather than freezing after the first replacement.
+
+Entry execution is one bounded campaign, not an independent pricing engine. It
+tries a favorable half-improvement, then midpoint, then one capped concession.
+Every price must remain inside the same playbook economics that admitted the
+candidate. For debit structures, the Sheet-owned
+`live_max_bpr_per_order` is the authoritative per-contract money ceiling. The
+older `max_debit_pct_bpr` values have mixed historical units and cannot authorize
+a live price until the column is normalized under a separate Sheet migration.
+
+If the selected rank-one basket becomes terminal with no fill, Kamandal may
+compile exactly one fresh Plan 2 through the same live portfolio planner. It
+uses the frozen policy snapshot and current portfolio, excludes the attempted
+contracts, rechecks every normal live gate, and consumes the same daily basket
+cap. This is a live-book retry only: it must not run the shadow book, create a
+second planner, or bypass partial-fill reconciliation.
+
+Before Plan 2 can produce a broker effect, its current ranked plan is projected
+to the existing `daily_plan` tab by replacing only today's `live_advisory` lane.
+Fallback identity and reason live inside `plan_detail_json` and operator notes;
+no extra Sheet tab or approval ceremony is introduced. A failed projection
+blocks submission, preserving the Google Sheet as the operator-visible surface.
+
+The portfolio BPR target is an optimization target, not a minimum-spend order.
+When no candidate survives idea, playbook, economics, portfolio, session, and
+broker gates, unused buying power is the correct safe result.
 
 Some internal fields and ledger statuses retain the word `approval` because the
 code also supports optional manual modes. In `auto_top_plan` and `auto_rules`,

@@ -23,12 +23,12 @@ from kamandal_v2.live.lineage import EntryLineage, resolve_entry_lineage
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
-from kamandal_v2.live.plan_fallback import PlanFallbackCoordinator, attempt_event_type, fallback_enabled, registered_campaign_ids
+from kamandal_v2.live.plan_fallback import FallbackDecision, PlanFallbackCoordinator, attempt_event_type, fallback_enabled, registered_campaign_ids
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.ops.stage_receipt import reconciliation_stage
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
-from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables
+from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables, write_daily_plan
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.models import CsaStage
 from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, load_daily_policy_snapshot
@@ -821,14 +821,12 @@ def _advance_plan_fallbacks(config: dict[str, Any], store: LocalStore) -> list[d
         policy = ((config.get("live") or {}).get("plan_fallback") or {})
         if decision.status == "fallback_ready" and bool(policy.get("auto_submit", True)):
             if not _fallback_basket_cap_allows(config, store, campaign_id, decision.plan_id):
-                decision_payload["submission_blocked"] = "max_live_baskets_per_day_reached"
-                store.event("live_plan_fallback_blocked", {"campaign_id": campaign_id, "reason": "max_live_baskets_per_day_reached", "plan_id": decision.plan_id})
-                decisions.append(decision_payload)
+                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, "max_live_baskets_per_day_reached"))
                 continue
             gate = entry_health_gate(store, config)
             if gate.get("blocked"):
-                decision_payload["submission_blocked"] = "blocked_live_health_red:" + ",".join(gate.get("reasons") or [])
-                decisions.append(decision_payload)
+                reason = "blocked_live_health_red:" + ",".join(gate.get("reasons") or [])
+                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, reason))
                 continue
             tickets = [
                 ticket
@@ -836,17 +834,25 @@ def _advance_plan_fallbacks(config: dict[str, Any], store: LocalStore) -> list[d
                 if (ticket := store.live_order_intent(ticket_hash)) is not None
             ]
             if len(tickets) != len(decision.ticket_hashes):
-                decision_payload["submission_blocked"] = "blocked_fallback_tickets_missing"
-                decisions.append(decision_payload)
+                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, "blocked_fallback_tickets_missing"))
                 continue
             submission_gate = _fallback_submission_gate(config, tickets, gate=gate)
             if submission_gate:
-                decision_payload["submission_blocked"] = submission_gate
-                store.event(
-                    "live_plan_fallback_blocked",
-                    {"campaign_id": campaign_id, "reason": submission_gate, "plan_id": decision.plan_id},
+                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, submission_gate))
+                continue
+            projection = _project_fallback_daily_plan(config, store, decision)
+            decision_payload["sheet_projection"] = projection
+            if not projection.get("ok"):
+                decisions.append(
+                    _blocked_fallback_decision(
+                        config,
+                        store,
+                        decision,
+                        decision_payload,
+                        "blocked_fallback_sheet_projection:" + str(projection.get("reason") or "unknown"),
+                        project=False,
+                    )
                 )
-                decisions.append(decision_payload)
                 continue
             adapter = broker_adapter(config)
             submission_results = []
@@ -870,6 +876,77 @@ def _advance_plan_fallbacks(config: dict[str, Any], store: LocalStore) -> list[d
                 decision_payload["submission_results"] = submission_results
         decisions.append(decision_payload)
     return decisions
+
+
+def _blocked_fallback_decision(
+    config: dict[str, Any],
+    store: LocalStore,
+    decision: FallbackDecision,
+    payload: dict[str, Any],
+    reason: str,
+    *,
+    project: bool = True,
+) -> dict[str, Any]:
+    payload["submission_blocked"] = reason
+    if project:
+        payload["sheet_projection"] = _project_fallback_daily_plan(config, store, decision, blocked_reason=reason)
+    store.event(
+        "live_plan_fallback_blocked",
+        {"campaign_id": decision.campaign_id, "reason": reason, "plan_id": decision.plan_id},
+    )
+    return payload
+
+
+def _project_fallback_daily_plan(
+    config: dict[str, Any],
+    store: LocalStore,
+    decision: FallbackDecision,
+    *,
+    blocked_reason: str = "",
+) -> dict[str, Any]:
+    """Make the current fallback portfolio visible before any broker effect."""
+
+    if not decision.daily_plan_rows:
+        return {"ok": False, "reason": "daily_plan_rows_missing", "rows": 0}
+    rows: list[list[Any]] = []
+    for raw_row in decision.daily_plan_rows:
+        row = dict(zip(DAILY_PLAN_HEADER, raw_row, strict=False))
+        detail = _loads(row.get("plan_detail_json"))
+        detail["fallback_attempt"] = decision.attempt
+        detail["fallback_campaign_id"] = decision.campaign_id
+        detail["fallback_parent_attempt_id"] = decision.campaign_id
+        detail["fallback_reason"] = decision.reason
+        detail["fallback_submission_blocked"] = blocked_reason
+        row["plan_detail_json"] = json.dumps(detail, sort_keys=True)
+        row["mode"] = "live_advisory"
+        is_selected = str(row.get("plan_id") or "") == decision.plan_id
+        row["operator_action"] = APPROVE_LIVE if is_selected and not blocked_reason else ""
+        if is_selected:
+            row["plan_status"] = "blocked" if blocked_reason else "eligible"
+            row["operator_notes"] = (
+                f"automatic Plan {decision.attempt} after {decision.reason}"
+                + (f"; blocked={blocked_reason}" if blocked_reason else "")
+            )
+        rows.append([row.get(column, "") for column in DAILY_PLAN_HEADER])
+    try:
+        written = write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_advisory"})
+    except Exception as exc:  # noqa: BLE001 - projection failure must block the live fallback.
+        reason = f"{type(exc).__name__}:{_safe_broker_error(exc)}"
+        store.event(
+            "live_plan_fallback_sheet_projection_failed",
+            {"campaign_id": decision.campaign_id, "plan_id": decision.plan_id, "reason": reason},
+        )
+        return {"ok": False, "reason": reason, "rows": 0}
+    receipt = {
+        "ok": True,
+        "campaign_id": decision.campaign_id,
+        "plan_id": decision.plan_id,
+        "attempt": decision.attempt,
+        "blocked_reason": blocked_reason,
+        "rows": written,
+    }
+    store.event("live_plan_fallback_sheet_projected", receipt)
+    return receipt
 
 
 def _fresh_fallback_replan(config: dict[str, Any], store: LocalStore, context: dict[str, Any]) -> dict[str, Any] | None:
@@ -913,7 +990,7 @@ def _fresh_fallback_replan(config: dict[str, Any], store: LocalStore, context: d
     candidate_ids = {candidate.candidate_id for candidate in plan.candidates}
     tickets = [
         dict(ticket)
-        for ticket in store.live_order_intents_by_type("open")
+        for ticket in store.live_order_intents_by_type("open", statuses=PENDING_TICKET_STATUSES)
         if str(ticket.get("plan_id") or "") == plan.plan_id
         and str(ticket.get("candidate_id") or "") in candidate_ids
     ]
@@ -953,6 +1030,7 @@ def _fresh_fallback_replan(config: dict[str, Any], store: LocalStore, context: d
         "candidate_ids": [candidate.candidate_id for candidate in plan.candidates],
         "tickets": tickets,
         "validation": validation,
+        "daily_plan_rows": [list(row) for row in book.result.daily_plan_rows],
     }
 
 

@@ -43,6 +43,7 @@ class FallbackDecision:
     ticket_hashes: tuple[str, ...] = ()
     exclusions: tuple[str, ...] = ()
     fill_summary: dict[str, Any] | None = None
+    daily_plan_rows: tuple[tuple[Any, ...], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +55,7 @@ class FallbackDecision:
             "ticket_hashes": list(self.ticket_hashes),
             "exclusions": list(self.exclusions),
             "fill_summary": dict(self.fill_summary or {}),
+            "sheet_projection_row_count": len(self.daily_plan_rows),
         }
 
 
@@ -221,6 +223,7 @@ class PlanFallbackCoordinator:
             "parent_attempt_id": campaign_id,
             "fill_summary": summary,
             "validation": validation,
+            "daily_plan_rows": [list(row) for row in candidate.get("daily_plan_rows") or []],
             "fallback_receipt_emitted": False,
         }
         for ticket in tickets:
@@ -228,7 +231,17 @@ class PlanFallbackCoordinator:
             if ticket_hash:
                 self.store.update_live_order_intent_status_with_payload(ticket_hash, str(ticket.get("_ledger_status") or "pending_approval"), {"plan_attempt_id": campaign_id, "parent_attempt_id": campaign_id})
         self.store.event(attempt_event_type(campaign_id), child_state)
-        return FallbackDecision("fallback_ready", campaign_id, context["reason"], attempt=child_state["attempt"], plan_id=child_state["plan_id"], ticket_hashes=ticket_hashes, exclusions=exclusions, fill_summary=summary)
+        return FallbackDecision(
+            "fallback_ready",
+            campaign_id,
+            context["reason"],
+            attempt=child_state["attempt"],
+            plan_id=child_state["plan_id"],
+            ticket_hashes=ticket_hashes,
+            exclusions=exclusions,
+            fill_summary=summary,
+            daily_plan_rows=tuple(tuple(row) for row in child_state["daily_plan_rows"]),
+        )
 
     def mark_submitted(self, decision: FallbackDecision, results: list[dict[str, Any]]) -> None:
         state = self.store.latest_event(attempt_event_type(decision.campaign_id))
@@ -254,6 +267,7 @@ class PlanFallbackCoordinator:
             plan_id=str(state.get("plan_id") or ""),
             ticket_hashes=tuple(sorted(str(item) for item in state.get("ticket_hashes") or [])),
             fill_summary=state.get("fill_summary") or {},
+            daily_plan_rows=tuple(tuple(row) for row in state.get("daily_plan_rows") or []),
         )
 
     def _record(self, state: dict[str, Any], updates: dict[str, Any]) -> None:

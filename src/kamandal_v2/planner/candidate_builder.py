@@ -1355,16 +1355,12 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
             score=0.0,
         )
     )
-    credit_floor = None
-    debit_ceiling = None
-    bound_source = ""
-    if net_credit > 0:
-        ratio = playbook.min_credit_to_width_ratio
-        credit_floor = round(max(width, 0.0) * max(float(ratio or 0.0), 0.0), 6)
-        bound_source = "playbook.min_credit_to_width_ratio" if ratio is not None else "structure_zero_credit_floor"
-    elif net_credit < 0 and playbook.max_debit_pct_bpr is not None and bpr > 0:
-        debit_ceiling = round(max(float(bpr), 0.0) * max(float(playbook.max_debit_pct_bpr), 0.0) / 10000.0, 6)
-        bound_source = "playbook.max_debit_pct_bpr"
+    credit_floor, debit_ceiling, bound_source = _entry_economic_bounds(
+        playbook,
+        structure=playbook.structure,
+        width=width,
+        net_credit=net_credit,
+    )
     return Candidate(
         candidate_id=candidate_id,
         idea_id=idea.idea_id,
@@ -1393,6 +1389,53 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
             *([f"mentioned_strategy={idea.mentioned_strategy}"] if idea.mentioned_strategy else []),
         ],
     )
+
+
+def _entry_economic_bounds(
+    playbook: Playbook,
+    *,
+    structure: str,
+    width: float,
+    net_credit: float,
+) -> tuple[float | None, float | None, str]:
+    """Freeze the same economic boundary that made the entry eligible.
+
+    Prices are per share while ``live_max_bpr_per_order`` is per contract, so
+    the explicit Sheet-owned money cap is converted by the option multiplier.
+    ``max_debit_pct_bpr`` is intentionally not used here: historical Sheet
+    rows contain mixed fraction/percent units, and candidate BPR for debit
+    structures is itself the debit paid, making it a circular price boundary.
+    """
+
+    risk_width = max(float(width or 0.0), 0.0)
+    if net_credit > 0:
+        floors: list[tuple[float, str]] = []
+        if playbook.min_credit_to_width_ratio is not None:
+            floors.append(
+                (
+                    risk_width * max(float(playbook.min_credit_to_width_ratio), 0.0),
+                    "playbook.min_credit_to_width_ratio",
+                )
+            )
+        if structure == "jade_lizard":
+            floors.append((risk_width, "jade_lizard.call_width"))
+        if structure in {"put_spread", "call_spread", "iron_condor"} and playbook.live_max_bpr_per_order:
+            floors.append(
+                (
+                    max(risk_width - (float(playbook.live_max_bpr_per_order) / 100.0), 0.0),
+                    "playbook.live_max_bpr_per_order",
+                )
+            )
+        if not floors:
+            return 0.0, None, "structure_zero_credit_floor"
+        floor = max(value for value, _source in floors)
+        binding_sources = sorted(source for value, source in floors if abs(value - floor) < 1e-9)
+        return round(floor, 6), None, "+".join(binding_sources)
+
+    if net_credit < 0 and playbook.live_max_bpr_per_order is not None:
+        ceiling = max(float(playbook.live_max_bpr_per_order), 0.0) / 100.0
+        return None, round(ceiling, 6), "playbook.live_max_bpr_per_order"
+    return None, None, ""
 
 
 def _leg_rank_score(quote: OptionQuote, *, target_delta: float, target_dte: float) -> float:

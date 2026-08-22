@@ -36,6 +36,13 @@ from kamandal_v2.strategy_engine.event_timing import entry_session_due
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
 
 
+LIVE_ENTRY_BINDABLE_STATUSES = {
+    "pending_approval",
+    "stage_approved_pending_submit",
+    "waiting_entry_window",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class PlanningBook:
     mode: ExecutionMode
@@ -70,6 +77,7 @@ def run_unified_books(
     exclude_candidate_ids: set[str] | None = None,
     exclude_contract_keys: set[str] | None = None,
     register_plan_attempt: bool = True,
+    include_shadow: bool = True,
 ) -> UnifiedPlanningResult:
     """Build independent books from one normalized Sheet snapshot.
 
@@ -110,7 +118,15 @@ def run_unified_books(
         exclude_contract_keys=exclude_contract_keys,
         register_plan_attempt=register_plan_attempt,
     )
-    shadow = _run_book(ExecutionMode.SHADOW, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root, write_sheet)
+    if include_shadow:
+        shadow = _run_book(ExecutionMode.SHADOW, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root, write_sheet)
+    else:
+        shadow = PlanningBook(
+            ExecutionMode.SHADOW,
+            tuple(policy.playbook_id for policy in compilation.policies if policy.mode is ExecutionMode.SHADOW),
+            None,
+            (),
+        )
     return UnifiedPlanningResult(compilation=compilation, live=live, shadow=shadow)
 
 
@@ -471,7 +487,7 @@ def _bind_selected_live_lifecycle(
             lifecycle = existing
         tickets = [
             ticket
-            for ticket in store.live_order_intents_by_type("open")
+            for ticket in store.live_order_intents_by_type("open", statuses=LIVE_ENTRY_BINDABLE_STATUSES)
             if str(ticket.get("plan_id") or "") == selected_plan.plan_id
             and str(ticket.get("candidate_id") or "") == candidate.candidate_id
         ]
@@ -520,7 +536,7 @@ def _register_unified_rank_one_attempt(
     candidate_ids = {candidate.candidate_id for candidate in selected_plan.candidates}
     tickets = [
         dict(ticket)
-        for ticket in store.live_order_intents_by_type("open")
+        for ticket in store.live_order_intents_by_type("open", statuses=LIVE_ENTRY_BINDABLE_STATUSES)
         if str(ticket.get("plan_id") or "") == selected_plan.plan_id
         and str(ticket.get("candidate_id") or "") in candidate_ids
     ]
@@ -594,6 +610,7 @@ def run_unified_fallback_plan(
         exclude_candidate_ids=set(exclude_candidate_ids or set()),
         exclude_contract_keys=set(exclude_contract_keys or set()),
         register_plan_attempt=False,
+        include_shadow=False,
     )
 
 

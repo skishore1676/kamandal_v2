@@ -187,6 +187,28 @@ def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) 
     assert result.shadow.result is not None
 
 
+def test_live_fallback_book_does_not_advance_shadow(tmp_path) -> None:
+    universe, playbooks = _rows()
+    control = load_control()
+    snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
+
+    result = run_unified_books(
+        control,
+        universe_rows=universe,
+        playbook_rows=playbooks,
+        idea_paths=["tests/fixtures/sample_ideas.yaml"],
+        store=_migrated_store(tmp_path),
+        audit_root=tmp_path / "audit",
+        daily_policy_snapshot=snapshot,
+        include_shadow=False,
+    )
+
+    assert result.live.result is not None
+    assert result.shadow.policy_ids == ("short_strangle_shadow",)
+    assert result.shadow.result is None
+    assert result.shadow.errors == ()
+
+
 def test_one_book_failure_does_not_erase_other_book(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     universe, playbooks = _rows()
     from kamandal_v2.strategy_engine import planning
@@ -598,6 +620,18 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
         trading_date=current_trading_date(control),
         tables=tables,
         captured_at="2026-08-15T12:00:00Z",
+    )
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "historical-repriced-ticket",
+            "order_id": "historical-repriced-order",
+            "intent_type": "open",
+            "plan_id": "live-plan",
+            "candidate_id": "selected-live",
+            "underlying": "XYZ",
+            "created_at": "2026-08-14T14:00:00Z",
+        },
+        status="repriced",
     )
     unified = run_unified_books(
         control,

@@ -1,7 +1,7 @@
 # Kamandal V2 Sheet Schema
 
-Date: 2026-04-25
-Status: Initial blank-sheet schema
+Date: 2026-08-22
+Status: Current lean operator contract
 
 Create one blank Google Sheet with these tabs:
 
@@ -82,6 +82,7 @@ long_delta_max
 spread_width
 min_credit_to_width_ratio
 max_debit_pct_bpr
+live_max_bpr_per_order
 profit_target_pct
 max_loss_multiple
 exit_dte_min
@@ -118,6 +119,14 @@ Notes:
   Live behavior can be flipped without changing the sheet by setting
   `KAMANDAL_EXIT_MAX_LOSS_ACTION`, `KAMANDAL_EXIT_LOSS_WATCH_CONFIRMATIONS_REQUIRED`,
   or `KAMANDAL_EXIT_LOSS_WATCH_WINDOW_MINUTES` in the runtime environment.
+- `live_max_bpr_per_order`: authoritative Sheet-owned dollar cap for one live
+  contract. It also bounds the worst entry debit after conversion to the
+  per-share option price used by the broker.
+- `max_debit_pct_bpr`: retained only for existing-Sheet compatibility. Current
+  rows contain mixed fraction/percent units, so this field does not authorize
+  an entry price. Do not edit it to tune live entry behavior; use
+  `live_max_bpr_per_order` until a protected Sheet migration defines one unit
+  and updates every row.
 - `iv_percentile_min/max`: optional distribution percentile gate.
 - `iv_rank_min/max`: optional min/max-rank gate against the local lookback.
 - `universe_expansion_enabled`: optional operator switch. For a short-strangle
@@ -145,11 +154,22 @@ Notes:
 - `iv_abs_min/max`: optional absolute ATM IV gate, useful for avoiding
   low-volatility false positives.
 - `half_time_exit`: true/false. If true, the engine can recommend exit around
-  half the original DTE.
+  half the original DTE. The unified manager measures original DTE from the
+  completed opening fill to the earliest active expiration and closes the full
+  strategy package; it does not manage one leg independently.
+- `exit_pre_event_days`: optional nonnegative calendar-day threshold. For
+  ordinary strategies, diagonals, and strangles, the unified manager compares
+  it with the latest captured earnings date and closes the full package when
+  due. Earnings-calendar rows intentionally leave this blank because their
+  separate contract holds through the confirmed event and exits afterward.
+- Shadow rows use these same frozen management fields after entry. Their final
+  adapter remains broker-inert and quote-based: a selected entry may work across
+  bounded retries or become `entry_missed`; shadow does not use live Plan 2.
 
 ## `daily_plan`
 
-Engine-written ranked portfolio plans for human review.
+Engine-written ranked portfolio plans for operator visibility and audit. In
+automatic mode this is not a trade-by-trade approval queue.
 
 The planner should not only rank individual trade candidates. It should rank
 combinations of candidates. For example, 20 scraped/generated ideas might reduce
