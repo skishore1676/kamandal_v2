@@ -464,6 +464,81 @@ def test_weekly_economics_fails_open_pnl_closed_when_same_day_mark_is_missing(tm
     assert row["quality_issues"] == ["open_lifecycle_missing_same_day_mark"]
 
 
+def test_weekly_economics_does_not_invent_close_pnl_without_verified_fill(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    CsaStore(database).save_lifecycle(
+        LifecycleState(
+            lifecycle_id="unknown-close",
+            opportunity_id="opportunity",
+            lane=LaneId.CALL_VERTICAL,
+            version=1,
+            status="closed",
+            active_legs=(),
+            cashflow_ledger=({"amount": 0.88, "filled_at": "2026-08-20T15:00:00Z"},),
+            opened_at="2026-08-20T15:00:00Z",
+            updated_at="2026-08-21T19:45:00Z",
+            policy_hash="policy",
+            metadata={
+                "playbook_id": "call_spread_default",
+                "execution_mode": "live",
+                "bpr": 500,
+                "terminal_economics_status": "reconciled_without_fill",
+                "policy": {"stage": "live"},
+            },
+        )
+    )
+
+    report = build_csa_weekly_economics(database, through_date="2026-08-21")
+    row = report["economic_rows"][0]
+
+    assert row["closed_in_period"] == 1
+    assert row["economically_complete_closed"] == 0
+    assert row["economically_unknown_closed"] == 1
+    assert row["known_realized_pnl_usd"] == 0.0
+    assert row["realized_pnl_usd"] is None
+    assert row["total_pnl_usd"] is None
+    assert row["economic_status"] == "partial"
+    assert row["quality_issues"] == ["closed_lifecycle_terminal_economics_unknown"]
+    assert report["book_totals"]["live"]["realized_pnl_usd"] is None
+    assert report["book_totals"]["live"]["known_realized_pnl_usd"] == 0.0
+
+
+def test_weekly_economics_never_combines_live_and_shadow_books(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    store = CsaStore(database)
+    for execution_mode, amount in (("live", 1.0), ("shadow", -0.4)):
+        store.save_lifecycle(
+            LifecycleState(
+                lifecycle_id=f"{execution_mode}-close",
+                opportunity_id=f"{execution_mode}-opportunity",
+                lane=LaneId.SHORT_STRANGLE,
+                version=1,
+                status="closed",
+                active_legs=(),
+                cashflow_ledger=({"amount": amount, "filled_at": "2026-08-21T19:45:00Z"},),
+                opened_at="2026-08-20T15:00:00Z",
+                updated_at="2026-08-21T19:45:00Z",
+                policy_hash=f"{execution_mode}-policy",
+                metadata={
+                    "playbook_id": f"{execution_mode}_playbook",
+                    "execution_mode": execution_mode,
+                    "bpr": 1_000,
+                    "policy": {"stage": execution_mode},
+                },
+            )
+        )
+
+    report = build_csa_weekly_economics(database, through_date="2026-08-21")
+
+    assert "totals" not in report
+    assert report["book_totals"]["live"]["realized_pnl_usd"] == 100.0
+    assert report["book_totals"]["shadow"]["realized_pnl_usd"] == -40.0
+
+
 def test_stage_change_fails_closed_while_shadow_order_is_working(tmp_path) -> None:
     database = tmp_path / "kamandal.db"
     LocalStore(database)

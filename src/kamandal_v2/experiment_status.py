@@ -12,7 +12,7 @@ import hashlib
 import json
 import sqlite3
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
@@ -50,7 +50,12 @@ def build_experiment_status_from_paths(
     report_path = resolve_path(report_dir)
     scorecards, scorecard_problems, scorecard_sources = _load_scorecards(report_path, as_of)
     economics, economics_problem, economics_source = _load_economics(report_path, as_of)
-    current_stages, policy_source = _load_current_policy(report_path, as_of)
+    (
+        current_stages,
+        configuration_identities,
+        policy_source,
+        policy_observations,
+    ) = _load_current_policy(report_path, as_of)
 
     source_status = "ok"
     source_limitations: list[str] = []
@@ -58,19 +63,40 @@ def build_experiment_status_from_paths(
         source_status = "partial"
         source_limitations.extend(scorecard_problems)
 
-    if not scorecards:
+    exact_scorecard_present = any(
+        str(card.get("trading_date") or "") == as_of.isoformat()
+        for card in scorecards
+    )
+    if not exact_scorecard_present:
         scorecard = _read_scorecard(database_path, as_of)
         if scorecard is None:
-            source_status = "unavailable"
-            source_limitations.append("source_unavailable")
+            source_status = "unavailable" if not scorecards else "stale"
+            source_limitations.append(
+                "source_unavailable" if not scorecards else "stale_source"
+            )
         else:
-            scorecards = [scorecard]
-            scorecard_sources.append({"kind": "sqlite", "path": str(database_path)})
+            scorecards = [
+                card
+                for card in scorecards
+                if str(card.get("trading_date") or "") != as_of.isoformat()
+            ]
+            scorecards.append(scorecard)
+            scorecard_sources.append(
+                {
+                    "kind": "sqlite",
+                    "path": str(database_path),
+                    "trading_date": as_of.isoformat(),
+                }
+            )
 
     if economics is None:
         economics = _read_economics(database_path, as_of)
         if economics is not None:
-            economics_source = {"kind": "sqlite", "path": str(database_path)}
+            economics_source = {
+                "kind": "sqlite",
+                "path": str(database_path),
+                "through": as_of.isoformat(),
+            }
         else:
             if source_status == "ok":
                 source_status = "partial"
@@ -89,12 +115,15 @@ def build_experiment_status_from_paths(
     else:
         effective_stages = _latest_scorecard_stages(scorecards)
 
+    scorecards = _with_policy_observations(scorecards, policy_observations)
+
     packet = build_experiment_status(
         scorecards,
         economics=economics,
         source_status=source_status,
         as_of=as_of,
         current_stages=effective_stages or None,
+        current_configuration_identities=configuration_identities or None,
         source_limitations=source_limitations,
         provenance={
             "scorecards": scorecard_sources,
@@ -115,6 +144,7 @@ def build_experiment_status(
     source_status: str = "ok",
     as_of: date | str | None = None,
     current_stages: Mapping[str, str] | None = None,
+    current_configuration_identities: Mapping[str, str] | None = None,
     source_limitations: Iterable[str] = (),
     provenance: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -143,9 +173,14 @@ def build_experiment_status(
             for experiment_id, observations in grouped.items()
             if current_stages.get(experiment_id) in ACTIVE_EXPERIMENT_STAGES
         }
+        for experiment_id, stage in current_stages.items():
+            if stage in ACTIVE_EXPERIMENT_STAGES:
+                grouped.setdefault(experiment_id, [])
 
     economic_rows = _economic_rows(economics)
     limitations = _unique_strings(source_limitations)
+    if economics is None:
+        limitations = _unique_strings([*limitations, "missing_evidence"])
     experiments = [
         _build_experiment(
             experiment_id,
@@ -154,6 +189,9 @@ def build_experiment_status(
             source_status,
             limitations,
             stage_override=(current_stages or {}).get(experiment_id),
+            configuration_identity_override=(
+                current_configuration_identities or {}
+            ).get(experiment_id),
         )
         for experiment_id, observations in sorted(grouped.items())
     ]
@@ -161,6 +199,7 @@ def build_experiment_status(
         "schema": STATUS_SCHEMA,
         "app": "kamandal",
         "as_of": through.isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "source_status": source_status,
         "source_schemas": [EVIDENCE_SCHEMA, ECONOMIC_SCHEMA],
         "experiments": experiments,
@@ -226,6 +265,7 @@ def _build_experiment(
     source_status: str,
     source_limitations: list[str],
     stage_override: str | None = None,
+    configuration_identity_override: str | None = None,
 ) -> dict[str, Any]:
     active = _current_stage_observations(observations, stage_override=stage_override)
     dates = [str(card.get("trading_date")) for card, _row in active if card.get("trading_date")]
@@ -243,7 +283,7 @@ def _build_experiment(
         row_limitations.append("partial_source")
     if source_status in {"stale", "unavailable"}:
         row_limitations.append(f"{source_status}_source")
-    if not policy_hashes:
+    if not policy_hashes and not configuration_identity_override:
         row_limitations.append("missing_configuration_identity")
     if len(policy_hashes) > 1:
         row_limitations.append("ambiguous_evidence")
@@ -251,9 +291,20 @@ def _build_experiment(
     opportunities = sum(int(row.get("opportunities") or 0) for _card, row in active)
     entries = sum(_entry_count(row) for _card, row in active)
     closed, metrics, economic_limitations = _economic_facts(experiment_id, stage, economic_rows)
+    entries = max(entries, int(metrics.get("completed_entries") or 0))
     row_limitations.extend(economic_limitations)
     for card, row in active:
-        if card.get("run_errors") or str(card.get("evidence_status") or "") == "RED":
+        if "runtime_status" in card:
+            runtime_unhealthy = (
+                str(card.get("runtime_status") or "") == "RED"
+                or bool(card.get("active_run_errors"))
+            )
+        else:
+            runtime_unhealthy = (
+                bool(card.get("run_errors"))
+                or str(card.get("evidence_status") or "") == "RED"
+            )
+        if runtime_unhealthy:
             row_limitations.append("data_quality_issue")
         if int(row.get("unexpected_broker_effects") or 0) > 0:
             row_limitations.append("unexpected_broker_effect")
@@ -268,7 +319,9 @@ def _build_experiment(
         "experiment_id": experiment_id,
         "playbook_id": experiment_id,
         "stage": stage,
-        "configuration_identity": _configuration_identity(policy_hashes),
+        "configuration_identity": (
+            configuration_identity_override or _configuration_identity(policy_hashes)
+        ),
         "observation_window": {
             "start": dates[0] if dates else "",
             "end": dates[-1] if dates else "",
@@ -325,7 +378,7 @@ def _economic_facts(
     if row is None:
         row = next((value for (candidate, _stage), value in rows.items() if candidate == experiment_id), None)
     if row is None:
-        return 0, {}, ["missing_evidence"]
+        return 0, {}, []
     limitations = list(row.get("quality_issues") or [])
     closed = int(row.get("closed_in_period") or 0)
     realized = _number(row.get("realized_pnl_usd"))
@@ -333,6 +386,17 @@ def _economic_facts(
     metrics: dict[str, Any] = {
         key: row.get(key)
         for key in (
+            "execution_mode",
+            "opened_in_period",
+            "completed_entries",
+            "economically_complete_closed",
+            "economically_unknown_closed",
+            "active_open",
+            "unresolved_entries",
+            "wins",
+            "losses",
+            "adjustment_count",
+            "known_realized_pnl_usd",
             "realized_pnl_usd",
             "open_unrealized_pnl_usd",
             "total_pnl_usd",
@@ -341,6 +405,7 @@ def _economic_facts(
             "realized_return_on_bpr_pct",
             "total_return_on_bpr_pct",
             "win_rate_pct",
+            "fill_basis",
         )
         if row.get(key) is not None
     }
@@ -398,10 +463,16 @@ def _load_scorecards(
 def _load_current_policy(
     report_dir: Path,
     through: date,
-) -> tuple[dict[str, str], dict[str, Any] | None]:
+) -> tuple[
+    dict[str, str],
+    dict[str, str],
+    dict[str, Any] | None,
+    dict[str, dict[str, tuple[str, str]]],
+]:
     policy_dir = report_dir.parent.parent / "run" / "strategy_policy"
     candidates = sorted(policy_dir.glob("strategy_policy_????-??-??.json"))
     selected: tuple[Path, dict[str, Any]] | None = None
+    observations: dict[str, dict[str, tuple[str, str]]] = {}
     for path in candidates:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -410,22 +481,97 @@ def _load_current_policy(
         trading_date = str(payload.get("trading_date") or "")
         if trading_date and trading_date <= through.isoformat():
             selected = (path, payload)
+            stages, identities = _policy_rows(payload)
+            observations[trading_date] = {
+                playbook_id: (stage, identities[playbook_id])
+                for playbook_id, stage in stages.items()
+            }
     if selected is None:
-        return {}, None
+        return {}, {}, None, observations
     path, payload = selected
-    rows = ((payload.get("tables") or {}).get("playbooks") or [])
-    stages = {
-        str(row.get("playbook_id")): str(row.get("csa_stage") or "baseline").strip().lower()
-        for row in rows
-        if row.get("playbook_id")
-    }
-    return stages, {
+    stages, configuration_identities = _policy_rows(payload)
+    return stages, configuration_identities, {
         "kind": "policy_snapshot",
         "path": str(path),
         "trading_date": payload.get("trading_date"),
         "snapshot_hash": payload.get("snapshot_hash"),
         "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }, observations
+
+
+def _policy_rows(payload: Mapping[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
+    rows = ((payload.get("tables") or {}).get("playbooks") or [])
+    enabled_rows = [
+        dict(row)
+        for row in rows
+        if row.get("playbook_id")
+        and str(row.get("enabled") if "enabled" in row else "true").strip().lower()
+        in {"true", "1", "yes", "on"}
+    ]
+    stages = {
+        str(row["playbook_id"]): str(
+            row.get("mode") or row.get("csa_stage") or "baseline"
+        ).strip().lower()
+        for row in enabled_rows
     }
+    configuration_identities = {
+        str(row["playbook_id"]): _policy_configuration_identity(row)
+        for row in enabled_rows
+    }
+    return stages, configuration_identities
+
+
+def _policy_configuration_identity(row: Mapping[str, Any]) -> str:
+    operational = {
+        str(key): value
+        for key, value in row.items()
+        if str(key) not in {"notes", "rationale"}
+    }
+    if str(row.get("mode") or "").strip():
+        operational.pop("csa_stage", None)
+    return hashlib.sha256(
+        json.dumps(
+            operational,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+
+
+def _with_policy_observations(
+    scorecards: list[dict[str, Any]],
+    observations: Mapping[str, Mapping[str, tuple[str, str]]],
+) -> list[dict[str, Any]]:
+    augmented: list[dict[str, Any]] = []
+    for original in scorecards:
+        card = dict(original)
+        experiments = [dict(row) for row in (card.get("experiments") or [])]
+        if int(card.get("runs") or 0) > 0:
+            existing = {
+                str(row.get("experiment_id") or row.get("playbook_id") or "")
+                for row in experiments
+            }
+            for playbook_id, (stage, configuration_identity) in (
+                observations.get(str(card.get("trading_date") or "")) or {}
+            ).items():
+                if stage not in ACTIVE_EXPERIMENT_STAGES or playbook_id in existing:
+                    continue
+                experiments.append(
+                    {
+                        "experiment_id": playbook_id,
+                        "playbook_id": playbook_id,
+                        "stage": stage,
+                        "policy_hashes": [configuration_identity],
+                        "opportunities": 0,
+                        "fills": {},
+                        "live_intents": {},
+                        "unexpected_broker_effects": 0,
+                    }
+                )
+        card["experiments"] = experiments
+        augmented.append(card)
+    return augmented
 
 
 def _latest_scorecard_stages(
@@ -456,7 +602,10 @@ def _load_economics(
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if payload.get("schema") != ECONOMIC_SCHEMA or str(payload.get("through") or "") > through.isoformat():
+        if (
+            payload.get("schema") != ECONOMIC_SCHEMA
+            or str(payload.get("through") or "") != through.isoformat()
+        ):
             continue
         if any(payload.get(key) is not False for key in ("recommendation_authority", "sheet_write_authority", "execution_authority", "alpha_claim_authority")):
             return None, "partial_source", None

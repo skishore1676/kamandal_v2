@@ -254,18 +254,16 @@ def build_csa_weekly_economics(
         "contract_multiplier": int(CONTRACT_MULTIPLIER),
         "schema_ready": False,
         "economic_rows": [],
-        "totals": {
-            "opened_in_period": 0,
-            "closed_in_period": 0,
-            "active_open": 0,
-            "realized_pnl_usd": 0.0,
-            "open_unrealized_pnl_usd": None,
-            "total_pnl_usd": None,
+        "book_totals": {
+            "live": _economic_totals([]),
+            "shadow": _economic_totals([]),
         },
         "limitations": [
+            "Live and shadow economics are separate books and are never combined.",
             "Shadow fills use Kamandal's conservative quote-based fill model.",
             "Commissions and fees are not included.",
             "Open P&L is reportable only from a same-day natural-close mark.",
+            "A reconciled close without a verified close fill remains economically unknown.",
             "Small samples are descriptive evidence, not proof of durable alpha.",
         ],
         "recommendation_authority": False,
@@ -306,25 +304,15 @@ def build_csa_weekly_economics(
         _economic_row(key, values, period_start=period_start, through=through)
         for key, values in sorted(grouped.items())
     ]
-    realized = round(sum(float(row["realized_pnl_usd"]) for row in rows), 2)
-    open_marks_complete = all(row["open_unrealized_pnl_usd"] is not None for row in rows)
-    open_unrealized = (
-        round(sum(float(row["open_unrealized_pnl_usd"] or 0.0) for row in rows), 2)
-        if open_marks_complete
-        else None
-    )
-    total = round(realized + open_unrealized, 2) if open_unrealized is not None else None
     report = {
         **base,
         "schema_ready": True,
         "economic_rows": rows,
-        "totals": {
-            "opened_in_period": sum(int(row["opened_in_period"]) for row in rows),
-            "closed_in_period": sum(int(row["closed_in_period"]) for row in rows),
-            "active_open": sum(int(row["active_open"]) for row in rows),
-            "realized_pnl_usd": realized,
-            "open_unrealized_pnl_usd": open_unrealized,
-            "total_pnl_usd": total,
+        "book_totals": {
+            execution_mode: _economic_totals(
+                [row for row in rows if row["execution_mode"] == execution_mode]
+            )
+            for execution_mode in ("live", "shadow")
         },
     }
     return _with_receipt(report, status="ok" if rows else "no_data")
@@ -354,9 +342,12 @@ def write_csa_weekly_economics(
                 "execution_mode",
                 "opened_in_period",
                 "closed_in_period",
+                "economically_complete_closed",
+                "economically_unknown_closed",
                 "active_open",
                 "wins",
                 "losses",
+                "known_realized_pnl_usd",
                 "realized_pnl_usd",
                 "open_unrealized_pnl_usd",
                 "total_pnl_usd",
@@ -416,16 +407,19 @@ def render_csa_weekly_economics(report: dict[str, Any]) -> str:
         "",
         "This packet reports app-owned economics only. It cannot recommend or apply a stage change.",
         "",
-        "| Playbook | Stage | Closed | Open | Realized P&L | Open P&L | Return on closed BPR | Evidence |",
+        "| Playbook | Stage | Closed known/unknown | Open | Realized P&L | Open P&L | Return on closed BPR | Evidence |",
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in report.get("economic_rows") or []:
         open_pnl = row.get("open_unrealized_pnl_usd")
+        realized_pnl = row.get("realized_pnl_usd")
         return_pct = row.get("realized_return_on_bpr_pct")
         return_label = f"{return_pct:+.2f}%" if return_pct is not None else "Unavailable"
         lines.append(
-            f"| `{row['playbook_id']}` | {row['stage']} | {row['closed_in_period']} | {row['active_open']} | "
-            f"{_money(row['realized_pnl_usd'])} | {_money(open_pnl) if open_pnl is not None else 'Unavailable'} | "
+            f"| `{row['playbook_id']}` | {row['stage']} | "
+            f"{row['economically_complete_closed']}/{row['economically_unknown_closed']} | {row['active_open']} | "
+            f"{_money(realized_pnl) if realized_pnl is not None else 'Unavailable'} | "
+            f"{_money(open_pnl) if open_pnl is not None else 'Unavailable'} | "
             f"{return_label} | {row['economic_status']} |"
         )
     if not report.get("economic_rows"):
@@ -577,12 +571,18 @@ def _economic_row(
         quality_issues.append("multiple_policy_hashes_in_stage_cohort")
 
     realized_values: list[float] = []
+    economically_unknown_closed = 0
     closed_bpr = 0.0
     for lifecycle in closed_in_period:
         cashflows = list(lifecycle.get("cashflow_ledger") or [])
         metadata = dict(lifecycle.get("metadata") or {})
+        if metadata.get("terminal_economics_status") == "reconciled_without_fill":
+            quality_issues.append("closed_lifecycle_terminal_economics_unknown")
+            economically_unknown_closed += 1
+            continue
         if not cashflows:
             quality_issues.append("closed_lifecycle_missing_cashflows")
+            economically_unknown_closed += 1
             continue
         realized_values.append(round(sum(float(item.get("amount") or 0.0) for item in cashflows) * CONTRACT_MULTIPLIER, 2))
         bpr = _positive_float(metadata.get("bpr"))
@@ -609,18 +609,30 @@ def _economic_row(
         else:
             quality_issues.append("open_lifecycle_missing_same_day_mark")
 
-    realized = round(sum(realized_values), 2)
+    known_realized = round(sum(realized_values), 2)
+    realized_complete = len(realized_values) == len(closed_in_period)
+    realized = known_realized if realized_complete else None
     open_complete = marked_open == len(active_open)
     open_unrealized = round(sum(open_values), 2) if open_complete else None
-    total = round(realized + open_unrealized, 2) if open_unrealized is not None else None
+    total = (
+        round(realized + open_unrealized, 2)
+        if realized is not None and open_unrealized is not None
+        else None
+    )
     wins = sum(value > 0 for value in realized_values)
     losses = sum(value < 0 for value in realized_values)
     breakeven = sum(value == 0 for value in realized_values)
     closed_count = len(realized_values)
-    realized_return = round(100.0 * realized / closed_bpr, 4) if closed_bpr > 0 else None
+    realized_return = (
+        round(100.0 * realized / closed_bpr, 4)
+        if realized is not None and closed_bpr > 0
+        else None
+    )
     total_bpr = closed_bpr + open_bpr
     total_return = round(100.0 * total / total_bpr, 4) if total is not None and total_bpr > 0 else None
-    if not closed_count and not active_open:
+    if closed_in_period and not realized_complete:
+        economic_status = "partial"
+    elif not closed_count and not active_open:
         economic_status = "no_fills"
     elif not closed_count:
         economic_status = "open_only" if open_complete else "partial"
@@ -638,6 +650,7 @@ def _economic_row(
         "completed_entries": len(closed_in_period) + len(active_open),
         "closed_in_period": len(closed_in_period),
         "economically_complete_closed": closed_count,
+        "economically_unknown_closed": economically_unknown_closed,
         "active_open": len(active_open),
         "unresolved_entries": unresolved_entries,
         "marked_open": marked_open,
@@ -645,6 +658,7 @@ def _economic_row(
         "losses": losses,
         "breakeven": breakeven,
         "win_rate_pct": round(100.0 * wins / closed_count, 2) if closed_count else None,
+        "known_realized_pnl_usd": known_realized,
         "realized_pnl_usd": realized,
         "open_unrealized_pnl_usd": open_unrealized,
         "total_pnl_usd": total,
@@ -659,6 +673,43 @@ def _economic_row(
         "quality_issues": sorted(set(quality_issues)),
         "commissions_included": False,
         "fill_basis": "quote_model" if execution_mode == "shadow" else "broker_fill",
+    }
+
+
+def _economic_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    realized_complete = all(row.get("realized_pnl_usd") is not None for row in rows)
+    open_complete = all(row.get("open_unrealized_pnl_usd") is not None for row in rows)
+    realized = (
+        round(sum(float(row["realized_pnl_usd"]) for row in rows), 2)
+        if realized_complete
+        else None
+    )
+    open_unrealized = (
+        round(sum(float(row["open_unrealized_pnl_usd"]) for row in rows), 2)
+        if open_complete
+        else None
+    )
+    return {
+        "opened_in_period": sum(int(row.get("opened_in_period") or 0) for row in rows),
+        "closed_in_period": sum(int(row.get("closed_in_period") or 0) for row in rows),
+        "economically_complete_closed": sum(
+            int(row.get("economically_complete_closed") or 0) for row in rows
+        ),
+        "economically_unknown_closed": sum(
+            int(row.get("economically_unknown_closed") or 0) for row in rows
+        ),
+        "active_open": sum(int(row.get("active_open") or 0) for row in rows),
+        "known_realized_pnl_usd": round(
+            sum(float(row.get("known_realized_pnl_usd") or 0.0) for row in rows),
+            2,
+        ),
+        "realized_pnl_usd": realized,
+        "open_unrealized_pnl_usd": open_unrealized,
+        "total_pnl_usd": (
+            round(realized + open_unrealized, 2)
+            if realized is not None and open_unrealized is not None
+            else None
+        ),
     }
 
 

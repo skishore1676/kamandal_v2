@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.ops import daily_report
@@ -142,3 +143,21 @@ def test_daily_report_keeps_live_and_shadow_bpr_separate(tmp_path) -> None:
     assert books["shadow"]["bpr_used_pct"] == 53.5
     assert books["live"]["snapshot_id"].startswith("live:")
     assert books["shadow"]["snapshot_id"].startswith("shadow:")
+
+
+def test_daily_report_emits_exact_strategy_evidence_packet(tmp_path) -> None:
+    database = tmp_path / "missing.sqlite"
+    output_dir = tmp_path / "reports"
+
+    written = daily_report.write_daily_report(
+        database,
+        output_dir=output_dir,
+        trading_date="2026-08-21",
+        config={},
+    )
+
+    artifacts = written.report["strategy_evidence_artifacts"]
+    assert Path(artifacts["scorecard"]).name == "csa1_scorecard_2026-08-21.json"
+    assert Path(artifacts["weekly_economics"]).name == "csa1_weekly_economics_2026-08-21.json"
+    assert Path(artifacts["experiment_status"]).name == "csa1_experiment_status_2026-08-21.json"
+    assert all(Path(path).exists() for path in artifacts.values())

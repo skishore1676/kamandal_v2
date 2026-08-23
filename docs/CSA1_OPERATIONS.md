@@ -65,11 +65,11 @@ records one migration identity, and requires `PRAGMA integrity_check=ok`.
 economics products. It does not refresh the Sheet, run a scan, mutate a stage,
 submit or reconcile an order, or make a recommendation. TradeLab consumes this
 packet for advisory analysis; the operator remains the only stage authority.
-The scorecard command writes the dated shared packet
-`data/reports/csa1/csa1_experiment_status_YYYY-MM-DD.json` atomically after it writes
-the scorecard and weekly economics. The standalone `experiment-status` command
-remains a read-only inspection path; TradeLab prefers the dated packet and otherwise
-retains its legacy scorecard fallback.
+The retained `daily-report` job writes the dated scorecard and weekly economics, then
+writes `data/reports/csa1/csa1_experiment_status_YYYY-MM-DD.json` atomically as the
+final shared product. Its 15:25 CT run follows the final lifecycle-management window.
+The standalone `experiment-status` command remains a read-only inspection path.
+TradeLab requires the exact-cutoff packet and never substitutes older scorecards.
 
 ## Isolation And Failure Behavior
 
@@ -98,10 +98,12 @@ retains its legacy scorecard fallback.
 
 ## Daily Truth
 
-`kamandal daily-report` remains the canonical daily aggregator and now embeds a
-`csa_shadow` block. The CSA scorecard also writes JSON, Markdown, and CSV under
-`data/reports/csa1/`. A green operational scorecard requires zero CSA live intents
-and no unexplained run errors; it does not prove strategy edge.
+`kamandal daily-report` is the canonical daily aggregator and strategy-evidence
+producer. It embeds the unified strategy scorecard and writes JSON, Markdown, CSV,
+weekly economics, and the shared exact-date packet under `data/reports/csa1/`.
+The 15:25 CT run is passive and post-close; it does not send Telegram unless the job
+fails. Operational health, live economics, and shadow economics remain separate, and
+none of them alone proves strategy edge.
 
 ## Rollback
 

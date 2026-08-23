@@ -235,6 +235,7 @@ def daily_report_job(args: argparse.Namespace) -> int:
             "json_path": str(result.json_path),
             "markdown_path": str(result.markdown_path),
             "ryg_path": str(result.ryg_markdown_path),
+            "strategy_evidence_paths": result.report.get("strategy_evidence_artifacts"),
             "alert": None,
             "delivery_status": "local_artifact_only",
             "level": level,

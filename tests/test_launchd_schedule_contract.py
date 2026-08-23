@@ -21,6 +21,8 @@ def test_late_day_sequence_preserves_dependency_order_and_submission_window() ->
     assert JOB_SCHEDULES["youtube"].fixed_times[-1] == time(14, 0)
     assert JOB_SCHEDULES["live-reconciliation"].fixed_times[-1] == time(14, 10)
     assert JOB_SCHEDULES["unified-planning"].fixed_times[-1] == time(14, 15)
+    assert JOB_SCHEDULES["daily-report"].fixed_times[-1] == time(15, 25)
+    assert JOB_SCHEDULES["daily-report"].fixed_times[-1] > JOB_SCHEDULES["unified-lifecycle-management"].window_end
     lifecycle = JOB_SCHEDULES["unified-lifecycle-management"]
     assert lifecycle.cadence_minutes == 5
     assert lifecycle.window_start == time(8, 30)

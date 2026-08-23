@@ -37,6 +37,33 @@ def write_daily_report(
     target_dir = Path(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     day = report["trading_date"]
+    from kamandal_v2.strategy_lanes.reports import (
+        write_csa_experiment_status,
+        write_csa_scorecard,
+        write_csa_weekly_economics,
+    )
+
+    strategy_report_dir = target_dir / "csa1"
+    scorecard = write_csa_scorecard(
+        db_path,
+        output_dir=strategy_report_dir,
+        trading_date=day,
+    )
+    economics = write_csa_weekly_economics(
+        db_path,
+        output_dir=strategy_report_dir,
+        through_date=day,
+    )
+    experiment_status = write_csa_experiment_status(
+        db_path,
+        output_dir=strategy_report_dir,
+        through_date=day,
+    )
+    report["strategy_evidence_artifacts"] = {
+        "scorecard": str(scorecard.json_path),
+        "weekly_economics": str(economics.json_path),
+        "experiment_status": str(experiment_status.json_path),
+    }
     json_path = target_dir / f"kamandal_daily_report_{day}.json"
     markdown_path = target_dir / f"kamandal_daily_report_{day}.md"
     ryg_markdown_path = target_dir / f"kamandal_daily_report_{day}_ryg.md"

@@ -55,7 +55,7 @@ Pilot/live therefore fail closed. A shadow scan may ask Tastytrade's order dry-r
 a BPR estimate and, if needed, use the conservative local fallback; both are recorded
 as shadow evidence and neither makes the playbook executable at Public.
 
-At 15:25 CT, the CSA scorecard job writes three app-owned evidence products:
+At 15:25 CT, the existing `daily-report` job writes three app-owned evidence products:
 
 - a daily machinery scorecard covering scans, admissions, fills, management actions,
   blockers, policy identity, and broker-effect invariants; and
@@ -70,12 +70,16 @@ is content-digested and explicitly has no recommendation, Sheet-write, execution
 alpha-claim authority. Shadow results exclude commissions and use the quote-based fill
 model, so TradeLab must preserve those limitations in any recommendation.
 
-TradeLab validates both products and asks its bounded Codex analyst for a stage-aware
-`continue`, `modify`, `demote`, or promotion-review proposal. Codex cannot recommend
+TradeLab requires the exact-cutoff shared packet, reports live operations separately
+from shadow/pilot experiments, and asks its bounded analyst for a stage-aware
+`continue`, `modify`, `demote`, or promotion-review proposal. The analyst cannot recommend
 promotion unless the machinery proposal already permits the same review and the
 economic packet contains at least one closed lifecycle plus complete positive total
 P&L. The proposal appears in the weekly operator brief; only the operator may change
-the Google Sheet.
+the Google Sheet. If the exact packet, post-close generation timestamp, current policy
+snapshot, daily scorecard, or weekly economics is missing, TradeLab reports Kamandal
+evidence as partial or unavailable. It never reuses older scorecards to create a
+Sheet-change recommendation.
 
 For cross-application consumption, Kamandal exposes the same facts through the
 read-only command `kamandal experiment-status --format json`. The command adapts the

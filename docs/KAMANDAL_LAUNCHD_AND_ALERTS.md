@@ -51,7 +51,7 @@ All times are oldmac local time, expected to be America/Chicago.
 | `unified_lifecycle_management` | `unified-lifecycle-management` | Weekdays every 5 minutes, 08:30-15:15 |
 | `live_health_report` | `live-health-report` | Weekdays 09:10, 11:45, 14:45, 15:20 |
 | `scheduled_job_health` | `scheduled-job-health` | Weekdays every 15 minutes, 09:15-15:45 |
-| `daily_report` | `daily-report` | Weekdays 09:10, 11:45, 14:45 |
+| `daily_report` | `daily-report` | Weekdays 09:10, 11:45, 14:45, 15:25 |
 | `earnings` | `earnings` | Weekdays 08:40 |
 | `iv` | `iv` | Weekdays 08:45 |
 | `iv_afternoon` | `iv-afternoon` | Weekdays 13:45 |

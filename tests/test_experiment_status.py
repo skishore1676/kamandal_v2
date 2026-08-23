@@ -99,6 +99,22 @@ def test_status_projection_marks_missing_economics_inconclusive() -> None:
     assert "partial_source" in experiment["limitations"]
 
 
+def test_status_projection_does_not_treat_recovered_run_errors_as_current_failure() -> None:
+    card = _card("2026-08-12")
+    card["run_errors"] = ["historical quote timeout"]
+    card["runtime_status"] = "GREEN"
+    card["active_run_errors"] = []
+
+    packet = build_experiment_status(
+        [card],
+        economics=_economics(),
+        as_of="2026-08-12",
+    )
+
+    assert packet["experiments"][0]["health"] == "ready_for_review"
+    assert "data_quality_issue" not in packet["experiments"][0]["limitations"]
+
+
 def test_status_command_reads_existing_reports_without_recomputing_or_writing(tmp_path: Path) -> None:
     report_dir = tmp_path / "reports"
     report_dir.mkdir()
@@ -167,6 +183,72 @@ def test_status_projection_does_not_promote_historical_baseline_rows_to_experime
     ]
     assert packet["experiments"][0]["stage"] == "shadow"
     assert packet["provenance"]["policy"]["snapshot_hash"] == "snapshot-1"
+
+
+def test_current_policy_mode_wins_over_legacy_csa_stage(tmp_path: Path) -> None:
+    report_dir = tmp_path / "data" / "reports" / "csa1"
+    report_dir.mkdir(parents=True)
+    policy_dir = tmp_path / "data" / "run" / "strategy_policy"
+    policy_dir.mkdir(parents=True)
+    policy = {
+        "schema": "kamandal.strategy_policy_snapshot.v1",
+        "trading_date": "2026-08-21",
+        "snapshot_hash": "snapshot-mode-authority",
+        "tables": {"playbooks": [{
+            "playbook_id": "short_strangle_high_iv",
+            "enabled": "TRUE",
+            "mode": "live",
+            "csa_stage": "shadow",
+        }, {
+            "playbook_id": "earnings_calendar_directional",
+            "enabled": "TRUE",
+            "mode": "live",
+            "csa_stage": "baseline",
+        }, {
+            "playbook_id": "disabled_strategy",
+            "enabled": "FALSE",
+            "mode": "live",
+            "csa_stage": "baseline",
+        }]},
+    }
+    policy["tables"]["playbooks"][0]["notes"] = "new operator explanation"
+    prior_policy = json.loads(json.dumps(policy))
+    prior_policy["trading_date"] = "2026-08-20"
+    prior_policy["snapshot_hash"] = "snapshot-prior"
+    prior_policy["tables"]["playbooks"][0]["notes"] = "old operator explanation"
+    prior_policy["tables"]["playbooks"][0]["csa_stage"] = "baseline"
+    (policy_dir / "strategy_policy_2026-08-20.json").write_text(
+        json.dumps(prior_policy), encoding="utf-8"
+    )
+    (policy_dir / "strategy_policy_2026-08-21.json").write_text(
+        json.dumps(policy), encoding="utf-8"
+    )
+    card = _card("2026-08-21", stage="live")
+    prior_card = _card("2026-08-20", stage="live")
+    (report_dir / "csa1_scorecard_2026-08-20.json").write_text(
+        json.dumps(prior_card), encoding="utf-8"
+    )
+    (report_dir / "csa1_scorecard_2026-08-21.json").write_text(
+        json.dumps(card), encoding="utf-8"
+    )
+
+    packet = build_experiment_status_from_paths(
+        database=tmp_path / "unused.db",
+        report_dir=report_dir,
+        through="2026-08-21",
+    )
+
+    by_id = {row["experiment_id"]: row for row in packet["experiments"]}
+    assert set(by_id) == {
+        "earnings_calendar_directional",
+        "short_strangle_high_iv",
+    }
+    assert by_id["short_strangle_high_iv"]["stage"] == "live"
+    assert by_id["short_strangle_high_iv"]["observations"] == 2
+    assert "ambiguous_evidence" not in by_id["short_strangle_high_iv"]["limitations"]
+    assert by_id["earnings_calendar_directional"]["observations"] == 2
+    assert by_id["earnings_calendar_directional"]["health"] == "collecting"
+    assert packet["generated_at"].endswith("+00:00")
 
 
 def test_status_command_is_read_only_and_does_not_import_legacy_cli(tmp_path: Path) -> None:

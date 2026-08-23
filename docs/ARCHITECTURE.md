@@ -497,7 +497,8 @@ The cutover changes existing seams; it does not add another subsystem:
   useful. The redundant daily proposer schedule is retired, and the Sheet
   publisher uses targeted append/readback rather than `replace_tab`.
 - The existing experiment/economics facts are exposed as generic lifecycle
-  history for TradeLab. No new transport or scheduler is added.
+  history for TradeLab. The retained `daily-report` job emits the exact-date shared
+  packet after lifecycle management ends; no new transport or scheduler is added.
 
 ### Atomic ownership migration
 

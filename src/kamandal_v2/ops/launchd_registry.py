@@ -87,7 +87,9 @@ JOB_SCHEDULES = {
     ),
     "live-health-report": JobSchedule(fixed_times=(time(9, 10), time(11, 45), time(14, 45), time(15, 20))),
     "scheduled-job-health": JobSchedule(cadence_minutes=15, window_start=time(9, 15), window_end=time(15, 45)),
-    "daily-report": JobSchedule(fixed_times=(time(9, 10), time(11, 45), time(14, 45))),
+    "daily-report": JobSchedule(
+        fixed_times=(time(9, 10), time(11, 45), time(14, 45), time(15, 25))
+    ),
     "earnings": JobSchedule(fixed_times=(time(8, 40),)),
     "iv": JobSchedule(fixed_times=(time(8, 45),)),
     "iv-afternoon": JobSchedule(fixed_times=(time(13, 45),)),
@@ -108,7 +110,7 @@ JOB_PURPOSES = {
     "iv": "Refresh IV data.",
     "iv-afternoon": "Refresh afternoon IV data.",
     "weekly-reviewer": "Review rejected candidates and propose playbook tuning.",
-    "daily-report": "Intraday Kamandal daily report (BHIKsha parity: JSON/Markdown/RYG via Lathi Bus).",
+    "daily-report": "Kamandal daily report and exact strategy-evidence packet; final passive run follows lifecycle management.",
 }
 
 DISABLED_BY_DEFAULT: set[str] = set()
