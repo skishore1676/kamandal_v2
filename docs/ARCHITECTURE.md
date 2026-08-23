@@ -1,7 +1,7 @@
 # Kamandal V2 Architecture
 
 Date: 2026-08-23
-Status: Corrective architecture implemented locally; deployment/readback pending
+Status: Corrective architecture deployed on oldmac at `5962f85`; natural-session proof pending
 
 ## Purpose
 
