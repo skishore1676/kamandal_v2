@@ -160,16 +160,17 @@ is the parameterization and terminal state, per exit reason:
 
 | Exit reason | Start price | Regress toward | Floor / terminal |
 |---|---|---|---|
-| `profit_target` | improved mid | partway to natural | stop at retained-profit floor: max(`exit_pricing.min_profit_to_trigger`, `target_profit * profit_floor_pct`) |
-| `dte_target`, `half_time` | mid | natural by end of day | must be flat by EOD; alert if not |
-| `max_loss`, `pre_event` | natural | cross the spread | alert operator if unfilled ~30 min; never end the day holding |
+| `profit_target` | validated mid | partway to validated natural | stop at retained-profit floor: max(`exit_pricing.min_profit_to_trigger`, `target_profit * profit_floor_pct`) |
+| `dte_target`, `half_time`, `pre_event` | validated mid | validated natural | keep the obligation due; alert if quote/order progress stalls |
+| `adverse_price_loss` | validated mid after confirmation | validated natural | never cross natural; opening/closing buffers observe only |
 
 Why per-reason parameters are load-bearing (real numbers from the book,
 2026-07-01 DELL put spread): entry credit $220, close at mid $112.50 → keep
 ~$107 profit; close at natural $215 → keep ~$5. One fixed "regress to natural"
-ladder donates the entire win on profit-target exits; refusing to pay natural
-on a max-loss exit risks far more than the spread. Same engine, different
-endpoints.
+ladder donates the entire win on profit-target exits. A loss exit remains
+urgent, but an extremely wide quote is not trustworthy permission to cross the
+spread. Same engine and midpoint-to-natural boundary, with different session,
+confirmation, floor, and escalation rules by reason.
 
 - DAY close orders that die at the bell: mark `expired_eod`; management
   re-stages automatically next session (no operator wake-up needed).
@@ -251,8 +252,9 @@ oldmac):
 - Close orders now reuse the cancel + replace pattern from entries, with close
   child tickets linked by `parent_ticket_hash`.
 - Profit-target closes can improve toward natural but never violate the
-  min-profit floor. DTE/half-time closes move toward natural. Max-loss and
-  pre-event exits may cross by a nickel per reprice attempt.
+  min-profit floor. DTE/half-time/pre-event closes remain due and move toward
+  validated natural. Adverse loss closes require valid repeated normal-window
+  observations and may never reprice through natural.
 - DAY close orders can be cancelled and marked `expired_eod`; management can
   re-stage next session because that status is terminal for dedup purposes.
 - Follow-up: reason-specific Lathi escalation for `terminal: alert*` presets.
