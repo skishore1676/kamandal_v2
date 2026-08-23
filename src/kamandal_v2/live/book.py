@@ -47,9 +47,18 @@ def run_live_book(store: LocalStore, config: dict[str, Any] | None = None) -> di
     for group in groups:
         group_id = str(group.get("group_id") or "")
         candidate = group.get("candidate") or {}
-        mark = store.latest_live_position_mark(group_id) or {}
-        stats = store.live_position_mark_stats(group_id)
+        canonical_mark = store.latest_canonical_live_lifecycle_mark(group_id)
+        mark = canonical_mark or store.latest_live_position_mark(group_id) or {}
+        stats = store.live_position_mark_stats(str((canonical_mark or {}).get("lifecycle_id") or group_id))
         management = store.latest_live_management_decision(group_id) or {}
+        if canonical_mark:
+            management = {
+                **management,
+                "action": "close" if canonical_mark.get("execution_status") in {"ready", "waiting_valid_quote"} else "hold",
+                "reason": str(canonical_mark.get("selected_reason") or ""),
+                "execution_status": str(canonical_mark.get("execution_status") or ""),
+                "decision_observation_id": str(canonical_mark.get("decision_observation_id") or ""),
+            }
         group_close_orders = [order for order in close_orders if str(order.get("group_id") or "") == group_id]
         group_open_orders = _open_orders_for_group(open_orders, group)
         attempts = store.live_order_attempts_for_ticket_hashes(

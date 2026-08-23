@@ -21,8 +21,10 @@ def propose_call_vertical_actions(
         actions.append(propose_action(lifecycle, ActionType.BLOCK, "working_order_conflict", arbiter_class="working_order_conflict", proposed_at=proposed_at))
     if not bool(context.get("ownership_clear", False)):
         actions.append(propose_action(lifecycle, ActionType.BLOCK, "ownership_ambiguous", arbiter_class="ownership_ambiguity", proposed_at=proposed_at))
-    if bool(context.get("hard_emergency")) or _number(context, "loss_multiple") >= sheet_number(policy, "max_loss_multiple"):
-        actions.append(propose_action(lifecycle, ActionType.CLOSE, "defined_risk_loss_exit", arbiter_class="hard_emergency", proposed_at=proposed_at))
+    if bool(context.get("hard_emergency")):
+        actions.append(propose_action(lifecycle, ActionType.CLOSE, "hard_emergency", arbiter_class="hard_emergency", proposed_at=proposed_at))
+    if _number(context, "loss_multiple") >= sheet_number(policy, "max_loss_multiple"):
+        actions.append(propose_action(lifecycle, ActionType.CLOSE, "defined_risk_loss_exit", arbiter_class="adverse_price_loss", proposed_at=proposed_at))
     if bool(context.get("event_exit_due")):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "mandatory_event_exit", arbiter_class="mandatory_event_exit", proposed_at=proposed_at))
     if _number(context, "profit_pct") >= sheet_number(policy, "profit_target_pct"):

@@ -1856,21 +1856,27 @@ def _repriced_close_limit_price(ticket: dict[str, Any], config: dict[str, Any]) 
         natural_price = _optional_float(ticket.get("exit_natural_limit_price"))
         natural_net = _close_net_from_price_with_current_side(ticket, natural_price) if natural_price is not None else current_net
     reason = str(ticket.get("exit_reason") or "").lower()
+    reason_class = str(ticket.get("exit_reason_class") or ticket.get("csa_action_reason_class") or "").lower()
     floor_net = _optional_float(ticket.get("exit_profit_floor_net"))
     if floor_net is None:
         floor_price = _optional_float(ticket.get("exit_profit_floor_limit_price"))
         if floor_price is not None:
             floor_net = _close_net_from_price_with_current_side(ticket, floor_price)
     attempt = int(ticket.get("reprice_attempt") or 0) + 1
-    if reason in {"max_loss", "pre_event"}:
-        target_net = natural_net - (5.0 * attempt)
+    if reason_class == "executable_profit" or reason == "profit_target":
+        target_net = max(natural_net, floor_net) if floor_net is not None else natural_net
+    elif reason_class in {"adverse_price_loss", "mandatory_event_exit", "hard_emergency", "time_decision"}:
+        target_net = natural_net
     elif reason == "profit_target" and floor_net is not None:
         target_net = max(natural_net, floor_net)
     else:
         target_net = natural_net
     step = _exit_reprice_step_multiplier(config, attempt)
     repriced_net = current_net + ((target_net - current_net) * step)
-    if reason == "profit_target" and floor_net is not None:
+    lower = min(current_net, natural_net)
+    upper = max(current_net, natural_net)
+    repriced_net = min(max(repriced_net, lower), upper)
+    if (reason_class == "executable_profit" or reason == "profit_target") and floor_net is not None:
         repriced_net = max(repriced_net, floor_net)
     return _close_limit_price_from_net(ticket, repriced_net)
 

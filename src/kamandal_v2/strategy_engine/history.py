@@ -7,6 +7,7 @@ from typing import Any
 
 from kamandal_v2.strategy_lanes.models import LifecycleState
 from kamandal_v2.strategy_lanes.store import CsaStore
+from kamandal_v2.stores.sqlite import LocalStore
 
 
 HISTORY_SCHEMA_VERSION = "kamandal.lifecycle-history.v1"
@@ -15,17 +16,27 @@ HISTORY_SCHEMA_VERSION = "kamandal.lifecycle-history.v1"
 def lifecycle_history(store: CsaStore, *, lifecycle_id: str | None = None) -> list[dict[str, Any]]:
     """Return deterministic lifecycle records without reading Sheets or brokers."""
     rows = store.rows("csa_lifecycles")
+    runtime_store = LocalStore(store.sqlite_path, read_only=True)
     records: list[dict[str, Any]] = []
     for row in rows:
         lifecycle = _lifecycle_from_row(row)
         if lifecycle_id and lifecycle.lifecycle_id != lifecycle_id:
             continue
+        live_evidence = runtime_store.live_order_evidence_for_lifecycle(
+            lifecycle.lifecycle_id,
+            position_projection_id=lifecycle.position_projection_id,
+        )
+        shadow_tickets = _payloads_for_lifecycle(store.rows("csa_shadow_order_intents"), lifecycle.lifecycle_id)
         records.append(
             history_record(
                 lifecycle,
                 actions=_payloads_for_lifecycle(store.rows("csa_actions"), lifecycle.lifecycle_id),
-                tickets=_payloads_for_lifecycle(store.rows("csa_shadow_order_intents"), lifecycle.lifecycle_id),
-                fills=_payloads_for_lifecycle(store.rows("csa_shadow_fills"), lifecycle.lifecycle_id),
+                observations=runtime_store.canonical_package_observations(lifecycle.lifecycle_id),
+                tickets=[*shadow_tickets, *live_evidence["tickets"]],
+                fills=[*_payloads_for_lifecycle(store.rows("csa_shadow_fills"), lifecycle.lifecycle_id), *live_evidence["fills"]],
+                attempts=live_evidence["attempts"],
+                broker_statuses=live_evidence["broker_statuses"],
+                reconciliation=live_evidence["reconciliation"],
             )
         )
     return sorted(records, key=lambda record: (record["opened_at"], record["lifecycle_id"]))
@@ -35,8 +46,12 @@ def history_record(
     lifecycle: LifecycleState,
     *,
     actions: list[dict[str, Any]] | None = None,
+    observations: list[dict[str, Any]] | None = None,
     tickets: list[dict[str, Any]] | None = None,
     fills: list[dict[str, Any]] | None = None,
+    attempts: list[dict[str, Any]] | None = None,
+    broker_statuses: list[dict[str, Any]] | None = None,
+    reconciliation: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Serialize one lifecycle with explicit economics and evidence quality."""
     metadata = dict(lifecycle.metadata)
@@ -90,8 +105,12 @@ def history_record(
             "adjustment_count": int(metadata.get("adjustment_count") or 0),
         },
         "actions": _ordered(actions or []),
+        "observations": _ordered(observations or []),
         "tickets": _ordered(tickets or []),
+        "attempts": _ordered(attempts or []),
+        "broker_statuses": _ordered(broker_statuses or []),
         "fills": _ordered(fills or []),
+        "reconciliation": _ordered(reconciliation or []),
         "evidence_quality": "complete" if not missing else "incomplete",
         "evidence_limitations": missing,
     }

@@ -63,6 +63,8 @@ REASON_ORDER = [
     "failed_close_order",
     "failed_preflight_close",
     "exit_pipeline_stalled",
+    "mandatory_exit_quote_stalled",
+    "mandatory_exit_waiting_quote",
     "urgent_close_order_stale",
     "loss_watch",
     "portfolio_bpr_over_target",
@@ -130,7 +132,7 @@ def run_live_health(
         )
         if not mark:
             continue
-        group_mark = _mark_overview(group_id, mark, config=config)
+        group_mark = _mark_overview(group_id, mark, config=config, now=checked_at)
         group_marks.append(group_mark)
         _collect_mark_events(group_mark, events, config=config)
 
@@ -438,6 +440,18 @@ def _collect_mark_events(
     target_state = "self_healing" if str(live.get("exit_approval_mode") or "sheet_approval") == "auto_rules" else "operator_needed"
     loss_action = str((live.get("exit_pricing") or {}).get("max_loss_action") or "review")
     loss_state = "self_healing" if loss_action in {"close", "close_when_confirmed"} else "operator_needed"
+    if bool(group_mark.get("mandatory_exit_waiting_quote")):
+        stalled = bool(group_mark.get("mandatory_exit_quote_stalled"))
+        events.append(
+            {
+                "severity": "red" if stalled else "yellow",
+                "reason": "mandatory_exit_quote_stalled" if stalled else "mandatory_exit_waiting_quote",
+                "detail": _format_mark_summary(group_mark),
+                "group_id": group_mark.get("group_id"),
+                "age_minutes": group_mark.get("waiting_quote_age_minutes"),
+                "operator_state": "operator_needed" if stalled else "self_healing",
+            },
+        )
     if bool(group_mark.get("target_reached")):
         events.append(
             {
@@ -465,7 +479,12 @@ def _mark_overview(
     mark: dict[str, Any],
     *,
     config: dict[str, Any],
+    now: datetime,
 ) -> dict[str, Any]:
+    waiting = str(mark.get("execution_status") or "") == "waiting_valid_quote"
+    reason_class = str(mark.get("selected_reason_class") or "")
+    mandatory_waiting = waiting and reason_class in {"mandatory_event_exit", "time_decision", "hard_emergency"}
+    waiting_age = _age_minutes(str(mark.get("waiting_valid_quote_since") or ""), now=now) if mandatory_waiting else None
     return {
         "group_id": group_id,
         "underlying": str(mark.get("underlying") or ""),
@@ -473,11 +492,29 @@ def _mark_overview(
         "profit_pct": float(mark.get("profit_pct") or 0.0),
         "target_progress_pct": float(mark.get("target_progress_pct") or 0.0),
         "trigger_progress_pct": float(mark.get("trigger_progress_pct") or 0.0),
-        "target_reached": profit_target_reached(mark, config),
+        "target_reached": bool(mark.get("quote_fresh", True)) and profit_target_reached(mark, config),
         "loss_watch": bool(mark.get("loss_watch") or bool(mark.get("max_loss_watch"))),
         "loss_watch_observations": mark.get("loss_watch_observations") or {},
+        "selected_reason": str(mark.get("selected_reason") or ""),
+        "selected_reason_class": reason_class,
+        "execution_status": str(mark.get("execution_status") or ""),
+        "mandatory_exit_waiting_quote": mandatory_waiting,
+        "mandatory_exit_quote_stalled": mandatory_waiting and waiting_age is not None and waiting_age > _exit_pipeline_stalled_minutes(config),
+        "waiting_quote_age_minutes": waiting_age,
         "updated_at": str(mark.get("marked_at") or mark.get("updated_at") or mark.get("created_at") or ""),
     }
+
+
+def _age_minutes(value: str, *, now: datetime) -> float | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return max((now - parsed.astimezone(UTC)).total_seconds() / 60.0, 0.0)
 
 
 def _latest_close_ticket_by_group(close_orders: list[dict[str, Any]]) -> dict[str, str]:

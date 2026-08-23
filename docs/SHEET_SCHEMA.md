@@ -119,6 +119,12 @@ Notes:
   Live behavior can be flipped without changing the sheet by setting
   `KAMANDAL_EXIT_MAX_LOSS_ACTION`, `KAMANDAL_EXIT_LOSS_WATCH_CONFIRMATIONS_REQUIRED`,
   or `KAMANDAL_EXIT_LOSS_WATCH_WINDOW_MINUTES` in the runtime environment.
+- `max_bid_ask_pct`: the per-playbook quote-quality limit for both entry and
+  management. Every open lifecycle freezes this value with its policy. If any
+  active leg or the package fails the limit, Kamandal records a wide-quote hold
+  and may not use that observation for a price-derived profit, loss, or
+  adjustment action. Natural price remains execution evidence; midpoint is the
+  economic decision mark after quote validation.
 - `live_max_bpr_per_order`: authoritative Sheet-owned dollar cap for one live
   contract. It also bounds the worst entry debit after conversion to the
   per-share option price used by the broker.
@@ -136,9 +142,10 @@ Notes:
 - `underlying_price_min/max`: required Sheet-owned bounds when universe expansion
   is enabled. The same row's `iv_rank_min/max` are also required. Missing values
   fail closed; the repository provides no fallback range.
-- `csa_stage` (column BA): blank or `baseline` keeps the row on the existing
-  path. `shadow`, `pilot_live`, and `live` are explicit CSA stages. The CSA-1
-  release runs only `shadow`; later stages do not grant broker authority.
+- `csa_stage` (column BA): deprecated compatibility evidence from the cutover.
+  It does not select an active runtime path when `mode` is present. `mode` is
+  the authoritative `shadow|live` operator switch; no new policy should be
+  authored against `csa_stage`.
 - `source_mode` (column BB): `idea`, `market_scan`, or `portfolio_hedge`. The
   value must be compatible with the row's structure and fails closed otherwise.
 - `management_policy_json` (column BC): operator-visible CSA lifecycle policy
@@ -146,11 +153,12 @@ Notes:
   non-empty `lifecycle` object. The existing `score_weight_credit/pop/liquidity/spread`
   columns remain canonical for scoring; duplicating `score_weights` inside JSON
   fails closed. CSA does not supply repository numeric fallbacks for missing values.
-- The protected unified cutover appends (without moving existing columns)
+- The protected unified cutover appended (without moving existing columns)
   `mode`, explicit strangle management controls, and event-calendar timing
-  controls.  Until that guarded migration occurs, `csa_stage` is read only as
-  compatibility input; `mode` wins when supplied.  The cutover manifest, not
-  this document, is the authority for exact Sheet ranges and validation copy.
+  controls. `mode` now wins; `csa_stage` remains read-only compatibility
+  evidence until a separately reviewed cleanup removes the redundant column.
+  The cutover manifest, not this document, is the authority for exact Sheet
+  ranges and validation copy.
 - `iv_abs_min/max`: optional absolute ATM IV gate, useful for avoiding
   low-volatility false positives.
 - `half_time_exit`: true/false. If true, the engine can recommend exit around
@@ -165,6 +173,15 @@ Notes:
 - Shadow rows use these same frozen management fields after entry. Their final
   adapter remains broker-inert and quote-based: a selected entry may work across
   bounded retries or become `entry_missed`; shadow does not use live Plan 2.
+
+The 2026-08-23 corrective management design requires no new Sheet column. The
+existing `mode`, `max_bid_ask_pct`, `profit_target_pct`, `max_loss_multiple`,
+`half_time_exit`, `exit_pre_event_days`, and lifecycle JSON already express the
+operator-owned strategy policy. Opening/closing adverse-loss buffers,
+confirmation semantics, quote validity, and execution-envelope preservation
+are shared platform safety behavior. Before deployment, Kamandal must read back
+that every enabled row has a valid `max_bid_ask_pct`; it must not silently
+invent a fallback for a missing value.
 
 ## `daily_plan`
 

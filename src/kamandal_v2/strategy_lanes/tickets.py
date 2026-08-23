@@ -90,6 +90,8 @@ def _ticket(
             "deployment_stage": policy.stage.value,
             "fill_policy": dict((policy.management.get("lifecycle") or {}).get("fill") or {}),
             "action_type": action.action_type.value,
+            "action_reason": str(action.reason_codes[0] if action.reason_codes else ""),
+            "action_reason_class": str(action.payload.get("arbiter_class") or ""),
             **({"adjustment_kind": action.payload["adjustment_kind"]} if action.payload.get("adjustment_kind") else {}),
             **(
                 {

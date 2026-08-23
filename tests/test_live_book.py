@@ -11,6 +11,9 @@ from kamandal_v2.live.management import run_live_management_plan
 from kamandal_v2.live.reconciliation import reconcile_live_positions
 from kamandal_v2.schemas import LIVE_BOOK_HEADER
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
+from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
+from kamandal_v2.strategy_lanes.store import CsaStore
 
 
 def _group(store: LocalStore, group_id: str = "group_book") -> dict[str, Any]:
@@ -115,6 +118,75 @@ def test_live_book_builds_per_group_dashboard_row(tmp_path: Path) -> None:
     assert row["broker_error_code"] == "157"
     assert row["management_blocker"] == "working_close_order"
     assert row["recommended_action"] == "hold:working_close_order:normal"
+
+
+def test_live_book_uses_canonical_midpoint_observation_and_stats(tmp_path: Path) -> None:
+    database = tmp_path / "kamandal_v2.db"
+    store = LocalStore(database)
+    _group(store, "group_canonical_book")
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    lifecycle_id = "adopt:group_canonical_book"
+    CsaStore(database).save_lifecycle(
+        LifecycleState(
+            lifecycle_id=lifecycle_id,
+            opportunity_id="fixture",
+            lane=LaneId.CALL_VERTICAL,
+            version=1,
+            status="open",
+            active_legs=(),
+            cashflow_ledger=({"amount": 1.2},),
+            opened_at="2026-08-21T14:00:00Z",
+            updated_at="2026-08-21T16:00:00Z",
+            policy_hash="policy",
+            metadata={
+                "execution_mode": "live",
+                "position_projection_id": "group_canonical_book",
+                "underlying": "AAPL",
+                "playbook_id": "call_spread_default",
+                "structure": "call_spread",
+                "cumulative_cashflow": 1.2,
+                "contract_multiplier": 100,
+                "mark_liquidation_price": -1.0,
+                "mark_natural_liquidation_price": -1.1,
+                "mark_pnl_price": 0.2,
+                "mark_natural_pnl_price": 0.1,
+                "mark_profit_pct": 16.67,
+                "mark_source": "validated_midpoint_package",
+                "mark_observation_id": "observation-latest",
+                "mark_quote_actionable": True,
+                "mark_quote_blockers": [],
+                "mark_max_leg_bid_ask_pct": 0.1,
+                "mark_selected_reason": "close_oriented_hold",
+                "mark_selected_reason_class": "hold",
+                "mark_execution_status": "held",
+                "last_marked_at": "2026-08-21T16:00:00Z",
+                "compiled_management_policy": {"resolved_fields": {"profit_target_pct": 50}},
+            },
+        )
+    )
+    for observation_id, pnl in (("observation-first", -5.0), ("observation-latest", 20.0)):
+        store.record_live_position_mark(
+            lifecycle_id,
+            {
+                "observation_kind": "canonical_package",
+                "observation_id": observation_id,
+                "underlying": "AAPL",
+                "entry_kind": "credit",
+                "pnl_mid": pnl,
+                "target_profit": 60.0,
+                "target_progress_pct": pnl / 60 * 100,
+                "quote_fresh": True,
+            },
+        )
+
+    row = run_live_book(store)["rows"][1]
+
+    assert row["current_mark"] == -100.0
+    assert row["unrealized_pnl"] == 20.0
+    assert row["quote_fresh"] is True
+    assert row["mfe"] == 20.0
+    assert row["mae"] == -5.0
+    assert json.loads(row["report_json"])["mark"]["decision_observation_id"] == "observation-latest"
 
 
 def test_live_book_extracts_broker_code_from_preflight_message_string(tmp_path: Path) -> None:

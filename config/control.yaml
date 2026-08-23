@@ -97,6 +97,7 @@ live:
     regular_close_time: "15:00"
     extended_close_time: "15:15"
     extended_close_symbols: [SPY]
+    quote_max_age_minutes: 10       # package observations older than this cannot drive management
     # The final 14:15 plan leaves several executor/reprice opportunities before
     # regular-session entries stop at 14:40, 20 minutes before the close.
     entry_buffer_minutes: 20
@@ -215,7 +216,7 @@ live:
     profit_floor_pct: 50
     require_fresh_quotes: true
     max_loss_action: close # review | close_when_confirmed | close
-    max_loss_requires_confirmation: false
+    max_loss_requires_confirmation: true # canonical adverse exits always use repeated valid observations
     default_max_loss_multiple_credit: 1.5 # backstop when a playbook has no max_loss_multiple
     default_max_loss_multiple_debit: 1.0
     short_strike_buffer_pct: 0

@@ -43,7 +43,7 @@ def propose_strangle_actions(
     loss_stages = lifecycle_value(policy, "loss_stages")
     if isinstance(loss_stages, dict) and loss_stages.get("close_multiple") not in (None, ""):
         if _context_number(context, "loss_multiple") >= nested_number(loss_stages, "close_multiple", prefix="lifecycle.loss_stages"):
-            actions.append(propose_action(lifecycle, ActionType.CLOSE, "loss_stage_close", arbiter_class="hard_emergency", proposed_at=proposed_at))
+            actions.append(propose_action(lifecycle, ActionType.CLOSE, "loss_stage_close", arbiter_class="adverse_price_loss", proposed_at=proposed_at))
 
     if _tested_side_confirmed(policy, context) and _adjustment_available(policy, context):
         roll = lifecycle_value(policy, "roll")

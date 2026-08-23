@@ -45,11 +45,18 @@ def submission_window(
 
     action_type = str(ticket.get("csa_action_type") or ticket.get("intent_type") or ("close" if close else "open")).strip().lower()
     is_close_action = action_type == "close"
+    reason_class = str(
+        ticket.get("csa_action_reason_class")
+        or ticket.get("exit_reason_class")
+        or ((ticket.get("csa_strategy_ticket") or {}).get("metadata") or {}).get("action_reason_class")
+        or ""
+    ).strip().lower()
+    adverse_price_exit = is_close_action and reason_class == "adverse_price_loss"
     intent_type = "close" if is_close_action else action_type
     underlying = str(ticket.get("underlying") or ticket.get("symbol") or "").upper()
     entry_buffer = int(policy.get("entry_buffer_minutes", DEFAULT_ENTRY_BUFFER_MINUTES))
     close_buffer = int(policy.get("close_buffer_minutes", DEFAULT_CLOSE_BUFFER_MINUTES))
-    buffer_minutes = close_buffer if is_close_action else entry_buffer
+    buffer_minutes = entry_buffer if adverse_price_exit else (close_buffer if is_close_action else entry_buffer)
 
     extended_symbols = {
         str(symbol).upper()
@@ -71,7 +78,7 @@ def submission_window(
     entry_not_before = datetime.combine(current.date(), _parse_time(policy.get("entry_not_before_time"), DEFAULT_ENTRY_NOT_BEFORE), market_tz)
     enabled = _as_bool(policy.get("enabled"), True)
     non_trading_day = is_non_trading_day(current.date())
-    requires_entry_window = not is_close_action and action_type in {"open", "adjust", "duration_roll"}
+    requires_entry_window = adverse_price_exit or (not is_close_action and action_type in {"open", "adjust", "duration_roll"})
     allowed = enabled and not non_trading_day and current >= market_open and current < cutoff_at and (not requires_entry_window or current >= entry_not_before)
 
     if not enabled:
@@ -81,9 +88,9 @@ def submission_window(
     elif current < market_open:
         reason = "market_not_open"
     elif requires_entry_window and current < entry_not_before:
-        reason = "entry_not_open"
+        reason = "adverse_exit_opening_buffer" if adverse_price_exit else "entry_not_open"
     elif current >= cutoff_at:
-        reason = "close_cutoff_reached" if is_close_action else "entry_cutoff_reached"
+        reason = "adverse_exit_closing_buffer" if adverse_price_exit else ("close_cutoff_reached" if is_close_action else "entry_cutoff_reached")
     else:
         reason = "within_submission_window"
 
@@ -100,8 +107,9 @@ def submission_window(
         "submission_cutoff_at": cutoff_at.isoformat(),
         "evaluated_at": current.isoformat(),
         "buffer_minutes": buffer_minutes,
-        "retryable_current_session": not is_close_action and reason == "entry_not_open",
-        "retryable_next_session": is_close_action and reason in {"market_closed_non_trading_day", "close_cutoff_reached"},
+        "action_reason_class": reason_class,
+        "retryable_current_session": reason in {"entry_not_open", "adverse_exit_opening_buffer"},
+        "retryable_next_session": is_close_action and reason in {"market_closed_non_trading_day", "close_cutoff_reached", "adverse_exit_closing_buffer"},
     }
 
 

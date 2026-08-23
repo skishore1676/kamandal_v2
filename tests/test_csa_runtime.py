@@ -30,6 +30,7 @@ from kamandal_v2.strategy_lanes.operator_policy import load_csa_operator_policy
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.live.execution import _adopt_csa_live_fill, execute_live_approved
 from kamandal_v2.live.orders import build_csa_live_ticket
+from kamandal_v2.strategy_engine.history import lifecycle_history
 
 
 def _tables():  # noqa: ANN202
@@ -660,25 +661,34 @@ def test_live_fill_advances_same_lifecycle_and_management_stages_reusable_close(
         tables=tables,
         market=FixtureMarketDataProvider(account_size=100_000),
         preflight=BrokerAuthoritativeFixture(),
-        observed_at="2026-08-08T12:00:00Z",
+        observed_at="2026-08-10T15:00:00Z",
     )
     live_store = LocalStore(database)
     entry = live_store.live_order_intents_by_status({"stage_approved_pending_submit"})[0]
-    adopted = _adopt_csa_live_fill(live_store, entry, {"averagePrice": "1.00", "filledAt": "2026-08-08T12:01:00Z"})
+    adopted = _adopt_csa_live_fill(live_store, entry, {"averagePrice": "1.00", "filledAt": "2026-08-10T15:01:00Z"})
 
+    first = run_csa_live_management(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=FixtureMarketDataProvider(account_size=100_000),
+        observed_at="2026-08-10T15:05:00Z",
+    )
     result = run_csa_live_management(
         {},
         sqlite_path=str(database),
         provider="fixture",
         tables=tables,
         market=FixtureMarketDataProvider(account_size=100_000),
-        observed_at="2026-08-08T12:15:00Z",
+        observed_at="2026-08-10T15:10:00Z",
     )
     staged = live_store.live_order_intents_by_status({"stage_approved_pending_submit"})
     close_ticket = next(item for item in staged if item["intent_type"] == "close")
 
     assert scan.live_intent_count == 1
     assert adopted["status"] == "open"
+    assert first.selected_actions == {"hold": 1}
     assert result.ok
     assert result.live_intent_count == 1
     assert result.selected_actions == {"close": 1}
@@ -812,6 +822,15 @@ def test_canonical_close_fill_atomically_retires_live_book_projection(tmp_path) 
     )
     live_ticket = build_csa_live_ticket(strategy_ticket)
     store.save_live_order_intent(live_ticket, status="submitted")
+    store.save_live_reconciliation_issue(
+        {
+            "issue_id": "amzn-calendar-observed",
+            "issue_type": "position_observed",
+            "group_id": group_id,
+            "underlying": "AMZN",
+            "status": "resolved",
+        }
+    )
 
     result = _adopt_csa_live_fill(
         store,
@@ -828,6 +847,10 @@ def test_canonical_close_fill_atomically_retires_live_book_projection(tmp_path) 
     closed_group = store.closed_live_position_groups()[0]
     assert closed_group["_status"] == "closed_by_canonical_lifecycle"
     assert store.live_order_intent(live_ticket["ticket_hash"])["_ledger_status"] == "close_filled"
+    history = lifecycle_history(CsaStore(database, read_only=True), lifecycle_id=lifecycle.lifecycle_id)[0]
+    assert history["fills"][0]["mode"] == "live"
+    assert history["fills"][0]["action_type"] == "close"
+    assert history["reconciliation"][0]["issue_id"] == "amzn-calendar-observed"
 
 
 def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_path) -> None:
@@ -878,11 +901,76 @@ def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_pat
     assert scorecard["csa_live_intents"] == 0
     marked = CsaStore(database, read_only=True).open_lifecycles()[0]
     assert marked.metadata["last_marked_at"] == "2026-08-08T12:15:00Z"
-    assert marked.metadata["mark_source"] == "natural_close_quote"
+    assert marked.metadata["mark_source"] == "validated_midpoint_package"
     assert "mark_pnl_price" in marked.metadata
     assert written.json_path.exists()
     assert written.markdown_path.exists()
     assert written.csv_path.exists()
+
+
+def test_mandatory_shadow_exit_waits_on_wide_quote_then_retries_same_lifecycle(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    tables = _tables()
+    tables["playbooks"][0]["exit_dte_min"] = 100
+    tables["playbooks"][0]["max_bid_ask_pct"] = 0.20
+    entry_market = FixtureMarketDataProvider(account_size=100_000)
+    run_csa_shadow_scan({}, sqlite_path=str(database), provider="fixture", tables=tables, market=entry_market, preflight=FixturePreflightClient(), observed_at="2026-08-24T14:00:00Z")
+    run_csa_shadow_scan({}, sqlite_path=str(database), provider="fixture", tables=tables, market=entry_market, preflight=FixturePreflightClient(), observed_at="2026-08-24T14:05:00Z")
+
+    class ManagementMarket:
+        def __init__(self, *, wide: bool, captured_at: str):
+            self.wide = wide
+            self.captured_at = captured_at
+
+        def chain_snapshot(self, underlying):  # noqa: ANN001
+            snapshot = FixtureMarketDataProvider(account_size=100_000).chain_snapshot(underlying)
+            snapshot.captured_at = self.captured_at
+            if self.wide:
+                for quote in snapshot.quotes:
+                    quote.bid = 0.01
+                    quote.ask = max(quote.ask, 5.0)
+            return snapshot
+
+    first = run_csa_shadow_management(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=ManagementMarket(wide=True, captured_at="2026-08-24T15:00:00Z"),
+        observed_at="2026-08-24T15:00:00Z",
+    )
+    store = CsaStore(database, read_only=True)
+    lifecycle = store.open_lifecycles()[0]
+    close_tickets = [
+        json.loads(row["payload"])
+        for row in store.rows("csa_shadow_order_intents")
+        if json.loads(row["payload"])["metadata"].get("action_type") == "close"
+    ]
+
+    assert first.selected_actions == {"close": 1}
+    assert lifecycle.metadata["mark_execution_status"] == "waiting_valid_quote"
+    assert lifecycle.metadata["mark_selected_reason"] == "time_exit"
+    assert close_tickets == []
+
+    second = run_csa_shadow_management(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=ManagementMarket(wide=False, captured_at="2026-08-24T15:05:00Z"),
+        observed_at="2026-08-24T15:05:00Z",
+    )
+    close_tickets = [
+        json.loads(row["payload"])
+        for row in store.rows("csa_shadow_order_intents")
+        if json.loads(row["payload"])["metadata"].get("action_type") == "close"
+    ]
+
+    assert second.selected_actions == {"close": 1}
+    assert len(close_tickets) == 1
+    assert close_tickets[0]["metadata"]["exit_reason_class"] == "time_decision"
 
 
 def test_shadow_management_skips_unfilled_proposed_lifecycles(tmp_path) -> None:

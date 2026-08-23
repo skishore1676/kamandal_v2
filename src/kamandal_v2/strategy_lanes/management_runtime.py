@@ -14,13 +14,16 @@ from kamandal_v2.live.execution import (
     REPLACE_WAITING_CANCEL,
 )
 from kamandal_v2.live.orders import build_csa_live_ticket
+from kamandal_v2.live.option_sessions import submission_window
+from kamandal_v2.live.position_management import live_exit_policy
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.planner.engine import _market_provider
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
-from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, policy_bool
+from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, policy_bool, propose_action
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode
+from kamandal_v2.strategy_lanes.observations import PackageObservation, observe_package
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.registry import lifecycle_registry
 from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
@@ -136,11 +139,15 @@ def _run_lifecycle_management(
         *CANCEL_PENDING_TICKET_STATUSES,
         REPLACE_WAITING_CANCEL,
     }
-    working_underlyings = (
+    working_owner_ids = (
         {
-            str(ticket.get("underlying") or "").upper()
+            owner
             for ticket in baseline_store.live_order_intents_by_status(active_statuses)
-            if str(ticket.get("underlying") or "").strip()
+            for owner in (
+                str(ticket.get("csa_lifecycle_id") or ""),
+                str(ticket.get("position_projection_id") or ticket.get("group_id") or ""),
+            )
+            if owner
         }
         if execution_mode == "live"
         else set()
@@ -159,25 +166,63 @@ def _run_lifecycle_management(
         try:
             snapshot = market.chain_snapshot(underlying)
             active_legs = _active_option_legs(lifecycle, snapshot)
-            context, plans, observed_lifecycle = _management_context(
+            context, plans, observed_lifecycle, observation = _management_context(
                 lifecycle,
                 policy,
                 active_legs,
                 snapshot,
                 market,
                 sqlite_path,
+                config=config,
                 observed_at=started_at,
                 ownership_clear=True,
-                working_order_conflict=underlying.upper() in working_underlyings,
+                working_order_conflict=bool(
+                    {lifecycle.lifecycle_id, lifecycle.position_projection_id} & working_owner_ids
+                ),
             )
-            store.save_lifecycle(observed_lifecycle)
             proposals = registry.resolve(lifecycle.lane)(observed_lifecycle, policy, context, proposed_at=started_at)
-            selected = arbitrate_actions(proposals).selected
+            raw_selected = arbitrate_actions(proposals).selected
+            selected, observation = _apply_management_safety(
+                raw_selected,
+                observed_lifecycle,
+                observation,
+                config=config,
+                store=writable_live_store,
+                proposed_at=started_at,
+            )
+            execution_status = "held" if selected.action_type in {ActionType.HOLD, ActionType.BLOCK} else "ready"
+            if selected.action_type not in {ActionType.HOLD, ActionType.BLOCK} and not observation.quote_actionable:
+                execution_status = "waiting_valid_quote"
+            observation = replace(
+                observation,
+                selected_action_type=selected.action_type.value,
+                selected_reason=str(selected.reason_codes[0] if selected.reason_codes else ""),
+                selected_reason_class=str(selected.payload.get("arbiter_class") or ""),
+                execution_status=execution_status,
+            )
+            observed_lifecycle = _with_observation_mark(observed_lifecycle, observation)
+            store.save_lifecycle(observed_lifecycle)
+            observation_payload = {
+                **observation.to_dict(),
+                "observation_kind": "canonical_package",
+                "group_id": observed_lifecycle.position_projection_id,
+                "entry_kind": "credit" if float(observed_lifecycle.metadata.get("cumulative_cashflow") or 0.0) > 0 else "debit",
+                "pnl_mid": observation.midpoint_pnl * 100.0,
+                "pnl_natural": observation.natural_pnl * 100.0,
+                "target_profit": _target_profit_dollars(observed_lifecycle, policy),
+                "target_progress_pct": _target_progress(observed_lifecycle, policy, observation),
+                "max_loss_watch": observation.adverse_loss_watch,
+                "raw_selected_reason": str(raw_selected.reason_codes[0] if raw_selected.reason_codes else ""),
+                "raw_selected_reason_class": str(raw_selected.payload.get("arbiter_class") or ""),
+            }
+            writable_live_store.record_live_position_mark(lifecycle.lifecycle_id, observation_payload)
             store.save_action(selected)
             counts[selected.action_type.value] = counts.get(selected.action_type.value, 0) + 1
             if selected.action_type in {ActionType.HOLD, ActionType.BLOCK}:
                 continue
-            ticket = _management_ticket(selected, observed_lifecycle, policy, active_legs, plans, underlying, started_at)
+            if not observation.quote_actionable:
+                continue
+            ticket = _management_ticket(selected, observed_lifecycle, policy, active_legs, plans, underlying, started_at, observation=observation, config=config)
             if execution_mode == "shadow":
                 store.save_shadow_order_intent(ticket)
                 quotes = _ticket_quote_map(ticket, snapshot)
@@ -281,8 +326,26 @@ def _active_option_legs(lifecycle: LifecycleState, snapshot: Any) -> tuple[Optio
         key = (str(item["expiration"]), str(item["option_type"]), float(item["strike"]))
         quote = quotes.get(key)
         if quote is None:
-            raise ValueError(f"active leg quote missing: {key}")
-        result.append(OptionLeg.from_quote(quote, role=str(item["role"]), side=str(item["side"]), quantity=int(item["quantity"])))
+            result.append(
+                OptionLeg(
+                    role=str(item["role"]),
+                    side=str(item["side"]),
+                    option_type=str(item["option_type"]),
+                    strike=float(item["strike"]),
+                    expiration=str(item["expiration"]),
+                    quantity=int(item["quantity"]),
+                    mid=0.0,
+                    bid=0.0,
+                    ask=0.0,
+                    delta=0.0,
+                    gamma=0.0,
+                    theta=0.0,
+                    vega=0.0,
+                    open_interest=0,
+                )
+            )
+        else:
+            result.append(OptionLeg.from_quote(quote, role=str(item["role"]), side=str(item["side"]), quantity=int(item["quantity"])))
     return tuple(result)
 
 
@@ -294,16 +357,22 @@ def _management_context(
     market: Any,
     sqlite_path: str,
     *,
+    config: dict[str, Any],
     observed_at: str,
     ownership_clear: bool,
     working_order_conflict: bool,
 ):
-    cumulative = float(lifecycle.metadata.get("cumulative_cashflow") or 0.0)
-    liquidation = sum((leg.bid if leg.side == "buy" else -leg.ask) * leg.quantity for leg in legs)
-    entry = float(lifecycle.cashflow_ledger[0]["amount"]) if lifecycle.cashflow_ledger else cumulative
-    pnl = cumulative + liquidation
-    profit_pct = (pnl / abs(entry) * 100.0) if entry else 0.0
-    loss_multiple = (abs(liquidation) / entry) if entry > 0 else max(-pnl / max(abs(entry), 0.01), 0.0)
+    quote_age = int((((config.get("live") or {}).get("option_submission") or {}).get("quote_max_age_minutes") or 10))
+    observation = observe_package(
+        lifecycle,
+        policy,
+        legs,
+        snapshot,
+        observed_at=observed_at,
+        quote_max_age_minutes=quote_age,
+    )
+    profit_pct = observation.profit_pct if observation.quote_actionable else -1.0e12
+    loss_multiple = observation.loss_multiple if observation.quote_actionable else 0.0
     observed_date = _parse_timestamp(observed_at).date()
     dtes = [max((date.fromisoformat(leg.expiration) - observed_date).days, 0) for leg in legs]
     half_time = _half_time_state(lifecycle, policy, legs, remaining_dtes=dtes)
@@ -322,15 +391,24 @@ def _management_context(
         "profit_pct": profit_pct,
         "loss_multiple": loss_multiple,
     }
-    plans: dict[str, Any] = {"liquidation": liquidation}
+    plans: dict[str, Any] = {
+        "midpoint_liquidation": observation.midpoint_liquidation,
+        "natural_liquidation": observation.natural_liquidation,
+    }
     metadata = dict(lifecycle.metadata)
     metadata.update(
         {
             "last_marked_at": observed_at,
-            "mark_liquidation_price": round(liquidation, 6),
-            "mark_pnl_price": round(pnl, 6),
+            "mark_liquidation_price": observation.midpoint_liquidation,
+            "mark_natural_liquidation_price": observation.natural_liquidation,
+            "mark_pnl_price": observation.midpoint_pnl,
+            "mark_natural_pnl_price": observation.natural_pnl,
             "mark_profit_pct": round(profit_pct, 6),
-            "mark_source": "natural_close_quote",
+            "mark_source": "validated_midpoint_package",
+            "mark_observation_id": observation.observation_id,
+            "mark_quote_actionable": observation.quote_actionable,
+            "mark_quote_blockers": list(observation.quote_blockers),
+            "mark_max_leg_bid_ask_pct": observation.max_leg_bid_ask_pct,
             "contract_multiplier": 100,
             "mark_entry_dte": half_time["entry_dte"],
             "mark_remaining_dte": half_time["remaining_dte"],
@@ -398,7 +476,7 @@ def _management_context(
             "profit_pct": profit_pct,
             "near_leg_expired": min(dtes) <= 0,
         }
-    return context, plans, replace(lifecycle, updated_at=observed_at, metadata=metadata)
+    return context, plans, replace(lifecycle, updated_at=observed_at, metadata=metadata), observation
 
 
 def _half_time_state(
@@ -487,6 +565,9 @@ def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot:
         if q.option_type == old.option_type
         and q.expiration == old.expiration
         and abs(q.delta) <= 0.40
+        and q.mid > 0
+        and q.ask >= q.bid >= 0
+        and q.spread_pct <= float(policy.resolved_fields["max_bid_ask_pct"])
     ]
     ordinary = [
         q
@@ -498,23 +579,174 @@ def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot:
     def plan(candidates: list[Any]):
         if not candidates:
             return None
-        new = min(candidates, key=lambda q: (abs(abs(q.delta) - 0.30), -(q.bid - old.ask), q.strike))
-        return {"old": old, "new": OptionLeg.from_quote(new, role=old.role, side="sell"), "credit": new.bid - old.ask}
+        new = min(candidates, key=lambda q: (abs(abs(q.delta) - 0.30), -(q.mid - old.mid), q.strike))
+        return {
+            "old": old,
+            "new": OptionLeg.from_quote(new, role=old.role, side="sell"),
+            "credit": new.mid - old.mid,
+            "natural_credit": new.bid - old.ask,
+        }
 
     return plan(ordinary), None
 
 
-def _management_ticket(action: Any, lifecycle: LifecycleState, policy: CsaPolicy, legs: tuple[OptionLeg, ...], plans: dict[str, Any], underlying: str, created_at: str):
+def _management_ticket(
+    action: Any,
+    lifecycle: LifecycleState,
+    policy: CsaPolicy,
+    legs: tuple[OptionLeg, ...],
+    plans: dict[str, Any],
+    underlying: str,
+    created_at: str,
+    *,
+    observation: PackageObservation,
+    config: dict[str, Any],
+):
     if action.action_type is ActionType.CLOSE:
-        ticket = mixed_ticket(action, policy, underlying=underlying, close_legs=legs, open_legs=(), created_at=created_at, limit_price=float(plans["liquidation"]))
+        ticket = mixed_ticket(action, policy, underlying=underlying, close_legs=legs, open_legs=(), created_at=created_at, limit_price=float(plans["midpoint_liquidation"]))
+        exit_policy = live_exit_policy(config)
+        cumulative_dollars = float(lifecycle.metadata.get("cumulative_cashflow") or 0.0) * 100.0
+        floor_pnl = max(
+            exit_policy.min_profit_to_trigger,
+            _target_profit_dollars(lifecycle, policy) * exit_policy.profit_floor_pct / 100.0,
+        )
+        floor_net = floor_pnl - cumulative_dollars
+        ticket = replace(
+            ticket,
+            metadata={
+                **ticket.metadata,
+                "decision_observation_id": observation.observation_id,
+                "exit_reason": str(action.reason_codes[0] if action.reason_codes else ""),
+                "exit_reason_class": str(action.payload.get("arbiter_class") or ""),
+                "exit_midpoint_net": observation.midpoint_liquidation * 100.0,
+                "exit_natural_net": observation.natural_liquidation * 100.0,
+                **(
+                    {"exit_profit_floor_net": floor_net}
+                    if str(action.payload.get("arbiter_class") or "") == "executable_profit"
+                    else {}
+                ),
+                "execution_envelope": {
+                    "initial": "midpoint",
+                    "boundary": "natural",
+                    "midpoint_net": observation.midpoint_liquidation * 100.0,
+                    "natural_net": observation.natural_liquidation * 100.0,
+                    "quote_max_bid_ask_pct": observation.max_bid_ask_pct,
+                },
+            },
+        )
         return _with_position_projection(ticket, lifecycle)
     if lifecycle.lane is LaneId.SHORT_STRANGLE and action.action_type is ActionType.ADJUST:
         plan = plans.get("roll")
         if not plan:
             raise ValueError("selected strangle adjustment has no executable roll plan")
         ticket = build_strangle_adjustment_ticket(lifecycle, action, policy, underlying=underlying, close_legs=(plan["old"],), open_legs=(plan["new"],), created_at=created_at, limit_price=float(plan["credit"]))
+        ticket = replace(
+            ticket,
+            metadata={
+                **ticket.metadata,
+                "decision_observation_id": observation.observation_id,
+                "execution_envelope": {
+                    "initial": "midpoint",
+                    "boundary": "natural",
+                    "midpoint_net": float(plan["credit"]) * 100.0,
+                    "natural_net": float(plan["natural_credit"]) * 100.0,
+                    "quote_max_bid_ask_pct": observation.max_bid_ask_pct,
+                },
+            },
+        )
         return _with_position_projection(ticket, lifecycle)
     raise ValueError(f"unsupported selected management action: {action.action_type.value}")
+
+
+def _apply_management_safety(
+    selected: Any,
+    lifecycle: LifecycleState,
+    observation: PackageObservation,
+    *,
+    config: dict[str, Any],
+    store: LocalStore,
+    proposed_at: str,
+) -> tuple[Any, PackageObservation]:
+    reason_class = str(selected.payload.get("arbiter_class") or "")
+    if reason_class != "adverse_price_loss":
+        return selected, observation
+    window = submission_window(
+        config,
+        {
+            "underlying": observation.underlying,
+            "intent_type": "close",
+            "csa_action_type": "close",
+            "csa_action_reason_class": reason_class,
+        },
+        close=True,
+        now=_parse_timestamp(proposed_at),
+    )
+    window_allowed = bool(window["allowed"])
+    policy = live_exit_policy(config)
+    prior = store.canonical_loss_confirmation_count(
+        lifecycle.lifecycle_id,
+        observed_at=proposed_at,
+        window_minutes=policy.loss_watch_window_minutes,
+    )
+    confirmations = prior + 1 if observation.quote_actionable and window_allowed else prior
+    observation = replace(
+        observation,
+        adverse_loss_watch=True,
+        loss_window_allowed=window_allowed,
+        loss_confirmation_count=confirmations,
+    )
+    if not window_allowed or confirmations < policy.loss_watch_confirmations_required:
+        reason = "adverse_loss_session_buffer" if not window_allowed else "loss_watch_debouncing"
+        hold = propose_action(
+            lifecycle,
+            ActionType.HOLD,
+            reason,
+            arbiter_class="hold",
+            proposed_at=proposed_at,
+            payload={
+                "deferred_action_reason": str(selected.reason_codes[0] if selected.reason_codes else ""),
+                "loss_confirmation_count": confirmations,
+                "loss_confirmations_required": policy.loss_watch_confirmations_required,
+                "session_reason": str(window.get("reason") or ""),
+            },
+        )
+        return arbitrate_actions((hold,)).selected, observation
+    return selected, observation
+
+
+def _with_observation_mark(lifecycle: LifecycleState, observation: PackageObservation) -> LifecycleState:
+    waiting_since = ""
+    if observation.execution_status == "waiting_valid_quote":
+        waiting_since = str(lifecycle.metadata.get("mark_waiting_valid_quote_since") or observation.observed_at)
+    metadata = {
+        **lifecycle.metadata,
+        "mark_observation_id": observation.observation_id,
+        "mark_liquidation_price": observation.midpoint_liquidation,
+        "mark_natural_liquidation_price": observation.natural_liquidation,
+        "mark_pnl_price": observation.midpoint_pnl,
+        "mark_natural_pnl_price": observation.natural_pnl,
+        "mark_profit_pct": observation.profit_pct,
+        "mark_source": "validated_midpoint_package",
+        "mark_quote_actionable": observation.quote_actionable,
+        "mark_quote_blockers": list(observation.quote_blockers),
+        "mark_max_leg_bid_ask_pct": observation.max_leg_bid_ask_pct,
+        "mark_selected_reason": observation.selected_reason,
+        "mark_selected_reason_class": observation.selected_reason_class,
+        "mark_execution_status": observation.execution_status,
+        "mark_waiting_valid_quote_since": waiting_since,
+    }
+    return replace(lifecycle, metadata=metadata)
+
+
+def _target_profit_dollars(lifecycle: LifecycleState, policy: CsaPolicy) -> float:
+    cumulative = float(lifecycle.metadata.get("cumulative_cashflow") or 0.0)
+    entry = float(lifecycle.cashflow_ledger[0]["amount"]) if lifecycle.cashflow_ledger else cumulative
+    return abs(entry) * 100.0 * float(policy.resolved_fields.get("profit_target_pct") or 0.0) / 100.0
+
+
+def _target_progress(lifecycle: LifecycleState, policy: CsaPolicy, observation: PackageObservation) -> float:
+    target = _target_profit_dollars(lifecycle, policy)
+    return observation.midpoint_pnl * 100.0 / target * 100.0 if target > 0 else 0.0
 
 
 def _with_position_projection(ticket: Any, lifecycle: LifecycleState) -> Any:

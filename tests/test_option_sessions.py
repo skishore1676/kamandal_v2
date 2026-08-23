@@ -122,6 +122,26 @@ def test_adjustment_cannot_inherit_close_permission_from_management_queue() -> N
     assert verdict["reason"] == "entry_not_open"
 
 
+def test_adverse_close_uses_loss_buffers_while_scheduled_close_keeps_close_window() -> None:
+    now = datetime(2026, 7, 24, 14, 45, tzinfo=CENTRAL)
+    adverse = submission_window(
+        _config(),
+        {"underlying": "AAPL", "intent_type": "close", "csa_action_type": "close", "csa_action_reason_class": "adverse_price_loss"},
+        close=True,
+        now=now,
+    )
+    scheduled = submission_window(
+        _config(),
+        {"underlying": "AAPL", "intent_type": "close", "csa_action_type": "close", "csa_action_reason_class": "time_decision"},
+        close=True,
+        now=now,
+    )
+
+    assert adverse["allowed"] is False
+    assert adverse["reason"] == "adverse_exit_closing_buffer"
+    assert scheduled["allowed"] is True
+
+
 def test_early_close_override_moves_spy_cutoff() -> None:
     verdict = submission_window(
         _config(),

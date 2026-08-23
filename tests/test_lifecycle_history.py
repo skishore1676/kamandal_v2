@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from kamandal_v2.strategy_engine.history import HISTORY_SCHEMA_VERSION, history_record
+from kamandal_v2.strategy_engine.history import HISTORY_SCHEMA_VERSION, history_record, lifecycle_history
 from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
+from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
+from kamandal_v2.strategy_lanes.store import CsaStore
+from kamandal_v2.stores.sqlite import LocalStore
 
 
 def _lifecycle(*, status: str, metadata: dict) -> LifecycleState:  # noqa: ANN001
@@ -38,3 +41,33 @@ def test_history_calls_missing_provenance_an_evidence_gap_not_zero_pnl() -> None
     assert record["evidence_quality"] == "incomplete"
     assert "compiled_policy" in record["evidence_limitations"]
     assert "open_mark" in record["evidence_limitations"]
+
+
+def test_adopted_lifecycle_history_joins_reconciliation_without_typed_ticket(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    runtime_store = LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    lifecycle = _lifecycle(
+        status="open",
+        metadata={
+            "execution_mode": "live",
+            "position_projection_id": "legacy-group-1",
+            "policy": {"hash": "hash-1"},
+            "mark_pnl_price": 0.5,
+        },
+    )
+    CsaStore(database).save_lifecycle(lifecycle)
+    runtime_store.save_live_reconciliation_issue(
+        {
+            "issue_id": "legacy-reconciliation",
+            "issue_type": "adopted_position_observed",
+            "group_id": "legacy-group-1",
+            "underlying": "AAPL",
+            "status": "resolved",
+        }
+    )
+
+    record = lifecycle_history(CsaStore(database, read_only=True), lifecycle_id=lifecycle.lifecycle_id)[0]
+
+    assert record["tickets"] == []
+    assert record["reconciliation"][0]["issue_id"] == "legacy-reconciliation"

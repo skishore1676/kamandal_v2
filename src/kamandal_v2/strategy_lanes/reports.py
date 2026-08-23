@@ -262,7 +262,7 @@ def build_csa_weekly_economics(
             "Live and shadow economics are separate books and are never combined.",
             "Shadow fills use Kamandal's conservative quote-based fill model.",
             "Commissions and fees are not included.",
-            "Open P&L is reportable only from a same-day natural-close mark.",
+            "Open P&L is reportable only from a same-day validated midpoint package mark.",
             "A reconciled close without a verified close fill remains economically unknown.",
             "Small samples are descriptive evidence, not proof of durable alpha.",
         ],
@@ -603,9 +603,13 @@ def _economic_row(
             open_bpr += bpr
         mark_date = _central_date(metadata.get("last_marked_at"))
         mark_pnl = _float_or_none(metadata.get("mark_pnl_price"))
-        if mark_date == through and mark_pnl is not None:
+        mark_source = str(metadata.get("mark_source") or "")
+        mark_actionable = bool(metadata.get("mark_quote_actionable")) if mark_source == "validated_midpoint_package" else True
+        if mark_date == through and mark_pnl is not None and mark_actionable:
             marked_open += 1
             open_values.append(round(mark_pnl * CONTRACT_MULTIPLIER, 2))
+        elif mark_date == through and mark_source == "validated_midpoint_package" and not mark_actionable:
+            quality_issues.append("open_lifecycle_same_day_mark_not_actionable")
         else:
             quality_issues.append("open_lifecycle_missing_same_day_mark")
 

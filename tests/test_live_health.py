@@ -12,6 +12,7 @@ from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.live.health import entry_health_gate, run_live_health
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
+from kamandal_v2.tools.launchd_job import health_attention
 
 
 def _make_open_group_with_mark(
@@ -115,6 +116,67 @@ def test_live_health_prefers_fresh_canonical_lifecycle_mark(tmp_path: Path) -> N
     assert report["group_marks"][0]["mark_source"] == "canonical_lifecycle"
     assert report["group_marks"][0]["profit_pct"] == 5.0
     assert report["group_marks"][0]["target_progress_pct"] == 10.0
+
+
+def test_mandatory_exit_invalid_quote_escalates_after_stall_deadline(tmp_path: Path) -> None:
+    database = tmp_path / "kamandal_v2.db"
+    store = LocalStore(database)
+    _make_open_group_with_mark(store, "group_due", target_progress=0.0)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    lifecycle = {
+        "lifecycle_id": "adopt:group_due",
+        "opportunity_id": "fixture",
+        "lane": "call_vertical",
+        "version": 1,
+        "status": "open",
+        "active_legs": [],
+        "cashflow_ledger": [{"amount": 1.0}],
+        "opened_at": "2026-08-21T14:00:00Z",
+        "updated_at": "2026-08-21T15:30:00Z",
+        "policy_hash": "fixture-policy",
+        "metadata": {
+            "execution_mode": "live",
+            "legacy_source_id": "group_due",
+            "underlying": "AAPL",
+            "cumulative_cashflow": 1.0,
+            "contract_multiplier": 100,
+            "mark_pnl_price": -0.2,
+            "mark_natural_pnl_price": -0.4,
+            "mark_profit_pct": -20,
+            "last_marked_at": "2026-08-21T15:30:00Z",
+            "mark_source": "validated_midpoint_package",
+            "mark_quote_actionable": False,
+            "mark_quote_blockers": ["spread_exceeds_frozen_policy"],
+            "mark_selected_reason": "time_exit",
+            "mark_selected_reason_class": "time_decision",
+            "mark_execution_status": "waiting_valid_quote",
+            "mark_waiting_valid_quote_since": "2026-08-21T15:00:00Z",
+            "compiled_management_policy": {"resolved_fields": {"profit_target_pct": "50"}},
+        },
+    }
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO csa_lifecycles (id, opportunity_id, lane, version, status, opened_at, updated_at, policy_hash, payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                lifecycle["lifecycle_id"], lifecycle["opportunity_id"], lifecycle["lane"],
+                lifecycle["version"], lifecycle["status"], lifecycle["opened_at"],
+                lifecycle["updated_at"], lifecycle["policy_hash"], json.dumps(lifecycle),
+            ),
+        )
+
+    report = run_live_health(
+        store,
+        {"live": {"health": {"exit_pipeline_stalled_minutes": 20}}},
+        now=datetime(2026, 8, 21, 15, 31, tzinfo=UTC),
+        allow_mutation=False,
+    )
+
+    assert report["overall"] == "RED"
+    assert "mandatory_exit_quote_stalled" in report["reasons"]
+    event = next(item for item in report["events"] if item["reason"] == "mandatory_exit_quote_stalled")
+    assert event["age_minutes"] == 31.0
+    assert event["operator_state"] == "operator_needed"
+    assert health_attention(report)["notify"] is True
 
 
 def test_live_health_does_not_page_for_midpoint_only_profit_target(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ _PRECEDENCE = (
     "mandatory_event_exit",
     "executable_profit",
     "time_decision",
+    "adverse_price_loss",
     "lane_adjustment",
     "routine_management",
     "hold",

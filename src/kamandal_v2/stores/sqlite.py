@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -1074,6 +1074,7 @@ class LocalStore:
             if str(metadata.get("execution_mode") or "") != "live":
                 continue
             owner_ids = {
+                str(metadata.get("position_projection_id") or ""),
                 str(metadata.get("legacy_source_id") or ""),
                 str(metadata.get("live_group_id") or ""),
                 str(metadata.get("group_id") or ""),
@@ -1095,21 +1096,37 @@ class LocalStore:
                     entry_price = abs(_float(cashflows[0].get("amount"), 0.0))
             multiplier = max(_float(metadata.get("contract_multiplier"), 100.0), 1.0)
             pnl = _float(metadata.get("mark_pnl_price"), 0.0) * multiplier
+            natural_pnl = _float(metadata.get("mark_natural_pnl_price"), _float(metadata.get("mark_pnl_price"), 0.0)) * multiplier
             target_profit = entry_price * (target_pct / 100.0) * multiplier
             target_progress = (pnl / target_profit * 100.0) if target_profit > 0 else 0.0
             return {
+                "lifecycle_id": str(payload.get("lifecycle_id") or ""),
                 "underlying": str(metadata.get("underlying") or ""),
+                "structure": str(metadata.get("structure") or payload.get("lane") or ""),
+                "playbook_id": str(metadata.get("playbook_id") or ""),
+                "opened_at": str(payload.get("opened_at") or ""),
+                "entry_kind": "credit" if _float(metadata.get("cumulative_cashflow"), 0.0) > 0 else "debit",
+                "entry_net_cashflow": _float(metadata.get("cumulative_cashflow"), 0.0) * multiplier,
+                "close_mid_net": _float(metadata.get("mark_liquidation_price"), 0.0) * multiplier,
+                "close_natural_net": _float(metadata.get("mark_natural_liquidation_price"), 0.0) * multiplier,
                 "pnl_mid": pnl,
-                "pnl_natural": pnl,
+                "pnl_natural": natural_pnl,
                 "target_profit": target_profit,
                 "target_progress_pct": target_progress,
                 "trigger_progress_pct": target_progress,
                 "profit_pct": profit_pct,
                 "marked_at": marked_at,
-                "quote_fresh": True,
-                "mark_source": "canonical_lifecycle",
-                "loss_watch": False,
-                "max_loss_watch": False,
+                "quote_fresh": bool(metadata.get("mark_quote_actionable")),
+                "pricing_complete": not bool(metadata.get("mark_quote_blockers")),
+                "max_leg_bid_ask_pct": _float(metadata.get("mark_max_leg_bid_ask_pct"), 0.0),
+                "mark_source": str(metadata.get("mark_source") or "canonical_lifecycle"),
+                "decision_observation_id": str(metadata.get("mark_observation_id") or ""),
+                "selected_reason": str(metadata.get("mark_selected_reason") or ""),
+                "selected_reason_class": str(metadata.get("mark_selected_reason_class") or ""),
+                "execution_status": str(metadata.get("mark_execution_status") or ""),
+                "waiting_valid_quote_since": str(metadata.get("mark_waiting_valid_quote_since") or ""),
+                "loss_watch": str(metadata.get("mark_selected_reason") or "").startswith("loss_") or str(metadata.get("mark_selected_reason") or "").startswith("adverse_"),
+                "max_loss_watch": str(metadata.get("mark_selected_reason") or "").startswith("loss_") or str(metadata.get("mark_selected_reason") or "").startswith("adverse_"),
             }
         return None
 
@@ -1267,6 +1284,107 @@ class LocalStore:
             "window_minutes": max(int(window_minutes), 1),
             "first_seen_at": observed[0]["created_at"] if observed else "",
             "latest_seen_at": observed[-1]["created_at"] if observed else "",
+        }
+
+    def canonical_loss_confirmation_count(
+        self,
+        lifecycle_id: str,
+        *,
+        observed_at: str,
+        window_minutes: int,
+    ) -> int:
+        """Count consecutive valid normal-window loss observations.
+
+        Invalid and edge-window observations neither advance nor reset the
+        watch. A later valid non-loss observation resets it.
+        """
+
+        cutoff = _parse_iso(observed_at) - timedelta(minutes=max(int(window_minutes), 1))
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM live_position_marks WHERE group_id = ? ORDER BY id DESC LIMIT 500",
+                (lifecycle_id,),
+            ).fetchall()
+        count = 0
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if str(payload.get("observation_kind") or "") != "canonical_package":
+                continue
+            try:
+                timestamp = _parse_iso(str(payload.get("observed_at") or ""))
+            except ValueError:
+                continue
+            if timestamp < cutoff:
+                break
+            if not bool(payload.get("quote_actionable")) or not bool(payload.get("loss_window_allowed")):
+                continue
+            if bool(payload.get("adverse_loss_watch")):
+                count += 1
+                continue
+            break
+        return count
+
+    def canonical_package_observations(self, lifecycle_id: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT created_at, payload FROM live_position_marks WHERE group_id = ? ORDER BY id ASC",
+                (lifecycle_id,),
+            ).fetchall()
+        observations = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if str(payload.get("observation_kind") or "") != "canonical_package":
+                continue
+            payload["_recorded_at"] = row["created_at"]
+            observations.append(payload)
+        return observations
+
+    def live_order_evidence_for_lifecycle(
+        self,
+        lifecycle_id: str,
+        *,
+        position_projection_id: str = "",
+    ) -> dict[str, list[dict[str, Any]]]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT status, payload FROM live_order_intents ORDER BY created_at, rowid").fetchall()
+        tickets = []
+        fills = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if str(payload.get("csa_lifecycle_id") or "") != lifecycle_id:
+                continue
+            payload["_ledger_status"] = row["status"]
+            tickets.append(payload)
+            fill = payload.get("csa_lifecycle_fill")
+            if isinstance(fill, dict):
+                fills.append({"mode": "live", "ticket_hash": payload.get("ticket_hash"), **fill})
+        hashes = {str(ticket.get("ticket_hash") or "") for ticket in tickets}
+        order_ids = {str(ticket.get("order_id") or "") for ticket in tickets}
+        projection_ids = {
+            str(ticket.get("position_projection_id") or ticket.get("group_id") or "")
+            for ticket in tickets
+            if str(ticket.get("position_projection_id") or ticket.get("group_id") or "")
+        }
+        if position_projection_id:
+            projection_ids.add(position_projection_id)
+        reconciliation = []
+        if projection_ids:
+            placeholders = ",".join("?" for _ in projection_ids)
+            with self._connect() as conn:
+                issue_rows = conn.execute(
+                    f"SELECT status, observed_count, last_seen_at, payload FROM live_reconciliation_issues WHERE group_id IN ({placeholders}) ORDER BY last_seen_at, issue_id",
+                    tuple(sorted(projection_ids)),
+                ).fetchall()
+            for row in issue_rows:
+                payload = json.loads(row["payload"])
+                payload.update({"status": row["status"], "observed_count": int(row["observed_count"]), "last_seen_at": row["last_seen_at"]})
+                reconciliation.append(payload)
+        return {
+            "tickets": tickets,
+            "attempts": self.live_order_attempts_for_ticket_hashes(hashes),
+            "fills": fills,
+            "broker_statuses": self.live_order_status_history(order_ids),
+            "reconciliation": reconciliation,
         }
 
     def close_live_position_group(self, group_id: str, *, status: str, reason: str, payload: dict[str, Any]) -> None:
@@ -1771,6 +1889,11 @@ def _float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _parse_iso(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _account_book_mode(value: str | None) -> str:

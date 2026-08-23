@@ -1,7 +1,7 @@
 # Kamandal V2 Architecture
 
-Date: 2026-08-22
-Status: Architecture frozen; unified runtime deployed and under natural observation
+Date: 2026-08-23
+Status: Corrective architecture implemented locally; deployment/readback pending
 
 ## Purpose
 
@@ -27,11 +27,16 @@ flowchart LR
     B --> C["Sheet playbooks"]
     C --> D["Strategy capabilities"]
     D --> E["Portfolio selection"]
-    E --> F["Trade lifecycle"]
-    F --> G["Shadow adapter"]
-    F --> H["Guarded live adapter"]
-    F --> I["Canonical trade history"]
-    I --> J["TradeLab"]
+    E --> F["Trade lifecycle state"]
+    K["Market quotes + frozen policy"] --> G["Validated package observation"]
+    F --> G
+    G --> H["Action + execution envelope"]
+    H --> I["Shadow adapter"]
+    H --> J["Guarded live ledger"]
+    F --> L["Canonical trade history"]
+    G --> L
+    H --> L
+    L --> M["TradeLab"]
 ```
 
 The ownership rule is simple:
@@ -101,18 +106,25 @@ For example, adding an `apple_strategy` means:
    natural sessions; and
 4. change that same row to `mode=live` when the operator authorizes it.
 
-Shadow and live use the same candidate, lifecycle, action, and ticket code. Only
-the final execution adapter differs.
+Shadow and live use the same candidate, lifecycle, validated package
+observation, action, and execution-envelope code. Only the final execution
+adapter differs.
 
 The shadow adapter remains a conservative executable-quote simulation, not an
-automatic midpoint fill. A selected entry may be `working` across natural
-planning observations, become `open` after a bounded quote-based fill, or end
-as `entry_missed` when its frozen attempts are exhausted. Once open, management
-and full-position exits use the same lifecycle rules and ticket shapes as live,
-with broker-free shadow fills as the effect. Live Plan 2 is not a shadow retry
-mechanism and may never advance the shadow book. Reports must retain the complete
-selected -> working -> filled/missed -> managed -> closed funnel so executable
-fill friction is not hidden from alpha analysis.
+automatic midpoint fill. Midpoint is the economic observation used to decide;
+natural price is separate execution evidence used to determine whether a
+protected limit would have filled. A selected entry may be `working` across
+natural planning observations, become `open` after a bounded quote-based fill,
+or end as `entry_missed` when its frozen attempts are exhausted. Once open,
+management and full-position exits use the same lifecycle rules, quote-quality
+gate, action reason, execution envelope, and ticket shapes as live, with
+broker-free shadow fills as the effect. An invalid or excessively wide quote
+cannot create a price-derived decision or fill in either mode. A scheduled or
+structural exit obligation remains due, waits for actionable execution
+evidence, and escalates if its deadline cannot be met. Live Plan 2 is not a
+shadow retry mechanism and may never advance the shadow book. Reports must
+retain the complete selected -> working -> filled/missed -> managed -> closed
+funnel so executable fill friction is not hidden from alpha analysis.
 
 `mode` and edited Sheet parameters control future entries. When a trade opens,
 the lifecycle stores the complete compiled management policy and its hash.
@@ -120,6 +132,68 @@ Later Sheet edits, disabling, or deletion do not silently rewrite or orphan that
 open trade. Current global safety, market-session, broker, reconciliation, and
 emergency rules may still override the stored strategy policy. Adopting a newer
 policy for an existing lifecycle is an explicit, versioned operation.
+
+### Package economics are an explicit contract
+
+The unified engine must not let a broker-facing liquidation price double as
+its opinion of what a position is worth. Every management observation produces
+one small, shared package record before any strategy rule runs:
+
+- close midpoint, computed from every active leg's midpoint;
+- close natural price, computed from the executable side of every active leg;
+- per-leg and package spread width, quote timestamp, source, and freshness;
+- entry and cumulative cashflow, midpoint P&L, and midpoint profit/loss ratios;
+- event, DTE, underlying, ownership, and working-order facts; and
+- `actionable=true|false` with a stable reason such as `wide_quote`,
+  `stale_quote`, `missing_leg`, or `crossed_quote`.
+
+The midpoint is the decision mark. The natural price is liquidity and execution
+evidence only. A price-derived profit, loss, or adjustment decision requires an
+actionable package observation. The frozen playbook's existing
+`max_bid_ask_pct` applies to management as well as entry; a lifecycle must not
+silently lose that limit after it opens. A quote outside that limit produces a
+hold-and-retry observation, never a price-triggered action.
+
+Midpoint alone is not sufficient when the market is extremely wide. For
+example, the observed TLT 79 put market of `$0.15 x $2.70` had a midpoint of
+`$1.425`, but neither that midpoint nor the `$2.70` ask was trustworthy enough
+to authorize a close. Quote validation therefore precedes midpoint valuation.
+
+### An action carries its reason and its economic boundary
+
+One selected lifecycle action becomes one immutable execution envelope. It
+must carry:
+
+- the exact reason and reason class: favorable profit, adverse price loss,
+  scheduled lifecycle exit, safety emergency, or risk-changing adjustment;
+- the observation identity and midpoint/natural evidence that selected it;
+- the initial protected limit, the worst permitted limit, bounded reprice
+  steps, and terminal behavior; and
+- complete lifecycle, policy, position-projection, and active-leg identity.
+
+This envelope survives translation into both the shadow adapter and guarded
+live ledger. The live executor must not reconstruct the reason or economics
+from a signed price. Profit-target repricing retains its configured profit
+floor; adverse exits may move toward but never through a validated natural
+boundary; scheduled exits remain owned until filled or explicitly escalated.
+A wide quote never becomes permission to cross the spread.
+
+Price loss is not a hard emergency. The action arbiter may rank it ahead of
+ordinary management while still keeping a distinct `adverse_price_loss` class.
+True emergencies such as ownership corruption, assignment, or an expiring
+unpaired position retain their separate, higher-priority path.
+
+### Management observations are retained, not overwritten
+
+Each evaluated lifecycle appends the package observation, selected action, and
+execution-envelope identity to canonical history. Repeated holds are useful
+evidence and cannot collapse into one idempotent action row or only the latest
+lifecycle metadata. Both live and shadow tickets, fills, retries,
+reconciliation outcomes, and terminal economics join that same history; Live
+Book and weekly TradeLab reporting read this canonical evidence rather than a
+retired mark table. This is the minimum evidence needed to answer: what quote
+was seen, whether it was usable, why an action was or was not selected, what
+limit was authorized, and what eventually filled.
 
 The Sheet contains typed parameters, not executable strategy code. A parameter
 variant is another row. A genuinely new entry shape or lifecycle behavior is a
@@ -250,15 +324,22 @@ inside the already enabled universe by bypassing per-symbol playbook allowlists.
 The unified policy should rename or clearly alias that meaning (for example,
 `universe_wide_scan`) so it cannot be mistaken for permission to add symbols.
 
-### Entry and management use different time permissions
+### Entry and management use reason-aware time permissions
 
-Session policy is shared platform behavior, not strategy-specific logic:
+Session policy is shared platform behavior, not strategy-specific logic. It
+uses the action's reason class rather than treating every close as equally
+urgent:
 
-| Central time | New entries | Existing-position actions |
-| --- | --- | --- |
-| 08:30-09:00 | blocked | closes and explicitly risk-reducing actions allowed |
-| 09:00-14:40 | allowed | normal lifecycle management allowed |
-| 14:40-14:55 | blocked | regular-option closes allowed until broker cutoff |
+| Central time | Entry / adjustment | Favorable profit | Adverse price loss | Scheduled exit / safety emergency |
+| --- | --- | --- | --- | --- |
+| 08:30-09:00 | blocked | allowed on an actionable quote with a protected limit | observe only; opening observations do not count toward confirmation | allowed on an actionable quote; unresolved emergency escalates |
+| 09:00-14:40 | allowed | allowed | allowed only after the configured valid-observation confirmation | allowed |
+| 14:40-14:55 | blocked | allowed on an actionable quote with a protected limit | observe only | allowed on an actionable quote; unresolved emergency escalates |
+
+`Scheduled exit` means that the lifecycle clock itself is due, such as a
+confirmed post-earnings exit, DTE/half-time exit, or expiry action. It does not
+mean that any loss-making position becomes urgent. A price-based stop cannot be
+relabeled as an emergency merely to bypass the opening or closing buffer.
 
 Extended-session symbols retain their configured close time and buffer. The
 broker-facing submission guard, not only the wake-up schedule, enforces these
@@ -364,6 +445,38 @@ replace the other wholesale.
 | CSA strategy lanes | typed opportunity, lifecycle, action arbitration, mixed-leg tickets, shadow/live adapters | CSA identity, independent scan/management ownership |
 | Existing live pipeline | health, account risk, BPR, broker preflight, submission windows, serialization, reconciliation | close-only strategy management |
 
+### Corrective salvage decision
+
+The topology cutover was directionally correct, but its proof focused on owner,
+policy, lane-action, and ticket joins. It did not prove parity from raw quotes
+through the final broker-facing price. Several earlier live protections were
+therefore left in the retired manager instead of being absorbed into the
+canonical lifecycle owner.
+
+| Capability | Earlier live behavior | Deployed unified behavior | Architecture decision |
+| --- | --- | --- | --- |
+| Economic mark | midpoint P&L with natural price retained separately | natural liquidation price drives P&L and loss multiple | absorb midpoint/natural separation into the shared package observation |
+| Quote quality | freshness, missing-leg, and wide-spread checks before adverse action | a fetched leg quote is treated as usable; no management spread gate | apply frozen `max_bid_ask_pct` and explicit quote validity before every price-derived action |
+| Loss confirmation | repeated midpoint loss-watch observations; wide quote blocks close | one natural quote can immediately select a loss exit | restore confirmation using only valid observations inside the normal management window |
+| Exit execution | reason, natural endpoint, and profit floor reach the close repricer | typed translation drops the reason/economic bounds; close starts at natural | carry an immutable reason-aware execution envelope through both adapters |
+| Forensic history | append-only live marks preserve observation payloads | lifecycle metadata keeps only the latest mark and duplicate holds collapse | append every package observation and join it to action, ticket, and fill |
+| Session permission | generic close window; no complete favorable/adverse distinction | generic close window remains, including price stops at 08:30 | add the reason-aware time matrix above; this is a new requirement, not a legacy restoration |
+| Same-day exits | blanket block unless globally overridden | canonical typed closes bypass that blanket | do not restore it; quote quality and reason-aware permissions are the correct controls |
+| Ownership and effects | ledger drain, broker preflight, reconciliation, health, and attention-only escalation | preserved behind the guarded effect boundary | keep; do not build a second submitter or manager |
+
+Already-repaired cutover regressions remain part of the required contract:
+live/shadow book identity, quote coverage for owned expirations, Sheet-owned
+half-time and pre-event clocks, terminal lifecycle/projection convergence,
+complete order-lineage ownership, and pricing-envelope preservation for entry
+replacements and Plan 2. They must stay in the regression suite even though no
+new implementation is required for them in this correction.
+
+The old live manager is evidence and reusable mechanics, not a runtime to
+revive. The repair absorbs the behaviors above into the one canonical manager,
+then leaves the duplicate manager unreachable from scheduled operation. This is
+not a literal code copy: the old blanket same-day block and the old urgent-close
+behavior that could price through natural are not restored.
+
 The resulting engine has three parts:
 
 1. **Selection brain:** the established portfolio planner evaluates all enabled
@@ -467,12 +580,18 @@ The cutover changes existing seams; it does not add another subsystem:
   contracts. The existing four lane modules implement the common capability
   interface rather than being special CSA routes.
 - `strategy_lanes/management_runtime.py` becomes the only lifecycle manager.
-  Fresh-quote marking, profit/event/DTE/loss behavior, and working-order checks
-  from `live/management.py` are preserved as shared context/rules; the separate
-  close-only runner is retired.
+  Midpoint/natural marking, freshness and quote-quality gates, loss
+  confirmation, profit/event/DTE/loss behavior, append-only observations, and
+  working-order checks from the earlier live path are absorbed as shared
+  context/rules; the separate close-only runner remains retired.
+- Working-order conflict checks bind to canonical lifecycle, position
+  projection, and order lineage identity. An unrelated ticket on the same
+  underlying is portfolio context, not proof that this lifecycle already has a
+  working action.
 - `live/orders.py` exposes one translation from a typed strategy ticket to the
   existing live ledger. It retains per-leg open/close effects for adjustments
-  and carries the canonical lifecycle's `position_projection_id` on every
+  and carries the canonical lifecycle's `position_projection_id`, selected
+  action reason, observation identity, and complete execution envelope on every
   management ticket.
 - A complete broker fill is one atomic state transition: advance the canonical
   lifecycle, update the order ledger, and retire its live-book projection in a
@@ -507,13 +626,18 @@ The cutover must not leave two managers running for days. Before deployment:
 1. replay frozen inputs through old and new candidate construction and prove
    that the unified planner preserves intended live eligibility and ranking;
 2. run every capability's entry, hold, adjustment, event, profit, loss, and time
-   branch that its contract permits through deterministic fixtures;
+   branch from raw multileg quotes through package observation, action,
+   execution envelope, adapter ticket, and terminal receipt; fixtures that
+   inject `profit_pct` or `loss_multiple` after valuation do not prove this
+   join;
 3. create a dry-run migration for all currently open live position groups and
    prove exact leg, playbook, cost-basis, and ownership correspondence; migrated
    records whose historical entry policy is unavailable must say `policy at
    adoption` rather than claiming a reconstructed entry-time policy;
 4. verify that every resulting ticket still passes the existing live health,
-   risk, session, preflight, idempotency, and reconciliation gates; and
+   risk, reason-aware session, quote-quality, preflight, idempotency, and
+   reconciliation gates, and that its reason and economic boundary survive
+   typed translation and every reprice child; and
 5. test the complete job topology with broker, Sheet-write, and external-send
    effects disabled.
 
@@ -528,6 +652,32 @@ At the approved deployment boundary:
 
 Rollback restores the prior code, database backup, and prior schedules as one
 unit. It never runs the old and new managers against the same position.
+
+### Corrective economic-path acceptance
+
+The corrective implementation is not complete merely because the unit suite is
+green. Before another live deployment, deterministic replay must prove:
+
+- the TLT `$0.15 x $2.70` put observation is retained as `wide_quote` and
+  produces no price-derived close in either shadow or live mode;
+- ordinary tight TLT observations around `$0.49` and `$0.38` produce midpoint
+  marks without pretending that a fill occurred;
+- the August 21 NVDA 08:30 loss path cannot submit an adverse price exit during
+  the opening buffer, while a valid profit or scheduled exit can;
+- the equivalent closing-buffer cases obey the same reason-aware distinction;
+- two valid normal-window loss observations are required and edge-window or
+  invalid observations do not advance that count;
+- mandatory event/DTE/expiry obligations remain due through invalid quotes,
+  retry from fresh actionable evidence, and escalate before their deadline;
+- profit floors, adverse bounds, and scheduled-exit ownership survive typed
+  ticket translation and every replacement child; and
+- the exact same observation and action are produced for shadow and live before
+  their adapters diverge.
+
+The replay set must also include all currently open live packages and every
+enabled Sheet capability. A capability with no natural current position still
+needs a production-shaped deterministic fixture. Runtime observation then
+proves scheduling and broker joins; it does not replace this branch proof.
 
 ## Deliberate Non-Goals
 

@@ -45,7 +45,7 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
         intent_type = "adjust"
     limit_price = _nickel_price(
         abs(float(ticket.limit_price)),
-        rounding=ROUND_FLOOR if ticket.order_kind == "credit" else ROUND_CEILING,
+        rounding=ROUND_CEILING if ticket.order_kind == "credit" else ROUND_FLOOR,
     )
     if ticket.order_kind == "credit":
         limit_price = f"-{limit_price}"
@@ -84,8 +84,21 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
         "csa_stage": str(ticket.metadata.get("deployment_stage") or ""),
         "csa_lifecycle_id": ticket.lifecycle_id,
         "csa_action_type": str(ticket.metadata.get("action_type") or ""),
+        "csa_action_reason": str(ticket.metadata.get("action_reason") or ticket.metadata.get("exit_reason") or ""),
+        "csa_action_reason_class": str(ticket.metadata.get("action_reason_class") or ticket.metadata.get("exit_reason_class") or ""),
         "stage_authorized": True,
     }
+    for key in (
+        "decision_observation_id",
+        "exit_reason",
+        "exit_reason_class",
+        "exit_midpoint_net",
+        "exit_natural_net",
+        "exit_profit_floor_net",
+        "execution_envelope",
+    ):
+        if key in ticket.metadata:
+            live_ticket[key] = ticket.metadata[key]
     projection_id = str(ticket.metadata.get("position_projection_id") or "")
     if projection_id:
         live_ticket["position_projection_id"] = projection_id
