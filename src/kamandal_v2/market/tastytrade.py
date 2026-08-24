@@ -16,6 +16,7 @@ from kamandal_v2.volatility.scale import normalize_iv_abs, normalize_iv_percenti
 
 
 DEFAULT_API_BASE_URL = "https://api.tastytrade.com"
+DEFAULT_ORDERS_API_VERSION = "20260427"
 USER_AGENT = "kamandal-v2/0.1"
 
 
@@ -50,8 +51,11 @@ class TastytradeAdapter:
         self.client_secret = str(tasty_cfg.get("client_secret") or "")
         self.refresh_token = str(tasty_cfg.get("refresh_token") or "")
         self.account_number = str(tasty_cfg.get("account_number") or "")
+        self._account_number_explicit = bool(self.account_number)
         self.oauth_scopes = _as_list(tasty_cfg.get("oauth_scopes") or ["read", "trade"])
         self.api_version = str(tasty_cfg.get("api_version") or "")
+        self._orders_api_version_explicit = bool(tasty_cfg.get("orders_api_version"))
+        self.orders_api_version = str(tasty_cfg.get("orders_api_version") or DEFAULT_ORDERS_API_VERSION)
         self.session_file = resolve_path(str(tasty_cfg.get("session_file") or "config/tastytrade_session.json"))
         self.account_cache_file = resolve_path(str(tasty_cfg.get("account_cache_file") or "config/tastytrade_account.json"))
         self._session = requests.Session()
@@ -62,8 +66,28 @@ class TastytradeAdapter:
     def available(self) -> bool:
         return bool(self.client_secret and self.refresh_token)
 
+    def live_readiness(self) -> dict[str, Any]:
+        reasons = []
+        if not self.available():
+            reasons.append("oauth_credentials_missing")
+        if not self._account_number_explicit:
+            reasons.append("explicit_account_number_missing")
+        if not self._orders_api_version_explicit:
+            reasons.append("orders_api_version_missing")
+        return {
+            "ready": not reasons,
+            "reasons": reasons,
+            "account_configured": self._account_number_explicit,
+            "orders_api_version_configured": self._orders_api_version_explicit,
+        }
+
+    def require_live_ready(self) -> None:
+        readiness = self.live_readiness()
+        if not readiness["ready"]:
+            raise RuntimeError("tastytrade live execution is not ready: " + ",".join(readiness["reasons"]))
+
     def account_state(self) -> PortfolioState:
-        self._require_available()
+        self.require_live_ready()
         account_number = self._account_number()
         balance = _data(self._get(f"/accounts/{account_number}/balances"))
         positions = _items(self._get(f"/accounts/{account_number}/positions"))
@@ -92,7 +116,7 @@ class TastytradeAdapter:
         )
 
     def broker_positions(self) -> list[dict[str, Any]]:
-        self._require_available()
+        self.require_live_ready()
         positions = _items(self._get(f"/accounts/{self._account_number()}/positions"))
         normalized = []
         for index, item in enumerate(positions):
@@ -190,7 +214,7 @@ class TastytradeAdapter:
             return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"tastytrade preflight failed: {exc}", raw={"source": "tastytrade"})
 
     def preflight_ticket(self, ticket: dict[str, Any]) -> PreflightResult:
-        self._require_available()
+        self.require_live_ready()
         try:
             payload = self._order_payload_from_ticket(ticket)
             response = self._post(f"/accounts/{self._account_number()}/orders/dry-run", payload)
@@ -199,17 +223,27 @@ class TastytradeAdapter:
             return PreflightResult(ok=False, bpr=0.0, message=f"tastytrade ticket preflight failed: {exc}", raw={"source": "tastytrade"})
 
     def place_order_ticket(self, ticket: dict[str, Any]) -> dict[str, Any]:
-        self._require_available()
+        self.require_live_ready()
         response = self._post(f"/accounts/{self._account_number()}/orders", self._order_payload_from_ticket(ticket))
         return _order_response(response)
 
     def get_order(self, order_id: str) -> dict[str, Any]:
-        self._require_available()
+        self.require_live_ready()
         return _order_response(self._get(f"/accounts/{self._account_number()}/orders/{order_id}"))
 
     def cancel_order(self, order_id: str) -> dict[str, Any]:
-        self._require_available()
+        self.require_live_ready()
         return _order_response(self._delete(f"/accounts/{self._account_number()}/orders/{order_id}"))
+
+    def supports_atomic_replace(self, _replacement_ticket: dict[str, Any]) -> bool:
+        return True
+
+    def replace_order(self, order_id: str, replacement_ticket: dict[str, Any]) -> dict[str, Any]:
+        self.require_live_ready()
+        payload = self._order_payload_from_ticket(replacement_ticket)
+        account = self._account_number()
+        self._post(f"/accounts/{account}/orders/{order_id}/dry-run", payload)
+        return _order_response(self._patch(f"/accounts/{account}/orders/{order_id}", payload))
 
     def _order_payload_from_ticket(self, ticket: dict[str, Any]) -> dict[str, Any]:
         public_limit = float(ticket.get("limit_price") or 0.0)
@@ -305,11 +339,14 @@ class TastytradeAdapter:
     def _delete(self, endpoint: str) -> dict[str, Any]:
         return self._request("DELETE", endpoint)
 
+    def _patch(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("PATCH", endpoint, json_data=payload)
+
     def _request(self, method: str, endpoint: str, *, params: Any = None, json_data: dict[str, Any] | None = None) -> dict[str, Any]:
         response = self._session.request(
             method,
             f"{self.api_base_url}{endpoint}",
-            headers=self._headers(token=self._token()),
+            headers=self._headers(token=self._token(), api_version=self._api_version_for_endpoint(endpoint)),
             params=params,
             json=json_data,
             timeout=30,
@@ -338,7 +375,7 @@ class TastytradeAdapter:
         _write_json(self.account_cache_file, {"account_number": account_number})
         return self.account_number
 
-    def _headers(self, *, token: str = "") -> dict[str, str]:
+    def _headers(self, *, token: str = "", api_version: str = "") -> dict[str, str]:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -346,9 +383,12 @@ class TastytradeAdapter:
         }
         if token:
             headers["Authorization"] = f"Bearer {token}"
-        if self.api_version:
-            headers["Accept-Version"] = self.api_version
+        if api_version:
+            headers["Accept-Version"] = api_version
         return headers
+
+    def _api_version_for_endpoint(self, endpoint: str) -> str:
+        return self.orders_api_version if "/orders" in endpoint else self.api_version
 
     def _require_available(self) -> None:
         if not self.available():
@@ -417,7 +457,25 @@ def _order_response(response: dict[str, Any]) -> dict[str, Any]:
     order_id = str(order.get("id") or order.get("order-id") or "")
     fallback_status = data.get("status") if isinstance(data, dict) else ""
     status = str(order.get("status") or fallback_status)
-    return {"orderId": order_id, "status": status.upper(), "raw": response}
+    normalized_status = status.strip().upper().replace("-", "_").replace(" ", "_")
+    if normalized_status in {"RECEIVED", "ROUTED", "IN_FLIGHT", "LIVE", "CONTINGENT", "ACCEPTED", "CANCEL_REQUESTED"}:
+        normalized_status = "WORKING"
+    normalized = {"orderId": order_id, "status": normalized_status, "raw": response}
+    field_map = {
+        "filledQuantity": ("filled-quantity", "filled_quantity"),
+        "remainingQuantity": ("remaining-quantity", "remaining_quantity"),
+        "averagePrice": ("average-price", "average_price"),
+        "filledAt": ("filled-at", "filled_at"),
+        "receivedAt": ("received-at", "received_at"),
+        "updatedAt": ("updated-at", "updated_at"),
+    }
+    for normalized_name, aliases in field_map.items():
+        value = order.get(normalized_name)
+        if value is None:
+            value = next((order.get(alias) for alias in aliases if order.get(alias) is not None), None)
+        if value is not None:
+            normalized[normalized_name] = value
+    return normalized
 
 
 def _data(payload: dict[str, Any]) -> Any:

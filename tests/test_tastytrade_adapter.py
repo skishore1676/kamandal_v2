@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
 from kamandal_v2.market.broker import broker_adapter
 from kamandal_v2.market.tastytrade import TastytradeAdapter, parse_tasty_option_symbol, tasty_option_symbol
@@ -67,7 +69,9 @@ def _adapter(tmp_path) -> TastytradeAdapter:
                     "client_id": "client-id",
                     "client_secret": "secret",
                     "refresh_token": "refresh",
+                    "account_number": "5WT00000",
                     "api_version": "20250813",
+                    "orders_api_version": "20260427",
                     "session_file": str(tmp_path / "session.json"),
                     "account_cache_file": str(tmp_path / "account.json"),
                 }
@@ -123,7 +127,7 @@ def test_tastytrade_account_state_fetches_oauth_and_account(tmp_path) -> None:
     assert token_request["json"]["client_id"] == "client-id"
     assert token_request["json"]["scope"] == "read trade"
     assert token_request["headers"]["User-Agent"] == "kamandal-v2/0.1"
-    assert token_request["headers"]["Accept-Version"] == "20250813"
+    assert "Accept-Version" not in token_request["headers"]
 
 
 def test_tastytrade_preflight_builds_open_option_order(tmp_path) -> None:
@@ -233,3 +237,139 @@ def test_broker_adapter_uses_tastytrade_when_active() -> None:
     adapter = broker_adapter({"broker": {"active": "tastytrade"}})
 
     assert isinstance(adapter, TastytradeAdapter)
+
+
+def test_tastytrade_builds_two_leg_strangle_open_close_and_adjust(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+    short_put = {
+        "role": "short_put",
+        "side": "sell",
+        "effect": "open",
+        "option_type": "put",
+        "strike": 430.0,
+        "expiration": "2026-06-19",
+        "quantity": 1,
+    }
+    short_call = {
+        "role": "short_call",
+        "side": "sell",
+        "effect": "open",
+        "option_type": "call",
+        "strike": 465.0,
+        "expiration": "2026-06-19",
+        "quantity": 1,
+    }
+
+    opened = adapter._order_payload_from_ticket({
+        "order_id": "client-open",
+        "underlying": "QQQ",
+        "intent_type": "open",
+        "limit_price": "-2.50",
+        "legs": [short_put, short_call],
+    })
+    closed = adapter._order_payload_from_ticket({
+        "order_id": "client-close",
+        "underlying": "QQQ",
+        "intent_type": "close",
+        "limit_price": "1.25",
+        "legs": [
+            {**short_put, "side": "buy", "effect": "close"},
+            {**short_call, "side": "buy", "effect": "close"},
+        ],
+    })
+    adjusted = adapter._order_payload_from_ticket({
+        "order_id": "client-adjust",
+        "underlying": "QQQ",
+        "intent_type": "adjust",
+        "limit_price": "-0.20",
+        "legs": [
+            {**short_call, "side": "buy", "effect": "close"},
+            {**short_call, "strike": 475.0, "side": "sell", "effect": "open"},
+        ],
+    })
+
+    assert [leg["action"] for leg in opened["legs"]] == ["Sell to Open", "Sell to Open"]
+    assert opened["price-effect"] == "Credit"
+    assert [leg["action"] for leg in closed["legs"]] == ["Buy to Close", "Buy to Close"]
+    assert closed["price-effect"] == "Debit"
+    assert [leg["action"] for leg in adjusted["legs"]] == ["Buy to Close", "Sell to Open"]
+    assert adjusted["external-identifier"] == "client-adjust"
+
+
+def test_tastytrade_atomic_replace_dry_runs_then_patches_with_pinned_order_version(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+    ticket = {
+        "order_id": "client-replacement",
+        "underlying": "QQQ",
+        "intent_type": "open",
+        "limit_price": "-2.40",
+        "legs": [{**_leg().to_dict(), "effect": "open"}],
+    }
+
+    response = adapter.replace_order("123", ticket)
+
+    assert response["orderId"] == "123"
+    assert response["status"] == "WORKING"
+    order_requests = [request for request in adapter._session.requests if "/orders/123" in request["url"]]
+    assert [request["method"] for request in order_requests] == ["POST", "PATCH"]
+    assert order_requests[0]["url"].endswith("/accounts/5WT00000/orders/123/dry-run")
+    assert order_requests[1]["url"].endswith("/accounts/5WT00000/orders/123")
+    assert all(request["headers"]["Accept-Version"] == "20260427" for request in order_requests)
+    assert order_requests[1]["json"]["external-identifier"] == "client-replacement"
+
+
+def test_tastytrade_order_response_normalizes_partial_fill_fields(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+
+    class PartialFillSession(_FakeSession):
+        def request(self, method: str, url: str, **kwargs) -> _Response:
+            self.requests.append({"method": method, "url": url, **kwargs})
+            return _Response({"data": {"order": {
+                "id": 321,
+                "status": "Partially Filled",
+                "filled-quantity": "1",
+                "remaining-quantity": "1",
+                "average-price": "2.45",
+                "updated-at": "2026-08-23T15:00:00Z",
+            }}})
+
+    adapter._session = PartialFillSession()
+    result = adapter.get_order("321")
+
+    assert result == {
+        "orderId": "321",
+        "status": "PARTIALLY_FILLED",
+        "raw": result["raw"],
+        "filledQuantity": "1",
+        "remainingQuantity": "1",
+        "averagePrice": "2.45",
+        "updatedAt": "2026-08-23T15:00:00Z",
+    }
+
+
+def test_tastytrade_live_order_fails_closed_without_explicit_account(tmp_path) -> None:
+    adapter = TastytradeAdapter({"broker": {"tastytrade": {
+        "client_secret": "secret",
+        "refresh_token": "refresh",
+        "orders_api_version": "20260427",
+        "session_file": str(tmp_path / "session.json"),
+        "account_cache_file": str(tmp_path / "account.json"),
+    }}})
+    adapter._session = _FakeSession()
+
+    with pytest.raises(RuntimeError, match="explicit_account_number_missing"):
+        adapter.place_order_ticket({"order_id": "client", "underlying": "QQQ", "legs": []})
+    assert adapter._session.requests == []
+
+
+def test_tastytrade_live_order_fails_closed_without_explicit_orders_version(tmp_path) -> None:
+    adapter = TastytradeAdapter({"broker": {"tastytrade": {
+        "client_secret": "secret",
+        "refresh_token": "refresh",
+        "account_number": "5WT00000",
+        "session_file": str(tmp_path / "session.json"),
+        "account_cache_file": str(tmp_path / "account.json"),
+    }}})
+
+    with pytest.raises(RuntimeError, match="orders_api_version_missing"):
+        adapter.get_order("123")

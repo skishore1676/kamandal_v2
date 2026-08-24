@@ -510,6 +510,47 @@ The short-strangle lane is currently `shadow`, even though its future venue is
 `tasty_primary`. Promotion to live remains a separate money gate and requires
 broker-native canary proof; this deployment does not submit an order.
 
+#### Order identity and replacement
+
+Every broker ticket carries two identities. `client_order_id` (also retained in
+the compatibility `order_id` field) is deterministic and immutable; it owns
+idempotency, ticket hashing, and replacement lineage. `broker_order_id` is
+assigned by the execution venue and is persisted immediately after a successful
+submission. Every later GET, cancel, or replace call addresses the broker id.
+This separation is required because Public can echo a client UUID while
+Tastytrade normally returns its own numeric order id.
+
+An atomic Tastytrade reprice is `replacement dry-run -> PATCH current order`.
+The Orders API has its own pinned `Accept-Version`; that header is not leaked
+onto OAuth or unrelated API surfaces. An adapter that explicitly declares it
+cannot replace atomically enters the staged-cancel state machine: persist the
+child, request cancel, observe a terminal unfilled parent state, verify the
+position for a close, preflight again, and only then submit. A cancel request or
+unknown status is never terminal proof.
+
+#### Account and reconciliation isolation
+
+Live Tastytrade account operations require an explicit configured account
+number and pinned Orders API version in addition to OAuth availability. Cached
+or first-returned account discovery may support non-effectful research, but it
+cannot authorize live account state, positions, or orders.
+
+Reconciliation inventories every venue implicated by an open group or working
+ticket. Its internal key is `(execution_venue, OCC symbol)`, not OCC symbol
+alone. Therefore the same contract at Public and Tastytrade remains two
+independent holdings. Failure to read any required venue suppresses automatic
+projection repair and emits `broker_venue_unavailable`; missing inventory is
+never interpreted as a flat account.
+
+#### Market data is not order routing
+
+The current quote/Greek surface remains the shared Public/fixture market-data
+provider. Tastytrade owns its venue's dry-run, account, order, and position
+receipts, but Kamandal does not yet consume DXLink quotes. That is an explicit
+live-pilot gate: sandbox multileg contract proof first, then a separately
+approved one-contract canary using current live quote evidence. A green sandbox
+order proves syntax and lifecycle plumbing, not execution quality or alpha.
+
 ### Autonomous short-strangle admission
 
 The Sheet is authoritative for the volatility, DTE, delta, range, profit, time,

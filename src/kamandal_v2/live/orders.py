@@ -63,6 +63,7 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
     submit_payload = _csa_submit_payload(order_id, ticket, limit_price)
     live_ticket = {
         "order_id": order_id,
+        "client_order_id": order_id,
         "plan_id": ticket.lifecycle_id,
         "plan_rank": 1,
         "candidate_id": ticket.ticket_id,
@@ -204,6 +205,7 @@ def _build_ticket(
     submit_payload = _submit_payload(order_id, candidate.underlying, legs, limit_price, open_close_indicator)
     ticket = {
         "order_id": order_id,
+        "client_order_id": order_id,
         "plan_id": plan.plan_id,
         "plan_rank": getattr(plan, "plan_rank", None),
         "candidate_id": candidate.candidate_id,

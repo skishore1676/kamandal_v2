@@ -24,8 +24,34 @@ the rest of its lifecycle.
 ## Promotion boundary
 
 The Sheet row remains `shadow`. A later live pilot is a separate protected
-change. Before that flip, prove Tastytrade credentials and account selection,
-one dry-run/preflight contract, broker-native signed multi-leg semantics,
-receipt redaction, cancel/replace, partial fills, reconciliation, and a bounded
-one-contract canary. No deployment or Sheet migration in this design implies
-permission to submit real orders.
+change. No deployment or Sheet migration in this design implies permission to
+submit real orders.
+
+The broker contract is now explicit:
+
+- `order_id`/`client_order_id` is Kamandal's deterministic idempotency and
+  lineage identity. `broker_order_id` is the id assigned by the routed broker.
+  Poll, cancel, and replace always use the latter; broker assignment never
+  rewrites the former.
+- Tastytrade order calls pin the Orders API version separately from unrelated
+  API surfaces. Atomic replacement first calls the replacement dry-run and only
+  then PATCHes the current broker order.
+- Tastytrade live account, position, preflight, submit, status, cancel, and
+  replace operations fail closed unless the target account number is explicitly
+  configured. Automatic "first account" discovery is not live authority.
+- Position reconciliation collects every venue implicated by an open group or
+  working ticket. Its comparison key is `execution_venue + OCC symbol`, so an
+  identical option held at Public and Tastytrade cannot offset or hide a
+  discrepancy at the other broker. If a required venue inventory is
+  unavailable, repair is suspended and the venue is reported as unavailable.
+- Tastytrade responses normalize working, partial-fill, fill-price, remaining
+  quantity, and fill-time fields into the existing shared lifecycle contract.
+
+Market data and execution remain deliberately separate. Public/shared quotes
+may build and manage the strategy; Tastytrade supplies native dry-runs, order
+receipts, status, and positions for its venue. DXLink is not yet a Kamandal
+quote provider. Before the protected live flip, run the same two-leg open,
+two-leg close, mixed adjustment, partial-fill, and cancel-replace contract
+against a Tastytrade sandbox account, then perform a separately approved bounded
+one-contract canary with live quotes. The sandbox is evidence for broker
+plumbing, not evidence of fill quality or strategy economics.

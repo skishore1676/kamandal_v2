@@ -40,6 +40,9 @@ class VenueAwareMarket:
             adapter = self._adapter(venue)
             if hasattr(adapter, "available") and not adapter.available():
                 raise RuntimeError(f"execution venue {venue} is unavailable")
+            readiness = adapter.live_readiness() if hasattr(adapter, "live_readiness") else {"ready": True}
+            if not readiness.get("ready", True):
+                raise RuntimeError(f"execution venue {venue} is not live-ready: {','.join(readiness.get('reasons') or [])}")
             states[venue] = adapter.account_state()
         self.config.setdefault("runtime", {})["venue_portfolios"] = {
             venue: state.to_dict() for venue, state in states.items()
@@ -63,7 +66,20 @@ class VenueAwareMarket:
                         raw={"execution_venue": venue, "live_eligible": False},
                     )
             else:
-                result = adapter.preflight(candidate)
+                readiness = adapter.live_readiness() if hasattr(adapter, "live_readiness") else {"ready": True}
+                if self.mode == "live" and not readiness.get("ready", True):
+                    result = PreflightResult(
+                        ok=False,
+                        bpr=0.0,
+                        message=f"execution venue {venue} is not live-ready",
+                        raw={
+                            "execution_venue": venue,
+                            "live_eligible": False,
+                            "readiness_reasons": list(readiness.get("reasons") or []),
+                        },
+                    )
+                else:
+                    result = adapter.preflight(candidate)
         raw = dict(result.raw or {})
         raw["execution_venue"] = venue
         raw["execution_broker"] = execution_venue_registry(self.config).get(venue, "")

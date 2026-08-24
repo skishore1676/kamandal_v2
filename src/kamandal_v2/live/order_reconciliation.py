@@ -9,6 +9,7 @@ from typing import Any
 from kamandal_v2.live.execution import TERMINAL_UNFILLED_ORDER_STATUSES
 from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
 from kamandal_v2.live.health import run_live_health
+from kamandal_v2.live.order_identity import broker_order_id
 from kamandal_v2.market.broker import broker_adapter, ticket_execution_venue
 from kamandal_v2.schemas import LIVE_BOOK_HEADER
 from kamandal_v2.sheets import write_live_book
@@ -174,7 +175,7 @@ def _reconcile_local_close_approval(
 def _reconcile_broker_close_order(store: LocalStore, adapter: Any, ticket: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
     result = _base_result(ticket, source="broker_order")
     try:
-        response = adapter.get_order(str(ticket["order_id"]))
+        response = adapter.get_order(broker_order_id(ticket))
     except Exception as exc:  # noqa: BLE001
         error = _safe_broker_error(exc)
         result.update({"broker_status": "BROKER_STATUS_FETCH_FAILED", "needs_broker_status_review": True, "error": error})

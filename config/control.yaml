@@ -309,6 +309,7 @@ broker:
     api_base_url: https://api.tastytrade.com
     client_id: ""
     api_version: ""
+    orders_api_version: "20260427"
     account_number: ""
     oauth_scopes: [read, trade]
     session_file: config/tastytrade_session.json

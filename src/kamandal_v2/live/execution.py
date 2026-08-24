@@ -23,6 +23,7 @@ from kamandal_v2.live.lineage import EntryLineage, resolve_entry_lineage
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
+from kamandal_v2.live.order_identity import broker_order_id, client_order_id, persist_broker_identity
 from kamandal_v2.live.plan_fallback import FallbackDecision, PlanFallbackCoordinator, attempt_event_type, fallback_enabled, registered_campaign_ids
 from kamandal_v2.market.broker import broker_adapter, ticket_execution_venue
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
@@ -500,6 +501,8 @@ def _execute_ticket(
             response = adapter.place_order_ticket(ticket)
             ok = bool(response.get("orderId"))
             status = "submitted" if ok else "submit_failed"
+            if ok:
+                persist_broker_identity(ticket, response)
         except Exception as exc:  # noqa: BLE001
             response = {"error": _safe_broker_error(exc)}
             ok = False
@@ -516,10 +519,19 @@ def _execute_ticket(
         request_payload=request_payload,
         response_payload=response,
     )
-    store.update_live_order_intent_status(str(ticket["ticket_hash"]), status)
+    store.update_live_order_intent_status_with_payload(
+        str(ticket["ticket_hash"]),
+        status,
+        {
+            "client_order_id": client_order_id(ticket),
+            **({"broker_order_id": broker_order_id(ticket)} if submit and ok else {}),
+        },
+    )
     store.event("live_order_execution_evaluated", {
         "ticket_hash": ticket.get("ticket_hash"),
         "order_id": ticket.get("order_id"),
+        "client_order_id": client_order_id(ticket),
+        "broker_order_id": broker_order_id(ticket) if submit and ok else "",
         "submit": submit,
         "close": close,
         "status": status,
@@ -528,6 +540,8 @@ def _execute_ticket(
     result = {
         "ticket_hash": ticket.get("ticket_hash"),
         "order_id": ticket.get("order_id"),
+        "client_order_id": client_order_id(ticket),
+        "broker_order_id": broker_order_id(ticket) if submit and ok else "",
         "underlying": ticket.get("underlying"),
         "status": status,
         "execution_venue": ticket_execution_venue(config, ticket),
@@ -585,7 +599,7 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
         )
         ledger_status = str(ticket.get("_ledger_status") or "submitted")
         try:
-            response = adapter.get_order(str(ticket["order_id"]))
+            response = adapter.get_order(broker_order_id(ticket))
         except Exception as exc:  # noqa: BLE001
             error = _safe_broker_error(exc)
             if ledger_status == "expired" and _broker_error_is_404(error):
@@ -1215,7 +1229,7 @@ def _broker_error_is_404(error: str) -> bool:
 def _expire_live_close_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
     try:
         _assert_submit_allowed(config, submit=True)
-        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        cancel_response = adapter.cancel_order(broker_order_id(ticket))
         store.record_live_order_status(str(ticket["order_id"]), "CLOSE_EXPIRE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
         store.record_live_order_attempt(
             ticket,
@@ -1282,10 +1296,12 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
         if not window["allowed"]:
             store.event("live_order_close_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_market_closed", "submission_window": window}
-        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        cancel_response = adapter.cancel_order(broker_order_id(ticket))
         store.record_live_order_status(str(ticket["order_id"]), "CLOSE_REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
         response = adapter.place_order_ticket(new_ticket)
         ok = bool(response.get("orderId"))
+        if ok:
+            persist_broker_identity(new_ticket, response)
         store.save_live_order_intent(new_ticket, status="submitted" if ok else "submit_failed")
         store.record_live_order_attempt(
             new_ticket,
@@ -1322,7 +1338,7 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
 def _expire_live_entry_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
     try:
         _assert_submit_allowed(config, submit=True)
-        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        cancel_response = adapter.cancel_order(broker_order_id(ticket))
         store.record_live_order_status(str(ticket["order_id"]), "ENTRY_EXPIRE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
         store.record_live_order_attempt(
             ticket,
@@ -1414,10 +1430,12 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
         if not window["allowed"]:
             store.event("live_order_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_entry_cutoff", "submission_window": window}
-        cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+        cancel_response = adapter.cancel_order(broker_order_id(ticket))
         store.record_live_order_status(str(ticket["order_id"]), "REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
         response = adapter.place_order_ticket(new_ticket)
         ok = bool(response.get("orderId"))
+        if ok:
+            persist_broker_identity(new_ticket, response)
         store.save_live_order_intent(new_ticket, status="submitted" if ok else "submit_failed")
         store.record_live_order_attempt(
             new_ticket,
@@ -1466,20 +1484,13 @@ def _replace_live_order_atomically(
     after an indeterminate network response remains idempotent.
     """
 
-    response = adapter.replace_order(str(ticket["order_id"]), new_ticket)
-    response_order_id = str(response.get("orderId") or "")
-    if not response_order_id:
-        raise RuntimeError("broker atomic replace response missing orderId")
-    request_id = str(new_ticket["order_id"])
-    if response_order_id != request_id:
-        new_ticket["replace_request_id"] = request_id
-        new_ticket["order_id"] = response_order_id
-        submit_payload = dict(new_ticket.get("submit_payload") or {})
-        submit_payload["orderId"] = response_order_id
-        new_ticket["submit_payload"] = submit_payload
-        new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
+    response = adapter.replace_order(broker_order_id(ticket), new_ticket)
+    request_id = client_order_id(new_ticket)
+    response_order_id = persist_broker_identity(new_ticket, response)
+    new_ticket["replace_request_id"] = request_id
     new_ticket["replace_method"] = "broker_atomic"
-    new_ticket["replaces_order_id"] = str(ticket["order_id"])
+    new_ticket["replaces_order_id"] = client_order_id(ticket)
+    new_ticket["replaces_broker_order_id"] = broker_order_id(ticket)
     new_ticket["replace_response"] = dict(response)
     store.save_live_order_intent(new_ticket, status="submitted")
     store.record_live_order_attempt(
@@ -1489,6 +1500,7 @@ def _replace_live_order_atomically(
         ok=True,
         request_payload={
             "orderId": ticket.get("order_id"),
+            "brokerOrderId": broker_order_id(ticket),
             "requestId": request_id,
             "quantity": new_ticket.get("quantity"),
             "limitPrice": new_ticket.get("limit_price"),
@@ -1534,8 +1546,7 @@ def _atomic_replace_supported(adapter: Any, replacement_ticket: dict[str, Any]) 
 def _staged_replace_required(adapter: Any, replacement_ticket: dict[str, Any]) -> bool:
     supports = getattr(adapter, "supports_atomic_replace", None)
     return (
-        callable(getattr(adapter, "replace_order", None))
-        and callable(getattr(adapter, "cancel_order", None))
+        callable(getattr(adapter, "cancel_order", None))
         and callable(supports)
         and not bool(supports(replacement_ticket))
     )
@@ -1553,10 +1564,11 @@ def _begin_staged_replacement(
     """Persist replacement lineage before requesting cancellation."""
 
     new_ticket["replace_method"] = "staged_cancel"
-    new_ticket["replaces_order_id"] = str(ticket["order_id"])
+    new_ticket["replaces_order_id"] = client_order_id(ticket)
+    new_ticket["replaces_broker_order_id"] = broker_order_id(ticket)
     store.save_live_order_intent(new_ticket, status=REPLACE_WAITING_CANCEL)
     store.update_live_order_intent_status(str(ticket["ticket_hash"]), REPLACE_CANCEL_PENDING)
-    cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+    cancel_response = adapter.cancel_order(broker_order_id(ticket))
     store.record_live_order_status(
         str(ticket["order_id"]),
         "REPLACE_CANCEL_REQUESTED",
@@ -1568,7 +1580,7 @@ def _begin_staged_replacement(
         action="stage_replace_cancel_close" if close else "stage_replace_cancel_open",
         submit=True,
         ok=True,
-        request_payload={"orderId": ticket.get("order_id")},
+        request_payload={"orderId": ticket.get("order_id"), "brokerOrderId": broker_order_id(ticket)},
         response_payload=cancel_response,
     )
     store.event(
@@ -1632,7 +1644,7 @@ def _advance_staged_replacement(
 
     if status in {"NEW", "OPEN", "WORKING", "PENDING", "ACCEPTED"}:
         try:
-            cancel_response = adapter.cancel_order(str(ticket["order_id"]))
+            cancel_response = adapter.cancel_order(broker_order_id(ticket))
             store.record_live_order_status(
                 str(ticket["order_id"]),
                 "REPLACE_CANCEL_REQUESTED",
@@ -1648,6 +1660,20 @@ def _advance_staged_replacement(
                     "error": _safe_broker_error(exc),
                 },
             )
+        return {
+            "reprice_status": "waiting_cancel",
+            "reprice_method": "staged_cancel",
+            "broker_status": status,
+            "position_evidence": position_evidence,
+        }
+
+    if status not in TERMINAL_UNFILLED_ORDER_STATUSES:
+        return {
+            "reprice_status": "waiting_cancel",
+            "reprice_method": "staged_cancel",
+            "broker_status": status,
+            "position_evidence": position_evidence,
+        }
 
     fresh_preflight = adapter.preflight_ticket(replacement)
     if not fresh_preflight.ok:
@@ -1659,16 +1685,8 @@ def _advance_staged_replacement(
         }
     replacement["preflight"] = _preflight_with_entry_pricing(fresh_preflight.to_dict(), replacement)
     response = adapter.place_order_ticket(replacement)
-    response_order_id = str(response.get("orderId") or "")
-    if not response_order_id:
-        raise RuntimeError("broker staged replacement response missing orderId")
-    if response_order_id != str(replacement["order_id"]):
-        replacement["replace_request_id"] = str(replacement["order_id"])
-        replacement["order_id"] = response_order_id
-        submit_payload = dict(replacement.get("submit_payload") or {})
-        submit_payload["orderId"] = response_order_id
-        replacement["submit_payload"] = submit_payload
-        replacement["ticket_hash"] = compute_ticket_hash(replacement)
+    replacement["replace_request_id"] = client_order_id(replacement)
+    response_order_id = persist_broker_identity(replacement, response)
     replacement["replace_response"] = dict(response)
     store.save_live_order_intent(replacement, status="submitted")
     store.update_live_order_intent_status(str(ticket["ticket_hash"]), "repriced")
@@ -1822,6 +1840,9 @@ def _repriced_open_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> dic
     )
     new_order_id = str(uuid5(NAMESPACE_URL, "kamandal-live-reprice:" + seed))
     new_ticket["order_id"] = new_order_id
+    new_ticket["client_order_id"] = new_order_id
+    new_ticket.pop("broker_order_id", None)
+    new_ticket.pop("replace_response", None)
     new_ticket["limit_price"] = new_limit
     new_ticket["parent_ticket_hash"] = ticket.get("ticket_hash")
     new_ticket["reprice_attempt"] = attempt
@@ -1849,6 +1870,9 @@ def _repriced_close_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> di
     )
     new_order_id = str(uuid5(NAMESPACE_URL, "kamandal-live-close-reprice:" + seed))
     new_ticket["order_id"] = new_order_id
+    new_ticket["client_order_id"] = new_order_id
+    new_ticket.pop("broker_order_id", None)
+    new_ticket.pop("replace_response", None)
     new_ticket["limit_price"] = new_limit
     new_ticket["parent_ticket_hash"] = ticket.get("ticket_hash")
     new_ticket["reprice_attempt"] = attempt

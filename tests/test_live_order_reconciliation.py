@@ -133,10 +133,14 @@ def test_order_reconciler_dry_run_reports_without_mutating(tmp_path: Path) -> No
 def test_order_reconciler_updates_terminal_broker_close_status(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     ticket = _close_ticket("ticket-close-submitted")
+    ticket["client_order_id"] = ticket["order_id"]
+    ticket["broker_order_id"] = "987654"
     store.save_live_order_intent(ticket, status="submitted")
+    observed = []
 
     class Broker:
-        def get_order(self, _order_id: str) -> dict[str, Any]:
+        def get_order(self, order_id: str) -> dict[str, Any]:
+            observed.append(order_id)
             return {"status": "REJECTED"}
 
     result = reconcile_live_orders(_config(), store=store, adapter=Broker())
@@ -144,6 +148,7 @@ def test_order_reconciler_updates_terminal_broker_close_status(tmp_path: Path) -
     assert result["results"][0]["broker_status"] == "REJECTED"
     assert result["results"][0]["reconciled_status"] == "rejected"
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "rejected"
+    assert observed == ["987654"]
 
 
 def test_order_reconciler_observes_staged_cancel_without_consuming_parent(tmp_path: Path) -> None:
@@ -178,6 +183,63 @@ def test_position_reconciliation_runs_order_reconciliation(tmp_path: Path, monke
 
     assert result["order_reconciliation"]["expired_stale_close_approvals"] == 1
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "expired_stale_close_approval"
+
+
+def test_position_reconciliation_isolates_same_occ_symbol_by_execution_venue(tmp_path: Path, monkeypatch: Any) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    leg = {
+        "role": "short_call",
+        "side": "sell",
+        "option_type": "call",
+        "strike": 465.0,
+        "expiration": "2026-10-16",
+        "quantity": 1,
+    }
+    for venue in ("public_primary", "tasty_primary"):
+        group_id = f"group-{venue}"
+        group = {
+            "group_id": group_id,
+            "underlying": "QQQ",
+            "execution_venue": venue,
+            "candidate": {
+                "underlying": "QQQ",
+                "execution_venue": venue,
+                "legs": [leg],
+            },
+        }
+        store.save_live_position_group(group_id, group)
+
+    occ = "QQQ261016C00465000"
+
+    class PublicBroker:
+        def broker_positions(self) -> list[dict[str, Any]]:
+            return [{
+                "asset_type": "option",
+                "occ_symbol": occ,
+                "underlying": "QQQ",
+                "quantity": -2,
+            }]
+
+    class TastyBroker:
+        def broker_positions(self) -> list[dict[str, Any]]:
+            return []
+
+    def adapter_for_venue(_config: dict[str, Any], *, execution_venue: str | None = None) -> Any:
+        return TastyBroker() if execution_venue == "tasty_primary" else PublicBroker()
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", adapter_for_venue)
+
+    config = _config()
+    config["live"]["reconciliation"]["auto_retire_ghost_after_confirmations"] = False
+    result = reconcile_live_positions(config, store=store, dry_run=True)
+
+    assert result["broker_venues_checked"] == ["public_primary", "tasty_primary"]
+    assert result["broker_venue_errors"] == {}
+    issue_types = {issue["issue_type"] for issue in result["issues"]}
+    assert issue_types == {"quantity_mismatch", "ghost_local_position"}
+    subjects = {issue["subject_id"] for issue in result["issues"]}
+    assert f"public_primary::{occ}" in subjects
+    assert "group-tasty_primary" in subjects
 
 
 def test_position_reconciliation_repairs_pre_fix_filled_canonical_close(tmp_path: Path, monkeypatch: Any) -> None:

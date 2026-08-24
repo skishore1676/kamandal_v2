@@ -38,7 +38,12 @@ one strategy lifecycle engine, and shadow/live execution adapters.
 
 - **Playbooks & Universe:** Strategy parameters, composition, and deployment stage are managed remotely in a Google Sheet (`universe`, `playbooks`, `daily_plan`). Kamandal owns the reusable capability; a playbook row owns whether it is baseline, shadow, pilot-live, or live. See [Strategy Promotion Loop](docs/STRATEGY_PROMOTION_LOOP.md).
 - **Runtime Rules:** Controlled locally via `config/control.yaml` and environment variables.
-  - The active broker is Public; Tastytrade supplies selected market metrics.
+  - The default and all current live strategy venues are Public. The shadow
+    short-strangle row is frozen to `tasty_primary` for future-entry testing;
+    changing that row does not reroute existing positions.
+  - Tastytrade also supplies selected market metrics. Its order/account path is
+    fail-closed until an explicit account is configured and the separate live
+    promotion gate is approved.
   - The checked-in posture is live and trading-enabled. Oldmac environment overrides remain part of runtime truth.
   - Configures BPR caps, concentration limits, automated live selection/submission, optional alternate approval modes, and retained shadow behavior.
 

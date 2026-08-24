@@ -12,7 +12,7 @@ from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
 from kamandal_v2.live.lineage import resolve_entry_lineage, source_ticket_hash
 from kamandal_v2.live.operator_review import OperatorReviewError, create_operator_review_request, expire_stale_operator_review_requests
 from kamandal_v2.live.order_reconciliation import reconcile_live_orders
-from kamandal_v2.market.broker import broker_adapter
+from kamandal_v2.market.broker import broker_adapter, default_execution_venue, ticket_execution_venue
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.ops.stage_receipt import StageReceipt
 from kamandal_v2.schemas import DAILY_PLAN_HEADER, LIVE_BOOK_HEADER
@@ -22,6 +22,42 @@ from kamandal_v2.strategy_engine.ownership import retire_orphaned_pending_live_l
 
 
 RECONCILIATION_ACTIONS = ["retire_local", "adopt_broker_position", "hold", "dismiss"]
+
+
+def _payload_execution_venue(config: dict[str, Any], payload: dict[str, Any]) -> str:
+    candidate = payload.get("candidate") or {}
+    entry_snapshot = payload.get("entry_snapshot") or {}
+    return str(
+        payload.get("execution_venue")
+        or candidate.get("execution_venue")
+        or entry_snapshot.get("execution_venue")
+        or "public_primary"
+    ).strip().lower()
+
+
+def _position_key(venue: str, occ: str) -> str:
+    return f"{str(venue or 'public_primary').strip().lower()}::{occ}"
+
+
+def _display_symbols(position_keys: set[str]) -> list[str]:
+    return sorted(key.split("::", 1)[-1] for key in position_keys)
+
+
+def _reconciliation_venues(
+    config: dict[str, Any],
+    store: LocalStore,
+    local_groups: list[dict[str, Any]],
+) -> set[str]:
+    venues = {_payload_execution_venue(config, group) for group in local_groups}
+    venues.add(default_execution_venue(config))
+    broker_statuses = {"submitted", "repriced", "partially_filled", "replace_cancel_pending"}
+    for ticket in store.live_order_intents_by_status(broker_statuses):
+        venues.add(ticket_execution_venue(config, ticket))
+    return {venue for venue in venues if venue}
+
+
+def _safe_broker_error(exc: Exception) -> str:
+    return str(exc).replace("\n", " ")[:500]
 
 
 def reconcile_live_positions(
@@ -36,41 +72,64 @@ def reconcile_live_positions(
     stage_receipt = StageReceipt.from_env()
     if not _reconciliation_enabled(config):
         return {"status": "disabled", "issues": [], "daily_plan_rows": []}
+    local_groups = store.open_live_position_groups()
+    venues = _reconciliation_venues(config, store, local_groups)
     stage_receipt.update("broker_positions", "running")
-    adapter = broker_adapter(config)
-    if not hasattr(adapter, "broker_positions"):
-        raise RuntimeError(f"configured broker adapter {type(adapter).__name__} does not expose broker_positions")
-    broker_positions = [position for position in adapter.broker_positions() if str(position.get("asset_type")) == "option"]
+    adapters: dict[str, Any] = {}
+    broker_positions: list[dict[str, Any]] = []
+    broker_venue_errors: dict[str, str] = {}
+    for venue in sorted(venues):
+        try:
+            try:
+                adapter = broker_adapter(config, execution_venue=venue)
+            except TypeError:
+                adapter = broker_adapter(config)
+            if not hasattr(adapter, "broker_positions"):
+                raise RuntimeError(f"configured broker adapter {type(adapter).__name__} does not expose broker_positions")
+            adapters[venue] = adapter
+            for position in adapter.broker_positions():
+                if str(position.get("asset_type")) != "option":
+                    continue
+                broker_positions.append({**position, "execution_venue": venue})
+        except Exception as exc:  # noqa: BLE001
+            broker_venue_errors[venue] = _safe_broker_error(exc)
     stage_receipt.update("broker_positions", "completed")
     stage_receipt.update("local_reconciliation", "running")
     broker_index = _broker_position_index(broker_positions)
-    pending_lifecycle_repairs = retire_orphaned_pending_live_lifecycles(
-        store,
-        dry_run=dry_run,
-        retire_unmatched=False,
-    )
-    canonical_lifecycle_repairs = _repair_filled_canonical_lifecycle_projections(
-        store,
-        broker_index,
-        dry_run=dry_run,
-    )
-    retired_projection_lifecycle_repairs = _repair_retired_projection_lifecycles(
-        store,
-        broker_index,
-        dry_run=dry_run,
-    )
-    projection_repairs = _repair_duplicate_entry_lineage_projections(
-        store,
-        broker_index,
-        dry_run=dry_run,
-    )
+    pending_lifecycle_repairs = []
+    canonical_lifecycle_repairs = []
+    retired_projection_lifecycle_repairs = []
+    projection_repairs = []
+    if not broker_venue_errors:
+        pending_lifecycle_repairs = retire_orphaned_pending_live_lifecycles(
+            store,
+            dry_run=dry_run,
+            retire_unmatched=False,
+        )
+        canonical_lifecycle_repairs = _repair_filled_canonical_lifecycle_projections(store, broker_index, dry_run=dry_run)
+        retired_projection_lifecycle_repairs = _repair_retired_projection_lifecycles(store, broker_index, dry_run=dry_run)
+        projection_repairs = _repair_duplicate_entry_lineage_projections(store, broker_index, dry_run=dry_run)
+    # Repairs can retire or replace projections; reconcile the post-repair book.
     local_groups = store.open_live_position_groups()
     local_index = _local_leg_index(local_groups)
     decision_context = _decision_context(store, local_groups, broker_index)
 
     issues = []
     observed_issue_ids: set[str] = set()
+    for venue, error in broker_venue_errors.items():
+        issue = _issue(
+            "broker_venue_unavailable",
+            subject_id=venue,
+            execution_venue=venue,
+            error=error,
+        )
+        stored = _record_issue(config, store, _with_decision(config, issue, decision_context), dry_run=dry_run)
+        if stored.get("issue_id"):
+            observed_issue_ids.add(str(stored["issue_id"]))
+        issues.append(stored)
     for group in local_groups:
+        if _payload_execution_venue(config, group) in broker_venue_errors:
+            continue
         issue = _local_group_issue(group, broker_index)
         if issue:
             stored = _record_issue(config, store, _with_decision(config, issue, decision_context), dry_run=dry_run)
@@ -86,7 +145,13 @@ def reconcile_live_positions(
     for position in broker_positions:
         symbol = str(position.get("occ_symbol") or "")
         if not symbol:
-            issue = _issue("unknown_broker_payload", subject_id=f"broker_{position.get('raw_index')}", broker_position=position)
+            venue = str(position.get("execution_venue") or "public_primary")
+            issue = _issue(
+                "unknown_broker_payload",
+                subject_id=f"{venue}::broker_{position.get('raw_index')}",
+                execution_venue=venue,
+                broker_position=position,
+            )
             stored = _record_issue(config, store, _with_decision(config, issue, decision_context), dry_run=dry_run)
             stored = _apply_reconciliation_decision(config, store, stored, dry_run=dry_run)
             if stored.get("issue_id"):
@@ -96,11 +161,13 @@ def reconcile_live_positions(
                 _request_review(config, store, stored, dry_run=dry_run)
     for position in broker_index.values():
         symbol = str(position.get("occ_symbol") or "")
-        if symbol not in local_index:
+        position_key = _position_key(str(position.get("execution_venue") or ""), symbol)
+        if position_key not in local_index:
             issue = _issue(
                 "orphan_broker_position",
-                subject_id=symbol,
+                subject_id=position_key,
                 underlying=str(position.get("underlying") or ""),
+                execution_venue=position.get("execution_venue"),
                 broker_position=position,
             )
             stored = _record_issue(config, store, _with_decision(config, issue, decision_context), dry_run=dry_run)
@@ -111,13 +178,13 @@ def reconcile_live_positions(
             if send_review:
                 _request_review(config, store, stored, dry_run=dry_run)
             continue
-        local_leg = local_index[symbol]
+        local_leg = local_index[position_key]
         broker_qty = float(position.get("quantity") or 0.0)
         local_qty = float(local_leg.get("quantity") or 0.0)
         if abs(broker_qty - local_qty) > 0.001:
             issue = _issue(
                 "quantity_mismatch",
-                subject_id=symbol,
+                subject_id=position_key,
                 group_id=str(local_leg.get("group_id") or ""),
                 underlying=str(position.get("underlying") or ""),
                 broker_position=position,
@@ -133,10 +200,12 @@ def reconcile_live_positions(
             if send_review and include_issue:
                 _request_review(config, store, stored, dry_run=dry_run)
 
-    _resolve_unobserved_issues(store, observed_issue_ids, dry_run=dry_run)
+    if not broker_venue_errors:
+        _resolve_unobserved_issues(store, observed_issue_ids, dry_run=dry_run)
     stage_receipt.update("local_reconciliation", "completed")
     stage_receipt.update("order_reconciliation", "running")
-    order_reconciliation = reconcile_live_orders(config, dry_run=dry_run, store=store, adapter=adapter)
+    injected_adapter = next(iter(adapters.values())) if len(adapters) == 1 else None
+    order_reconciliation = reconcile_live_orders(config, dry_run=dry_run, store=store, adapter=injected_adapter)
     stage_receipt.update("order_reconciliation", "completed")
     rows = [_daily_plan_row(index, issue) for index, issue in enumerate(issues, start=1)]
     live_book_rows_written = 0
@@ -153,6 +222,8 @@ def reconcile_live_positions(
     return {
         "status": "ok",
         "broker_option_positions": len(broker_positions),
+        "broker_venues_checked": sorted(venues),
+        "broker_venue_errors": broker_venue_errors,
         "local_open_groups": len(local_groups),
         "issues": issues,
         "pending_lifecycle_repairs": pending_lifecycle_repairs,
@@ -210,7 +281,7 @@ def _repair_filled_canonical_lifecycle_projections(
             ),
         )
         group_legs = _group_leg_symbols(group)
-        affected_symbols = {str(leg.get("occ_symbol") or "") for leg in group_legs}
+        affected_symbols = {str(leg.get("position_key") or "") for leg in group_legs}
         affected_symbols.discard("")
         if not affected_symbols or not _aggregate_matches_after_removing_group(
             affected_symbols,
@@ -238,7 +309,7 @@ def _repair_filled_canonical_lifecycle_projections(
             "position_projection_id": projection_id,
             "ticket_hash": ticket.get("ticket_hash"),
             "order_id": order_id,
-            "affected_symbols": sorted(affected_symbols),
+            "affected_symbols": _display_symbols(affected_symbols),
         }
         if not dry_run:
             result = _adopt_csa_live_fill(
@@ -285,7 +356,7 @@ def _repair_retired_projection_lifecycles(
         if not projection_id or group is None:
             continue
         group_legs = _group_leg_symbols(group)
-        affected_symbols = {str(leg.get("occ_symbol") or "") for leg in group_legs}
+        affected_symbols = {str(leg.get("position_key") or "") for leg in group_legs}
         affected_symbols.discard("")
         if not affected_symbols:
             continue
@@ -304,7 +375,7 @@ def _repair_retired_projection_lifecycles(
             "lifecycle_id": lifecycle.lifecycle_id,
             "position_projection_id": projection_id,
             "projection_status": str(group.get("_status") or ""),
-            "affected_symbols": sorted(affected_symbols),
+            "affected_symbols": _display_symbols(affected_symbols),
         }
         if not dry_run:
             terminalized_at = _now()
@@ -431,6 +502,15 @@ def _with_decision(config: dict[str, Any], issue: dict[str, Any], context: dict[
 
 def _reconciliation_decision(config: dict[str, Any], issue: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     issue_type = str(issue.get("issue_type") or "")
+    if issue_type == "broker_venue_unavailable":
+        return _decision(
+            "human_review",
+            "hold",
+            "high",
+            False,
+            "broker_venue_inventory_unavailable",
+            evidence={"execution_venue": issue.get("execution_venue")},
+        )
     if issue_type == "quantity_mismatch":
         repair = _filled_close_repair_candidate(issue, context)
         if repair:
@@ -499,10 +579,10 @@ def _filled_close_repair_candidate(issue: dict[str, Any], context: dict[str, Any
         group_legs = context["legs_by_group"].get(group_id) or []
         if not group_legs:
             continue
-        affected_symbols = {str(leg.get("occ_symbol") or "") for leg in group_legs}
+        affected_symbols = {str(leg.get("position_key") or "") for leg in group_legs}
         affected_symbols = {symbol for symbol in affected_symbols if symbol}
         if _aggregate_matches_after_removing_group(affected_symbols, group_legs, context):
-            candidates.append({"group_id": group_id, "close_ticket": close_ticket, "affected_symbols": sorted(affected_symbols)})
+            candidates.append({"group_id": group_id, "close_ticket": close_ticket, "affected_symbols": _display_symbols(affected_symbols)})
     if len(candidates) != 1:
         return None
     candidate = candidates[0]
@@ -590,7 +670,7 @@ def _aggregate_matches_after_removing_group(affected_symbols: set[str], group_le
     for symbol in affected_symbols:
         broker_qty = float((context["broker_index"].get(symbol) or {}).get("quantity") or 0.0)
         local_qty = float((context["local_index"].get(symbol) or {}).get("quantity") or 0.0)
-        group_qty = sum(float(leg.get("quantity") or 0.0) for leg in group_legs if str(leg.get("occ_symbol") or "") == symbol)
+        group_qty = sum(float(leg.get("quantity") or 0.0) for leg in group_legs if str(leg.get("position_key") or "") == symbol)
         if abs(broker_qty - (local_qty - group_qty)) > 0.001:
             return False
     return True
@@ -645,7 +725,7 @@ def _repair_duplicate_entry_lineage_projections(
         duplicate_groups = [
             group for group in lineage_groups if str(group.get("group_id") or "") != canonical_group_id
         ]
-        affected_symbols = {str(leg.get("occ_symbol") or "") for group in lineage_groups for leg in _group_leg_symbols(group)}
+        affected_symbols = {str(leg.get("position_key") or "") for group in lineage_groups for leg in _group_leg_symbols(group)}
         affected_symbols.discard("")
         if not _aggregate_matches_after_replacing_groups(
             affected_symbols,
@@ -664,7 +744,7 @@ def _repair_duplicate_entry_lineage_projections(
             "canonical_ticket_hash": canonical_ticket_hash,
             "broker_order_id": resolution.canonical_ticket.get("order_id"),
             "retired_group_ids": sorted(str(group.get("group_id") or "") for group in duplicate_groups),
-            "affected_symbols": sorted(affected_symbols),
+            "affected_symbols": _display_symbols(affected_symbols),
         }
         repairs.append(repair)
         if dry_run:
@@ -720,9 +800,9 @@ def _repair_duplicate_entry_lineage_projections(
 def _group_leg_signature(group: dict[str, Any]) -> tuple[tuple[str, float], ...]:
     return tuple(
         sorted(
-            (str(leg.get("occ_symbol") or ""), round(float(leg.get("quantity") or 0.0), 8))
+            (str(leg.get("position_key") or ""), round(float(leg.get("quantity") or 0.0), 8))
             for leg in _group_leg_symbols(group)
-            if str(leg.get("occ_symbol") or "")
+            if str(leg.get("position_key") or "")
         ),
     )
 
@@ -737,11 +817,11 @@ def _aggregate_matches_after_replacing_groups(
     lineage_by_symbol: dict[str, float] = {}
     for group in lineage_groups:
         for leg in _group_leg_symbols(group):
-            symbol = str(leg.get("occ_symbol") or "")
+            symbol = str(leg.get("position_key") or "")
             lineage_by_symbol[symbol] = lineage_by_symbol.get(symbol, 0.0) + float(leg.get("quantity") or 0.0)
     canonical_by_symbol: dict[str, float] = {}
     for leg in _group_leg_symbols(canonical_source):
-        symbol = str(leg.get("occ_symbol") or "")
+        symbol = str(leg.get("position_key") or "")
         if symbol:
             canonical_by_symbol[symbol] = canonical_by_symbol.get(symbol, 0.0) + float(leg.get("quantity") or 0.0)
     for symbol in affected_symbols:
@@ -872,7 +952,7 @@ def _local_group_issue(group: dict[str, Any], broker_index: dict[str, dict[str, 
             underlying=str(group.get("underlying") or (group.get("candidate") or {}).get("underlying") or ""),
             local_group=group,
         )
-    missing = [leg for leg in local_legs if leg["occ_symbol"] not in broker_index]
+    missing = [leg for leg in local_legs if leg["position_key"] not in broker_index]
     if len(missing) == len(local_legs):
         return _issue(
             "ghost_local_position",
@@ -898,7 +978,7 @@ def _local_leg_index(groups: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     index: dict[str, dict[str, Any]] = {}
     for group in groups:
         for leg in _group_leg_symbols(group):
-            symbol = str(leg["occ_symbol"])
+            symbol = str(leg["position_key"])
             current = index.setdefault(
                 symbol,
                 {
@@ -919,6 +999,7 @@ def _local_leg_index(groups: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 def _group_leg_symbols(group: dict[str, Any]) -> list[dict[str, Any]]:
     candidate = group.get("candidate") or {}
     underlying = str(group.get("underlying") or candidate.get("underlying") or "")
+    venue = _payload_execution_venue({}, group)
     result = []
     for leg in candidate.get("legs") or []:
         try:
@@ -927,7 +1008,15 @@ def _group_leg_symbols(group: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         sign = 1 if str(leg.get("side") or "").lower() == "buy" else -1
         quantity = sign * abs(float(leg.get("quantity") or 1.0))
-        result.append({**leg, "quantity": quantity, "group_id": group.get("group_id"), "underlying": underlying, "occ_symbol": symbol})
+        result.append({
+            **leg,
+            "quantity": quantity,
+            "group_id": group.get("group_id"),
+            "underlying": underlying,
+            "occ_symbol": symbol,
+            "execution_venue": venue,
+            "position_key": _position_key(venue, symbol),
+        })
     return result
 
 
@@ -937,7 +1026,8 @@ def _broker_position_index(positions: list[dict[str, Any]]) -> dict[str, dict[st
         symbol = str(position.get("occ_symbol") or "")
         if not symbol:
             continue
-        current = index.setdefault(symbol, {**position, "quantity": 0.0, "raw_positions": []})
+        key = _position_key(str(position.get("execution_venue") or ""), symbol)
+        current = index.setdefault(key, {**position, "position_key": key, "quantity": 0.0, "raw_positions": []})
         current["quantity"] = float(current.get("quantity") or 0.0) + float(position.get("quantity") or 0.0)
         current["raw_positions"].append(position)
     return index
@@ -1047,7 +1137,8 @@ def _daily_plan_row(index: int, issue: dict[str, Any]) -> list[Any]:
 
 
 def _adopt_broker_position(store: LocalStore, issue: dict[str, Any], position: dict[str, Any], audit: dict[str, Any]) -> str:
-    group_id = "adopted_" + _hash_key(str(position.get("occ_symbol") or position.get("symbol") or issue.get("issue_id")))
+    venue = str(position.get("execution_venue") or issue.get("execution_venue") or "public_primary")
+    group_id = "adopted_" + _hash_key(_position_key(venue, str(position.get("occ_symbol") or position.get("symbol") or issue.get("issue_id"))))
     leg = {
         "role": "adopted",
         "side": "buy" if float(position.get("quantity") or 0) > 0 else "sell",
@@ -1071,11 +1162,13 @@ def _adopt_broker_position(store: LocalStore, issue: dict[str, Any], position: d
         "candidate_id": group_id,
         "idea_id": "",
         "underlying": position.get("underlying"),
+        "execution_venue": venue,
         "playbook_id": "adopted_broker_position",
         "structure": "adopted_option",
         "candidate": {
             "candidate_id": group_id,
             "underlying": position.get("underlying"),
+            "execution_venue": venue,
             "playbook_id": "adopted_broker_position",
             "structure": "adopted_option",
             "net_credit": 0.0,

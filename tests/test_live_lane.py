@@ -1042,7 +1042,7 @@ def test_live_submit_stages_next_basket_ticket_after_prior_fill(tmp_path, monkey
             return PreflightResult(ok=True, bpr=400.0, message="ok")
 
         def place_order_ticket(self, ticket):
-            return {"orderId": ticket["order_id"]}
+            return {"orderId": "987654"}
 
     live_control = _live_control()
     live_control["runtime"]["mode"] = "live"
@@ -1057,6 +1057,12 @@ def test_live_submit_stages_next_basket_ticket_after_prior_fill(tmp_path, monkey
     assert executed["processed"] == 1
     assert executed["results"][0]["ticket_hash"] == tickets[1]["ticket_hash"]
     assert executed["results"][0]["status"] == "submitted"
+    assert executed["results"][0]["client_order_id"] == tickets[1]["order_id"]
+    assert executed["results"][0]["broker_order_id"] == "987654"
+    stored = store.live_order_intent(tickets[1]["ticket_hash"])
+    assert stored["order_id"] == tickets[1]["order_id"]
+    assert stored["client_order_id"] == tickets[1]["order_id"]
+    assert stored["broker_order_id"] == "987654"
 
 
 def test_live_submit_can_submit_multiple_pending_basket_tickets_when_configured(tmp_path, monkeypatch) -> None:
@@ -2770,6 +2776,10 @@ def test_sync_live_orders_stages_signed_multileg_cancel_then_uses_portfolio_and_
     child = store.live_order_child_intents(ticket["ticket_hash"])[0]
     assert child["_ledger_status"] == "replace_waiting_cancel"
     assert not any(call[0] in {"portfolio", "preflight", "place"} for call in calls)
+
+    waiting = sync_live_orders(config, store=store)
+    assert waiting["orders"][0]["reprice_status"] == "waiting_cancel"
+    assert not any(call[0] in {"preflight", "place"} for call in calls)
 
     # Simulate the legacy race where reconciliation consumed the staged parent.
     store.update_live_order_intent_status(ticket["ticket_hash"], "cancelled")

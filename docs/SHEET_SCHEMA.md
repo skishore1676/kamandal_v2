@@ -164,7 +164,9 @@ Notes:
 - `execution_venue`: immutable route for newly created trades. Supported values
   are `public_primary` and `tasty_primary`. A later Sheet flip affects only new
   candidates; an open lifecycle and every adjustment/close retain the venue
-  frozen at entry.
+  frozen at entry. All ordinary strategy rows remain `public_primary`; only the
+  short-strangle row is routed to `tasty_primary`, and that row remains
+  `shadow`. Changing a row never migrates an existing position.
 - `target_dte`: preferred expiration inside the inclusive `dte_min/max` window.
   The short-strangle row uses 45 inside 35-50; the builder chooses the nearest
   available expiration without weakening the hard window.
