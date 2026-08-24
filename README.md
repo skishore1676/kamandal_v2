@@ -54,6 +54,8 @@ short-strangle playbook only when that playbook's Sheet-owned expansion switch,
 underlying-price bounds, and IV-rank bounds allow it. Existing explicit permissions
 remain valid outside that overlay. The repository supplies no fallback policy values. See
 [docs/STRANGLE_BPR_AND_ELIGIBILITY.md](docs/STRANGLE_BPR_AND_ELIGIBILITY.md).
+For secure Tastytrade credential placement and the broker-validation ladder, see
+[docs/TASTYTRADE_LIVE_HANDOFF.md](docs/TASTYTRADE_LIVE_HANDOFF.md).
 
 ## Local Data Architecture
 

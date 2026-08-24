@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,9 @@ from kamandal_v2.paths import resolve_path
 from kamandal_v2.volatility.scale import normalize_iv_abs, normalize_iv_percentile, normalize_iv_rank
 
 
-DEFAULT_API_BASE_URL = "https://api.tastytrade.com"
+DEFAULT_API_BASE_URL = "https://api.tastyworks.com"
+DOCUMENTED_PRODUCTION_API_BASE_URL = "https://api.tastyworks.com"
+DOCUMENTED_SANDBOX_API_BASE_URL = "https://api.cert.tastyworks.com"
 DEFAULT_ORDERS_API_VERSION = "20260427"
 USER_AGENT = "kamandal-v2/0.1"
 
@@ -64,7 +68,7 @@ class TastytradeAdapter:
         self._market_metric_cache: dict[str, dict[str, Any]] = {}
 
     def available(self) -> bool:
-        return bool(self.client_secret and self.refresh_token)
+        return bool(self.client_id and self.client_secret and self.refresh_token)
 
     def live_readiness(self) -> dict[str, Any]:
         reasons = []
@@ -79,6 +83,93 @@ class TastytradeAdapter:
             "reasons": reasons,
             "account_configured": self._account_number_explicit,
             "orders_api_version_configured": self._orders_api_version_explicit,
+        }
+
+    def configuration_report(self) -> dict[str, Any]:
+        documented_hosts = {
+            DOCUMENTED_PRODUCTION_API_BASE_URL,
+            DOCUMENTED_SANDBOX_API_BASE_URL,
+        }
+        host_documented = self.api_base_url in documented_hosts
+        return {
+            **self.live_readiness(),
+            "network_used": False,
+            "api_base_url": self.api_base_url,
+            "api_base_url_documented": host_documented,
+            "api_base_url_warning": "" if host_documented else "api_base_url_not_currently_documented_by_tastytrade",
+            "environment": "sandbox" if self.api_base_url == DOCUMENTED_SANDBOX_API_BASE_URL else "production_or_custom",
+            "oauth_scopes": list(self.oauth_scopes),
+            "capabilities": {
+                "two_leg_open": True,
+                "two_leg_close": True,
+                "mixed_adjustment": True,
+                "atomic_replace": True,
+                "partial_fill_normalization": True,
+                "dxlink_quotes": False,
+            },
+        }
+
+    def order_contract_matrix(self) -> dict[str, Any]:
+        """Build representative multileg payloads without auth or network use."""
+
+        short_put = {
+            "role": "short_put",
+            "side": "sell",
+            "effect": "open",
+            "option_type": "put",
+            "strike": 430.0,
+            "expiration": "2027-01-15",
+            "quantity": 1,
+        }
+        short_call = {
+            "role": "short_call",
+            "side": "sell",
+            "effect": "open",
+            "option_type": "call",
+            "strike": 465.0,
+            "expiration": "2027-01-15",
+            "quantity": 1,
+        }
+        tickets = {
+            "open": {
+                "order_id": "contract-open",
+                "underlying": "QQQ",
+                "intent_type": "open",
+                "limit_price": "-2.50",
+                "legs": [short_put, short_call],
+            },
+            "close": {
+                "order_id": "contract-close",
+                "underlying": "QQQ",
+                "intent_type": "close",
+                "limit_price": "1.25",
+                "legs": [
+                    {**short_put, "side": "buy", "effect": "close"},
+                    {**short_call, "side": "buy", "effect": "close"},
+                ],
+            },
+            "adjust": {
+                "order_id": "contract-adjust",
+                "underlying": "QQQ",
+                "intent_type": "adjust",
+                "limit_price": "-0.20",
+                "legs": [
+                    {**short_call, "side": "buy", "effect": "close"},
+                    {**short_call, "strike": 475.0, "side": "sell", "effect": "open"},
+                ],
+            },
+            "replace": {
+                "order_id": "contract-replace",
+                "underlying": "QQQ",
+                "intent_type": "open",
+                "limit_price": "-2.60",
+                "legs": [short_put, short_call],
+            },
+        }
+        return {
+            "network_used": False,
+            "synthetic_contracts_only": True,
+            "payloads": {name: self._order_payload_from_ticket(ticket) for name, ticket in tickets.items()},
         }
 
     def require_live_ready(self) -> None:
@@ -514,7 +605,19 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        path.chmod(0o600)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _error_body(response: requests.Response) -> str:

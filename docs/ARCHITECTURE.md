@@ -1,7 +1,7 @@
 # Kamandal V2 Architecture
 
-Date: 2026-08-23
-Status: Corrective architecture deployed on oldmac at `5962f85`; natural-session proof pending
+Date: 2026-08-24
+Status: Multi-broker architecture deployed on Old Mac; Tastytrade authentication and broker-effect proof pending
 
 ## Purpose
 
@@ -550,6 +550,24 @@ receipts, but Kamandal does not yet consume DXLink quotes. That is an explicit
 live-pilot gate: sandbox multileg contract proof first, then a separately
 approved one-contract canary using current live quote evidence. A green sandbox
 order proves syntax and lifecycle plumbing, not execution quality or alpha.
+
+#### Tastytrade readiness is an explicit ladder
+
+The checked-in Tastytrade default follows the documented production host,
+`https://api.tastyworks.com`; sandbox uses
+`https://api.cert.tastyworks.com`. The Orders API version is independently
+pinned to `20260427`. Runtime environment overrides are reported rather than
+silently rewritten, because changing a credential-bearing runtime file is an
+operator action.
+
+`kamandal tastytrade-readiness` is broker-inert: it reports configuration
+gaps and builds representative two-leg open, two-leg close, mixed adjustment,
+and replacement payloads without authentication or network use. The secure runtime
+configuration helper accepts credentials through hidden prompts, atomically
+writes a `0600` environment file, and never prints values. Authenticated account
+reads, broker dry-runs, sandbox submissions, the bounded production canary, and
+the Sheet promotion are successive and separately authorized gates. See
+[TASTYTRADE_LIVE_HANDOFF.md](TASTYTRADE_LIVE_HANDOFF.md).
 
 ### Autonomous short-strangle admission
 

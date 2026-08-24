@@ -332,6 +332,10 @@ def main() -> None:
     tasty_smoke_parser = subparsers.add_parser("tastytrade-smoke", help="Fetch tastytrade OAuth/account state without submitting orders")
     tasty_smoke_parser.add_argument("--include-market-metrics", action="store_true", help="Also fetch IV metrics for the symbol")
     tasty_smoke_parser.add_argument("--symbol", default="TSLA")
+    subparsers.add_parser(
+        "tastytrade-readiness",
+        help="Inspect redacted Tastytrade configuration and synthetic multileg payloads without auth or network use",
+    )
 
     iv_parser = subparsers.add_parser("capture-iv", help="Capture current option-chain IV snapshots for universe symbols")
     iv_parser.add_argument("--symbols", nargs="*", help="Optional symbols; defaults to enabled sheet/seed universe")
@@ -959,6 +963,9 @@ def main() -> None:
     if args.command == "tastytrade-smoke":
         print(json.dumps(_tastytrade_smoke(config, args.symbol, include_market_metrics=args.include_market_metrics), indent=2))
         return
+    if args.command == "tastytrade-readiness":
+        print(json.dumps(_tastytrade_readiness(config), indent=2))
+        return
     if args.command == "capture-iv":
         result = capture_iv_snapshots(
             config,
@@ -1245,6 +1252,17 @@ def _tastytrade_smoke(config: dict, symbol: str, *, include_market_metrics: bool
             "iv_abs": adapter.iv_abs(symbol),
         }
     return result
+
+
+def _tastytrade_readiness(config: dict) -> dict[str, Any]:
+    adapter = TastytradeAdapter(config)
+    return {
+        "broker": "tastytrade",
+        "configuration": adapter.configuration_report(),
+        "order_contract_matrix": adapter.order_contract_matrix(),
+        "live_order_submitted": False,
+        "authenticated": False,
+    }
 
 
 def _compare_market_data(config: dict, symbols: list[str], provider_a: str, provider_b: str) -> dict:

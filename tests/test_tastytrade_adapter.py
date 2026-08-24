@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import stat
 
 import pytest
 
@@ -123,11 +124,12 @@ def test_tastytrade_account_state_fetches_oauth_and_account(tmp_path) -> None:
     assert account.bpr_used == 7000.0
     assert account.positions_count == 1
     token_request = adapter._session.requests[0]
-    assert token_request["url"] == "https://api.tastytrade.com/oauth/token"
+    assert token_request["url"] == "https://api.tastyworks.com/oauth/token"
     assert token_request["json"]["client_id"] == "client-id"
     assert token_request["json"]["scope"] == "read trade"
     assert token_request["headers"]["User-Agent"] == "kamandal-v2/0.1"
     assert "Accept-Version" not in token_request["headers"]
+    assert stat.S_IMODE((tmp_path / "session.json").stat().st_mode) == 0o600
 
 
 def test_tastytrade_preflight_builds_open_option_order(tmp_path) -> None:
@@ -373,3 +375,45 @@ def test_tastytrade_live_order_fails_closed_without_explicit_orders_version(tmp_
 
     with pytest.raises(RuntimeError, match="orders_api_version_missing"):
         adapter.get_order("123")
+
+
+def test_tastytrade_readiness_and_contract_matrix_are_broker_inert(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+
+    report = adapter.configuration_report()
+    matrix = adapter.order_contract_matrix()
+
+    assert report["ready"] is True
+    assert report["network_used"] is False
+    assert report["api_base_url"] == "https://api.tastyworks.com"
+    assert report["api_base_url_documented"] is True
+    assert report["capabilities"]["dxlink_quotes"] is False
+    assert matrix["network_used"] is False
+    assert matrix["synthetic_contracts_only"] is True
+    assert [leg["action"] for leg in matrix["payloads"]["open"]["legs"]] == ["Sell to Open", "Sell to Open"]
+    assert [leg["action"] for leg in matrix["payloads"]["close"]["legs"]] == ["Buy to Close", "Buy to Close"]
+    assert [leg["action"] for leg in matrix["payloads"]["adjust"]["legs"]] == ["Buy to Close", "Sell to Open"]
+    assert matrix["payloads"]["replace"]["price"] == "2.60"
+    assert matrix["payloads"]["replace"]["price-effect"] == "Credit"
+    assert adapter._session.requests == []
+
+
+def test_tastytrade_readiness_warns_on_legacy_api_host_without_blocking(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+    adapter.api_base_url = "https://api.tastytrade.com"
+
+    report = adapter.configuration_report()
+
+    assert report["ready"] is True
+    assert report["api_base_url_documented"] is False
+    assert report["api_base_url_warning"] == "api_base_url_not_currently_documented_by_tastytrade"
+
+
+def test_tastytrade_readiness_requires_complete_oauth_triplet(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+    adapter.client_id = ""
+
+    report = adapter.configuration_report()
+
+    assert report["ready"] is False
+    assert "oauth_credentials_missing" in report["reasons"]

@@ -55,3 +55,6 @@ two-leg close, mixed adjustment, partial-fill, and cancel-replace contract
 against a Tastytrade sandbox account, then perform a separately approved bounded
 one-contract canary with live quotes. The sandbox is evidence for broker
 plumbing, not evidence of fill quality or strategy economics.
+
+See [TASTYTRADE_LIVE_HANDOFF.md](TASTYTRADE_LIVE_HANDOFF.md) for the secure
+credential placement and staged broker-validation procedure.

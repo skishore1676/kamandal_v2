@@ -306,7 +306,7 @@ broker:
     option_chain_end_dte: 140
     option_chain_max_expirations: 12
   tastytrade:
-    api_base_url: https://api.tastytrade.com
+    api_base_url: https://api.tastyworks.com
     client_id: ""
     api_version: ""
     orders_api_version: "20260427"
