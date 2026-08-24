@@ -2,9 +2,9 @@
 title: An order ticket version is not a position identity
 type: decision
 area: live execution and reconciliation
-date: 2026-08-01
-tags: [broker, fills, lineage, reconciliation, replacements]
-refs: [src/kamandal_v2/live/lineage.py, src/kamandal_v2/live/execution.py, src/kamandal_v2/live/reconciliation.py, docs/LIVE_RECONCILIATION.md]
+date: 2026-08-23
+tags: [broker, fills, lineage, reconciliation, replacements, multi-broker]
+refs: [src/kamandal_v2/live/order_identity.py, src/kamandal_v2/live/lineage.py, src/kamandal_v2/live/execution.py, src/kamandal_v2/live/reconciliation.py, aa54c6a]
 ---
 
 # An Order Ticket Version Is Not a Position Identity
@@ -13,6 +13,9 @@ refs: [src/kamandal_v2/live/lineage.py, src/kamandal_v2/live/execution.py, src/k
 
 Use the root entry lineage as the stable local position identity. Count a fill
 once per broker order ID, using its maximum cumulative `filledQuantity`.
+Keep the deterministic client order ID and broker-assigned order ID as separate
+persisted fields; never rewrite ticket identity merely because a broker returns
+its own numeric ID.
 
 ## Context and Evidence
 
@@ -26,6 +29,12 @@ The regression matrix covers atomic reprices, staged replacements, cumulative
 polls, terminal partial fills, ambiguous siblings, missing/cyclic parents,
 historical duplicate repair, and post-fill position-endpoint lag.
 
+The multi-broker route added a second collision domain. Public can echo a
+client UUID while Tastytrade assigns a numeric order ID, and the same OCC
+contract can exist in both accounts. The safe keys are therefore distinct:
+client order ID for idempotency and lineage, broker order ID for GET/cancel/
+replace, and `(execution_venue, OCC symbol)` for position reconciliation.
+
 ## When It Applies
 
 Apply this to entry submission, repricing, fill projection, reconciliation,
@@ -38,4 +47,5 @@ When adding an order lifecycle feature, ask three separate questions: which
 ticket version describes the intent, which broker order IDs actually executed,
 and which root lineage owns the position. If those collapse to one identifier,
 the design will either double count an atomic replacement or lose a staged
-partial fill.
+partial fill. Also ask which venue owns each broker ID and position; never let
+the same OCC symbol at two brokers aggregate before reconciliation.
