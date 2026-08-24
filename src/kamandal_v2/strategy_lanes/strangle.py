@@ -40,10 +40,13 @@ def propose_strangle_actions(
     elif bool(context.get("half_time_exit_due")):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "half_time_exit", arbiter_class="time_decision", proposed_at=proposed_at))
 
-    loss_stages = lifecycle_value(policy, "loss_stages")
-    if isinstance(loss_stages, dict) and loss_stages.get("close_multiple") not in (None, ""):
-        if _context_number(context, "loss_multiple") >= nested_number(loss_stages, "close_multiple", prefix="lifecycle.loss_stages"):
-            actions.append(propose_action(lifecycle, ActionType.CLOSE, "loss_stage_close", arbiter_class="adverse_price_loss", proposed_at=proposed_at))
+    if policy.resolved_fields.get("loss_close_multiple") not in (None, ""):
+        close_multiple = sheet_number(policy, "loss_close_multiple")
+    else:
+        loss_stages = lifecycle_value(policy, "loss_stages")
+        close_multiple = nested_number(loss_stages, "close_multiple", prefix="lifecycle.loss_stages")
+    if _context_number(context, "loss_multiple") >= close_multiple:
+        actions.append(propose_action(lifecycle, ActionType.CLOSE, "loss_stage_close", arbiter_class="adverse_price_loss", proposed_at=proposed_at))
 
     if _tested_side_confirmed(policy, context) and _adjustment_available(policy, context):
         roll = lifecycle_value(policy, "roll")
@@ -107,12 +110,26 @@ def _tested_side_confirmed(policy: CsaPolicy, context: Mapping[str, Any]) -> boo
     return (
         bool(context.get("tested_side"))
         and bool(context.get("cooldown_elapsed"))
-        and _context_number(context, "tested_side_confirmations") >= lifecycle_number(policy, "tested_side_confirmation")
+        and _context_number(context, "tested_side_confirmations") >= _policy_number(
+            policy,
+            "tested_side_confirmations",
+            lifecycle_fallback="tested_side_confirmation",
+        )
     )
 
 
 def _adjustment_available(policy: CsaPolicy, context: Mapping[str, Any]) -> bool:
-    return _context_number(context, "adjustment_count") < lifecycle_number(policy, "adjustment_limit")
+    return _context_number(context, "adjustment_count") < _policy_number(
+        policy,
+        "filled_side_adjustment_limit",
+        lifecycle_fallback="adjustment_limit",
+    )
+
+
+def _policy_number(policy: CsaPolicy, field: str, *, lifecycle_fallback: str) -> float:
+    if policy.resolved_fields.get(field) not in (None, ""):
+        return sheet_number(policy, field)
+    return lifecycle_number(policy, lifecycle_fallback)
 
 
 def _context_number(context: Mapping[str, Any], key: str) -> float:

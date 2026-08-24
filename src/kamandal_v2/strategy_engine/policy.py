@@ -41,6 +41,7 @@ class StrangleManagementPolicy:
     duration_roll_limit: int
     inversion_enabled: bool
     inversion_max_width: float | None
+    loss_close_multiple: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,13 +116,18 @@ def compile_playbook_policy(
     source_mode = str(row.get("source_mode") or "idea").strip().lower() or "idea"
     if source_mode not in {"idea", "market_scan", "portfolio_hedge"}:
         raise PolicyError(f"{playbook_id}: invalid source_mode={source_mode!r}")
+    execution_venue = str(row.get("execution_venue") or "public_primary").strip().lower()
+    if execution_venue not in {"public_primary", "tasty_primary"}:
+        raise PolicyError(f"{playbook_id}: unsupported execution_venue={execution_venue!r}")
     fields = {str(key): value for key, value in sorted(row.items()) if value not in (None, "")}
+    fields.setdefault("execution_venue", execution_venue)
     management = _management(row, playbook_id)
     management = _normalize_legacy_management(capability, management, compatibility)
     _reject_live_approval_branch(mode, management, playbook_id)
     _validate_directional_diagonal(capability, management, playbook_id)
     _validate_earnings_calendar(capability, row, source_mode, playbook_id)
     strangle_management = _compile_strangle_management(row, management, compatibility, capability, playbook_id)
+    _validate_entry_targets(row, capability=capability, playbook_id=playbook_id)
     canonical = {
         "playbook_id": playbook_id,
         "capability": capability.key,
@@ -212,6 +218,18 @@ def _compile_strangle_management(
         for field in ("inversion_max_width", "inversion_min_credit", "inversion_remaining_profit", "inversion_adjusted_profit_target"):
             if _optional_number(row.get(field)) is None:
                 raise PolicyError(f"{playbook_id}: {field} is required when inversion is enabled")
+    loss_close_multiple = _optional_number(row.get("loss_close_multiple"))
+    if loss_close_multiple is None:
+        loss_stages = lifecycle.get("loss_stages") or {}
+        loss_close_multiple = _optional_number(loss_stages.get("close_multiple"))
+        compatibility["legacy_loss_close_multiple"] = True
+    if loss_close_multiple is None:
+        # Historical rows predate the dedicated Sheet column. Preserve their
+        # ability to compile while converging the one canonical close at 3x.
+        loss_close_multiple = 3.0
+        compatibility["legacy_loss_close_default_3x"] = True
+    if loss_close_multiple is None or loss_close_multiple <= 0:
+        raise PolicyError(f"{playbook_id}: loss_close_multiple must be positive")
     return StrangleManagementPolicy(
         entry_delta_range=(entry_min, entry_max),
         target_delta=target,
@@ -226,7 +244,28 @@ def _compile_strangle_management(
         duration_roll_limit=duration_roll_limit,
         inversion_enabled=inversion_enabled,
         inversion_max_width=_optional_number(row.get("inversion_max_width")) if inversion_enabled else None,
+        loss_close_multiple=loss_close_multiple,
     )
+
+
+def _validate_entry_targets(
+    row: dict[str, Any],
+    *,
+    capability: Capability,
+    playbook_id: str,
+) -> None:
+    target = _optional_number(row.get("target_dte"))
+    if target is not None:
+        minimum = _number(row, "dte_min", playbook_id)
+        maximum = _number(row, "dte_max", playbook_id)
+        if not minimum <= target <= maximum:
+            raise PolicyError(f"{playbook_id}: target_dte must fall inside dte_min/dte_max")
+    if capability.key == "short_strangle" and _as_bool(row.get("range_gate_required")):
+        maximum_age = _optional_number(row.get("range_gate_max_age_days"))
+        if maximum_age is None or maximum_age < 0 or not maximum_age.is_integer():
+            raise PolicyError(
+                f"{playbook_id}: range_gate_max_age_days must be a nonnegative integer"
+            )
 
 
 def _normalize_legacy_management(

@@ -858,7 +858,7 @@ def _short_strangle_candidates(idea: Idea, playbook: Playbook, quotes: list[Opti
     short_puts = _near_delta(quotes, "put", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
     short_calls = _near_delta(quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max)
     target_delta = ((playbook.short_delta_min or 0.10) + (playbook.short_delta_max or 0.60)) / 2.0
-    target_dte = (playbook.dte_min + playbook.dte_max) / 2.0
+    target_dte = float(playbook.target_dte or ((playbook.dte_min + playbook.dte_max) / 2.0))
     pairs = [
         (short_put, short_call)
         for short_put, short_call in product(short_puts[:4], short_calls[:4])
@@ -1353,6 +1353,7 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
             greeks=greeks,
             liquidity_score=liquidity_score,
             score=0.0,
+            execution_venue=playbook.execution_venue,
         )
     )
     credit_floor, debit_ceiling, bound_source = _entry_economic_bounds(
@@ -1373,12 +1374,14 @@ def _candidate(idea: Idea, playbook: Playbook, legs: list[OptionLeg]) -> Candida
         greeks=greeks,
         liquidity_score=round(liquidity_score, 4),
         score=0.0,
+        execution_venue=playbook.execution_venue,
         entry_credit_floor=credit_floor,
         entry_debit_ceiling=debit_ceiling,
         entry_economic_bound_source=bound_source,
         reasons=[
             f"built_from={idea.idea_id}",
             f"playbook={playbook.playbook_id}",
+            f"execution_venue={playbook.execution_venue}",
             f"expiry_quality={expiry_quality}",
             f"min_open_interest={min_oi}",
             f"avg_bid_ask_pct={avg_spread_pct:.4f}",

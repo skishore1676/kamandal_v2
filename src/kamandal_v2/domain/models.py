@@ -195,6 +195,7 @@ class Playbook:
     earnings_blackout_days: int | None = None
     dte_min: int = 30
     dte_max: int = 45
+    target_dte: int | None = None
     long_dte_min: int | None = None
     long_dte_max: int | None = None
     short_delta_min: float | None = None
@@ -228,6 +229,7 @@ class Playbook:
     underlying_price_min: float | None = None
     underlying_price_max: float | None = None
     deployment_stage: str = "baseline"
+    execution_venue: str = "public_primary"
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "Playbook":
@@ -253,6 +255,7 @@ class Playbook:
             earnings_blackout_days=_optional_int(row.get("earnings_blackout_days")),
             dte_min=int(_as_float(row.get("dte_min"), 30.0)),
             dte_max=int(_as_float(row.get("dte_max"), 45.0)),
+            target_dte=_optional_int(row.get("target_dte")),
             long_dte_min=_optional_int(row.get("long_dte_min")),
             long_dte_max=_optional_int(row.get("long_dte_max")),
             short_delta_min=_optional_float(row.get("short_delta_min")),
@@ -286,6 +289,7 @@ class Playbook:
             underlying_price_min=_optional_float(row.get("underlying_price_min")),
             underlying_price_max=_optional_float(row.get("underlying_price_max")),
             deployment_stage=str(row.get("csa_stage") or "baseline").strip().lower() or "baseline",
+            execution_venue=str(row.get("execution_venue") or "public_primary").strip().lower(),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -446,6 +450,7 @@ class Candidate:
     greeks: Greeks
     liquidity_score: float
     score: float
+    execution_venue: str = "public_primary"
     reasons: list[str] = field(default_factory=list)
     rejection_reason: str = ""
     preflight: PreflightResult | None = None
@@ -470,6 +475,7 @@ class Candidate:
             "greeks": self.greeks.to_dict(),
             "liquidity_score": self.liquidity_score,
             "score": self.score,
+            "execution_venue": self.execution_venue,
             "reasons": list(self.reasons),
             "rejection_reason": self.rejection_reason,
             "preflight": self.preflight.to_dict() if self.preflight else None,

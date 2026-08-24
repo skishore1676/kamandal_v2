@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from kamandal_v2.domain.models import ChainSnapshot, Idea, OptionLeg, Playbook, PortfolioState, UniverseEntry
-from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, _market_provider, run_plan
+from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, _market_provider, _preflight_client, run_plan
+from kamandal_v2.market.venue_router import VenueAwareMarket
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import write_daily_plan
 from kamandal_v2.stores.audit import AuditWriter
@@ -23,6 +24,7 @@ from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_engine.lifecycle import freeze_lifecycle_policy
 from kamandal_v2.strategy_engine.ownership import retire_orphaned_pending_live_lifecycles
 from kamandal_v2.strategy_engine.policy import ExecutionMode, PlaybookPolicy, PolicyCompilation, compile_playbook_policies
+from kamandal_v2.strategy_engine.range_gate import apply_range_regime_gate
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, policy_tables_hash
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, ShadowFill, SourceMode, stable_csa_id
@@ -204,9 +206,27 @@ def _run_book(
 
         mode_config = live_config(mode_config)
         live_renderer = (render_live_plan_rows, _live_candidate_policy)
+    if provider == "public":
+        base_market = market_override or _market_provider(mode_config, provider=provider, store=store)
+        venues = {str(policy.fields.get("execution_venue") or "public_primary") for policy in selected}
+        market_override = VenueAwareMarket(
+            base_market,
+            _preflight_client(base_market),
+            mode_config,
+            mode=mode.value,
+            venues=venues,
+            provider=provider,
+        )
     playbooks = [Playbook.from_row(policy.fields) for policy in selected]
     def candidate_postprocessor(candidates: list[Any], current_store: LocalStore, current_config: dict[str, Any], portfolio: PortfolioState) -> None:
         _gate_earnings_calendar_entries(candidates, selected, sqlite_path=current_store.sqlite_path, observed_at=_planning_observed_at(current_config))
+        range_receipt = apply_range_regime_gate(
+            candidates,
+            selected,
+            ((current_config.get("planner") or {}).get("range_regime_gate") or {}),
+            observed_at=_planning_observed_at(current_config),
+        )
+        current_store.event("cartographer_range_regime_gate", range_receipt)
         if live_renderer is not None:
             live_renderer[1](
                 candidates,
@@ -468,6 +488,7 @@ def _bind_selected_live_lifecycle(
                     "greeks": candidate.greeks.to_dict(),
                     "unified_plan_id": selected_plan.plan_id,
                     "execution_mode": "live",
+                    "execution_venue": candidate.execution_venue,
                     # This is the daily Sheet snapshot identity, not the
                     # per-playbook compiled-policy identity below.
                     "policy_snapshot_hash": daily_policy_snapshot.snapshot_hash,
@@ -506,6 +527,7 @@ def _bind_selected_live_lifecycle(
                 "csa_policy_snapshot_date": str(lifecycle.metadata["policy_snapshot_date"]),
                 "csa_policy_snapshot_hash": str(lifecycle.metadata["policy_snapshot_hash"]),
                 "csa_authorization_policy": "unified_strategy_engine",
+                "execution_venue": candidate.execution_venue,
                 "csa_compiled_policy_hash": compiled.policy_hash,
                 "stage_authorized": True,
             }
@@ -693,6 +715,7 @@ def _materialize_shadow_handoff(
                     "greeks": candidate.greeks.to_dict(),
                     "unified_plan_id": selected_plan.plan_id,
                     "execution_mode": "shadow",
+                    "execution_venue": candidate.execution_venue,
                     "policy_snapshot_hash": compiled.policy_hash,
                     "policy_snapshot_date": _plan_time(result)[:10],
                     "source_identity": {"idea_id": candidate.idea_id, "plan_run_id": result.plan_run_id},
@@ -763,13 +786,22 @@ def _shadow_csa_policy(policy: PlaybookPolicy, *, stage: CsaStage = CsaStage.SHA
         source_mode = SourceMode(policy.source_mode)
     except ValueError as exc:
         raise ValueError(f"{policy.playbook_id}: unsupported source mode {policy.source_mode!r}") from exc
+    resolved_fields = dict(policy.fields)
+    management = dict(policy.management)
+    if policy.strangle_management is not None:
+        resolved_fields.setdefault("loss_close_multiple", policy.strangle_management.loss_close_multiple)
+        resolved_fields.setdefault("management_delta_target", policy.strangle_management.target_delta)
+        resolved_fields.setdefault("management_delta_max", policy.strangle_management.max_delta)
+        resolved_fields.setdefault("tested_side_confirmations", policy.strangle_management.tested_side_confirmations)
+        resolved_fields.setdefault("rearm_inside_confirmations", policy.strangle_management.rearm_inside_confirmations)
+        resolved_fields.setdefault("filled_side_adjustment_limit", policy.strangle_management.filled_side_adjustment_limit)
     return CsaPolicy(
         playbook_id=policy.playbook_id,
         lane=lane,
         stage=stage,
         source_mode=source_mode,
-        management=dict(policy.management),
-        resolved_fields=dict(policy.fields),
+        management=management,
+        resolved_fields=resolved_fields,
         policy_hash=policy.policy_hash,
         source="unified_policy_compiler",
         read_at=_plan_time_from_fields(policy.fields),

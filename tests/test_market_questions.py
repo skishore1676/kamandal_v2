@@ -6,6 +6,7 @@ from pathlib import Path
 from kamandal_v2.intelligence.correspondent_signals import load_correspondent_profile
 from kamandal_v2.intelligence.market_questions import (
     build_market_question_request,
+    build_range_regime_request,
     run_market_question_exchange,
     validate_market_question_response,
 )
@@ -182,3 +183,17 @@ def test_market_question_failure_parks_chart_ideas_without_throwing(
     assert result.status == "failed"
     assert result.response_path is None
     assert "unavailable" in str(result.error)
+
+
+def test_range_request_is_source_neutral_and_deterministic() -> None:
+    first = build_range_regime_request(
+        ["SPY", "QQQ", "SPY"], as_of=AS_OF, playbook_id="short_strangle_high_iv"
+    )
+    second = build_range_regime_request(
+        ["QQQ", "SPY"], as_of=AS_OF, playbook_id="short_strangle_high_iv"
+    )
+
+    assert first == second
+    assert [item["symbol"] for item in first["questions"]] == ["QQQ", "SPY"]
+    assert all(item["question"] == "range_regime" for item in first["questions"])
+    assert all(item["direction_hint"] == "neutral" for item in first["questions"])

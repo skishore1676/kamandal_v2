@@ -24,7 +24,7 @@ from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMI
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
 from kamandal_v2.live.plan_fallback import FallbackDecision, PlanFallbackCoordinator, attempt_event_type, fallback_enabled, registered_campaign_ids
-from kamandal_v2.market.broker import broker_adapter
+from kamandal_v2.market.broker import broker_adapter, ticket_execution_venue
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.ops.stage_receipt import reconciliation_stage
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
@@ -73,6 +73,29 @@ FAILED_TICKET_STATUSES = {
     "deferred_market_closed",
 }
 SELECTED_ENTRY_ATTENTION_STATE_EVENT = "live_selected_entry_attention_state"
+
+
+def _ticket_has_explicit_venue(ticket: dict[str, Any]) -> bool:
+    nested = ticket.get("csa_strategy_ticket") or {}
+    metadata = nested.get("metadata") or {}
+    candidate = ticket.get("candidate") or {}
+    return bool(
+        ticket.get("execution_venue")
+        or candidate.get("execution_venue")
+        or metadata.get("execution_venue")
+    )
+
+
+def _broker_for_ticket(config: dict[str, Any], ticket: dict[str, Any], default: Any | None = None) -> Any:
+    if not _ticket_has_explicit_venue(ticket):
+        return default if default is not None else broker_adapter(config)
+    venue = ticket_execution_venue(config, ticket)
+    try:
+        return broker_adapter(config, execution_venue=venue)
+    except TypeError:
+        # Compatibility for small injected adapters used by tests and local
+        # diagnostics; production broker_adapter accepts the venue keyword.
+        return broker_adapter(config)
 
 
 def execute_live_approved(
@@ -423,6 +446,10 @@ def _execute_ticket(
     submit: bool,
     close: bool,
 ) -> dict[str, Any]:
+    # The venue is frozen into the ticket before it reaches this money boundary.
+    # Never let the process-wide default silently reroute a persisted order.
+    if _ticket_has_explicit_venue(ticket):
+        adapter = _broker_for_ticket(config, ticket, adapter)
     intent = store.live_order_intent(str(ticket.get("ticket_hash") or ""))
     if not intent:
         return _failure(ticket, "ticket_not_found_in_live_ledger")
@@ -496,12 +523,14 @@ def _execute_ticket(
         "submit": submit,
         "close": close,
         "status": status,
+        "execution_venue": ticket_execution_venue(config, ticket),
     })
     result = {
         "ticket_hash": ticket.get("ticket_hash"),
         "order_id": ticket.get("order_id"),
         "underlying": ticket.get("underlying"),
         "status": status,
+        "execution_venue": ticket_execution_venue(config, ticket),
         "response": response,
     }
     if status == "submit_failed":
@@ -528,7 +557,7 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
 
 
 def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manage_entries: bool) -> dict[str, Any]:
-    adapter = broker_adapter(config)
+    default_adapter = broker_adapter(config)
     tickets = store.live_order_intents_by_status(
         {"submitted", "partially_filled", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
     )
@@ -549,6 +578,11 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
     )
     results = []
     for ticket in tickets:
+        adapter = (
+            _broker_for_ticket(config, ticket, default_adapter)
+            if _ticket_has_explicit_venue(ticket)
+            else default_adapter
+        )
         ledger_status = str(ticket.get("_ledger_status") or "submitted")
         try:
             response = adapter.get_order(str(ticket["order_id"]))
@@ -2592,6 +2626,7 @@ def _save_live_position_from_ticket(
         "underlying": canonical.get("underlying"),
         "playbook_id": canonical.get("playbook_id"),
         "structure": canonical.get("structure"),
+        "execution_venue": ticket_execution_venue({}, canonical),
         "candidate": candidate,
         "execution_quality": canonical.get("execution_quality") or {},
         "entry_snapshot": _entry_snapshot_from_lineage(

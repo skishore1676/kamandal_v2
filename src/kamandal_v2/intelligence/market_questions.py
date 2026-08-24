@@ -18,6 +18,8 @@ from kamandal_v2.paths import resolve_path
 QUESTION_REQUEST_SCHEMA = "market_cartographer.question_request.v1"
 QUESTION_RESPONSE_SCHEMA = "market_cartographer.question_response.v1"
 QUESTION_KIND = "directional_setup"
+RANGE_QUESTION_KIND = "range_regime"
+QUESTION_KINDS = {QUESTION_KIND, RANGE_QUESTION_KIND}
 _TIMESTAMP = TypeAdapter(datetime)
 
 CommandRunner = Callable[[list[str], Path], str]
@@ -90,6 +92,38 @@ def build_market_question_request(
         "as_of": packet["generated_at"],
         "questions": questions,
     }
+
+
+def build_range_regime_request(
+    symbols: list[str],
+    *,
+    as_of: str,
+    playbook_id: str,
+) -> dict[str, Any] | None:
+    questions = []
+    for symbol in sorted({str(item).strip().upper() for item in symbols if str(item).strip()}):
+        source_id = f"{playbook_id}:{symbol}:{as_of}"
+        identity = f"{source_id}|{RANGE_QUESTION_KIND}"
+        questions.append(
+            {
+                "question_id": "mq-" + hashlib.sha256(identity.encode()).hexdigest()[:20],
+                "question": RANGE_QUESTION_KIND,
+                "symbol": symbol,
+                "direction_hint": "neutral",
+                "source_claim": "Evaluate whether the current chart remains inside a deterministic range.",
+                "source": {
+                    "kind": "kamandal_market_scan",
+                    "source_id": source_id,
+                    "source_url": None,
+                    "published_at": None,
+                    "author_handle": None,
+                    "observation_sources": ["kamandal_unified_planner"],
+                },
+            }
+        )
+    if not questions:
+        return None
+    return {"schema": QUESTION_REQUEST_SCHEMA, "as_of": as_of, "questions": questions}
 
 
 def run_market_question_exchange(
@@ -167,6 +201,61 @@ def run_market_question_exchange(
         )
 
 
+def run_range_regime_exchange(
+    symbols: list[str],
+    settings: dict[str, Any],
+    *,
+    as_of: str,
+    playbook_id: str,
+    command_runner: CommandRunner | None = None,
+) -> MarketQuestionResult:
+    request = build_range_regime_request(symbols, as_of=as_of, playbook_id=playbook_id)
+    if request is None:
+        return MarketQuestionResult("not_needed", 0, None, None)
+    if settings.get("enabled") is not True:
+        return MarketQuestionResult("disabled", len(request["questions"]), None, None)
+
+    request_root = resolve_path(settings.get("request_dir") or "data/research/market_questions/requests")
+    output_root = resolve_path(settings.get("evaluation_dir") or "data/research/market_questions")
+    request_id = hashlib.sha256(_stable_json(request).encode()).hexdigest()[:16]
+    request_dir = request_root / RANGE_QUESTION_KIND
+    output_dir = output_root / RANGE_QUESTION_KIND / request_id
+    request_path = request_dir / f"question-request-{request_id}.json"
+    _write_idempotent(request_path, json.dumps(request, indent=2, sort_keys=True) + "\n")
+
+    cartographer_bin = resolve_path(settings.get("cartographer_bin") or "../market-cartographer/.venv/bin/market-cartographer")
+    provider = str(settings.get("provider") or "mala")
+    args = [
+        str(cartographer_bin),
+        "answer-questions",
+        "--input",
+        str(request_path),
+        "--provider",
+        provider,
+        "--output",
+        str(output_dir),
+    ]
+    if provider == "mala":
+        args.extend(["--data-root", str(resolve_path(settings.get("data_root") or "../mala_v2/data"))])
+    runner = command_runner or _run_command
+    try:
+        if not cartographer_bin.is_file():
+            raise FileNotFoundError(f"Market Cartographer CLI not found: {cartographer_bin}")
+        runner(args, cartographer_bin.parent.parent.parent)
+        response_path = output_dir / "question-response.json"
+        response = validate_market_question_response(json.loads(response_path.read_text(encoding="utf-8")))
+        _assert_response_matches_request(request, response)
+        return MarketQuestionResult("succeeded", len(request["questions"]), request_path, response_path)
+    except Exception as exc:  # noqa: BLE001 - a failed range gate fails dependent candidates closed.
+        return MarketQuestionResult(
+            "failed",
+            len(request["questions"]),
+            request_path,
+            None,
+            f"{type(exc).__name__}: {exc}",
+        )
+
+
 def validate_market_question_response(payload: object) -> dict[str, Any]:
     if (
         not isinstance(payload, dict)
@@ -200,12 +289,13 @@ def validate_market_question_response(payload: object) -> dict[str, Any]:
     seen: set[str] = set()
     for index, answer in enumerate(answers):
         if not isinstance(answer, dict):
-            raise ValueError(f"answers[{index}] must be an object")
+            raise TypeError(f"answers[{index}] must be an object")
         question_id = _text(answer.get("question_id"), f"answers[{index}].question_id")
         if question_id in seen:
             raise ValueError(f"duplicate market question answer: {question_id}")
         seen.add(question_id)
-        if answer.get("question") != QUESTION_KIND:
+        question_kind = answer.get("question")
+        if question_kind not in QUESTION_KINDS:
             raise ValueError(f"answers[{index}].question is invalid")
         if answer.get("planner_eligible") is not False:
             raise ValueError(f"answers[{index}] cannot grant planner eligibility")
@@ -213,8 +303,16 @@ def validate_market_question_response(payload: object) -> dict[str, Any]:
             raise ValueError(f"answers[{index}].direction is invalid")
         source = answer.get("source_context")
         if not isinstance(source, dict):
-            raise ValueError(f"answers[{index}].source_context must be an object")
+            raise TypeError(f"answers[{index}].source_context must be an object")
         _text(source.get("source_id"), f"answers[{index}].source_context.source_id")
+        if question_kind == RANGE_QUESTION_KIND:
+            state = answer.get("range_state")
+            if answer.get("answer_status") == "evaluated" and state not in {
+                "confirmed_range",
+                "broken",
+                "no_range",
+            }:
+                raise ValueError(f"answers[{index}].range_state is invalid")
     return payload
 
 

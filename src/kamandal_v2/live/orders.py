@@ -52,6 +52,7 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
     seed = json.dumps(
         {
             "strategy_ticket_id": ticket.ticket_id,
+            "execution_venue": str(ticket.metadata.get("execution_venue") or "public_primary"),
             "intent_type": intent_type,
             "legs": [leg.to_dict() for leg in ticket.legs],
             "limit_price": limit_price,
@@ -68,6 +69,7 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
         "idea_id": "",
         "intent_type": intent_type,
         "underlying": ticket.underlying,
+        "execution_venue": str(ticket.metadata.get("execution_venue") or "public_primary"),
         "playbook_id": str(ticket.metadata.get("playbook_id") or ""),
         "structure": ticket.lane.value,
         "quantity": 1,
@@ -121,7 +123,6 @@ def build_close_ticket(
     ]
     if not legs:
         raise ValueError(f"live position group {group.get('group_id')} has no legs to close")
-    net_credit = float(candidate_payload.get("net_credit") or 0.0)
     if close_net_credit is None:
         close_net_credit = _close_net_credit_from_legs(legs) if limit_price is None else -(limit_price)
     close_limit = _close_limit_price(legs, close_net_credit)
@@ -134,6 +135,11 @@ def build_close_ticket(
         legs=legs,
         net_credit=close_net_credit,
         preflight=None,
+        execution_venue=str(
+            group.get("execution_venue")
+            or candidate_payload.get("execution_venue")
+            or "public_primary"
+        ),
     )
     fake_plan = _TicketPlan(str(group.get("plan_id") or ""), str(group.get("group_id") or ""))
     ticket = _build_ticket(
@@ -160,6 +166,7 @@ def ticket_hash(ticket: dict[str, Any]) -> str:
             "idea_id",
             "intent_type",
             "underlying",
+            "execution_venue",
             "structure",
             "submit_payload",
             "legs",
@@ -184,6 +191,7 @@ def _build_ticket(
         "intent_type": intent_type,
         "plan_id": plan.plan_id,
         "candidate_id": candidate.candidate_id,
+        "execution_venue": str(getattr(candidate, "execution_venue", None) or "public_primary"),
         "legs": [_leg_ticket_payload(candidate.underlying, leg, open_close_indicator) for leg in legs],
         "limit_price": limit_price,
     }
@@ -202,6 +210,7 @@ def _build_ticket(
         "idea_id": candidate.idea_id,
         "intent_type": intent_type,
         "underlying": candidate.underlying,
+        "execution_venue": str(getattr(candidate, "execution_venue", None) or "public_primary"),
         "playbook_id": candidate.playbook_id,
         "structure": candidate.structure,
         "quantity": 1,
@@ -369,6 +378,7 @@ class _TicketCandidate:
         legs: list[OptionLeg],
         net_credit: float,
         preflight: Any,
+        execution_venue: str = "public_primary",
     ) -> None:
         self.candidate_id = candidate_id
         self.idea_id = idea_id
@@ -378,3 +388,4 @@ class _TicketCandidate:
         self.legs = legs
         self.net_credit = net_credit
         self.preflight = preflight
+        self.execution_venue = execution_venue

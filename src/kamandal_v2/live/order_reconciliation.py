@@ -9,7 +9,7 @@ from typing import Any
 from kamandal_v2.live.execution import TERMINAL_UNFILLED_ORDER_STATUSES
 from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
 from kamandal_v2.live.health import run_live_health
-from kamandal_v2.market.broker import broker_adapter
+from kamandal_v2.market.broker import broker_adapter, ticket_execution_venue
 from kamandal_v2.schemas import LIVE_BOOK_HEADER
 from kamandal_v2.sheets import write_live_book
 from kamandal_v2.stores.sqlite import LocalStore
@@ -64,9 +64,16 @@ def reconcile_live_orders(
             )
             continue
         if status in BROKER_OBSERVED_STATUSES:
-            if broker is None:
-                broker = broker_adapter(config)
-            results.append(_reconcile_broker_close_order(store, broker, ticket, dry_run=dry_run))
+            ticket_broker = broker
+            if ticket_broker is None:
+                try:
+                    ticket_broker = broker_adapter(
+                        config,
+                        execution_venue=ticket_execution_venue(config, ticket),
+                    )
+                except TypeError:
+                    ticket_broker = broker_adapter(config)
+            results.append(_reconcile_broker_close_order(store, ticket_broker, ticket, dry_run=dry_run))
 
     results.extend(_retire_stale_close_failures(store, config, dry_run=dry_run))
 

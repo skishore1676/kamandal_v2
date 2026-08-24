@@ -286,6 +286,12 @@ google_sheets:
 
 broker:
   active: public
+  default_execution_venue: public_primary
+  execution_venues:
+    public_primary:
+      broker: public
+    tasty_primary:
+      broker: tastytrade
   market_metrics_provider: tastytrade
   public:
     api_base_url: https://api.public.com
@@ -350,6 +356,14 @@ source_intelligence:
     limit: 50
 
 planner:
+  range_regime_gate:
+    enabled: true
+    evaluation_dir: data/research/market_questions
+    request_dir: data/research/market_questions/requests
+    cartographer_bin: ../market-cartographer/.venv/bin/market-cartographer
+    provider: mala
+    data_root: ../mala_v2/data
+    max_symbols_per_request: 8
   expiry:
     monthly_single_name_bonus: true
     diagonal_calendar_dte_fallback:

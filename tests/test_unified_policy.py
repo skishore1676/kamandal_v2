@@ -133,6 +133,31 @@ def test_short_strangle_compiles_frozen_management_policy_separate_from_entry_de
     assert policy.compatibility["legacy_inversion_ignored"] is True
 
 
+def test_strangle_sheet_controls_compile_as_one_immutable_policy() -> None:
+    policy = compile_playbook_policy(
+        _strangle_row(
+            execution_venue="tasty_primary",
+            dte_min="35",
+            dte_max="50",
+            target_dte="45",
+            short_delta_max="0.22",
+            range_gate_required="TRUE",
+            range_gate_max_age_days="7",
+            loss_close_multiple="3",
+        )
+    )
+
+    assert policy.fields["execution_venue"] == "tasty_primary"
+    assert policy.fields["target_dte"] == "45"
+    assert policy.fields["range_gate_required"] == "TRUE"
+    assert policy.strangle_management.loss_close_multiple == 3
+
+
+def test_unknown_execution_venue_fails_closed() -> None:
+    with pytest.raises(PolicyError, match="unsupported execution_venue"):
+        compile_playbook_policy(_strangle_row(execution_venue="oldmac_clone"))
+
+
 def test_strangle_management_delta_never_falls_back_to_entry_delta() -> None:
     with pytest.raises(PolicyError, match="management_delta_target"):
         compile_playbook_policy(

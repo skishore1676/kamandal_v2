@@ -93,6 +93,13 @@ PLAYBOOKS_HEADER = [
     "event_near_expiry_after_days",
     "paired_order_required",
     "post_event_exit",
+    # One-brain/multiple-venue controls. These remain appended so legacy
+    # columns and formulas keep their exact positions.
+    "execution_venue",
+    "target_dte",
+    "range_gate_required",
+    "range_gate_max_age_days",
+    "loss_close_multiple",
 ]
 
 DAILY_PLAN_HEADER = [

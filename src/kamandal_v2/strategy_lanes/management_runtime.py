@@ -428,8 +428,8 @@ def _management_context(
             replace(lifecycle, metadata=metadata),
             tested_side=tested,
             breached_strike=breached_strike,
-            required_confirmations=int(lifecycle_number(policy, "tested_side_confirmation")),
-            rearm_inside_confirmations=2,
+            required_confirmations=int(_resolved_or_lifecycle(policy, "tested_side_confirmations", "tested_side_confirmation")),
+            rearm_inside_confirmations=int(_resolved_or_default(policy, "rearm_inside_confirmations", 2)),
         )
         metadata = dict(observed.metadata)
         episode = dict(metadata.get("strangle_test_episode") or {})
@@ -564,7 +564,7 @@ def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot:
         for q in snapshot.quotes
         if q.option_type == old.option_type
         and q.expiration == old.expiration
-        and abs(q.delta) <= 0.40
+        and abs(q.delta) <= _resolved_or_default(policy, "management_delta_max", 0.40)
         and q.mid > 0
         and q.ask >= q.bid >= 0
         and q.spread_pct <= float(policy.resolved_fields["max_bid_ask_pct"])
@@ -579,7 +579,8 @@ def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot:
     def plan(candidates: list[Any]):
         if not candidates:
             return None
-        new = min(candidates, key=lambda q: (abs(abs(q.delta) - 0.30), -(q.mid - old.mid), q.strike))
+        target_delta = _resolved_or_default(policy, "management_delta_target", 0.30)
+        new = min(candidates, key=lambda q: (abs(abs(q.delta) - target_delta), -(q.mid - old.mid), q.strike))
         return {
             "old": old,
             "new": OptionLeg.from_quote(new, role=old.role, side="sell"),
@@ -588,6 +589,18 @@ def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot:
         }
 
     return plan(ordinary), None
+
+
+def _resolved_or_default(policy: CsaPolicy, field: str, default: float) -> float:
+    raw = policy.resolved_fields.get(field)
+    return float(default if raw in (None, "") else raw)
+
+
+def _resolved_or_lifecycle(policy: CsaPolicy, field: str, lifecycle_field: str) -> float:
+    raw = policy.resolved_fields.get(field)
+    if raw not in (None, ""):
+        return float(raw)
+    return lifecycle_number(policy, lifecycle_field)
 
 
 def _management_ticket(

@@ -161,6 +161,21 @@ Notes:
   ranges and validation copy.
 - `iv_abs_min/max`: optional absolute ATM IV gate, useful for avoiding
   low-volatility false positives.
+- `execution_venue`: immutable route for newly created trades. Supported values
+  are `public_primary` and `tasty_primary`. A later Sheet flip affects only new
+  candidates; an open lifecycle and every adjustment/close retain the venue
+  frozen at entry.
+- `target_dte`: preferred expiration inside the inclusive `dte_min/max` window.
+  The short-strangle row uses 45 inside 35-50; the builder chooses the nearest
+  available expiration without weakening the hard window.
+- `range_gate_required`: when true, eligible candidates must receive a fresh
+  `confirmed_range` answer from Market Cartographer before optimization. A
+  missing, stale, failed, or broken-range answer rejects that candidate only.
+- `range_gate_max_age_days`: maximum age of the Cartographer daily observation.
+- `loss_close_multiple`: canonical package-loss close threshold for strangles.
+  The short-strangle policy uses 3x entry credit. The older
+  `max_loss_multiple` remains the ordinary credit-spread loss-watch control and
+  must not override this strangle lifecycle value.
 - `half_time_exit`: true/false. If true, the engine can recommend exit around
   half the original DTE. The unified manager measures original DTE from the
   completed opening fill to the earliest active expiration and closes the full
@@ -174,7 +189,10 @@ Notes:
   adapter remains broker-inert and quote-based: a selected entry may work across
   bounded retries or become `entry_missed`; shadow does not use live Plan 2.
 
-The 2026-08-23 corrective management design requires no new Sheet column. The
+The 2026-08-23 corrective management design originally required no new Sheet
+column. The later autonomous-strangle migration appends five controls for venue
+routing, preferred DTE, the chart-range gate, and one canonical 3x strangle
+loss close. The
 existing `mode`, `max_bid_ask_pct`, `profit_target_pct`, `max_loss_multiple`,
 `half_time_exit`, `exit_pre_event_days`, and lifecycle JSON already express the
 operator-owned strategy policy. Opening/closing adverse-loss buffers,

@@ -8,7 +8,6 @@ from kamandal_v2.domain.models import Candidate, OptionLeg
 from kamandal_v2.market.public import occ_symbol
 from kamandal_v2.strategy_lanes.models import (
     CsaAction,
-    LaneId,
     LegEffect,
     LegSide,
     LifecycleState,
@@ -70,7 +69,13 @@ def _ticket(
 ) -> StrategyTicket:
     ticket_id = stable_csa_id(
         "ticket",
-        [action.action_id, action.lifecycle_version, [leg.to_dict() for leg in legs], limit_price],
+        [
+            action.action_id,
+            action.lifecycle_version,
+            str(policy.resolved_fields.get("execution_venue") or "public_primary"),
+            [leg.to_dict() for leg in legs],
+            limit_price,
+        ],
     )
     return StrategyTicket(
         ticket_id=ticket_id,
@@ -88,6 +93,9 @@ def _ticket(
             "execution_boundary": policy.stage.value,
             "playbook_id": policy.playbook_id,
             "deployment_stage": policy.stage.value,
+            "execution_venue": str(
+                policy.resolved_fields.get("execution_venue") or "public_primary"
+            ),
             "fill_policy": dict((policy.management.get("lifecycle") or {}).get("fill") or {}),
             "action_type": action.action_type.value,
             "action_reason": str(action.reason_codes[0] if action.reason_codes else ""),

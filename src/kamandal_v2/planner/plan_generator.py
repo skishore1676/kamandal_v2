@@ -114,6 +114,8 @@ def _constraint_violation(
         return "new_bpr_cap"
     if ((portfolio.bpr_used + total_bpr) / max(portfolio.account_size, 1.0)) * 100 > max_bpr_pct:
         return "portfolio_bpr_cap"
+    if violation := _venue_bpr_violation(plan, control):
+        return violation
     per_underlying: dict[str, float] = dict(portfolio.per_underlying_bpr)
     for candidate in plan:
         per_underlying[candidate.underlying] = per_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
@@ -122,6 +124,29 @@ def _constraint_violation(
             return "underlying_bpr_cap"
     if violation := _delta_guard_violation(plan, portfolio, control):
         return violation
+    return ""
+
+
+def _venue_bpr_violation(plan: list[Candidate], control: dict) -> str:
+    raw = (control.get("runtime") or {}).get("venue_portfolios") or {}
+    if not isinstance(raw, dict) or not raw:
+        return ""
+    by_venue: dict[str, float] = {}
+    for candidate in plan:
+        venue = str(candidate.execution_venue or "public_primary")
+        by_venue[venue] = by_venue.get(venue, 0.0) + candidate.estimated_bpr
+    hard_pct = float(((control.get("portfolio") or {}).get("hard_max_bpr_utilization_pct") or 90))
+    for venue, added_bpr in by_venue.items():
+        state = raw.get(venue)
+        if not isinstance(state, dict):
+            return f"execution_venue_account_missing:{venue}"
+        account_size = float(state.get("account_size") or 0.0)
+        buying_power = float(state.get("buying_power") or 0.0)
+        bpr_used = float(state.get("bpr_used") or 0.0)
+        if account_size <= 0 or added_bpr > buying_power:
+            return f"execution_venue_buying_power:{venue}"
+        if ((bpr_used + added_bpr) / account_size) * 100 > hard_pct:
+            return f"execution_venue_bpr_cap:{venue}"
     return ""
 
 

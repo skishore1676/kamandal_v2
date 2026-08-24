@@ -490,6 +490,40 @@ The resulting engine has three parts:
 3. **Effect boundary:** shadow simulation or the existing guarded live ledger,
    submitter, and reconciliation path.
 
+### One brain, multiple execution venues
+
+Kamandal remains one application and one portfolio/lifecycle brain. The
+`execution_venue` playbook field chooses a broker route for each new candidate;
+that value is then frozen through candidate, lifecycle, strategy ticket, broker
+ticket, receipt, replacement, position projection, and close. Market-data
+observation may still come from the shared read-only provider, but broker
+preflight, submission, order status, and account-local buying-power checks use
+the ticket's venue.
+
+`public_primary` maps to Public and `tasty_primary` maps to Tastytrade. A Sheet
+flip changes future entries only. It cannot migrate an existing position and it
+cannot change the broker used for that position's management. The portfolio
+optimizer sees aggregate family exposure while also enforcing account-local
+buying power, so capital at one broker cannot authorize an order at another.
+
+The short-strangle lane is currently `shadow`, even though its future venue is
+`tasty_primary`. Promotion to live remains a separate money gate and requires
+broker-native canary proof; this deployment does not submit an order.
+
+### Autonomous short-strangle admission
+
+The Sheet is authoritative for the volatility, DTE, delta, range, profit, time,
+event, and loss controls. The current intended policy is IV percentile 70-100,
+IV rank 50-100, 35-50 DTE with target 45, 14-22 delta, 40% profit, exit at 21
+DTE, pre-event exit at five days, and a 3x package-loss close.
+
+After deterministic volatility and structure eligibility, Kamandal asks Market
+Cartographer a source-neutral `range_regime` question. Only a fresh
+`confirmed_range` answer reaches optimization. `broken`, `no_range`, stale,
+missing, and exchange-failure answers fail the dependent candidate closed while
+leaving unrelated strategy lanes operational. Cartographer owns chart facts;
+Kamandal owns strategy admission and every trading effect.
+
 This direction matters because the CSA scanner currently selects the best
 candidate inside each opportunity; it does not replace the established
 portfolio-bundle optimizer. Conversely, the established live manager mainly

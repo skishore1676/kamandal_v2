@@ -204,7 +204,12 @@ class StrategyTicket:
     def idempotency_key(self) -> str:
         return stable_csa_id(
             "ticket",
-            [self.action_id, self.lifecycle_version, [leg.to_dict() for leg in self.legs]],
+            [
+                self.action_id,
+                self.lifecycle_version,
+                str(self.metadata.get("execution_venue") or "public_primary"),
+                [leg.to_dict() for leg in self.legs],
+            ],
         )
 
     def to_dict(self) -> dict[str, Any]:
