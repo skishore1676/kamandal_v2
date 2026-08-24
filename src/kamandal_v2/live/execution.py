@@ -25,7 +25,7 @@ from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
 from kamandal_v2.live.order_identity import broker_order_id, client_order_id, persist_broker_identity
 from kamandal_v2.live.plan_fallback import FallbackDecision, PlanFallbackCoordinator, attempt_event_type, fallback_enabled, registered_campaign_ids
-from kamandal_v2.market.broker import broker_adapter, ticket_execution_venue
+from kamandal_v2.market.broker import broker_adapter, default_execution_venue, ticket_execution_venue
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.ops.stage_receipt import reconciliation_stage
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
@@ -91,12 +91,11 @@ def _broker_for_ticket(config: dict[str, Any], ticket: dict[str, Any], default: 
     if not _ticket_has_explicit_venue(ticket):
         return default if default is not None else broker_adapter(config)
     venue = ticket_execution_venue(config, ticket)
-    try:
-        return broker_adapter(config, execution_venue=venue)
-    except TypeError:
-        # Compatibility for small injected adapters used by tests and local
-        # diagnostics; production broker_adapter accepts the venue keyword.
-        return broker_adapter(config)
+    # Fail closed.  A resolver error must never silently send a venue-frozen
+    # ticket through the process-wide default broker.
+    if venue == default_execution_venue(config):
+        return default if default is not None else broker_adapter(config)
+    return broker_adapter(config, execution_venue=venue)
 
 
 def execute_live_approved(

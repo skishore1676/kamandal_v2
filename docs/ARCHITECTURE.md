@@ -512,13 +512,20 @@ that value is then frozen through candidate, lifecycle, strategy ticket, broker
 ticket, receipt, replacement, position projection, and close. Market-data
 observation may still come from the shared read-only provider, but broker
 preflight, submission, order status, and account-local buying-power checks use
-the ticket's venue.
+the ticket's venue for live execution. In shadow, a broker dry run may supply
+exact-leg BPR evidence, but the real broker account's balance, buying power, or
+permission level cannot veto the simulated trade. Invalid legs, malformed
+orders, missing or unusable quotes, and all other strategy/safety failures
+remain blocking in both modes.
 
 `public_primary` maps to Public and `tasty_primary` maps to Tastytrade. A Sheet
 flip changes future entries only. It cannot migrate an existing position and it
 cannot change the broker used for that position's management. The portfolio
 optimizer sees aggregate family exposure while also enforcing account-local
 buying power, so capital at one broker cannot authorize an order at another.
+Order reconciliation follows the frozen venue independently for every ticket;
+an unavailable venue is reported and never replaced with the process-default
+broker.
 
 The short-strangle lane is currently `shadow`, even though its future venue is
 `tasty_primary`. Promotion to live remains a separate money gate and requires

@@ -516,14 +516,21 @@ def _signed_tasty_quantity(item: dict[str, Any]) -> float:
 
 def _preflight_result(payload: dict[str, Any], response: dict[str, Any], *, default_bpr: float) -> PreflightResult:
     errors = _find_list(response, ("errors",))
-    bpr = _find_number(
+    broker_bpr = _find_optional_number(
         response,
         ("impact", "change-in-buying-power", "isolated-order-margin-requirement", "buying-power-requirement"),
-        default=default_bpr,
     )
+    broker_bpr_provided = broker_bpr is not None and abs(broker_bpr) > 0
+    bpr = broker_bpr if broker_bpr_provided else default_bpr
+    raw = {
+        "request": payload,
+        "response": response,
+        "broker_bpr_provided": broker_bpr_provided,
+        "bpr_source": "tastytrade_dry_run" if broker_bpr_provided else "local_fallback",
+    }
     if errors:
-        return PreflightResult(ok=False, bpr=abs(bpr), message="tastytrade preflight returned errors", raw={"request": payload, "response": response})
-    return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="tastytrade preflight ok", raw={"request": payload, "response": response})
+        return PreflightResult(ok=False, bpr=abs(bpr), message="tastytrade preflight returned errors", raw=raw)
+    return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="tastytrade preflight ok", raw=raw)
 
 
 def _api_error_payload(exc: Exception) -> dict[str, Any]:

@@ -66,4 +66,7 @@ def broker_adapter(config: dict[str, Any], *, execution_venue: str | None = None
 
 
 def broker_adapter_for_ticket(config: dict[str, Any], ticket: dict[str, Any]) -> Any:
-    return broker_adapter(config, execution_venue=ticket_execution_venue(config, ticket))
+    venue = ticket_execution_venue(config, ticket)
+    if venue == default_execution_venue(config):
+        return broker_adapter(config)
+    return broker_adapter(config, execution_venue=venue)

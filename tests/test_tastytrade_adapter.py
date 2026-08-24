@@ -151,6 +151,8 @@ def test_tastytrade_preflight_builds_open_option_order(tmp_path) -> None:
 
     assert result.ok is True
     assert result.bpr == 412.34
+    assert result.raw["broker_bpr_provided"] is True
+    assert result.raw["bpr_source"] == "tastytrade_dry_run"
     request = result.raw["request"]
     assert request["price"] == "1.25"
     assert request["price-effect"] == "Credit"
@@ -200,6 +202,8 @@ def test_tastytrade_preflight_preserves_bpr_from_failed_margin_check(tmp_path) -
 
     assert result.ok is False
     assert result.bpr == 3922.61658
+    assert result.raw["broker_bpr_provided"] is True
+    assert result.raw["bpr_source"] == "tastytrade_dry_run"
     assert result.raw["response"]["error"]["errors"][0]["code"] == "margin_check_failed_with_flags"
 
 

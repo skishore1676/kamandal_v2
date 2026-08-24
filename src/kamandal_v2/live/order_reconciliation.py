@@ -10,7 +10,7 @@ from kamandal_v2.live.execution import TERMINAL_UNFILLED_ORDER_STATUSES
 from kamandal_v2.live.book import live_book_sheet_rows, run_live_book
 from kamandal_v2.live.health import run_live_health
 from kamandal_v2.live.order_identity import broker_order_id
-from kamandal_v2.market.broker import broker_adapter, ticket_execution_venue
+from kamandal_v2.market.broker import broker_adapter, default_execution_venue, ticket_execution_venue
 from kamandal_v2.schemas import LIVE_BOOK_HEADER
 from kamandal_v2.sheets import write_live_book
 from kamandal_v2.stores.sqlite import LocalStore
@@ -68,12 +68,15 @@ def reconcile_live_orders(
             ticket_broker = broker
             if ticket_broker is None:
                 try:
-                    ticket_broker = broker_adapter(
-                        config,
-                        execution_venue=ticket_execution_venue(config, ticket),
+                    venue = ticket_execution_venue(config, ticket)
+                    ticket_broker = (
+                        broker_adapter(config)
+                        if venue == default_execution_venue(config)
+                        else broker_adapter(config, execution_venue=venue)
                     )
-                except TypeError:
-                    ticket_broker = broker_adapter(config)
+                except Exception as exc:  # noqa: BLE001 - report venue outage without cross-routing.
+                    results.append(_broker_venue_unavailable_result(ticket, exc))
+                    continue
             results.append(_reconcile_broker_close_order(store, ticket_broker, ticket, dry_run=dry_run))
 
     results.extend(_retire_stale_close_failures(store, config, dry_run=dry_run))
@@ -96,6 +99,19 @@ def reconcile_live_orders(
         "dry_run": dry_run,
         "expire_stale_close_approvals": expire_stale,
     }
+
+
+def _broker_venue_unavailable_result(ticket: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    result = _base_result(ticket, source="broker_order")
+    result.update(
+        {
+            "execution_venue": ticket_execution_venue({}, ticket),
+            "reconciled_status": "broker_venue_unavailable",
+            "needs_broker_status_review": True,
+            "error": _safe_broker_error(exc),
+        }
+    )
+    return result
 
 
 def _retire_stale_close_failures(store: LocalStore, config: dict[str, Any], *, dry_run: bool) -> list[dict[str, Any]]:

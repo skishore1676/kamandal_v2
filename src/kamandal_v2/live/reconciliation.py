@@ -80,10 +80,11 @@ def reconcile_live_positions(
     broker_venue_errors: dict[str, str] = {}
     for venue in sorted(venues):
         try:
-            try:
-                adapter = broker_adapter(config, execution_venue=venue)
-            except TypeError:
-                adapter = broker_adapter(config)
+            adapter = (
+                broker_adapter(config)
+                if venue == default_execution_venue(config)
+                else broker_adapter(config, execution_venue=venue)
+            )
             if not hasattr(adapter, "broker_positions"):
                 raise RuntimeError(f"configured broker adapter {type(adapter).__name__} does not expose broker_positions")
             adapters[venue] = adapter
@@ -204,8 +205,10 @@ def reconcile_live_positions(
         _resolve_unobserved_issues(store, observed_issue_ids, dry_run=dry_run)
     stage_receipt.update("local_reconciliation", "completed")
     stage_receipt.update("order_reconciliation", "running")
-    injected_adapter = next(iter(adapters.values())) if len(adapters) == 1 else None
-    order_reconciliation = reconcile_live_orders(config, dry_run=dry_run, store=store, adapter=injected_adapter)
+    # Order tickets resolve their own frozen venue.  Reusing a sole position
+    # adapter here can query a Tastytrade order ID through Public when one
+    # venue is unavailable.
+    order_reconciliation = reconcile_live_orders(config, dry_run=dry_run, store=store)
     stage_receipt.update("order_reconciliation", "completed")
     rows = [_daily_plan_row(index, issue) for index, issue in enumerate(issues, start=1)]
     live_book_rows_written = 0

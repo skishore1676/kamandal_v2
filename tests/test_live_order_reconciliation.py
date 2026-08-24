@@ -177,12 +177,48 @@ def test_position_reconciliation_runs_order_reconciliation(tmp_path: Path, monke
         def broker_positions(self) -> list[dict[str, Any]]:
             return []
 
-    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config, **_kwargs: Broker())
 
     result = reconcile_live_positions(_config(), store=store)
 
     assert result["order_reconciliation"]["expired_stale_close_approvals"] == 1
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "expired_stale_close_approval"
+
+
+def test_position_reconciliation_never_queries_tasty_order_through_public_on_tasty_outage(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = _close_ticket("ticket-tasty-submitted")
+    ticket["execution_venue"] = "tasty_primary"
+    ticket["broker_order_id"] = "tasty-order-42"
+    store.save_live_order_intent(ticket, status="submitted")
+    public_order_queries: list[str] = []
+
+    class PublicBroker:
+        def broker_positions(self) -> list[dict[str, Any]]:
+            return []
+
+        def get_order(self, order_id: str) -> dict[str, Any]:
+            public_order_queries.append(order_id)
+            return {"status": "WORKING"}
+
+    def adapter_for_venue(_config: dict[str, Any], *, execution_venue: str | None = None) -> Any:
+        if execution_venue == "tasty_primary":
+            raise RuntimeError("tastytrade unavailable")
+        return PublicBroker()
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", adapter_for_venue)
+    monkeypatch.setattr("kamandal_v2.live.order_reconciliation.broker_adapter", adapter_for_venue)
+
+    result = reconcile_live_positions(_config(), store=store, dry_run=True)
+
+    assert result["broker_venue_errors"] == {"tasty_primary": "tastytrade unavailable"}
+    order_result = result["order_reconciliation"]["results"][0]
+    assert order_result["execution_venue"] == "tasty_primary"
+    assert order_result["reconciled_status"] == "broker_venue_unavailable"
+    assert public_order_queries == []
 
 
 def test_position_reconciliation_isolates_same_occ_symbol_by_execution_venue(tmp_path: Path, monkeypatch: Any) -> None:
@@ -333,7 +369,7 @@ def test_position_reconciliation_repairs_pre_fix_filled_canonical_close(tmp_path
         def broker_positions(self) -> list[dict[str, Any]]:
             return []
 
-    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config, **_kwargs: Broker())
 
     result = reconcile_live_positions(_config(), store=store)
 
@@ -402,7 +438,7 @@ def test_position_reconciliation_terminalizes_broker_flat_retired_projection(tmp
         def broker_positions(self) -> list[dict[str, Any]]:
             return []
 
-    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config, **_kwargs: Broker())
 
     result = reconcile_live_positions(_config(), store=store)
 
@@ -456,7 +492,7 @@ def test_position_reconciliation_terminalizes_exhausted_pending_entry(tmp_path: 
         def broker_positions(self) -> list[dict[str, Any]]:
             return []
 
-    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config, **_kwargs: Broker())
 
     result = reconcile_live_positions(_config(), store=store)
 
