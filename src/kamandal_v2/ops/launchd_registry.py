@@ -72,7 +72,9 @@ JOB_LABEL_SUFFIXES = {
 }
 
 JOB_SCHEDULES = {
-    "x-bookmarks": JobSchedule(fixed_times=(time(8, 15),)),
+    "x-bookmarks": JobSchedule(
+        fixed_times=(time(8, 15), time(9, 15), time(11, 45), time(14, 0))
+    ),
     "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 0))),
     "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
     "live-reconciliation": JobSchedule(fixed_times=(time(8, 35), time(10, 30), time(12, 30), time(14, 10))),

@@ -275,6 +275,81 @@ def test_earnings_announcement_defaults_to_greg_trade_idea_four(tmp_path: Path) 
     assert idea.direction == "neutral"
 
 
+def test_earnings_bundle_expands_to_four_known_templates_without_substitution(tmp_path: Path) -> None:
+    class IgnoringIntentClient:
+        def chat_json(self, _system_prompt: str, user_prompt: str) -> dict:
+            supplied = json.loads(user_prompt)["posts"]
+            return {
+                "results": [
+                    {
+                        "signal_id": item["signal_id"],
+                        "action": "ignore",
+                        "symbol": "ABBV",
+                        "direction": "neutral",
+                        "strategy_hint": "",
+                        "reason": "Headline alone",
+                    }
+                    for item in supplied
+                ]
+            }
+
+    input_path = _write_json(
+        tmp_path / "signals.json",
+        _packet([
+            _record(
+                "351",
+                "earnings_bundle",
+                "4 Trade Ideas for AbbVie: Bonus Idea $ABBV",
+                ["ABBV"],
+                idea_number=None,
+            )
+        ]),
+    )
+    output_dir = tmp_path / "output"
+    first = import_correspondent_signals(
+        input_path,
+        profile_path=PROFILE,
+        universe_symbols={"ABBV"},
+        output_dir=output_dir,
+        intent_client=IgnoringIntentClient(),
+    )
+    second = import_correspondent_signals(
+        input_path,
+        profile_path=PROFILE,
+        universe_symbols={"ABBV"},
+        output_dir=output_dir,
+        intent_client=IgnoringIntentClient(),
+    )
+
+    assert first.record_count == 4
+    assert first.planner_idea_count == 1
+    assert first.created is True
+    assert second.created is False
+    translation = json.loads(first.translation_path.read_text(encoding="utf-8"))
+    records = sorted(translation["records"], key=lambda record: record["template_number"])
+    assert [record["template_number"] for record in records] == [1, 2, 3, 4]
+    assert [record["strategy_family"] for record in records] == [
+        "put_ratio_1x2",
+        "bull_call_spread_with_short_put",
+        "call_calendar_with_short_put",
+        "short_strangle",
+    ]
+    assert all(record["template_origin"] == "bundle" for record in records)
+    assert all(record["source_intent"]["action"] == "enter" for record in records)
+    assert [record["planner_eligible"] for record in records] == [False, False, False, True]
+    assert all(
+        "planner_structure_unsupported" in record["planner_blockers"]
+        for record in records[:3]
+    )
+    assert records[3]["planner_blockers"] == []
+    assert len(list((output_dir / "latest" / "greg_harmon").glob("*.json"))) == 4
+    ideas = load_ideas([first.planner_ideas_path])
+    assert len(ideas) == 1
+    assert ideas[0].underlying == "ABBV"
+    assert ideas[0].allowed_structures == ["short_strangle"]
+    assert "template_number:4" in ideas[0].thesis_tags
+
+
 def test_second_correspondent_uses_profile_configuration_without_new_code(tmp_path: Path) -> None:
     profile_path = tmp_path / "sample.yaml"
     profile_path.write_text(

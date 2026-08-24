@@ -85,6 +85,19 @@ Eligible ideas therefore participate in the existing planner and live-advisory f
 The activation does not itself run the planner, write a Sheet, call a broker, admit a
 live order, or place an order; all existing downstream gates remain authoritative.
 
+The X job runs at 08:15, 09:15, 11:45, and 14:00 CT. Birdclaw refreshes its
+canonical sanitized digest ten minutes before each intraday activation (and
+separately at 05:30 for the morning paper), so every unified planning window
+receives a bounded fresh correspondent packet without another collector or
+planner lane.
+
+For `numbered_template`, a profile may declare `bundle_idea_numbers`. When an
+announcement has no literal idea number, Kamandal expands the source into those
+numbered records using the existing `idea_number_map`. Explicit `Trade Idea N`
+updates remain singular. Greg's earnings bundle expands to Ideas 1--4, ignores
+the inaccessible article and bonus idea, parks unsupported exact structures,
+and publishes only currently compatible planner ideas.
+
 For each profile, activation exports the current Birdclaw packet first. It then builds
 questions from that same packet, invokes the sibling Market Cartographer, validates the
 all-effects-false response, and translates the packet once. The former path that built

@@ -42,7 +42,7 @@ All times are oldmac local time, expected to be America/Chicago.
 
 | Label suffix | Job | Schedule |
 | --- | --- | --- |
-| `x_bookmarks` | `x-bookmarks` | Weekdays 08:15 |
+| `x_bookmarks` | `x-bookmarks` | Weekdays 08:15, 09:15, 11:45, 14:00 |
 | `youtube` | `youtube` | Weekdays 09:15, 11:45, 14:00 |
 | `my_ideas` | `my-ideas` | Weekdays 08:05, 09:20 |
 | `live_reconciliation` | `live-reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:10 |

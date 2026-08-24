@@ -86,7 +86,7 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
 
     assert weekday_one_times("iv_afternoon") == {(13, 45)}
     assert weekday_one_times("youtube") == {(9, 15), (11, 45), (14, 0)}
-    assert weekday_one_times("x_bookmarks") == {(8, 15)}
+    assert weekday_one_times("x_bookmarks") == {(8, 15), (9, 15), (11, 45), (14, 0)}
     assert weekday_one_times("live_reconciliation") == {(8, 35), (10, 30), (12, 30), (14, 10)}
     assert weekday_one_times("unified_planning") == {
         (8, 50),

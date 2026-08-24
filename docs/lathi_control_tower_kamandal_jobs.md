@@ -87,7 +87,7 @@ Kamandal already owns the active launchd schedule on oldmac.
 
 | Label | Schedule | Purpose |
 | --- | --- | --- |
-| `com.kamandal.v2.x_bookmarks` | Weekdays 08:15 CT | Import X and activate source profiles before the first plan. |
+| `com.kamandal.v2.x_bookmarks` | Weekdays 08:15, 09:15, 11:45, 14:00 CT | Import X and activate source profiles before each planning window. |
 | `com.kamandal.v2.youtube` | Weekdays 09:15, 11:45, 14:00 CT | Import YouTube/transcript intelligence before the final advisory. |
 | `com.kamandal.v2.my_ideas` | Weekdays 08:05, 09:20 CT | Import operator ideas. |
 | `com.kamandal.v2.live_reconciliation` | Weekdays 08:35, 10:30, 12:30, 14:10 CT | Reconcile local live groups against Public broker state. |

@@ -31,7 +31,7 @@ PLANNER_SCHEMA = "kamandal.correspondent_planner_ideas.v1"
 RECEIPT_SCHEMA = "kamandal.correspondent_signal_receipt.v1"
 LIFECYCLE_SCHEMA = "kamandal.correspondent_lifecycle_index.v1"
 ACQUISITION_REFERENCE_SCHEMA = "birdclaw.correspondent_acquisition_reference.v1"
-TRANSLATOR_VERSION = "correspondent-translator-v3"
+TRANSLATOR_VERSION = "correspondent-translator-v4"
 
 SOURCE_INTENT_ACTIONS = {"enter", "update", "exit", "ignore"}
 SOURCE_INTENT_POSTURES = {"explicit_only", "inference_allowed"}
@@ -234,6 +234,22 @@ def load_correspondent_profile(path: str | Path) -> tuple[dict[str, Any], str]:
             raise ValueError("correspondent family is invalid")
         if config.get("mode") not in {"chart_watch", "numbered_template", "trade_journal", "ignore"}:
             raise ValueError(f"unsupported correspondent family mode: {config.get('mode')}")
+        bundle_numbers = config.get("bundle_idea_numbers")
+        if bundle_numbers is not None:
+            if config.get("mode") != "numbered_template":
+                raise ValueError("bundle_idea_numbers requires numbered_template mode")
+            if (
+                not isinstance(bundle_numbers, list)
+                or not bundle_numbers
+                or any(not isinstance(number, int) or number < 1 or number > 99 for number in bundle_numbers)
+                or len(set(bundle_numbers)) != len(bundle_numbers)
+            ):
+                raise ValueError("bundle_idea_numbers must contain distinct integers from 1..99")
+            template_map = config.get("idea_number_map") or {}
+            if any(str(number) not in template_map for number in bundle_numbers):
+                raise ValueError("bundle_idea_numbers must exist in idea_number_map")
+            if not isinstance(config.get("bundle_implies_enter", False), bool):
+                raise ValueError("bundle_implies_enter must be boolean")
     for rule in payload.get("strategy_rules") or []:
         _validate_regex_rule(rule, "strategy")
         for direction_rule in rule.get("direction_rules") or []:
@@ -335,21 +351,41 @@ def _translate_packet(
     as_of = _parse_timestamp(packet["generated_at"])
     records: list[dict[str, Any]] = []
     for source_record in packet["records"]:
+        family = (profile.get("families") or {}).get(str(source_record["classification"]["type"])) or {}
+        template_variants = _template_variants(source_record, family)
         symbols = source_record["literal"]["symbols"] or [None]
         for symbol_item in symbols:
             symbol = str(symbol_item["symbol"]).upper() if symbol_item else None
-            translated = _translate_record(
-                source_record,
-                profile,
-                symbol=symbol,
-                symbol_origin=str(symbol_item.get("origin") or "") if symbol_item else "",
-                as_of=as_of,
-                universe=universe,
-                chart=charts.get((source_record["source"]["source_id"], symbol or "")),
-                source_intent=source_intents[source_record["signal_id"]],
-            )
-            records.append(translated)
+            for template_number, template_origin in template_variants:
+                translated = _translate_record(
+                    source_record,
+                    profile,
+                    symbol=symbol,
+                    symbol_origin=str(symbol_item.get("origin") or "") if symbol_item else "",
+                    as_of=as_of,
+                    universe=universe,
+                    chart=charts.get((source_record["source"]["source_id"], symbol or "")),
+                    source_intent=source_intents[source_record["signal_id"]],
+                    template_number=template_number,
+                    template_origin=template_origin,
+                )
+                records.append(translated)
     return records
+
+
+def _template_variants(
+    source_record: dict[str, Any], family: dict[str, Any]
+) -> list[tuple[int | None, str]]:
+    literal_number = source_record["literal"].get("idea_number")
+    if literal_number is not None:
+        return [(int(literal_number), "literal")]
+    bundle_numbers = family.get("bundle_idea_numbers")
+    if isinstance(bundle_numbers, list) and bundle_numbers:
+        return [(int(number), "bundle") for number in bundle_numbers]
+    default_number = family.get("default_idea_number")
+    if default_number is not None:
+        return [(int(default_number), "default")]
+    return [(None, "none")]
 
 
 def _translate_record(
@@ -362,6 +398,8 @@ def _translate_record(
     universe: set[str],
     chart: dict[str, Any] | None,
     source_intent: dict[str, str],
+    template_number: int | None,
+    template_origin: str,
 ) -> dict[str, Any]:
     tweet_type = str(source_record["classification"]["type"])
     family = (profile.get("families") or {}).get(tweet_type)
@@ -372,7 +410,16 @@ def _translate_record(
     allowed_structures: list[str] = []
     planner_supported = False
     planner = dict((family or {}).get("planner") or {})
-    intent_action = source_intent["action"]
+    effective_source_intent = dict(source_intent)
+    if template_origin == "bundle" and bool((family or {}).get("bundle_implies_enter", False)):
+        effective_source_intent = {
+            **effective_source_intent,
+            "action": "enter",
+            "symbol": symbol or "",
+            "strategy_hint": "",
+            "reason": "Profile-declared numbered earnings bundle",
+        }
+    intent_action = effective_source_intent["action"]
     lifecycle_action = _lifecycle_action(intent_action)
     activation: dict[str, Any] = {"kind": "none", "status": "not_applicable"}
     construction_mode = "none"
@@ -420,12 +467,12 @@ def _translate_record(
                     blockers.append("chart_direction_unresolved")
         elif mode == "numbered_template":
             explicit = _strategy_match(text, profile)
-            interpreted = _strategy_from_intent(source_intent, profile)
-            idea_number = source_record["literal"].get("idea_number")
+            interpreted = _strategy_from_intent(effective_source_intent, profile)
+            idea_number = template_number
             mapped = (family.get("idea_number_map") or {}).get(str(idea_number))
             default_number = family.get("default_idea_number")
             default = (family.get("idea_number_map") or {}).get(str(default_number))
-            selected = explicit or interpreted or mapped or default
+            selected = mapped if template_origin == "bundle" else explicit or interpreted or mapped or default
             lifecycle_action = _lifecycle_action(intent_action)
             activation = {"kind": "source_activation", "status": intent_action}
             construction_mode = "reconstruct_fresh"
@@ -494,10 +541,12 @@ def _translate_record(
         "source": dict(source_record["source"]),
         "tweet_type": tweet_type,
         "classification": dict(source_record["classification"]),
-        "source_intent": dict(source_intent),
+        "source_intent": effective_source_intent,
         "symbol": symbol,
         "symbol_origin": symbol_origin,
         "strategy_family": strategy_family,
+        "template_number": template_number,
+        "template_origin": template_origin,
         "direction": direction,
         "construction_mode": construction_mode,
         "allowed_structures": allowed_structures,
@@ -526,6 +575,7 @@ def _planner_idea(record: dict[str, Any], profile: dict[str, Any]) -> dict[str, 
         *record["planner"]["thesis_tags"],
         f"correspondent:{profile['profile_id']}",
         f"signal_type:{record['tweet_type']}",
+        *([f"template_number:{record['template_number']}"] if record.get("template_number") is not None else []),
     ]))
     return {
         "idea_id": idea_id,
@@ -548,7 +598,7 @@ def _planner_idea(record: dict[str, Any], profile: dict[str, Any]) -> dict[str, 
         "operator_status": "pending",
         "notes": (
             f"source_id={record['signal_id']}; tweet_type={record['tweet_type']}; "
-            f"construction_mode={record['construction_mode']}"
+            f"template_number={record.get('template_number')}; construction_mode={record['construction_mode']}"
         ),
     }
 
@@ -838,14 +888,15 @@ def _render_review(translation: dict[str, Any]) -> str:
         f"- Birdclaw acquisition: `{translation['source_acquisition']['status']}`",
         "- Planner run performed: `false`",
         "",
-        "| Source | Type | Symbol | Strategy | Activation | Status | Planner | Blockers |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Source | Type | Template | Symbol | Strategy | Activation | Status | Planner | Blockers |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for record in translation["records"]:
         lines.append(
-            "| {source} | {tweet_type} | {symbol} | {strategy} | {activation} | {status} | {planner} | {blockers} |".format(
+            "| {source} | {tweet_type} | {template} | {symbol} | {strategy} | {activation} | {status} | {planner} | {blockers} |".format(
                 source=record["signal_id"],
                 tweet_type=record["tweet_type"],
+                template=record.get("template_number") or "-",
                 symbol=record["symbol"] or "-",
                 strategy=record["strategy_family"] or "-",
                 activation=record["activation"]["status"],
@@ -874,6 +925,8 @@ def _record_id(record: dict[str, Any], *, profile_text: str) -> str:
 
 def _logical_record_id(record: dict[str, Any]) -> str:
     identity = f"{record['profile_id']}|{record['signal_id']}|{record.get('symbol') or '-'}"
+    if record.get("template_origin") == "bundle":
+        identity += f"|template:{record.get('template_number')}"
     return hashlib.sha256(identity.encode()).hexdigest()[:24]
 
 

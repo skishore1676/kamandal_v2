@@ -220,6 +220,14 @@ all normalize into a common signal contract. Adding another correspondent
 normally adds a collector/profile/translator, not another planner or manager.
 Once normalized, the signal is evaluated by every compatible enabled playbook.
 
+Normalization may be one-to-many. A source profile with a stable numbered
+grammar may expand one announcement into several distinct template signals
+while retaining one source ID and separate template identities. For example,
+Greg Harmon's earnings announcement expands deterministically into Ideas 1--4
+using the declared profile map; inaccessible subscription content and bonus
+ideas are neither fetched nor invented. Each resulting structure then passes
+the ordinary compatibility and portfolio gates independently.
+
 A correspondent translator asks the configured LLM one bounded question: does
 this post introduce a new `enter` opportunity, an `update`, an `exit`, or
 `ignore`? Here `enter` means "investigate now or retain as a conditional watch,"
@@ -230,6 +238,11 @@ timestamp, correspondent, and interpreter identity; the model is not asked to
 reproduce an audit packet. Profiles select one posture: `explicit_only` or
 `inference_allowed`. This is prompt policy, not temperature tuning or a matrix
 of confidence thresholds.
+
+When a profile declares an exact recurring bundle grammar, that declaration may
+deterministically establish `enter` and the numbered strategy families. This is
+the same principle as extracting multiple ideas from one YouTube transcript:
+collectors differ, but normalized ideas and downstream ownership do not.
 
 A source profile also decides whether it needs external market evidence. When it
 does, Kamandal sends a small, versioned question to Market Cartographer. The

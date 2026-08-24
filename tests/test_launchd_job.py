@@ -565,12 +565,12 @@ def test_scheduled_job_health_keeps_newer_x_bookmarks_failure(tmp_path, monkeypa
     artifact = tmp_path / "data" / "digest" / "x_bookmarks" / "2026-07-02" / "llm" / "2026-07-02_llm_raw.json"
     artifact.parent.mkdir(parents=True)
     artifact.write_text('[{"ideas": []}]', encoding="utf-8")
-    old_success_at = datetime(2026, 7, 2, 8, 50, tzinfo=launchd_job.CENTRAL).timestamp()
+    old_success_at = datetime(2026, 7, 2, 14, 5, tzinfo=launchd_job.CENTRAL).timestamp()
     os.utime(artifact, (old_success_at, old_success_at))
     label = "com.kamandal.v2.x_bookmarks"
     log_path = log_dir / f"{label}.out.log"
     log_path.write_text(launchd_job.RESULT_PREFIX + json.dumps({"job": "x-bookmarks", "status": "failed"}) + "\n")
-    failed_at = datetime(2026, 7, 2, 8, 55, tzinfo=launchd_job.CENTRAL).timestamp()
+    failed_at = datetime(2026, 7, 2, 14, 10, tzinfo=launchd_job.CENTRAL).timestamp()
     os.utime(log_path, (failed_at, failed_at))
 
     report = launchd_job.scheduled_job_health(

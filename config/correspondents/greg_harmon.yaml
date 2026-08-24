@@ -17,7 +17,7 @@ families:
       thesis_tags: [correspondent_weekly, breakout, momentum]
       horizon_days: 30
 
-  earnings_idea:
+  earnings_idea: &greg_earnings_templates
     mode: numbered_template
     max_age_hours: 36
     default_idea_number: 4
@@ -45,6 +45,11 @@ families:
     planner:
       thesis_tags: [correspondent_earnings, earnings, volatility]
       horizon_days: 7
+
+  earnings_bundle:
+    <<: *greg_earnings_templates
+    bundle_idea_numbers: [1, 2, 3, 4]
+    bundle_implies_enter: true
 
   trade_journal:
     mode: trade_journal

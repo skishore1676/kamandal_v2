@@ -217,6 +217,7 @@ def main() -> int:
 
     expected_greg_types = {
         "weekly_ideas",
+        "earnings_bundle",
         "earnings_idea",
         "trade_journal",
         "irrelevant",
@@ -249,6 +250,20 @@ def main() -> int:
         raise RuntimeError(
             "second-profile Birdclaw acquisition health did not reach Kamandal translation"
         )
+    abbv_bundle = [
+        record
+        for record in greg_translation["records"]
+        if record["signal_id"] == "x-post:1006" and record["symbol"] == "ABBV"
+    ]
+    if [record["template_number"] for record in abbv_bundle] != [1, 2, 3, 4]:
+        raise RuntimeError("Greg ABBV earnings bundle did not expand to Ideas 1 through 4")
+    if [record["strategy_family"] for record in abbv_bundle] != [
+        "put_ratio_1x2",
+        "bull_call_spread_with_short_put",
+        "call_calendar_with_short_put",
+        "short_strangle",
+    ]:
+        raise RuntimeError("Greg ABBV earnings bundle drifted from its declared template map")
 
     receipt = {
         "schema": "kamandal.correspondent_signal_replay.v1",
@@ -351,6 +366,11 @@ def _fixture_db(path: Path) -> None:
             ("1003", "Bought $IWM call spread for 1.25", "harmongreg"),
             ("1004", "Closed $IWM call spread", "harmongreg"),
             ("1005", "Great game last night", "harmongreg"),
+            (
+                "1006",
+                "4 Trade Ideas for AbbVie: Bonus Idea $ABBV",
+                "harmongreg",
+            ),
             ("2001", "Swing entry: Bought $SPY call spread", "sampleperson"),
         ]
         for index, (source_id, text, author) in enumerate(rows, start=1):
