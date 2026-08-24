@@ -415,6 +415,7 @@ def test_scheduled_job_health_detects_stale_frequent_job(tmp_path) -> None:
     report = launchd_job.scheduled_job_health(
         repo_root=tmp_path,
         log_dir=log_dir,
+        launchd_dir=tmp_path / "LaunchAgents",
         label_prefix="com.kamandal.v2",
         now=datetime(2026, 6, 30, 10, 0, tzinfo=launchd_job.CENTRAL),
     )
@@ -499,6 +500,7 @@ def test_scheduled_job_health_accepts_recent_frequent_job(tmp_path, monkeypatch)
     report = launchd_job.scheduled_job_health(
         repo_root=tmp_path,
         log_dir=log_dir,
+        launchd_dir=tmp_path / "LaunchAgents",
         label_prefix="com.kamandal.v2",
         now=datetime(2026, 6, 30, 10, 0, tzinfo=launchd_job.CENTRAL),
     )
@@ -575,6 +577,7 @@ def test_scheduled_job_health_accepts_newer_x_bookmarks_artifact(tmp_path, monke
     report = launchd_job.scheduled_job_health(
         repo_root=tmp_path,
         log_dir=log_dir,
+        launchd_dir=tmp_path / "LaunchAgents",
         label_prefix="com.kamandal.v2",
         now=datetime(2026, 7, 2, 15, 30, tzinfo=launchd_job.CENTRAL),
     )
@@ -605,6 +608,7 @@ def test_scheduled_job_health_keeps_newer_x_bookmarks_failure(tmp_path, monkeypa
     report = launchd_job.scheduled_job_health(
         repo_root=tmp_path,
         log_dir=log_dir,
+        launchd_dir=tmp_path / "LaunchAgents",
         label_prefix="com.kamandal.v2",
         now=datetime(2026, 7, 2, 15, 30, tzinfo=launchd_job.CENTRAL),
     )
