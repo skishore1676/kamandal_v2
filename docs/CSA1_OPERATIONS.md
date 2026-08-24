@@ -43,12 +43,15 @@ defaults. Lane-specific required keys are:
 - Earnings calendar: `event_expiration.near_before_days`,
   `event_expiration.far_after_days`, and `close_only`.
 
-`kamandal csa-validate-policy` reports every missing or incompatible field and
-does not admit the affected row.
+`kamandal csa-validate-policy` reports every missing or incompatible CSA field
+and does not admit the affected row. Production deployment uses the broader
+`kamandal validate-sheet-policy` gate, which also compiles the ordinary planner
+and unified strategy-engine contracts from the same read-only Sheet snapshot.
 
 ## Commands
 
 ```bash
+kamandal validate-sheet-policy
 kamandal csa-validate-policy
 kamandal csa-migrate-db --db data/kamandal_v2.db
 kamandal csa-shadow-scan --db data/kamandal_v2.db --provider public --ideas data/ideas/active

@@ -199,9 +199,15 @@ existing `mode`, `max_bid_ask_pct`, `profit_target_pct`, `max_loss_multiple`,
 `half_time_exit`, `exit_pre_event_days`, and lifecycle JSON already express the
 operator-owned strategy policy. Opening/closing adverse-loss buffers,
 confirmation semantics, quote validity, and execution-envelope preservation
-are shared platform safety behavior. Before deployment, Kamandal must read back
-that every enabled row has a valid `max_bid_ask_pct`; it must not silently
-invent a fallback for a missing value.
+are shared platform safety behavior. For a short strangle,
+`management_policy_json.lifecycle.loss_stages` must retain both the explicit
+`watch_multiple` and `close_multiple`; the dedicated `loss_close_multiple`
+column is the canonical close threshold and must agree with the JSON close
+value during migration. Before deployment, Old Mac must run
+`kamandal validate-sheet-policy`. That read-only command validates every enabled
+row, including `max_bid_ask_pct`, against the planner, unified compiler, and
+strict CSA compatibility compiler from one live Sheet snapshot. Kamandal must
+not silently invent a fallback for a missing operator value.
 
 ## `daily_plan`
 

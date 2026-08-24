@@ -50,6 +50,20 @@ The ownership rule is simple:
   effects; and
 - TradeLab reads Kamandal facts and produces analysis. It does not manage trades.
 
+The Sheet/code boundary has one mandatory deployment check. On Old Mac,
+`kamandal validate-sheet-policy` reads the canonical Sheet once and compiles
+that exact snapshot through the ordinary planner model, the unified capability
+compiler, and the retained strict CSA compatibility compiler. The command is
+read-only: it does not capture the daily snapshot, touch SQLite, invoke market
+data, or call a broker. A failure blocks activation and identifies the contract
+that rejected the row. This closes the gap where repository fixtures could be
+green while a live Sheet JSON edit made the next natural planner fail.
+
+Policy compilation remains system-wide and fail-closed today. A malformed
+enabled row can therefore block both live and shadow books. Per-lane policy
+quarantine is a separate architecture change; it must preserve visibility and
+must never allow an invalid live row to be silently skipped.
+
 ### Capability versus playbook
 
 A strategy capability is code that knows how to validate, construct, and manage

@@ -48,6 +48,12 @@ TEST_CMD=""
 # Whether to run tests even when repo is already up to date.
 RUN_TESTS_WHEN_ALREADY_CURRENT=false
 
+# Compile the canonical Google Sheet through the planner, unified engine, and
+# retained CSA compatibility contract after tests and before activation. This
+# command is read-only and must fail closed when Sheet/code contracts drift.
+RUN_SHEET_POLICY_GATE=true
+SHEET_POLICY_GATE_CMD=""
+
 # Optional final deploy/restart command.
 #
 # Examples:
@@ -345,6 +351,19 @@ auto_test_command() {
   fi
 }
 
+auto_sheet_policy_gate_command() {
+  if [ -n "$SHEET_POLICY_GATE_CMD" ]; then
+    printf "%s\n" "$SHEET_POLICY_GATE_CMD"
+    return 0
+  fi
+
+  if [ -x ".venv/bin/kamandal" ]; then
+    printf "%s\n" ".venv/bin/kamandal validate-sheet-policy"
+  else
+    printf "%s\n" "PYTHONPATH=src python3 -m kamandal_v2.entrypoint validate-sheet-policy"
+  fi
+}
+
 run_post_update_pipeline() {
   local old_head="$1"
   local reason="$2"
@@ -369,6 +388,17 @@ run_post_update_pipeline() {
     fi
   else
     log "Skipping tests because RUN_TESTS=false"
+  fi
+
+  if is_true "$RUN_SHEET_POLICY_GATE"; then
+    local policy_cmd
+    policy_cmd="$(auto_sheet_policy_gate_command)"
+
+    if ! run_cmd_string "Compiling canonical Google Sheet policy" "$policy_cmd"; then
+      rollback_offer "$old_head" "Canonical Google Sheet policy gate failed" "Y"
+    fi
+  else
+    log "Skipping canonical Google Sheet policy gate because RUN_SHEET_POLICY_GATE=false"
   fi
 
   if [ -n "$DEPLOY_CMD" ]; then

@@ -72,6 +72,10 @@ def main() -> None:
     subparsers.add_parser("pull-sheet", help="Read configured Google Sheet tabs and cache the row payload")
     validate_parser = subparsers.add_parser("validate-config", help="Validate universe and playbook configuration")
     validate_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
+    subparsers.add_parser(
+        "validate-sheet-policy",
+        help="Read the canonical Sheet once and compile every planning policy contract",
+    )
     subparsers.add_parser("csa-validate-policy", help="Read and strictly validate canonical Sheet CSA policy")
     csa_snapshot_parser = subparsers.add_parser(
         "csa-policy-snapshot",
@@ -688,6 +692,14 @@ def main() -> None:
         universe, playbooks = load_planner_config(config, source=args.config_source)
         result = validate_config(universe, playbooks)
         print(json.dumps(result.to_dict(), indent=2))
+        if not result.ok:
+            raise SystemExit(1)
+        return
+    if args.command == "validate-sheet-policy":
+        from kamandal_v2.strategy_engine.sheet_policy_gate import validate_sheet_policy
+
+        result = validate_sheet_policy(config)
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
         if not result.ok:
             raise SystemExit(1)
         return

@@ -376,6 +376,7 @@ After deployment:
 ```bash
 cd /Users/sunny/Documents/kamandal_v2
 git rev-parse --short HEAD
+.venv/bin/kamandal validate-sheet-policy
 PYTHONPATH=src .venv/bin/python -m pytest tests/test_ops_alerts.py tests/test_launchd_job.py tests/test_operator_review_reconciliation.py tests/test_live_health.py -q
 cd /Users/sunny/code/lathi-bus && python3 -m lathi_bus.cli doctor --profile kamandal-northstar
 cd /Users/sunny/code/lathi-bus && python3 -m lathi_bus.cli telegram-doctor --profile kamandal-northstar

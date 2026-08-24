@@ -18,6 +18,9 @@ Google Sheet, database, launchd, broker, auth, or external-send effect.
    copies and labels, Sheet header/validation/value snapshot, database backup
    checksum, `PRAGMA integrity_check`, open-group/order inventory, and the
    rendered target plist hashes.
+5. On Old Mac, run `.venv/bin/kamandal validate-sheet-policy`. It must return
+   `ok=true` for the exact canonical Sheet snapshot before scheduler activation.
+   This read-only gate does not replace the value/validation readback above.
 
 ## Exact Sheet change set
 
