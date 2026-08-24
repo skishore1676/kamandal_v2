@@ -51,7 +51,6 @@ class TastytradeAdapter:
     def __init__(self, config: dict[str, Any]) -> None:
         tasty_cfg = ((config.get("broker") or {}).get("tastytrade") or {})
         self.api_base_url = str(tasty_cfg.get("api_base_url") or DEFAULT_API_BASE_URL).rstrip("/")
-        self.client_id = str(tasty_cfg.get("client_id") or "")
         self.client_secret = str(tasty_cfg.get("client_secret") or "")
         self.refresh_token = str(tasty_cfg.get("refresh_token") or "")
         self.account_number = str(tasty_cfg.get("account_number") or "")
@@ -68,7 +67,7 @@ class TastytradeAdapter:
         self._market_metric_cache: dict[str, dict[str, Any]] = {}
 
     def available(self) -> bool:
-        return bool(self.client_id and self.client_secret and self.refresh_token)
+        return bool(self.client_secret and self.refresh_token)
 
     def live_readiness(self) -> dict[str, Any]:
         reasons = []
@@ -406,8 +405,6 @@ class TastytradeAdapter:
             "client_secret": self.client_secret,
             "grant_type": "refresh_token",
         }
-        if self.client_id:
-            payload["client_id"] = self.client_id
         if self.oauth_scopes:
             payload["scope"] = " ".join(self.oauth_scopes)
         response = self._session.post(f"{self.api_base_url}/oauth/token", json=payload, headers=self._headers(), timeout=30)

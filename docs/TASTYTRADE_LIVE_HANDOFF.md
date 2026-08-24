@@ -17,8 +17,10 @@ the pinned Orders API version. The documented production API is
 
 Before an authenticated check, obtain:
 
-1. A rotated production OAuth client id, client secret, and refresh token.
-   Rotate the previously exposed values before they are used again.
+1. A rotated production OAuth client secret and refresh token. Create the
+   initial refresh token in Tastytrade under `OAuth Applications -> Manage ->
+   Create Grant`. Rotate the previously exposed values before they are used
+   again. A client id is not required for this personal-application grant flow.
 2. The production Tastytrade account number approved for uncovered options.
 3. A separate sandbox OAuth client and sandbox account number.
 
@@ -35,8 +37,8 @@ cd /Users/sunny/Documents/kamandal_v2
 ```
 
 This atomically updates `/Users/sunny/Documents/kamandal_v2/.env` with owner-only
-permissions. It writes the Tastytrade client id, client secret, refresh token,
-account number, documented production host, and pinned Orders API version. It
+permissions. It writes the Tastytrade client secret, refresh token, account
+number, documented production host, and pinned Orders API version. It
 prints key names only, never values.
 
 For sandbox, use separate credentials and a separate file:

@@ -67,7 +67,6 @@ def _adapter(tmp_path) -> TastytradeAdapter:
         {
             "broker": {
                 "tastytrade": {
-                    "client_id": "client-id",
                     "client_secret": "secret",
                     "refresh_token": "refresh",
                     "account_number": "5WT00000",
@@ -125,7 +124,7 @@ def test_tastytrade_account_state_fetches_oauth_and_account(tmp_path) -> None:
     assert account.positions_count == 1
     token_request = adapter._session.requests[0]
     assert token_request["url"] == "https://api.tastyworks.com/oauth/token"
-    assert token_request["json"]["client_id"] == "client-id"
+    assert "client_id" not in token_request["json"]
     assert token_request["json"]["scope"] == "read trade"
     assert token_request["headers"]["User-Agent"] == "kamandal-v2/0.1"
     assert "Accept-Version" not in token_request["headers"]
@@ -409,9 +408,9 @@ def test_tastytrade_readiness_warns_on_legacy_api_host_without_blocking(tmp_path
     assert report["api_base_url_warning"] == "api_base_url_not_currently_documented_by_tastytrade"
 
 
-def test_tastytrade_readiness_requires_complete_oauth_triplet(tmp_path) -> None:
+def test_tastytrade_readiness_requires_secret_and_refresh_token(tmp_path) -> None:
     adapter = _adapter(tmp_path)
-    adapter.client_id = ""
+    adapter.client_secret = ""
 
     report = adapter.configuration_report()
 

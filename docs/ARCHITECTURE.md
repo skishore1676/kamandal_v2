@@ -569,6 +569,10 @@ reads, broker dry-runs, sandbox submissions, the bounded production canary, and
 the Sheet promotion are successive and separately authorized gates. See
 [TASTYTRADE_LIVE_HANDOFF.md](TASTYTRADE_LIVE_HANDOFF.md).
 
+For Kamandal's personal OAuth application, the refresh exchange uses the
+client secret and the user grant's refresh token. A client id is not required;
+short-lived access tokens are generated automatically at runtime.
+
 ### Autonomous short-strangle admission
 
 The Sheet is authoritative for the volatility, DTE, delta, range, profit, time,

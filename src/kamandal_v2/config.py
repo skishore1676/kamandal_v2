@@ -242,7 +242,6 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "broker.public.account_cache_file": os.environ.get("PUBLIC_ACCOUNT_CACHE_FILE"),
         "broker.public.api_requests_per_second": os.environ.get("API_REQUESTS_PER_SECOND"),
         "broker.public.api_burst_limit": os.environ.get("API_BURST_LIMIT"),
-        "broker.tastytrade.client_id": os.environ.get("TASTYTRADE_CLIENT_ID"),
         "broker.tastytrade.client_secret": os.environ.get("TASTYTRADE_CLIENT_SECRET"),
         "broker.tastytrade.refresh_token": os.environ.get("TASTYTRADE_REFRESH_TOKEN"),
         "broker.tastytrade.account_number": os.environ.get("TASTYTRADE_ACCOUNT_NUMBER"),

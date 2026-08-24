@@ -60,7 +60,7 @@ def main() -> None:
     parser.add_argument(
         "--rotate-oauth",
         action="store_true",
-        help="Prompt for and replace client id, client secret, and refresh token",
+        help="Prompt for and replace client secret and refresh token",
     )
     args = parser.parse_args()
 
@@ -74,13 +74,11 @@ def main() -> None:
         "TASTYTRADE_ORDERS_API_VERSION": ORDERS_API_VERSION,
     }
     if args.rotate_oauth:
-        client_id = getpass.getpass("New Tastytrade client id (input hidden): ").strip()
         client_secret = getpass.getpass("New Tastytrade client secret (input hidden): ").strip()
         refresh_token = getpass.getpass("New Tastytrade refresh token (input hidden): ").strip()
-        if not client_id or not client_secret or not refresh_token:
-            raise SystemExit("client id, client secret, and refresh token are required; no file changed")
+        if not client_secret or not refresh_token:
+            raise SystemExit("client secret and refresh token are required; no file changed")
         updates.update({
-            "TASTYTRADE_CLIENT_ID": client_id,
             "TASTYTRADE_CLIENT_SECRET": client_secret,
             "TASTYTRADE_REFRESH_TOKEN": refresh_token,
         })
