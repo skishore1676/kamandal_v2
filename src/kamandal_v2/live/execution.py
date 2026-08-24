@@ -164,25 +164,26 @@ def execute_live_approved(
     rows = _approved_rows(config, close=close, tables=sheet_tables)
     if not rows and not close:
         staged = sorted(
-            store.live_order_intents_by_status({"stage_approved_pending_submit", WAITING_ENTRY_WINDOW}),
+            (
+                ticket
+                for ticket in store.live_order_intents_by_status(
+                    {"stage_approved_pending_submit", WAITING_ENTRY_WINDOW}
+                )
+                if str(ticket.get("intent_type") or "open") == "open"
+            ),
             key=lambda ticket: (
-                0 if str(ticket.get("intent_type") or "") in {"close", "adjust"} else 1,
                 str(ticket.get("created_at") or ""),
                 str(ticket.get("ticket_hash") or ""),
             ),
         )
         if staged:
             ticket = staged[0]
-            is_management = _is_lifecycle_management_ticket(ticket)
-            if is_management:
-                authorized, authorization_reason = _lifecycle_management_authorization(ticket, config=config, store=store)
+            try:
+                daily_policy = load_daily_policy_snapshot(config)
+            except (FileNotFoundError, ValueError) as exc:
+                authorized, authorization_reason = False, f"blocked_daily_policy_snapshot:{type(exc).__name__}"
             else:
-                try:
-                    daily_policy = load_daily_policy_snapshot(config)
-                except (FileNotFoundError, ValueError) as exc:
-                    authorized, authorization_reason = False, f"blocked_daily_policy_snapshot:{type(exc).__name__}"
-                else:
-                    authorized, authorization_reason = _stage_ticket_authorization(ticket, daily_policy)
+                authorized, authorization_reason = _stage_ticket_authorization(ticket, daily_policy)
             if not authorized:
                 store.event(
                     "stage_authorized_live_entry_blocked",
@@ -200,24 +201,6 @@ def execute_live_approved(
                     "source": "stage_authorized_ledger",
                 }
             _assert_submit_allowed(config, submit=submit)
-            if is_management:
-                adapter = broker_adapter(config)
-                result = _execute_ticket(
-                    config,
-                    adapter,
-                    store,
-                    ticket,
-                    submit=submit,
-                    close=str(ticket.get("intent_type") or "") == "close",
-                )
-                return {
-                    "action": action,
-                    "submit": submit,
-                    "processed": 1,
-                    "results": [result],
-                    "source": "stage_authorized_ledger",
-                    "management": True,
-                }
             gate = entry_health_gate(store, config)
             if submit and gate["blocked"]:
                 return {
@@ -2955,6 +2938,11 @@ def _selected_entry_failure(execution: dict[str, Any], *, submit: bool) -> dict[
         if status == "dry_run":
             continue
         if status in {WAITING_ENTRY_WINDOW, "retired_stale_entry_approval"}:
+            continue
+        submission_window = result.get("submission_window") or {}
+        if bool(submission_window.get("retryable_current_session")) or bool(
+            submission_window.get("retryable_next_session")
+        ):
             continue
         if reason.startswith("basket_ticket_active:"):
             continue

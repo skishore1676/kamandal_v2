@@ -53,10 +53,14 @@ provider, launchd, or an external notification channel.
 Before the cutover, separate schedule names could each decide work for the same
 trading domain. After it, `run_unified_planning.sh` is the sole planning
 entrypoint and `run_unified_lifecycle_management.sh` is the sole management
-entrypoint. The latter runs live branches before shadow branches and records
-branch failures independently. Reconciliation, the guarded order executor,
-health, and reports remain supporting jobs rather than competing strategy
-owners.
+entrypoint. The latter synchronizes order state, completes live evaluation and
+guarded close/adjust effects, synchronizes again, and only then runs shadow.
+Branch failures remain independently recorded and cannot suppress already
+staged live work. The separate approved-order runner performs a read-only
+status refresh and owns open submissions only; active-order recovery remains
+inside the unified lifecycle cycle. Reconciliation, health, and reports remain
+supporting jobs rather than
+competing strategy owners.
 
 For example, a short-strangle market scan now becomes a stable synthetic
 opportunity for an enabled universe symbol, is matched only against

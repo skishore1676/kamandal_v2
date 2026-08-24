@@ -14,8 +14,11 @@ run_live_approved_orders() {
   ideas_dir="$CURRENT_IDEAS_DIR"
   local submit_args=()
   submit_args+=(--submit-auto)
-  log "Syncing live order status before evaluating staged approvals."
-  "$KAMANDAL_BIN" sync-live-orders
+  # This runner owns open submissions only.  Poll current broker status as a
+  # fail-closed entry precondition, but leave repricing, expiry, close recovery,
+  # and approval cleanup to the unified lifecycle cycle.
+  log "Refreshing live order status before evaluating staged open approvals."
+  "$KAMANDAL_BIN" sync-live-orders --read-only
   log "Evaluating sheet-approved live open orders submit=${KAMANDAL_LIVE_SUBMIT:-0}."
   "$KAMANDAL_BIN" execute-live-approved \
     ${submit_args+"${submit_args[@]}"} \
@@ -23,10 +26,6 @@ run_live_approved_orders() {
     --recovery-ideas "$ideas_dir" \
     --recovery-config-source sheet \
     --recovery-provider public
-  log "Syncing live order status."
-  "$KAMANDAL_BIN" sync-live-orders
-  log "Cleaning stale live approval cells."
-  "$KAMANDAL_BIN" cleanup-live-approvals
 }
 
 with_lock live_approved_orders run_live_approved_orders

@@ -39,10 +39,19 @@ def run_unified_lifecycle_management(
     *,
     sqlite_path: str,
     provider: str,
+    branch: str = "all",
     live_lifecycle_manager: Manager | None = None,
     shadow_lifecycle_manager: Manager | None = None,
 ) -> UnifiedManagementReceipt:
-    """Evaluate all canonical lifecycle ownership in deterministic order."""
+    """Evaluate canonical lifecycle ownership in deterministic live-first order.
+
+    ``branch`` lets the scheduled runner finish the complete guarded-live effect
+    cycle before starting broker-inert shadow work.  The default remains ``all``
+    for read-only callers and compatibility, while scheduled operation invokes
+    ``live`` and ``shadow`` separately around the live effect boundary.
+    """
+    if branch not in {"all", "live", "shadow"}:
+        raise ValueError(f"unsupported lifecycle-management branch: {branch}")
     if live_lifecycle_manager is None or shadow_lifecycle_manager is None:
         from kamandal_v2.strategy_lanes.management_runtime import (
             run_live_lifecycle_management,
@@ -55,11 +64,12 @@ def run_unified_lifecycle_management(
         shadow_lifecycle_manager = shadow_lifecycle_manager or (
             lambda: run_shadow_lifecycle_management(config, sqlite_path=sqlite_path, provider=provider)
         )
-    branches = (
-        _run_branch("live_lifecycle", live_lifecycle_manager),
-        _run_branch("shadow_lifecycle", shadow_lifecycle_manager),
-    )
-    return UnifiedManagementReceipt(branches)
+    branches: list[ManagementBranchReceipt] = []
+    if branch in {"all", "live"}:
+        branches.append(_run_branch("live_lifecycle", live_lifecycle_manager))
+    if branch in {"all", "shadow"}:
+        branches.append(_run_branch("shadow_lifecycle", shadow_lifecycle_manager))
+    return UnifiedManagementReceipt(tuple(branches))
 
 
 def _run_branch(branch: str, manager: Manager) -> ManagementBranchReceipt:

@@ -170,6 +170,42 @@ def test_no_selected_entry_is_silent(tmp_path, monkeypatch) -> None:
     assert result["operator_notification"]["needed"] is False
 
 
+def test_retryable_close_deferral_is_owned_by_next_management_cycle(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    monkeypatch.setattr(
+        execution,
+        "execute_live_approved",
+        lambda *_args, **_kwargs: {
+            "processed": 1,
+            "results": [
+                {
+                    "status": "deferred_market_closed",
+                    "reason": "close_cutoff_reached",
+                    "intent_type": "close",
+                    "ticket_hash": "nvda-close",
+                    "underlying": "NVDA",
+                    "submission_window": {"retryable_next_session": True},
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        execution,
+        "send_lathi_alert",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("retryable next-session management must stay silent")
+        ),
+    )
+
+    result = execution.execute_live_approved_with_recovery(_config(), submit=True, store=store)
+
+    assert result["operator_notification"] == {
+        "needed": False,
+        "attempted": False,
+        "reason": "no_selected_entry_failure",
+    }
+
+
 def test_auto_selected_advisory_risk_block_notifies_with_cap_reason(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     sent = []

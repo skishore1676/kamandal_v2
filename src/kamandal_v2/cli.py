@@ -102,6 +102,12 @@ def main() -> None:
     )
     unified_management_parser.add_argument("--db", default="data/kamandal_v2.db")
     unified_management_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
+    unified_management_parser.add_argument(
+        "--branch",
+        choices=["all", "live", "shadow"],
+        default="all",
+        help="Run both branches or one branch around the guarded live effect boundary",
+    )
     csa_scan_parser = subparsers.add_parser("csa-shadow-scan", help="Run the broker-inert CSA discovery and entry shadow cycle")
     csa_scan_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_scan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
@@ -580,7 +586,12 @@ def main() -> None:
     if args.command == "unified-lifecycle-management":
         from kamandal_v2.strategy_engine.management import run_unified_lifecycle_management
 
-        result = run_unified_lifecycle_management(config, sqlite_path=args.db, provider=args.provider)
+        result = run_unified_lifecycle_management(
+            config,
+            sqlite_path=args.db,
+            provider=args.provider,
+            branch=args.branch,
+        )
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
         if not result.ok:
             raise SystemExit(1)

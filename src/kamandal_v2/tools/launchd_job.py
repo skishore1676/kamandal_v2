@@ -894,10 +894,13 @@ def _observation_time(observation: dict[str, Any]) -> datetime | None:
 def evaluate_job_observation(job: str, expectation: dict[str, Any], observation: dict[str, Any]) -> dict[str, Any] | None:
     if expectation["status"] in {"not_due_yet", "pending_grace", "not_expected_today"}:
         return None
-    if observation["status"] == "missing_log" and observation.get("installed_at") and expectation.get("expected_by"):
+    if observation.get("installed_at") and expectation.get("expected_by"):
         installed_at = datetime.fromisoformat(str(observation["installed_at"]))
         expected_by = datetime.fromisoformat(str(expectation["expected_by"]))
         if installed_at > expected_by:
+            # The current plist became active after the most recent scheduled
+            # tick.  An absent or older log belongs to the prior activation and
+            # cannot make the newly installed schedule retroactively stale.
             return None
     if observation["status"] in {"missing_log", "unreadable_log", "no_result_line"}:
         return {"job": job, "reason": observation["status"], "detail": observation.get("error") or observation.get("log_path")}

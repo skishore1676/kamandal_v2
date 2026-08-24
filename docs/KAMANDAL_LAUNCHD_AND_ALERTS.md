@@ -71,6 +71,21 @@ orders stop at 14:40, preserving a 20-minute buffer before the 15:00 close.
 Lifecycle management remains entry-independent and continues every five minutes
 through the final pre-close exit evaluation.
 
+Each unified lifecycle tick has one ordered recovery path:
+
+1. synchronize broker working orders and apply bounded repricing/fill recovery;
+2. evaluate every live lifecycle, isolating an error to the affected lifecycle;
+3. submit the live close/adjust tickets staged by successful evaluations;
+4. synchronize again and clean completed approval projections; and
+5. evaluate broker-inert shadow lifecycles only after live effects are complete.
+
+`live-approved-orders` owns open submissions only. Its precondition is a
+read-only broker-status refresh; it must not consume lifecycle `close` or
+`adjust` tickets or advance repricing/expiry recovery. Full position
+reconciliation remains at its fixed times; the five-minute lifecycle cycle
+owns active-order recovery and refreshes order state without repeating the
+heavier position/Sheet reconciliation on every tick.
+
 ### Shadow evidence status
 
 The legacy `market-shadow` and `shadow-eod-report` labels are intentionally not
@@ -270,7 +285,7 @@ KAMANDAL_SHEETS_RETRY_MAX_DELAY_SECONDS=4
   sends once, remains visible in Control Tower, and can notify again only after
   it clears or its affected reason/group/order changes.
 - `exit_pipeline_stalled` is RED. It means policy approved a close locally but
-  `live-approved-orders` did not submit it within
+  `unified-lifecycle-management` did not submit it within
   `live.health.exit_pipeline_stalled_minutes`.
 - `urgent_close_order_stale` is RED. It means a broker-working `max_loss` or
   `pre_event` close is still open past
@@ -293,15 +308,15 @@ live:
   exit_submit_source: sheet   # sheet | ledger
 ```
 
-`sheet` is the legacy bridge: `live-management` writes
-`APPROVE_LIVE_CLOSE` rows and `live-approved-orders` reads them. It is kept as a
-rollback path.
+`sheet` is the retained compatibility bridge for historical approval rows. It
+is not the scheduled canonical lifecycle owner.
 
 `ledger` is the preferred live mode: when `exit_approval_mode=auto_rules`,
-`live-management` writes approved close intents directly to SQLite as
-`approved_close_pending_submit`; `live-approved-orders` drains every eligible
-close up to `live.max_close_submits_per_run`. The Sheet becomes a projection,
-not the execution queue.
+the unified lifecycle owner writes frozen close/adjust intents directly to
+SQLite and its own guarded close executor drains them in the same ordered
+management cycle. `live-approved-orders` drains open entries only. The Sheet
+remains the operator-policy surface and a projection, not the close execution
+queue.
 
 Close lifecycle vocabulary:
 
@@ -310,7 +325,7 @@ Close lifecycle vocabulary:
 | `approved_close_pending_submit` | Local policy approved the exit; submitter should drain it. |
 | `submitted` / `repriced` | Broker acknowledged a working close. |
 | `exit_pipeline_pending` | Health sees local pending pipeline state, not broker risk. |
-| `exit_pipeline_stalled` | Local approved close did not drain fast enough; check `live-approved-orders` logs. |
+| `exit_pipeline_stalled` | Local approved close did not drain fast enough; check `unified-lifecycle-management` logs. |
 | `urgent_close_order_stale` | Health reason for an urgent broker-working close that has not filled fast enough. |
 | `expired_eod` | DAY close was cancelled/expired; management can re-stage next session. |
 | `expired_stale_close_approval` | Local close intent was never submitted and aged past the stale approval window. |

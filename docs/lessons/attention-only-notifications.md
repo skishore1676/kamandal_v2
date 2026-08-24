@@ -46,6 +46,12 @@ and operator-state metadata rather than color or lifecycle milestones alone.
 - Health events carry `operator_state`. `self_healing` and `self_handled` events
   do not page; delegated review events use their dedicated surface
   (`src/kamandal_v2/tools/launchd_job.py:265`).
+- A close deferred by the session guard with `retryable_current_session` or
+  `retryable_next_session` remains owned by lifecycle recovery. The direct
+  placement summary must not turn that normal waiting state into an error page.
+- Scheduled health compares observations only with ticks that occurred after
+  the current plist activation. Installing a changed schedule after an earlier
+  tick cannot make the new job retroactively stale.
 - A stable reason/group/order fingerprint suppresses an unchanged incident until
   it clears or materially changes (`src/kamandal_v2/tools/launchd_job.py:310`).
 - High-frequency launchd jobs persist a stable failure fingerprint, absorb the

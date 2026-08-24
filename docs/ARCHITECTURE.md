@@ -671,8 +671,18 @@ Legacy material is treated in three different ways:
 The active scheduled commands must not import or dispatch to deprecated CSA
 scanner or management entry points. In particular:
 
-- unified lifecycle management performs one generic pass over canonical
-  lifecycles, with failure-isolated `live` and `shadow` receipts;
+- unified lifecycle management owns one ordered recovery cycle: synchronize
+  broker orders, evaluate the `live` branch, drain its guarded close/adjust
+  tickets, synchronize and clean up, and only then evaluate the broker-inert
+  `shadow` branch. A lifecycle error is retained in its branch receipt but
+  cannot prevent successfully staged live effects from completing;
+- `live-approved-orders` is the open-entry executor. It does not claim
+  lifecycle `close` or `adjust` tickets and performs only a read-only status
+  refresh before opening work. Active-order repricing, expiry, close recovery,
+  and cleanup have exactly one effect owner in the unified management cycle;
+- full broker-position reconciliation keeps its lower-frequency independent
+  schedule. The five-minute management cycle refreshes working-order state
+  before and after effects without duplicating full reconciliation every tick;
 - unified planning owns working-order continuation rather than borrowing a
   helper from an old scanner;
 - current Sheet compilation requires the generic `mode` and capability
@@ -740,7 +750,9 @@ The cutover changes existing seams; it does not add another subsystem:
   five minutes; increase frequency later only from measured need. Mode is read
   from each playbook and lifecycle, not encoded in the job name. One broken
   lifecycle is isolated from the others, and live lifecycles are processed
-  before shadow lifecycles.
+  through their complete guarded effect and readback cycle before shadow
+  lifecycles. Retryable current-session and next-session states are
+  machine-owned evidence, not operator alerts.
 - Source normalizers persist both tradable ideas and non-tradable discovery
   evidence transactionally. The existing Friday reviewer emits the bounded
   ranked universe queue, reusing proposer filtering/publishing code where

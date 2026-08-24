@@ -941,6 +941,33 @@ def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_
     assert executed["results"][0]["status"] == "dry_run"
 
 
+def test_live_entry_executor_leaves_management_ticket_for_unified_owner(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    close_ticket = {
+        "ticket_hash": "management-close",
+        "order_id": "management-close-order",
+        "plan_id": "management-plan",
+        "candidate_id": "management-candidate",
+        "intent_type": "close",
+        "underlying": "NVDA",
+        "created_at": "2026-08-24T20:05:00Z",
+    }
+    store.save_live_order_intent(close_ticket, status="stage_approved_pending_submit")
+    monkeypatch.setattr(
+        "kamandal_v2.live.execution.pull_sheet_tables",
+        lambda _config: {"daily_plan": []},
+    )
+    monkeypatch.setattr(
+        "kamandal_v2.live.execution.broker_adapter",
+        lambda _config: (_ for _ in ()).throw(AssertionError("entry executor must not claim management")),
+    )
+
+    executed = execute_live_approved(_live_control(), submit=False, store=store)
+
+    assert executed["processed"] == 0
+    assert store.live_order_intent("management-close")["_ledger_status"] == "stage_approved_pending_submit"
+
+
 def test_live_execute_blocks_stage_ticket_when_daily_snapshot_is_missing(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     candidate = _ticket_candidate("csa_candidate", "csa_idea", "MSFT")

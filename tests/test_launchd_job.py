@@ -528,6 +528,35 @@ def test_scheduled_job_health_suppresses_missing_log_when_installed_after_due(tm
     assert report["issues"] == []
 
 
+def test_scheduled_job_health_ignores_pre_activation_stale_log(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(launchd_job, "MONITORED_JOBS", ["x-bookmarks"])
+    log_dir = tmp_path / "logs"
+    launchd_dir = tmp_path / "LaunchAgents"
+    log_dir.mkdir()
+    launchd_dir.mkdir()
+    label = "com.kamandal.v2.x_bookmarks"
+    log_path = log_dir / f"{label}.out.log"
+    log_path.write_text(
+        launchd_job.RESULT_PREFIX + json.dumps({"job": "x-bookmarks", "status": "ok"}) + "\n"
+    )
+    prior_run = datetime(2026, 6, 30, 11, 45, tzinfo=launchd_job.CENTRAL).timestamp()
+    os.utime(log_path, (prior_run, prior_run))
+    plist = launchd_dir / f"{label}.plist"
+    plist.write_text("plist")
+    activated_after_last_tick = datetime(2026, 6, 30, 14, 21, tzinfo=launchd_job.CENTRAL).timestamp()
+    os.utime(plist, (activated_after_last_tick, activated_after_last_tick))
+
+    report = launchd_job.scheduled_job_health(
+        repo_root=tmp_path,
+        log_dir=log_dir,
+        launchd_dir=launchd_dir,
+        label_prefix="com.kamandal.v2",
+        now=datetime(2026, 6, 30, 14, 30, tzinfo=launchd_job.CENTRAL),
+    )
+
+    assert report["issues"] == []
+
+
 def test_scheduled_job_health_accepts_newer_x_bookmarks_artifact(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setattr(launchd_job, "MONITORED_JOBS", ["x-bookmarks"])
     log_dir = tmp_path / "logs"
