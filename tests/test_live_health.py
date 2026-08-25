@@ -275,7 +275,7 @@ def test_live_health_yellow_for_pending_entry_approvals(tmp_path: Path) -> None:
     assert report["events"][0]["operator_state"] == "operator_needed"
 
 
-def test_live_health_marks_auto_top_plan_pending_entries_self_handled(tmp_path: Path) -> None:
+def test_live_health_ignores_lower_rank_auto_plan_alternatives(tmp_path: Path) -> None:
     store = LocalStore(tmp_path / "kamandal_v2.db")
     _make_open_group_with_mark(store, "group_pending", target_progress=20.0, trigger_progress=100.0)
     store.save_live_order_intent(
@@ -287,6 +287,31 @@ def test_live_health_marks_auto_top_plan_pending_entries_self_handled(tmp_path: 
             "idea_id": "idea-pending",
             "intent_type": "open",
             "underlying": "AAPL",
+            "plan_rank": 2,
+        },
+        status="pending_approval",
+    )
+
+    report = run_live_health(store, {"live": {"entry_approval_mode": "auto_top_plan"}})
+
+    assert report["overall"] == "GREEN"
+    assert report["counts"]["pending_entry_approvals"] == 0
+    assert "pending_entry_approvals" not in report["reasons"]
+
+
+def test_live_health_keeps_rank_one_auto_plan_pending_visible(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_pending", target_progress=20.0, trigger_progress=100.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "pending-rank-one",
+            "order_id": "order-rank-one",
+            "plan_id": "plan-rank-one",
+            "candidate_id": "candidate-rank-one",
+            "idea_id": "idea-rank-one",
+            "intent_type": "open",
+            "underlying": "AAPL",
+            "plan_rank": 1,
         },
         status="pending_approval",
     )

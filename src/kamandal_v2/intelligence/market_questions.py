@@ -320,11 +320,22 @@ def _run_command(args: list[str], cwd: Path) -> str:
     completed = subprocess.run(
         args,
         cwd=cwd,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=180,
     )
+    # Market Cartographer uses exit 2 for a valid, persisted response whose
+    # answer is "insufficient evidence".  That is negative chart evidence, not
+    # a transport failure; validation below still rejects a missing or malformed
+    # response artifact.  All other non-zero exits remain hard failures.
+    if completed.returncode not in {0, 2}:
+        raise subprocess.CalledProcessError(
+            completed.returncode,
+            args,
+            output=completed.stdout,
+            stderr=completed.stderr,
+        )
     return completed.stdout
 
 

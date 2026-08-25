@@ -604,6 +604,94 @@ def test_reconcile_repairs_historical_duplicate_replacement_projection(tmp_path,
     assert store.operator_review_request("or_recon_duplicate_short_leg")["_ledger_status"] == "expired"
 
 
+def test_reconcile_repairs_proven_atomic_replacement_overcount(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    legs = [
+        {
+            "role": "long_put",
+            "side": "buy",
+            "option_type": "put",
+            "strike": 240,
+            "expiration": "2026-07-17",
+            "quantity": 1,
+        },
+        {
+            "role": "short_put",
+            "side": "sell",
+            "option_type": "put",
+            "strike": 250,
+            "expiration": "2026-07-17",
+            "quantity": 1,
+        },
+    ]
+    parent = _entry_ticket("ticket-parent")
+    parent.update({"order_id": "client-parent", "broker_order_id": "broker-shared", "legs": legs})
+    child = _entry_ticket("ticket-child", parent_ticket_hash="ticket-parent")
+    child.update(
+        {
+            "order_id": "client-child",
+            "broker_order_id": "broker-shared",
+            "replace_method": "broker_atomic",
+            "replaces_broker_order_id": "broker-shared",
+            "legs": legs,
+        }
+    )
+    store.save_live_order_intent(parent, status="repriced")
+    store.save_live_order_intent(child, status="filled")
+    store.record_live_order_status(
+        "client-parent",
+        "FILLED",
+        {"status": "FILLED", "filledQuantity": "1", "averagePrice": "2.50"},
+        ticket_hash="ticket-parent",
+    )
+    store.record_live_order_status(
+        "client-child",
+        "FILLED",
+        {"status": "FILLED", "filledQuantity": "1", "averagePrice": "2.50"},
+        ticket_hash="ticket-child",
+    )
+
+    group = _put_group("live_group_ticket-parent", long_strike=240, short_strike=250)
+    for leg in group["candidate"]["legs"]:
+        leg["quantity"] = 2
+    group.update(
+        {
+            "order_id": "client-child",
+            "entry_snapshot": {"source_ticket_hash": "ticket-child", "fill_quantity": 2},
+        }
+    )
+    store.save_live_position_group(group["group_id"], group, status="open")
+    store.save_live_position(group["group_id"], group["group_id"], group, status="open")
+    store.save_live_reconciliation_issue(
+        {
+            "issue_id": "recon_atomic_overcount",
+            "issue_type": "quantity_mismatch",
+            "subject_id": "MRVL260717P00250000",
+            "group_id": group["group_id"],
+            "underlying": "MRVL",
+            "status": "open",
+        }
+    )
+
+    class Broker:
+        def broker_positions(self):
+            return [
+                {"asset_type": "option", "occ_symbol": "MRVL260717P00240000", "underlying": "MRVL", "quantity": 1.0},
+                {"asset_type": "option", "occ_symbol": "MRVL260717P00250000", "underlying": "MRVL", "quantity": -1.0},
+            ]
+
+    monkeypatch.setattr("kamandal_v2.live.reconciliation.broker_adapter", lambda _config: Broker())
+
+    result = reconcile_live_positions(_config(), store=store)
+
+    assert result["issues"] == []
+    assert result["projection_repairs"][0]["reason"] == "atomic_replacement_projection_overcount"
+    repaired = store.open_live_position_groups()[0]
+    assert repaired["entry_snapshot"]["fill_quantity"] == 1.0
+    assert {leg["quantity"] for leg in repaired["candidate"]["legs"]} == {1.0}
+    assert store.live_reconciliation_issue("recon_atomic_overcount")["status"] == "resolved"
+
+
 def test_reconcile_duplicate_lineage_repair_is_dry_run_safe(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     parent = _entry_ticket("ticket-parent")

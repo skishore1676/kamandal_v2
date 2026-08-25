@@ -2139,6 +2139,39 @@ def test_sync_atomic_replace_projects_one_position_per_lineage(tmp_path, monkeyp
     assert store.live_order_intent("ticket-child")["_ledger_status"] == "filled"
 
 
+def test_sync_atomic_replace_does_not_sum_two_local_ticket_observations(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    parent = _replacement_entry_ticket("ticket-parent", order_id="client-parent")
+    parent["broker_order_id"] = "broker-shared"
+    child = _replacement_entry_ticket(
+        "ticket-child",
+        order_id="client-child",
+        parent_ticket_hash="ticket-parent",
+    )
+    child.update(
+        {
+            "broker_order_id": "broker-shared",
+            "replace_method": "broker_atomic",
+            "replaces_broker_order_id": "broker-shared",
+        }
+    )
+    store.save_live_order_intent(parent, status="repriced")
+    store.save_live_order_intent(child, status="submitted")
+
+    class FilledBroker:
+        def get_order(self, _order_id):
+            return {"status": "FILLED", "filledQuantity": "1", "averagePrice": "5.45"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: FilledBroker())
+
+    sync_live_orders(_live_control(), store=store)
+
+    group = store.open_live_position_groups()[0]
+    assert group["entry_snapshot"]["fill_quantity"] == 1.0
+    assert len(group["entry_snapshot"]["execution_fills"]) == 1
+    assert {leg["quantity"] for leg in group["candidate"]["legs"]} == {1.0}
+
+
 def test_sync_staged_replace_keeps_root_identity_when_child_order_fills(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     parent = _replacement_entry_ticket("ticket-parent", order_id="broker-parent")

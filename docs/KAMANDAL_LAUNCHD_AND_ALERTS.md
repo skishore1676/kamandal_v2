@@ -246,6 +246,11 @@ KAMANDAL_SHEETS_RETRY_BASE_DELAY_SECONDS=1
 KAMANDAL_SHEETS_RETRY_MAX_DELAY_SECONDS=4
 ```
 
+Kamandal's two runtime SQLite stores use a bounded 30-second busy wait. This
+lets coincident five- and fifteen-minute workers serialize a short write instead
+of dropping a lifecycle tick with `database is locked`; a lock held beyond that
+bound still fails visibly and is not hidden.
+
 - Healthy `live-health-report` runs print `KAMANDAL_LAUNCHD_JOB={...}` and do
   not send a message.
 - Successful order submission, fill, intermediate reprice, cancellation, and
@@ -265,14 +270,17 @@ KAMANDAL_SHEETS_RETRY_MAX_DELAY_SECONDS=4
   gates, performs a fresh broker preflight, and submits at most once. A
   successful rebuild stays silent. If rebuilding or placement still fails,
   Kamandal sends one deduplicated attention alert and records that no position
-  opened. A risk cap that merely exists remains self-handled; a cap that blocks
-  the auto-selected entry uses this same attention path.
+  opened. Expected self-handled safety limits (daily-position, concentration,
+  and consecutive-loss cooldown caps) stay in SQLite even when they block the
+  auto-selected entry. Unexpected risk stops such as drawdown breakers still
+  use the attention path.
 - Live health performs bounded self-healing for stale local entry approvals
   before it scores the book. A prior-market-day `pending_approval` entry ticket
   is retired locally as `retired_stale_entry_approval`; it is not a broker
   action and should disappear from Control Tower/Blackboard on the next Lathi
-  projection. Pending lower-ranked entries under `auto_top_plan` are also
-  self-handled and do not page.
+  projection. Pending lower-ranked alternatives under `auto_top_plan` are not
+  health findings at all: only rank one is selected work, so ranks two and below
+  neither turn health yellow nor page.
 - RED is a safety classification, not by itself a paging decision. Events
   marked `self_healing` or `self_handled` remain silent. A RED event without
   recovery metadata still fails safe and alerts.

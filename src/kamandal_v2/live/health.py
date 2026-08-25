@@ -118,6 +118,16 @@ def run_live_health(
         for ticket in pending_entry_approvals
         if str(ticket.get("ticket_hash") or "") not in self_healed_hashes
     ]
+    approval_mode = str(((config.get("live") or {}).get("entry_approval_mode") or "sheet_approval"))
+    if approval_mode == "auto_top_plan":
+        # Ranks below the selected rank one plan are retained alternatives, not
+        # waiting work.
+        # Missing rank is treated as rank one for compatibility with old tickets.
+        pending_entry_approvals = [
+            ticket
+            for ticket in pending_entry_approvals
+            if int(ticket.get("plan_rank") or 1) == 1
+        ]
     risk = _risk_overview(store, config)
 
     events: list[dict[str, Any]] = []
@@ -310,7 +320,6 @@ def run_live_health(
         )
 
     if pending_entry_approvals:
-        approval_mode = str(((config.get("live") or {}).get("entry_approval_mode") or "sheet_approval"))
         pending_operator_state = "self_handled" if approval_mode == "auto_top_plan" else "operator_needed"
         events.append(
             {
@@ -390,6 +399,7 @@ def entry_health_gate(store: LocalStore, config: dict[str, Any] | None = None) -
         "reasons": report["reasons"],
         "counts": report["counts"],
         "risk_manager": risk_manager,
+        "events": report["events"],
     }
 
 

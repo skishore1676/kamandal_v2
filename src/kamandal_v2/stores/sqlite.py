@@ -12,6 +12,8 @@ from typing import Any
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, Idea, Plan, PortfolioState, PreflightResult
 from kamandal_v2.paths import resolve_path
 
+SQLITE_BUSY_TIMEOUT_MS = 30_000
+
 
 class LocalStore:
     def __init__(
@@ -28,9 +30,17 @@ class LocalStore:
 
     def _connect(self) -> sqlite3.Connection:
         if self.read_only:
-            conn = sqlite3.connect(f"file:{self.sqlite_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(
+                f"file:{self.sqlite_path}?mode=ro",
+                uri=True,
+                timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            )
         else:
-            conn = sqlite3.connect(self.sqlite_path)
+            conn = sqlite3.connect(
+                self.sqlite_path,
+                timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            )
+        conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         conn.row_factory = sqlite3.Row
         return conn
 

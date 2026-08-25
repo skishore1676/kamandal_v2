@@ -109,7 +109,12 @@ def reconcile_live_positions(
         )
         canonical_lifecycle_repairs = _repair_filled_canonical_lifecycle_projections(store, broker_index, dry_run=dry_run)
         retired_projection_lifecycle_repairs = _repair_retired_projection_lifecycles(store, broker_index, dry_run=dry_run)
-        projection_repairs = _repair_duplicate_entry_lineage_projections(store, broker_index, dry_run=dry_run)
+        projection_repairs = _repair_atomic_replacement_projection_overcounts(
+            store,
+            broker_index,
+            dry_run=dry_run,
+        )
+        projection_repairs += _repair_duplicate_entry_lineage_projections(store, broker_index, dry_run=dry_run)
     # Repairs can retire or replace projections; reconcile the post-repair book.
     local_groups = store.open_live_position_groups()
     local_index = _local_leg_index(local_groups)
@@ -797,6 +802,126 @@ def _repair_duplicate_entry_lineage_projections(
                 },
             )
         store.event("live_entry_lineage_projection_repaired", repair)
+    return repairs
+
+
+def _repair_atomic_replacement_projection_overcounts(
+    store: LocalStore,
+    broker_index: dict[str, dict[str, Any]],
+    *,
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    """Repair one overcount only when an atomic alias and broker legs prove it."""
+
+    from kamandal_v2.live.execution import refresh_live_position_projection_from_lineage
+
+    groups = store.open_live_position_groups()
+    local_index = _local_leg_index(groups)
+    repairs: list[dict[str, Any]] = []
+    for group in groups:
+        ticket_hash = source_ticket_hash(group)
+        ticket = store.live_order_intent(ticket_hash) if ticket_hash else None
+        if not ticket or str(ticket.get("intent_type") or "") != "open":
+            continue
+        resolution = resolve_entry_lineage(store, ticket, broker_order_id=str(ticket.get("order_id") or ""))
+        canonical = resolution.canonical_ticket
+        if resolution.ambiguous or not canonical:
+            continue
+
+        members_by_hash = {
+            str(member.get("ticket_hash") or ""): member for member in resolution.members
+        }
+        atomic_aliases = []
+        for member in resolution.members:
+            if str(member.get("replace_method") or "") != "broker_atomic":
+                continue
+            parent_ticket = members_by_hash.get(str(member.get("parent_ticket_hash") or ""))
+            if not parent_ticket:
+                continue
+            parent_broker_id = str(parent_ticket.get("broker_order_id") or parent_ticket.get("order_id") or "")
+            child_broker_id = str(member.get("broker_order_id") or "")
+            replaced_broker_id = str(member.get("replaces_broker_order_id") or "")
+            if parent_broker_id and parent_broker_id in {child_broker_id, replaced_broker_id}:
+                atomic_aliases.append(member)
+        if not atomic_aliases:
+            continue
+
+        venue = _payload_execution_venue({}, group)
+        ticket_quantity = abs(float(canonical.get("quantity") or 1.0))
+        expected_group = {
+            "group_id": group.get("group_id"),
+            "underlying": canonical.get("underlying"),
+            "execution_venue": venue,
+            "candidate": {
+                "legs": [
+                    {
+                        **leg,
+                        "quantity": abs(float(leg.get("quantity") or 1.0)) * ticket_quantity,
+                    }
+                    for leg in canonical.get("legs") or []
+                ]
+            },
+        }
+        expected_legs = _group_leg_symbols(expected_group)
+        group_legs = _group_leg_symbols(group)
+        expected = {str(leg["position_key"]): float(leg["quantity"]) for leg in expected_legs}
+        current = {str(leg["position_key"]): float(leg["quantity"]) for leg in group_legs}
+        if not expected or set(expected) != set(current) or all(
+            abs(expected[key] - current[key]) <= 0.001 for key in expected
+        ):
+            continue
+        if any(
+            abs(float((broker_index.get(key) or {}).get("quantity") or 0.0) - quantity) > 0.001
+            for key, quantity in expected.items()
+        ):
+            continue
+        if any(
+            set(str(item) for item in (local_index.get(key) or {}).get("group_ids") or [])
+            != {str(group.get("group_id") or "")}
+            for key in expected
+        ):
+            continue
+
+        order_ids = {
+            str(member.get("order_id") or "") for member in resolution.members if str(member.get("order_id") or "")
+        }
+        filled_observations = [
+            observation
+            for observation in store.live_order_status_history(order_ids)
+            if float(observation.get("filledQuantity") or 0.0) > 0
+        ]
+        if not filled_observations:
+            continue
+        order_status = max(
+            filled_observations,
+            key=lambda item: (
+                float(item.get("filledQuantity") or 0.0),
+                int(item.get("_status_id") or 0),
+            ),
+        )
+        repair = {
+            "status": "dry_run" if dry_run else "applied",
+            "reason": "atomic_replacement_projection_overcount",
+            "lineage_id": resolution.lineage_id,
+            "group_id": str(group.get("group_id") or ""),
+            "canonical_ticket_hash": str(canonical.get("ticket_hash") or ""),
+            "affected_symbols": _display_symbols(set(expected)),
+            "local_quantities_before": current,
+            "broker_quantities": {
+                key: float((broker_index.get(key) or {}).get("quantity") or 0.0)
+                for key in expected
+            },
+        }
+        repairs.append(repair)
+        if dry_run:
+            continue
+        refreshed = refresh_live_position_projection_from_lineage(store, canonical, order_status)
+        if not refreshed.get("saved"):
+            raise RuntimeError(
+                "atomic replacement projection repair failed: "
+                + str(refreshed.get("reason") or "unknown")
+            )
+        store.event("live_atomic_replacement_projection_repaired", repair)
     return repairs
 
 

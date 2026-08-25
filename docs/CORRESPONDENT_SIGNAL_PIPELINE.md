@@ -104,6 +104,10 @@ all-effects-false response, and translates the packet once. The former path that
 a request from the previous translation has been retired. If Cartographer or its data
 is unavailable, only the chart-dependent ideas remain parked; unrelated earnings or
 journal opportunities can still proceed through their normal gates.
+Cartographer's persisted `insufficient_evidence` result (process exit 2) is a valid
+negative answer, not an invocation failure. Kamandal validates and retains it so the
+idea is parked for the stated evidence reason instead of being mislabeled as broken
+plumbing.
 
 An empty translation replaces the active file with an empty idea list. Any acquisition
 or translation failure fails the scheduled job and also clears every configured

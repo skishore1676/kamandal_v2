@@ -25,6 +25,12 @@ from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
 from kamandal_v2.live.order_identity import broker_order_id, client_order_id, persist_broker_identity
 from kamandal_v2.live.plan_fallback import FallbackDecision, PlanFallbackCoordinator, attempt_event_type, fallback_enabled, registered_campaign_ids
+from kamandal_v2.live.risk_manager import (
+    BREAKER_CONSECUTIVE_LOSSES,
+    BREAKER_DAILY_NEW_POSITIONS,
+    REASON_CLUSTER_AT_CAP,
+    REASON_UNDERLYING_AT_CAP,
+)
 from kamandal_v2.market.broker import broker_adapter, default_execution_venue, ticket_execution_venue
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.ops.stage_receipt import reconciliation_stage
@@ -2709,6 +2715,21 @@ def _save_live_position_from_ticket(
     }
 
 
+def refresh_live_position_projection_from_lineage(
+    store: LocalStore,
+    ticket: dict[str, Any],
+    order_status: dict[str, Any],
+) -> dict[str, Any]:
+    """Rebuild one open projection from proven entry-lineage fill evidence."""
+
+    return _save_live_position_from_ticket(
+        store,
+        ticket,
+        status="filled",
+        order_status=order_status,
+    )
+
+
 def _candidate_from_ticket(ticket: dict[str, Any], *, fill_quantity: float = 1.0) -> dict[str, Any]:
     legs = []
     for raw_leg in ticket.get("legs") or []:
@@ -2820,8 +2841,57 @@ def _lineage_execution_fills(
         ):
             best_by_order[order_id] = observation
 
+    # A broker-atomic replacement changes the immutable local ticket version,
+    # but it does not create a second economic order.  Collapse only atomic
+    # parent-child aliases.  Staged cancel/re-submit children remain additive
+    # because each can carry a real partial fill.
+    parent: dict[str, str] = {order_id: order_id for order_id in best_by_order}
+
+    def find(order_id: str) -> str:
+        root = parent.setdefault(order_id, order_id)
+        while root != parent[root]:
+            root = parent[root]
+        while order_id != root:
+            next_id = parent[order_id]
+            parent[order_id] = root
+            order_id = next_id
+        return root
+
+    def union(first: str, second: str) -> None:
+        first_root = find(first)
+        second_root = find(second)
+        if first_root != second_root:
+            parent[second_root] = first_root
+
+    for member in lineage.members:
+        if str(member.get("replace_method") or "") != "broker_atomic":
+            continue
+        child_order_id = str(member.get("order_id") or "")
+        parent_ticket = members_by_hash.get(str(member.get("parent_ticket_hash") or ""))
+        parent_order_id = str((parent_ticket or {}).get("order_id") or "")
+        if not child_order_id or not parent_order_id:
+            continue
+        parent_broker_id = str((parent_ticket or {}).get("broker_order_id") or parent_order_id)
+        child_broker_id = str(member.get("broker_order_id") or "")
+        replaced_broker_id = str(member.get("replaces_broker_order_id") or "")
+        if parent_broker_id and parent_broker_id in {child_broker_id, replaced_broker_id}:
+            union(child_order_id, parent_order_id)
+
+    best_by_economic_order: dict[str, tuple[str, dict[str, Any]]] = {}
+    for order_id, observation in best_by_order.items():
+        alias = find(order_id)
+        previous = best_by_economic_order.get(alias)
+        previous_observation = previous[1] if previous else None
+        quantity = _filled_quantity(observation)
+        previous_quantity = _filled_quantity(previous_observation or {})
+        if previous is None or quantity > previous_quantity or (
+            quantity == previous_quantity
+            and int(observation.get("_status_id") or 0) > int((previous_observation or {}).get("_status_id") or 0)
+        ):
+            best_by_economic_order[alias] = (order_id, observation)
+
     fills = []
-    for order_id, observation in sorted(best_by_order.items()):
+    for _, (order_id, observation) in sorted(best_by_economic_order.items()):
         observed_ticket = members_by_hash.get(str(observation.get("_ticket_hash") or ""))
         ticket_for_order = observed_ticket or max(
             members_by_order.get(order_id) or [current_ticket],
@@ -2948,8 +3018,28 @@ def _selected_entry_failure(execution: dict[str, Any], *, submit: bool) -> dict[
             continue
         if reason == "basket_complete_or_no_pending_tickets":
             continue
+        if _self_handled_health_block(execution, reason):
+            continue
         return result
     return None
+
+
+def _self_handled_health_block(execution: dict[str, Any], reason: str) -> bool:
+    """Keep owned safety stops in the ledger instead of paging the operator."""
+
+    if not reason.startswith(("blocked_risk_manager:", "blocked_risk_")):
+        return False
+    gate = execution.get("health_gate") or {}
+    reason_codes = {str(item) for item in gate.get("reasons") or [] if str(item)}
+    relevant = [
+        event
+        for event in gate.get("events") or []
+        if str(event.get("reason") or "") in reason_codes
+    ]
+    return bool(relevant) and all(
+        str(event.get("operator_state") or "operator_needed") in {"self_handled", "self_healing"}
+        for event in relevant
+    )
 
 
 def notify_live_advisory_risk_block(
@@ -2967,10 +3057,22 @@ def notify_live_advisory_risk_block(
     if not blocked:
         return {"needed": False, "attempted": False, "reason": "no_advisory_risk_block"}
     candidate = max(blocked, key=lambda item: float(getattr(item, "score", 0.0) or 0.0))
+    rejection_reason = str(candidate.rejection_reason)
+    if _advisory_risk_block_is_self_handled(rejection_reason):
+        store.event(
+            "live_advisory_risk_block_self_handled",
+            {
+                "candidate_id": str(candidate.candidate_id),
+                "underlying": str(candidate.underlying),
+                "structure": str(candidate.structure),
+                "reason": rejection_reason,
+            },
+        )
+        return {"needed": False, "attempted": False, "reason": "self_handled_safety_limit"}
     result = {
         "status": "blocked",
-        "reason": str(candidate.rejection_reason),
-        "failure_code": str(candidate.rejection_reason),
+        "reason": rejection_reason,
+        "failure_code": rejection_reason,
         "underlying": str(candidate.underlying),
         "structure": str(candidate.structure),
         "ticket_hash": f"candidate:{candidate.candidate_id}",
@@ -2982,6 +3084,20 @@ def notify_live_advisory_risk_block(
         recovery={"attempted": False},
         submit=True,
     )
+
+
+def _advisory_risk_block_is_self_handled(reason: str) -> bool:
+    if reason.startswith(("live_risk_underlying_cap:", "live_risk_cluster_cap:")):
+        return True
+    if not reason.startswith("live_risk_manager_blocked:"):
+        return False
+    codes = {item for item in reason.split(":", 1)[1].split(",") if item}
+    return bool(codes) and codes <= {
+        BREAKER_CONSECUTIVE_LOSSES,
+        BREAKER_DAILY_NEW_POSITIONS,
+        REASON_CLUSTER_AT_CAP,
+        REASON_UNDERLYING_AT_CAP,
+    }
 
 
 def _notify_selected_entry_failure(

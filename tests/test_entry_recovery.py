@@ -170,6 +170,49 @@ def test_no_selected_entry_is_silent(tmp_path, monkeypatch) -> None:
     assert result["operator_notification"]["needed"] is False
 
 
+def test_self_handled_risk_limit_does_not_page_operator(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    monkeypatch.setattr(
+        execution,
+        "execute_live_approved",
+        lambda *_args, **_kwargs: {
+            "processed": 1,
+            "results": [
+                {
+                    "status": "blocked",
+                    "reason": "blocked_risk_manager:daily_new_positions_cap",
+                    "underlying": "AAPL",
+                }
+            ],
+            "health_gate": {
+                "blocked": True,
+                "reasons": ["daily_new_positions_cap"],
+                "events": [
+                    {
+                        "reason": "daily_new_positions_cap",
+                        "operator_state": "self_handled",
+                    }
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        execution,
+        "send_lathi_alert",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("an owned safety stop must stay silent")
+        ),
+    )
+
+    result = execution.execute_live_approved_with_recovery(_config(), submit=True, store=store)
+
+    assert result["operator_notification"] == {
+        "needed": False,
+        "attempted": False,
+        "reason": "no_selected_entry_failure",
+    }
+
+
 def test_retryable_close_deferral_is_owned_by_next_management_cycle(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     monkeypatch.setattr(
@@ -206,7 +249,7 @@ def test_retryable_close_deferral_is_owned_by_next_management_cycle(tmp_path, mo
     }
 
 
-def test_auto_selected_advisory_risk_block_notifies_with_cap_reason(tmp_path, monkeypatch) -> None:
+def test_auto_selected_advisory_safety_cap_stays_silent(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     sent = []
     monkeypatch.setattr(
@@ -224,7 +267,32 @@ def test_auto_selected_advisory_risk_block_notifies_with_cap_reason(tmp_path, mo
 
     result = execution.notify_live_advisory_risk_block(_config(), store, [candidate])
 
+    assert result == {
+        "needed": False,
+        "attempted": False,
+        "reason": "self_handled_safety_limit",
+    }
+    assert sent == []
+    assert store.latest_event("live_advisory_risk_block_self_handled")["reason"] == "live_risk_underlying_cap:BABA"
+
+
+def test_auto_selected_drawdown_block_still_notifies(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    sent = []
+    monkeypatch.setattr(
+        execution,
+        "send_lathi_alert",
+        lambda **kwargs: sent.append(kwargs) or AlertResult(attempted=True, ok=True, mode="spool"),
+    )
+    candidate = SimpleNamespace(
+        candidate_id="cand-risk",
+        underlying="SPY",
+        structure="put_spread",
+        score=9.0,
+        rejection_reason="live_risk_manager_blocked:risk_daily_drawdown_breaker",
+    )
+
+    result = execution.notify_live_advisory_risk_block(_config(), store, [candidate])
+
     assert result["ok"] is True
-    assert result["reason"] == "live_risk_underlying_cap:BABA"
-    assert "live_risk_underlying_cap:BABA" in sent[0]["body"]
-    assert "BABA put spread" in sent[0]["body"]
+    assert len(sent) == 1

@@ -21,6 +21,8 @@ from kamandal_v2.strategy_lanes.models import (
     TicketLeg,
 )
 
+SQLITE_BUSY_TIMEOUT_MS = 30_000
+
 
 class CsaStore:
     """Access only explicitly migrated CSA tables; never auto-migrate runtime DBs."""
@@ -33,9 +35,17 @@ class CsaStore:
 
     def _connect(self) -> sqlite3.Connection:
         if self.read_only:
-            conn = sqlite3.connect(f"file:{self.sqlite_path}?mode=ro", uri=True)
+            conn = sqlite3.connect(
+                f"file:{self.sqlite_path}?mode=ro",
+                uri=True,
+                timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            )
         else:
-            conn = sqlite3.connect(self.sqlite_path)
+            conn = sqlite3.connect(
+                self.sqlite_path,
+                timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            )
+        conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         conn.row_factory = sqlite3.Row
         return conn
 

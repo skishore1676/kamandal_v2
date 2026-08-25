@@ -87,6 +87,18 @@ def test_csa_policy_compiles_sheet_values_with_stable_provenance() -> None:
     assert first.read_at != second.read_at
 
 
+def test_runtime_stores_use_bounded_sqlite_busy_wait(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    local_store = LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    csa_store = CsaStore(database)
+
+    with local_store._connect() as connection:
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+    with csa_store._connect() as connection:
+        assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
+
+
 @pytest.mark.parametrize(
     ("changes", "message"),
     [

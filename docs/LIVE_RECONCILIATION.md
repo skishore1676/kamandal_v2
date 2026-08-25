@@ -17,9 +17,11 @@ Three identifiers describe different things:
 
 The position group is therefore stable across price changes. The deepest
 unambiguous viable ticket supplies current metadata, while fills are aggregated
-once per distinct broker order ID. Broker `filledQuantity` is cumulative, so
-Kamandal keeps the maximum observed quantity for each order rather than summing
-polls.
+once per distinct economic broker order. Broker `filledQuantity` is cumulative,
+so Kamandal keeps the maximum observed quantity for each order rather than
+summing polls. When a broker-atomic replacement has different immutable local
+client IDs, the parent-child replacement proof still makes those versions one
+economic order.
 
 ## Deterministic recovery matrix
 
@@ -30,6 +32,7 @@ polls.
 | Partial fill followed by cancel/reject/expiry | Preserve the partial exposure as an open local position | A terminal order is not the same as zero exposure |
 | Repeated FILLED/PARTIALLY_FILLED polls | Upsert the stable group without changing `opened_at` | Broker quantities are cumulative and projection is idempotent |
 | Historical duplicate groups from one lineage | Retire duplicates only when lineage, economic legs, and complete broker quantity arithmetic all agree | The repair has three independent proofs |
+| One group overcounted by atomic replacement aliases | Rebuild the projection from the maximum cumulative alias fill only when lineage, exact OCC legs, and broker quantities all agree | Ticket versions are proven aliases, not separate executions |
 | Fresh fill absent from the first position snapshot | Hold during the post-fill grace window | Order and position endpoints can settle at different times |
 | Confirmed broker-flat local ghost | Use the configured repeated-observation retirement path | Broker absence is confirmed, not inferred from one poll |
 | Resolved issue or repaired projection | Resolve the issue, expire its review request, and replace the reconciliation Sheet lane even when empty | Stale human work must disappear when source truth clears |

@@ -253,6 +253,12 @@ rules, select an option structure, or manage a position. Kamandal stores the
 answer, applies the source profile, and chooses compatible Sheet-enabled
 playbooks through the ordinary portfolio planner.
 
+An `insufficient_evidence` answer is still a valid, useful response. Market
+Cartographer persists that response and may exit with status 2; Kamandal accepts
+the artifact as negative chart evidence, validates it normally, and parks only
+the dependent ideas. Exit codes other than 0 or 2 remain transport/runtime
+failures.
+
 Therefore profiles understand people, Cartographer understands charts, and
 Kamandal understands strategies and the portfolio. A future correspondent can
 ask the same market question, ask none, or later use another source-neutral
@@ -561,6 +567,14 @@ cannot replace atomically enters the staged-cancel state machine: persist the
 child, request cancel, observe a terminal unfilled parent state, verify the
 position for a close, preflight again, and only then submit. A cancel request or
 unknown status is never terminal proof.
+
+Atomic replacement ticket versions are aliases of one economic broker order,
+even when their immutable local client IDs differ. Fill projection therefore
+keeps the maximum cumulative quantity across that proven alias set rather than
+summing ticket observations. Reconciliation may correct a historical
+overcount automatically only when the atomic lineage, exact OCC legs, and
+broker quantities all agree; generic quantity mismatches remain human-review
+cases.
 
 #### Account and reconciliation isolation
 

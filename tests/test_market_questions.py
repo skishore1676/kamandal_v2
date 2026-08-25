@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
+from kamandal_v2.intelligence import market_questions
 from kamandal_v2.intelligence.correspondent_signals import load_correspondent_profile
 from kamandal_v2.intelligence.market_questions import (
     build_market_question_request,
@@ -183,6 +186,39 @@ def test_market_question_failure_parks_chart_ideas_without_throwing(
     assert result.status == "failed"
     assert result.response_path is None
     assert "unavailable" in str(result.error)
+
+
+def test_cartographer_exit_two_is_valid_negative_evidence(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        market_questions.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=2,
+            stdout='{"status":"failed"}',
+            stderr="insufficient evidence",
+        ),
+    )
+
+    assert market_questions._run_command(["market-cartographer", "answer"], tmp_path) == '{"status":"failed"}'
+
+
+def test_cartographer_other_nonzero_exit_remains_failure(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        market_questions.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="transport failed",
+        ),
+    )
+
+    try:
+        market_questions._run_command(["market-cartographer", "answer"], tmp_path)
+    except subprocess.CalledProcessError as exc:
+        assert exc.returncode == 1
+    else:
+        raise AssertionError("exit one must remain a hard failure")
 
 
 def test_range_request_is_source_neutral_and_deterministic() -> None:
