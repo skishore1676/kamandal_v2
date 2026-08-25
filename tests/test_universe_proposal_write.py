@@ -13,6 +13,9 @@ def test_universe_proposals_append_only_and_preserve_existing_rows(monkeypatch) 
         def read_tab(self, _title):  # noqa: ANN001
             return existing
 
+        def read_tab_values(self, _title):  # noqa: ANN001
+            return [UNIVERSE_HEADER]
+
         def append_tab_rows(self, title, *, header, rows):  # noqa: ANN001
             calls.append({"title": title, "header": header, "rows": rows})
             for row in rows:
@@ -41,6 +44,9 @@ def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch) ->
         def read_tab(self, _title):  # noqa: ANN001
             return existing
 
+        def read_tab_values(self, _title):  # noqa: ANN001
+            return [UNIVERSE_HEADER]
+
         def append_tab_rows(self, _title, *, header, rows):  # noqa: ANN001
             appended = dict(zip(header, rows[0], strict=True))
             appended["tier"] = "held"
@@ -55,3 +61,34 @@ def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch) ->
         assert "tier" in str(exc)
     else:
         raise AssertionError("proposal write must reject an inexact readback")
+
+
+def test_universe_proposals_follow_non_destructive_sheet_column_order(monkeypatch) -> None:
+    actual_header = [item for item in UNIVERSE_HEADER if item != "notes"] + ["notes"]
+    existing = [{key: "" for key in actual_header}]
+    existing[0]["symbol"] = "EXIST"
+    calls = []
+
+    class Client:
+        def read_tab(self, _title):  # noqa: ANN001
+            return existing
+
+        def read_tab_values(self, _title):  # noqa: ANN001
+            return [actual_header]
+
+        def append_tab_rows(self, _title, *, header, rows):  # noqa: ANN001
+            calls.append((header, rows))
+            existing.append(dict(zip(header, rows[0], strict=True)))
+            return 1
+
+    monkeypatch.setattr(sheets.GoogleSheetClient, "from_config", lambda _config: Client())
+
+    written = sheets.write_universe_proposals(
+        {},
+        [{"symbol": "NEW", "enabled": "FALSE", "tier": "proposed", "notes": "review me"}],
+    )
+
+    assert written == 1
+    assert calls[0][0] == actual_header
+    assert calls[0][1][0][actual_header.index("tier")] == "proposed"
+    assert calls[0][1][0][actual_header.index("notes")] == "review me"

@@ -355,11 +355,19 @@ def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, s
     existing = client.read_tab(title)
     from kamandal_v2.schemas import UNIVERSE_HEADER
 
-    header = UNIVERSE_HEADER
-    if existing:
-        existing_headers = list(existing[0].keys()) if existing and isinstance(existing[0], dict) else []
-        if existing_headers == UNIVERSE_HEADER:
-            header = existing_headers
+    values = client.read_tab_values(title)
+    existing_headers = [str(cell).strip() for cell in (values[0] if values else [])]
+    if len(existing_headers) != len(UNIVERSE_HEADER) or set(existing_headers) != set(UNIVERSE_HEADER):
+        missing = sorted(set(UNIVERSE_HEADER) - set(existing_headers))
+        unexpected = sorted(set(existing_headers) - set(UNIVERSE_HEADER))
+        raise ValueError(
+            f"worksheet {title!r} universe proposal schema mismatch: "
+            f"missing={missing} unexpected={unexpected}"
+        )
+    # Column position belongs to the operator Sheet.  Proposal columns may be
+    # appended after the legacy notes column; map values by the actual header
+    # instead of forcing a destructive column reorder.
+    header = existing_headers
     existing_by_symbol = {str(row.get("symbol") or "").upper(): row for row in existing}
     appendable = [
         proposal

@@ -11,6 +11,7 @@ from typing import Any
 
 from kamandal_v2.domain.models import Playbook, UniverseEntry, utc_now
 from kamandal_v2.planner.config_validator import validate_config
+from kamandal_v2.schemas import UNIVERSE_HEADER
 from kamandal_v2.sheets import pull_sheet_tables
 from kamandal_v2.strategy_engine.policy import compile_playbook_policies
 from kamandal_v2.strategy_lanes.daily_policy import policy_tables_hash
@@ -83,6 +84,14 @@ def validate_sheet_policy(
     model_errors: list[str] = []
     universe: list[UniverseEntry] = []
     playbooks: list[Playbook] = []
+
+    if policy_tables["universe"]:
+        observed_headers = set(policy_tables["universe"][0])
+        missing_universe_headers = sorted(set(UNIVERSE_HEADER) - observed_headers)
+        if missing_universe_headers:
+            model_errors.append(
+                "universe_header_missing:" + ",".join(missing_universe_headers)
+            )
 
     for index, row in enumerate(policy_tables["universe"], start=2):
         if not row.get("symbol"):
