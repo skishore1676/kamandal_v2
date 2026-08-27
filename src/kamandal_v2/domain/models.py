@@ -206,6 +206,7 @@ class Playbook:
     legs_extra: str = ""
     min_credit_to_width_ratio: float | None = None
     max_debit_pct_bpr: float | None = None
+    max_debit_to_width_ratio: float | None = None
     max_bid_ask_pct: float | None = None
     min_option_oi: int | None = None
     profit_target_pct: float = 50.0
@@ -266,6 +267,7 @@ class Playbook:
             legs_extra=str(row.get("legs_extra") or ""),
             min_credit_to_width_ratio=_optional_float(row.get("min_credit_to_width_ratio")),
             max_debit_pct_bpr=_optional_float(row.get("max_debit_pct_bpr")),
+            max_debit_to_width_ratio=_optional_float(row.get("max_debit_to_width_ratio")),
             max_bid_ask_pct=_optional_float(row.get("max_bid_ask_pct")),
             min_option_oi=_optional_int(row.get("min_option_oi")),
             profit_target_pct=_as_float(row.get("profit_target_pct"), 50.0),

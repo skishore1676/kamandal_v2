@@ -161,8 +161,9 @@ def test_sheet_mapping_is_bounded_non_applying_and_preserves_generic_calendar_ro
     header = [
         "playbook_id", "enabled", "strategy_family", "structure", "csa_stage", "management_policy_json",
         "profit_target_pct", "short_delta_min", "short_delta_max", "source_mode",
-        "applicable_direction", "dte_min", "dte_max", "long_dte_min", "long_dte_max",
-        "max_loss_multiple", "sizing_method", "sizing_value", "max_contracts",
+            "applicable_direction", "dte_min", "dte_max", "long_dte_min", "long_dte_max",
+            "max_loss_multiple", "sizing_method", "sizing_value", "max_contracts",
+            "max_debit_to_width_ratio",
     ]
     rows = [
         {
@@ -178,8 +179,8 @@ def test_sheet_mapping_is_bounded_non_applying_and_preserves_generic_calendar_ro
         {
             "playbook_id": "directional", "enabled": "TRUE", "strategy_family": "call_diagonal",
             "structure": "call_diagonal", "csa_stage": "baseline", "source_mode": "idea",
-            "max_loss_multiple": "0.5", "sizing_method": "fixed_contracts", "sizing_value": "1",
-            "max_contracts": "1",
+                "max_loss_multiple": "0.5", "sizing_method": "fixed_contracts", "sizing_value": "1",
+                "max_contracts": "1", "max_debit_to_width_ratio": "0.75",
             "management_policy_json": '{"lifecycle":{"fill":{"max_attempts":4,"price_increment":0.05},"long_only":{"requires_approval":true},"short_leg":{"roll":true}}}',
         },
     ]

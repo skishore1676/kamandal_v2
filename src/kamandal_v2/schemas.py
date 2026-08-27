@@ -100,6 +100,9 @@ PLAYBOOKS_HEADER = [
     "range_gate_required",
     "range_gate_max_age_days",
     "loss_close_multiple",
+    # Explicit diagonal entry economics. Appended so every existing column
+    # retains its position, validation, and formatting.
+    "max_debit_to_width_ratio",
 ]
 
 DAILY_PLAN_HEADER = [

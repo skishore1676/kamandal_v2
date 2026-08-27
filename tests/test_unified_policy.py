@@ -27,6 +27,7 @@ def _row(**overrides: object) -> dict[str, object]:
         "sizing_method": "fixed_contracts",
         "sizing_value": "1",
         "max_contracts": "1",
+        "max_debit_to_width_ratio": "0.75",
     }
     row.update(overrides)
     return row

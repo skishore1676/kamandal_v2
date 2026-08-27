@@ -221,7 +221,7 @@ def test_live_low_oi_price_through_warns_without_rejecting() -> None:
     )
 
 
-def test_live_wide_bid_ask_price_through_warns_without_rejecting() -> None:
+def test_live_diagonal_package_spread_stays_hard_when_leg_price_through_is_enabled() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_overextended",
         "source": "test",
@@ -242,7 +242,12 @@ def test_live_wide_bid_ask_price_through_warns_without_rejecting() -> None:
         config={"runtime": {"mode": "live"}, "live": {"liquidity_policy": {"wide_bid_ask_mode": "price_through"}}},
     )
 
-    assert any(candidate.eligible for candidate in candidates)
+    assert candidates
+    assert not any(candidate.eligible for candidate in candidates)
+    assert any(
+        str(candidate.rejection_reason or "").startswith("package_bid_ask_pct_above_max:")
+        for candidate in candidates
+    )
     assert any(
         "wide_bid_ask_price_through=true" in candidate.reasons
         for candidate in candidates

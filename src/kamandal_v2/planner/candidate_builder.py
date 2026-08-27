@@ -144,6 +144,9 @@ def build_candidates(
                         candidate.reasons.append(f"filter_warning={filter_rejection}")
                         candidate.reasons.append("wide_bid_ask_price_through=true")
                         continue
+                    if _always_hard_filter_rejection(filter_rejection):
+                        hard_filter_rejections.append(filter_rejection)
+                        continue
                     if candidate_filter_mode == "warn":
                         candidate.reasons.append(f"filter_warning={filter_rejection}")
                     else:
@@ -1021,8 +1024,11 @@ def _directional_diagonal_candidates(
     short_target_dte = float(playbook.target_dte or ((playbook.dte_min + playbook.dte_max) / 2.0))
     long_target_dte = (far_min + far_max) / 2.0
     ranked: list[tuple[float, Candidate]] = []
-    for short in short_selection.quotes[:8]:
-        for long in long_selection.quotes[:8]:
+    # The Sheet windows define the bounded search space. Evaluate every pair
+    # inside those hard windows so a near-target but unaffordable contract
+    # cannot hide a slightly less aggressive, fully eligible diagonal.
+    for short in short_selection.quotes:
+        for long in long_selection.quotes:
             if long.expiration <= short.expiration:
                 continue
             if option_type == "call" and long.strike > short.strike:
@@ -1499,9 +1505,32 @@ def _entry_economic_bounds(
         binding_sources = sorted(source for value, source in floors if abs(value - floor) < 1e-9)
         return round(floor, 6), None, "+".join(binding_sources)
 
-    if net_credit < 0 and playbook.live_max_bpr_per_order is not None:
-        ceiling = max(float(playbook.live_max_bpr_per_order), 0.0) / 100.0
-        return None, round(ceiling, 6), "playbook.live_max_bpr_per_order"
+    if net_credit < 0:
+        ceilings: list[tuple[float, str]] = []
+        if playbook.live_max_bpr_per_order is not None:
+            ceilings.append(
+                (
+                    max(float(playbook.live_max_bpr_per_order), 0.0) / 100.0,
+                    "playbook.live_max_bpr_per_order",
+                )
+            )
+        if (
+            structure in {"call_diagonal", "put_diagonal"}
+            and playbook.max_debit_to_width_ratio is not None
+            and risk_width > 0
+        ):
+            ceilings.append(
+                (
+                    risk_width * max(float(playbook.max_debit_to_width_ratio), 0.0),
+                    "playbook.max_debit_to_width_ratio",
+                )
+            )
+        if ceilings:
+            ceiling = min(value for value, _source in ceilings)
+            binding_sources = sorted(
+                source for value, source in ceilings if abs(value - ceiling) < 1e-9
+            )
+            return None, round(ceiling, 6), "+".join(binding_sources)
     return None, None, ""
 
 
@@ -1667,6 +1696,34 @@ def _filter_rejections(candidate: Candidate, playbook: Playbook, config: dict | 
             if spread_pct > playbook.max_bid_ask_pct:
                 rejections.append(f"bid_ask_pct_above_max:{spread_pct:.4f}>{playbook.max_bid_ask_pct}")
                 break
+        if candidate.structure in {"call_diagonal", "put_diagonal"}:
+            package_spread_pct = float(
+                candidate_liquidity_metrics(candidate)["aggregate_spread_to_mid_pct"]
+            )
+            if package_spread_pct > playbook.max_bid_ask_pct:
+                rejections.append(
+                    f"package_bid_ask_pct_above_max:{package_spread_pct:.4f}>{playbook.max_bid_ask_pct}"
+                )
+    if candidate.structure in {"call_diagonal", "put_diagonal"} and candidate.net_credit < 0:
+        if (
+            playbook.live_max_bpr_per_order is not None
+            and candidate.estimated_bpr > playbook.live_max_bpr_per_order
+        ):
+            rejections.append(
+                "diagonal_debit_bpr_above_max:"
+                f"{candidate.estimated_bpr:.2f}>{playbook.live_max_bpr_per_order:.2f}"
+            )
+        if playbook.max_debit_to_width_ratio is not None:
+            width = _risk_width(candidate)
+            if width <= 0:
+                rejections.append("diagonal_width_nonpositive")
+            else:
+                debit_to_width = abs(candidate.net_credit) / width
+                if debit_to_width > playbook.max_debit_to_width_ratio:
+                    rejections.append(
+                        "diagonal_debit_width_ratio_above_max:"
+                        f"{debit_to_width:.4f}>{playbook.max_debit_to_width_ratio}"
+                    )
     if playbook.min_credit_to_width_ratio is not None and candidate.net_credit > 0:
         width = _risk_width(candidate)
         if width > 0:
@@ -1704,6 +1761,19 @@ def _wide_bid_ask_price_through_enabled(rejection: str, config: dict | None) -> 
     return mode == "price_through"
 
 
+def _always_hard_filter_rejection(rejection: str) -> bool:
+    """Keep Sheet-owned diagonal economics hard in every planner mode."""
+
+    return rejection.startswith(
+        (
+            "package_bid_ask_pct_above_max:",
+            "diagonal_debit_bpr_above_max:",
+            "diagonal_debit_width_ratio_above_max:",
+            "diagonal_width_nonpositive",
+        )
+    )
+
+
 def _absurd_bid_ask_pct(config: dict | None) -> float:
     policy = (((config or {}).get("live") or {}).get("liquidity_policy") or {})
     try:
@@ -1713,7 +1783,7 @@ def _absurd_bid_ask_pct(config: dict | None) -> float:
 
 
 def _risk_width(candidate: Candidate) -> float:
-    if candidate.structure in {"put_spread", "call_spread"} and len(candidate.legs) == 2:
+    if candidate.structure in {"put_spread", "call_spread", "put_diagonal", "call_diagonal"} and len(candidate.legs) == 2:
         return abs(candidate.legs[0].strike - candidate.legs[1].strike)
     if candidate.structure == "iron_condor" and len(candidate.legs) == 4:
         puts = [leg for leg in candidate.legs if leg.option_type == "put"]

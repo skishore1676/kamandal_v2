@@ -110,6 +110,7 @@ _LANE_REQUIRED_FIELDS = {
         "short_delta_max",
         "long_delta_min",
         "long_delta_max",
+        "max_debit_to_width_ratio",
         "profit_target_pct",
         "max_loss_multiple",
         "exit_dte_min",
@@ -397,6 +398,10 @@ def _validate_numeric_policy(row: dict[str, Any], *, lane: LaneId, management: d
         if not 0 < parsed["max_loss_multiple"] <= 1:
             raise PolicyError(
                 f"{row_name}: debit diagonal max_loss_multiple must be a loss fraction in (0, 1]"
+            )
+        if not 0 < parsed["max_debit_to_width_ratio"] <= 1:
+            raise PolicyError(
+                f"{row_name}: max_debit_to_width_ratio must be in (0, 1]"
             )
         sizing_method = str(row.get("sizing_method") or "").strip().lower()
         if sizing_method != "fixed_contracts" or parsed["sizing_value"] != 1 or parsed["max_contracts"] != 1:

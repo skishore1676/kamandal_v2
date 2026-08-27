@@ -333,6 +333,12 @@ def _validate_directional_diagonal(
         raise PolicyError(
             f"{playbook_id}: directional diagonal currently requires fixed_contracts sizing_value=1 max_contracts=1"
         )
+    if capability.key in {"call_diagonal", "put_diagonal"}:
+        debit_width_ratio = _optional_number(row.get("max_debit_to_width_ratio"))
+        if debit_width_ratio is None or not 0 < debit_width_ratio <= 1:
+            raise PolicyError(
+                f"{playbook_id}: max_debit_to_width_ratio must be present and in (0, 1]"
+            )
 
 
 def _validate_earnings_calendar(capability: Capability, row: dict[str, Any], source_mode: str, playbook_id: str) -> None:

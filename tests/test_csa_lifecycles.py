@@ -55,6 +55,7 @@ def _row(structure: str):  # noqa: ANN202
         "min_option_oi": 1,
         "profit_target_pct": 50,
         "live_max_bpr_per_order": 2500,
+        "max_debit_to_width_ratio": 0.75,
     }
     if structure == "short_strangle":
         fields = {

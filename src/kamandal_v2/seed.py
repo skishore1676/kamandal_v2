@@ -166,6 +166,11 @@ def build_seed_tables(control: dict[str, Any]) -> dict[str, list[list[Any]]]:
     playbooks = _playbook_rows()
     playbooks.extend(_narrative_ignition_rows())
     playbooks = [row + [""] * (len(PLAYBOOKS_HEADER) - len(row)) for row in playbooks]
+    family_index = PLAYBOOKS_HEADER.index("strategy_family")
+    debit_width_index = PLAYBOOKS_HEADER.index("max_debit_to_width_ratio")
+    for row in playbooks:
+        if row[family_index] in {"call_diagonal", "put_diagonal"}:
+            row[debit_width_index] = 0.75
     return {
         "universe": _universe_rows(control, playbooks),
         "playbooks": playbooks,

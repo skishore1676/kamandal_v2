@@ -78,6 +78,7 @@ def _policy_row(structure: str = "short_strangle", **overrides):  # noqa: ANN003
             "exit_dte_min": 10,
             "spread_width": "",
             "live_max_bpr_per_order": 1500,
+            "max_debit_to_width_ratio": 0.75,
             "lifecycle": {"short_leg": {"roll": True, "roll_dte": 7}, "long_only": {"requires_approval": True}, "fill": {"max_attempts": 2, "price_increment": 0.05}},
         },
     }

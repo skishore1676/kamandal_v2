@@ -866,8 +866,8 @@ option plus a reusable short-premium program:
   `short_delta_min/short_delta_max`, while the far long targets the midpoint of
   `long_dte_min/long_dte_max` and `long_delta_min/long_delta_max`;
 - the current operator contract uses 20-30 DTE and 20-30 absolute delta for the
-  near short, and 45-60 DTE and 45-55 absolute delta for the far long. This
-  naturally targets about 25 delta/25 DTE and 50 delta/52 DTE without requiring
+  near short, and 45-60 DTE and 40-55 absolute delta for the far long. This
+  naturally targets about 25 delta/25 DTE and 47.5 delta/52 DTE without requiring
   an exact expiration on every day of the month;
 - for calls, the far long is closer to the money at a lower strike than the near
   short; for puts, the far long is closer to the money at a higher strike than
@@ -883,6 +883,18 @@ option plus a reusable short-premium program:
 - the net debit must not exceed `live_max_bpr_per_order`, the Sheet's explicit
   per-contract dollar cap. `max_debit_pct_bpr` is legacy compatibility evidence
   and may not authorize a diagonal entry;
+- the net debit must also be no more than the Sheet-owned
+  `max_debit_to_width_ratio` multiplied by the resulting strike distance. The
+  initial operator value is `0.75`; this is an economic sanity gate, not a fixed
+  width rule;
+- candidate selection evaluates every valid pair inside the hard Sheet windows,
+  rejects pairs that fail liquidity, package spread, debit/width, or per-order
+  BPR policy, and ranks only the remaining pairs toward the Sheet-window
+  midpoints. It does not choose an unaffordable ideal pair before looking for an
+  affordable in-policy pair;
+- the tighter of the dollar cap and debit/width cap is frozen into the entry
+  pricing envelope, so later broker concessions cannot make an originally valid
+  diagonal violate its admitting economics;
 - ordinary profit, thesis, loss, or time exit closes both legs together as one
   complex order; and
 - `exit_dte_min` is measured against the nearer short leg, because a far-leg

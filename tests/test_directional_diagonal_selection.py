@@ -6,6 +6,7 @@ import pytest
 
 from kamandal_v2.domain.models import Idea, OptionQuote, Playbook
 from kamandal_v2.planner.candidate_builder import (
+    _always_hard_filter_rejection,
     _call_diagonal_candidates,
     _put_diagonal_candidates,
 )
@@ -27,11 +28,13 @@ def _playbook(structure: str) -> Playbook:
         long_dte_max=60,
         short_delta_min=0.20,
         short_delta_max=0.30,
-        long_delta_min=0.45,
+        long_delta_min=0.40,
         long_delta_max=0.55,
         spread_width=None,
         max_bid_ask_pct=0.20,
         min_option_oi=25,
+        live_max_bpr_per_order=1500,
+        max_debit_to_width_ratio=0.75,
     )
 
 
@@ -146,3 +149,59 @@ def test_directional_diagonal_does_not_silently_widen_dte_windows() -> None:
     )
 
     assert candidates == []
+
+
+def test_diagonal_search_skips_ideal_delta_pair_when_it_exceeds_bpr_cap() -> None:
+    quotes = [
+        _quote("META", "call", 630, 23, 0.25, 4.00),
+        _quote("META", "call", 585, 51, 0.50, 24.60),  # $2,060 debit: reject.
+        _quote("META", "call", 605, 51, 0.43, 18.50),  # $1,450 debit: eligible.
+    ]
+
+    candidates = _call_diagonal_candidates(
+        _idea("call_diagonal", "META"),
+        _playbook("call_diagonal"),
+        quotes,
+    )
+
+    assert len(candidates) == 1
+    legs = {leg.role: leg for leg in candidates[0].legs}
+    assert legs["long_far"].strike == 605
+    assert candidates[0].estimated_bpr == 1450
+    assert candidates[0].entry_debit_ceiling == 15.0
+    assert candidates[0].entry_economic_bound_source == "playbook.live_max_bpr_per_order"
+
+
+def test_diagonal_debit_to_width_is_a_hard_selection_gate() -> None:
+    quotes = [
+        _quote("XYZ", "call", 130, 23, 0.25, 2.00),
+        _quote("XYZ", "call", 120, 51, 0.50, 10.00),  # 80% of width: reject.
+        _quote("XYZ", "call", 110, 51, 0.40, 16.00),  # 70% of width: eligible.
+    ]
+
+    candidates = _call_diagonal_candidates(
+        _idea("call_diagonal", "XYZ"),
+        _playbook("call_diagonal"),
+        quotes,
+    )
+
+    assert len(candidates) == 1
+    legs = {leg.role: leg for leg in candidates[0].legs}
+    assert legs["long_far"].strike == 110
+    assert candidates[0].entry_debit_ceiling == 15.0
+    assert candidates[0].entry_economic_bound_source == (
+        "playbook.live_max_bpr_per_order+playbook.max_debit_to_width_ratio"
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "package_bid_ask_pct_above_max:0.25>0.2",
+        "diagonal_debit_bpr_above_max:1600>1500",
+        "diagonal_debit_width_ratio_above_max:0.8>0.75",
+        "diagonal_width_nonpositive",
+    ],
+)
+def test_diagonal_economic_rejections_remain_hard_in_warn_mode(reason: str) -> None:
+    assert _always_hard_filter_rejection(reason)

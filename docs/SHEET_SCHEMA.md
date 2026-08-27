@@ -132,6 +132,12 @@ Notes:
 - `live_max_bpr_per_order`: authoritative Sheet-owned dollar cap for one live
   contract. It also bounds the worst entry debit after conversion to the
   per-share option price used by the broker.
+- `max_debit_to_width_ratio`: directional-diagonal-only hard entry gate. The
+  absolute midpoint debit divided by the resulting strike distance must not
+  exceed this fraction; `0.75` means the debit may be at most 75% of width.
+  This field does not choose or constrain width. It rejects structurally poor
+  economics after both legs have independently matched their Sheet delta/DTE
+  windows.
 - `max_debit_pct_bpr`: retained only for existing-Sheet compatibility. Current
   rows contain mixed fraction/percent units, so this field does not authorize
   an entry price. Do not edit it to tune live entry behavior; use
@@ -178,7 +184,7 @@ Notes:
   blank. The builder targets the midpoint of the short and long DTE/delta
   windows independently. Blank `spread_width` means no width constraint, not
   `$5` and not one strike-grid interval. The current call/put mirror policy is
-  short 20-30 DTE at 20-30 absolute delta and long 45-60 DTE at 45-55 absolute
+  short 20-30 DTE at 20-30 absolute delta and long 45-60 DTE at 40-55 absolute
   delta. If either hard window has no valid liquid leg, no candidate is built.
 - `range_gate_required`: when true, eligible candidates must receive a fresh
   `confirmed_range` answer from Market Cartographer before optimization. A
