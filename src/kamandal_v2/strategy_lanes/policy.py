@@ -393,6 +393,16 @@ def _validate_numeric_policy(row: dict[str, Any], *, lane: LaneId, management: d
             raise PolicyError(f"{row_name}: Sheet field {name} must be nonnegative")
     if sum(parsed[name] for name in ("score_weight_credit", "score_weight_pop", "score_weight_liquidity", "score_weight_spread")) <= 0:
         raise PolicyError(f"{row_name}: Sheet score weights must have positive total")
+    if lane is LaneId.DIRECTIONAL_DIAGONAL:
+        if not 0 < parsed["max_loss_multiple"] <= 1:
+            raise PolicyError(
+                f"{row_name}: debit diagonal max_loss_multiple must be a loss fraction in (0, 1]"
+            )
+        sizing_method = str(row.get("sizing_method") or "").strip().lower()
+        if sizing_method != "fixed_contracts" or parsed["sizing_value"] != 1 or parsed["max_contracts"] != 1:
+            raise PolicyError(
+                f"{row_name}: directional diagonal currently requires fixed_contracts sizing_value=1 max_contracts=1"
+            )
     for low, high in (
         ("dte_min", "dte_max"),
         ("short_delta_min", "short_delta_max"),

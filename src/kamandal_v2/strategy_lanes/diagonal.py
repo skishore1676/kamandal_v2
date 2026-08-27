@@ -34,9 +34,9 @@ def propose_diagonal_actions(
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "mandatory_event_exit", arbiter_class="mandatory_event_exit", proposed_at=proposed_at))
     if _number(context, "profit_pct") >= sheet_number(policy, "profit_target_pct"):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "profit_target", arbiter_class="executable_profit", proposed_at=proposed_at))
-    time_exit_due = _number(context, "far_dte") <= sheet_number(policy, "exit_dte_min")
+    time_exit_due = _number(context, "near_dte") <= sheet_number(policy, "exit_dte_min")
     if time_exit_due:
-        actions.append(propose_action(lifecycle, ActionType.CLOSE, "long_leg_time_exit", arbiter_class="time_decision", proposed_at=proposed_at))
+        actions.append(propose_action(lifecycle, ActionType.CLOSE, "near_leg_time_exit", arbiter_class="time_decision", proposed_at=proposed_at))
     elif bool(context.get("half_time_exit_due")):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "half_time_exit", arbiter_class="time_decision", proposed_at=proposed_at))
 

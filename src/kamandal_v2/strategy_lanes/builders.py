@@ -30,10 +30,6 @@ def build_lane_candidates(
     if opportunity.underlying != snapshot.underlying:
         raise ValueError("opportunity underlying does not match chain snapshot")
     resolved_fields = dict(policy.resolved_fields)
-    width_source = "sheet"
-    if policy.lane is LaneId.DIRECTIONAL_DIAGONAL and resolved_fields.get("spread_width") in (None, ""):
-        resolved_fields["spread_width"] = _strike_grid_width(snapshot)
-        width_source = "strike_grid"
     playbook = Playbook.from_row(resolved_fields)
     idea = _source_idea(opportunity)
     quotes = snapshot.quotes
@@ -80,8 +76,8 @@ def build_lane_candidates(
         if policy.lane is LaneId.DIRECTIONAL_DIAGONAL:
             candidate.reasons.extend(
                 [
-                    f"csa_width_source={width_source}",
-                    f"csa_actual_width={abs(candidate.legs[0].strike - candidate.legs[1].strike)}",
+                    "csa_width_source=independent_sheet_leg_targets",
+                    f"csa_actual_width={abs(candidate.legs[0].strike - candidate.legs[1].strike):g}",
                 ]
             )
     return tuple(candidates)
@@ -159,14 +155,6 @@ def _source_idea(opportunity: StrategyOpportunity) -> Idea:
         direction=direction,
         operator_status="approved",
     )
-
-
-def _strike_grid_width(snapshot: ChainSnapshot) -> float:
-    strikes = sorted({float(quote.strike) for quote in snapshot.quotes})
-    gaps = [high - low for low, high in zip(strikes, strikes[1:], strict=False) if high > low]
-    if not gaps:
-        raise ValueError("diagonal strike grid has no positive interval")
-    return min(gaps)
 
 
 def _builder_config(policy: CsaPolicy) -> dict[str, Any]:

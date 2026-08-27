@@ -861,16 +861,40 @@ option plus a reusable short-premium program:
   put diagonal;
 - the farther long and nearer short legs enter together as one complex debit
   order;
+- each leg is selected independently from the Google Sheet's own DTE and delta
+  windows: the near short targets the midpoint of `dte_min/dte_max` and
+  `short_delta_min/short_delta_max`, while the far long targets the midpoint of
+  `long_dte_min/long_dte_max` and `long_delta_min/long_delta_max`;
+- the current operator contract uses 20-30 DTE and 20-30 absolute delta for the
+  near short, and 45-60 DTE and 45-55 absolute delta for the far long. This
+  naturally targets about 25 delta/25 DTE and 50 delta/52 DTE without requiring
+  an exact expiration on every day of the month;
 - for calls, the far long is closer to the money at a lower strike than the near
   short; for puts, the far long is closer to the money at a higher strike than
   the near short;
-- the net debit must not exceed the Sheet-configured cap, initially 75% of strike
-  width, and the paired profit target remains a Sheet value within the 25-50%
-  tastylive reference range;
+- `spread_width` is intentionally blank for directional diagonals. Blank means
+  no width constraint: neither a repository `$5` default nor the option-chain
+  strike interval may influence selection. Strike distance is resulting
+  evidence from the two independently selected legs;
+- standard monthly expirations, open interest, and tight markets are
+  deterministic preferences inside the hard Sheet windows. If no valid pair
+  exists inside those windows, the capability produces no candidate; it does
+  not silently widen DTE or delta policy;
+- the net debit must not exceed `live_max_bpr_per_order`, the Sheet's explicit
+  per-contract dollar cap. `max_debit_pct_bpr` is legacy compatibility evidence
+  and may not authorize a diagonal entry;
 - ordinary profit, thesis, loss, or time exit closes both legs together as one
   complex order; and
+- `exit_dte_min` is measured against the nearer short leg, because a far-leg
+  clock could otherwise become due only after the short option has expired;
 - no short-leg roll, resale, or intentional long-only state is part of this
   capability.
+
+Call and put construction share one selector parameterized only by option type
+and mirrored strike ordering. This prevents the bearish path from drifting from
+the bullish path. Delta is the canonical strike input. ATR distance may be
+recorded for research, but it is not a selection rule unless the operator later
+adds an explicit Sheet-owned ATR field after reviewing evidence.
 
 A partial quantity fill may create fewer complete two-leg packages than ordered;
 it must not create a one-leg strategy position. If broker/reconciliation state

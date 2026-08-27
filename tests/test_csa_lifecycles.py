@@ -102,8 +102,8 @@ def _row(structure: str):  # noqa: ANN202
             "short_delta_max": 0.35,
             "long_delta_min": 0.5,
             "long_delta_max": 0.8,
-            "spread_width": 5,
-            "max_loss_multiple": 2,
+            "spread_width": "",
+            "max_loss_multiple": 0.5,
             "exit_dte_min": 10,
             "lifecycle": {"short_leg": {"roll": True, "roll_dte": 7}, "long_only": {"requires_approval": True}, "fill": {"max_attempts": 2, "price_increment": 0.05}},
         }
@@ -263,7 +263,7 @@ def test_earnings_calendar_uses_event_relative_expirations_for_tomorrow_event() 
     ]
 
 
-def test_diagonal_blank_sheet_width_is_derived_from_the_quote_grid() -> None:
+def test_diagonal_blank_sheet_width_means_independent_leg_selection() -> None:
     row = _row("call_diagonal")
     row["spread_width"] = ""
     policy = compile_csa_policy(row, source="google_sheet", read_at=NOW)
@@ -274,14 +274,14 @@ def test_diagonal_blank_sheet_width_is_derived_from_the_quote_grid() -> None:
         _chain(
             [
                 _quote("call", 103, 30, 0.25, 1.5, 1.6),
-                _quote("call", 100, 75, 0.6, 8.0, 8.2),
-                _quote("call", 97, 75, 0.7, 10.0, 10.2),
+                _quote("call", 100, 75, 0.65, 8.0, 8.2),
+                _quote("call", 97, 75, 0.8, 10.0, 10.2),
             ]
         ),
     )
 
     assert candidates
-    assert any(reason == "csa_width_source=strike_grid" for reason in candidates[0].reasons)
+    assert any(reason == "csa_width_source=independent_sheet_leg_targets" for reason in candidates[0].reasons)
     assert any(reason == "csa_actual_width=3" for reason in candidates[0].reasons)
 
 
@@ -395,6 +395,7 @@ def test_lane_lifecycle_scenarios_cover_adjust_close_and_approval_block() -> Non
                 "loss_multiple": 0,
                 "event_exit_due": False,
                 "profit_pct": 0,
+                "near_dte": 30,
                 "far_dte": 70,
                 "short_leg_present": False,
                 "long_only_approved": False,
@@ -451,6 +452,7 @@ def test_all_lanes_have_deterministic_hold_and_earnings_has_expiry_close() -> No
                 "loss_multiple": 0,
                 "event_exit_due": False,
                 "profit_pct": 0,
+                "near_dte": 30,
                 "far_dte": 70,
                 "short_leg_present": True,
                 "short_leg_roll_due": False,
@@ -474,6 +476,33 @@ def test_all_lanes_have_deterministic_hold_and_earnings_has_expiry_close() -> No
         registry.resolve(earnings.lane)(_lifecycle(earnings.lane), earnings, expiry_context, proposed_at=NOW)
     )
     assert expiry.selected.reason_codes == ("near_leg_expiry_close",)
+
+
+def test_directional_diagonal_time_exit_uses_near_short_leg() -> None:
+    policy = _policy("call_diagonal")
+    selected = arbitrate_actions(
+        lifecycle_registry().resolve(policy.lane)(
+            _lifecycle(policy.lane),
+            policy,
+            {
+                "working_order_conflict": False,
+                "ownership_clear": True,
+                "hard_emergency": False,
+                "event_exit_due": False,
+                "half_time_exit_due": False,
+                "profit_pct": 0,
+                "loss_multiple": 0,
+                "near_dte": 10,
+                "far_dte": 59,
+                "short_leg_present": True,
+                "paired_position_complete": True,
+            },
+            proposed_at=NOW,
+        )
+    ).selected
+
+    assert selected.action_type is ActionType.CLOSE
+    assert selected.reason_codes == ("near_leg_time_exit",)
 
 
 @pytest.mark.parametrize(
@@ -520,6 +549,7 @@ def test_all_lanes_have_deterministic_hold_and_earnings_has_expiry_close() -> No
                 "half_time_exit_due": True,
                 "profit_pct": 0,
                 "loss_multiple": 0,
+                "near_dte": 29,
                 "far_dte": 59,
                 "short_leg_present": True,
                 "paired_position_complete": True,
@@ -690,6 +720,7 @@ def test_diagonal_partial_state_blocks_and_never_emits_a_short_leg_roll() -> Non
                 "loss_multiple": 0,
                 "event_exit_due": False,
                 "profit_pct": 0,
+                "near_dte": 30,
                 "far_dte": 70,
                 "short_leg_present": False,
                 "paired_position_complete": False,

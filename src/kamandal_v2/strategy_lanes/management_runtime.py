@@ -454,7 +454,17 @@ def _management_context(
     elif lifecycle.lane is LaneId.DIRECTIONAL_DIAGONAL:
         short = next((leg for leg in legs if leg.role == "short_near"), None)
         long = next(leg for leg in legs if leg.role == "long_far")
-        context = {**common, "far_dte": max((date.fromisoformat(long.expiration) - observed_date).days, 0), "short_leg_present": short is not None, "paired_position_complete": short is not None and len(legs) == 2}
+        context = {
+            **common,
+            "near_dte": (
+                max((date.fromisoformat(short.expiration) - observed_date).days, 0)
+                if short is not None
+                else 0
+            ),
+            "far_dte": max((date.fromisoformat(long.expiration) - observed_date).days, 0),
+            "short_leg_present": short is not None,
+            "paired_position_complete": short is not None and len(legs) == 2,
+        }
     else:
         frozen_event = dict(lifecycle.metadata.get("event_context") or {})
         event = latest_earnings_snapshot(sqlite_path, snapshot.underlying) if not frozen_event else None

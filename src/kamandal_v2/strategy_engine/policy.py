@@ -124,7 +124,7 @@ def compile_playbook_policy(
     management = _management(row, playbook_id)
     management = _normalize_legacy_management(capability, management, compatibility)
     _reject_live_approval_branch(mode, management, playbook_id)
-    _validate_directional_diagonal(capability, management, playbook_id)
+    _validate_directional_diagonal(capability, row, management, playbook_id)
     _validate_earnings_calendar(capability, row, source_mode, playbook_id)
     strangle_management = _compile_strangle_management(row, management, compatibility, capability, playbook_id)
     _validate_entry_targets(row, capability=capability, playbook_id=playbook_id)
@@ -307,7 +307,12 @@ def _validate_activation(row: dict[str, Any], playbook_id: str) -> None:
         raise PolicyError(f"{playbook_id}: proposed/held/rejected universe policy is not tradable")
 
 
-def _validate_directional_diagonal(capability: Capability, management: dict[str, Any], playbook_id: str) -> None:
+def _validate_directional_diagonal(
+    capability: Capability,
+    row: dict[str, Any],
+    management: dict[str, Any],
+    playbook_id: str,
+) -> None:
     if capability.key not in {"call_diagonal", "put_diagonal", "narrative_ignition"}:
         return
     lifecycle = management.get("lifecycle") or {}
@@ -316,6 +321,18 @@ def _validate_directional_diagonal(capability: Capability, management: dict[str,
         raise PolicyError(f"{playbook_id}: directional diagonal short-leg roll is not permitted")
     if "long_only" in serialized or "resale" in serialized:
         raise PolicyError(f"{playbook_id}: directional diagonal long-only/resale management is not permitted")
+    loss_fraction = _optional_number(row.get("max_loss_multiple"))
+    if loss_fraction is None or not 0 < loss_fraction <= 1:
+        raise PolicyError(
+            f"{playbook_id}: debit diagonal max_loss_multiple must be a loss fraction in (0, 1]"
+        )
+    sizing_method = str(row.get("sizing_method") or "").strip().lower()
+    sizing_value = _optional_number(row.get("sizing_value"))
+    max_contracts = _optional_number(row.get("max_contracts"))
+    if sizing_method != "fixed_contracts" or sizing_value != 1 or max_contracts != 1:
+        raise PolicyError(
+            f"{playbook_id}: directional diagonal currently requires fixed_contracts sizing_value=1 max_contracts=1"
+        )
 
 
 def _validate_earnings_calendar(capability: Capability, row: dict[str, Any], source_mode: str, playbook_id: str) -> None:

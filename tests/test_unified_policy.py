@@ -23,6 +23,10 @@ def _row(**overrides: object) -> dict[str, object]:
         "source_mode": "idea",
         "dte_min": "30",
         "dte_max": "45",
+        "max_loss_multiple": "0.5",
+        "sizing_method": "fixed_contracts",
+        "sizing_value": "1",
+        "max_contracts": "1",
     }
     row.update(overrides)
     return row
@@ -197,6 +201,27 @@ def test_legacy_baseline_diagonal_is_converted_to_paired_management() -> None:
 
     assert policy.management["lifecycle"] == {}
     assert policy.compatibility["legacy_diagonal_management_ignored"] == ["long_only", "short_leg"]
+
+
+def test_directional_diagonal_rejects_unreachable_debit_loss_and_unimplemented_sizing() -> None:
+    with pytest.raises(PolicyError, match="loss fraction"):
+        compile_playbook_policy(
+            _row(
+                strategy_family="call_diagonal",
+                structure="call_diagonal",
+                max_loss_multiple="1.5",
+            )
+        )
+    with pytest.raises(PolicyError, match="fixed_contracts"):
+        compile_playbook_policy(
+            _row(
+                strategy_family="put_diagonal",
+                structure="put_diagonal",
+                sizing_method="pct_account_bpr",
+                sizing_value="0.04",
+                max_contracts="2",
+            )
+        )
 
 
 def test_proposed_universe_activation_and_unknown_capability_fail_closed() -> None:

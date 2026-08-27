@@ -56,9 +56,10 @@ portfolio, diagnostic, rejection, and metric payloads remained part of the hash.
     evidence; overlap or working intent selects `block` and creates no new ticket.
 11. CSA launchd install/enable/disable actions target only the three CSA labels;
     baseline jobs are not reloaded during rollout or rollback.
-12. Blank diagonal `spread_width` is not replaced by a repository constant; CSA
-    derives the interval from the current option strike grid and records the
-    source and actual selected width in candidate evidence.
+12. Blank diagonal `spread_width` is not replaced by a repository constant or
+    by the current option strike grid. CSA selects the near short and far long
+    independently from their Sheet-owned DTE/delta windows and records the
+    resulting actual width as evidence only.
 
 ## Strategy Sources Used For Operator Defaults
 

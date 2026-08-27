@@ -99,7 +99,7 @@ def test_put_diagonal_variant_matches_bearish_overextended_thesis() -> None:
     assert candidates[0].playbook_id == "put_diagonal_overextended"
 
 
-def test_put_diagonal_uses_bounded_near_dte_fallback_for_public_ladder() -> None:
+def test_put_diagonal_does_not_widen_sheet_dte_window_for_public_ladder() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_overextended",
         "source": "test",
@@ -118,15 +118,7 @@ def test_put_diagonal_uses_bounded_near_dte_fallback_for_public_ladder() -> None
         FixturePreflightClient(),
     )
 
-    eligible = [candidate for candidate in candidates if candidate.eligible]
-    assert eligible
-    assert eligible[0].structure == "put_diagonal"
-    assert any(
-        reason.startswith("dte_fallback_warning=near:")
-        and ":dte=24:" in reason
-        and ":window=25-35" in reason
-        for reason in eligible[0].reasons
-    )
+    assert candidates == []
 
 
 def test_matched_playbook_zero_raw_candidates_gets_build_diagnostic() -> None:

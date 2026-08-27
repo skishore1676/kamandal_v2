@@ -116,6 +116,10 @@ Notes:
   spread enters loss-watch when the mid close debit reaches about $2.00.
   Runtime config can require repeated loss-watch observations before a review
   or close recommendation is surfaced.
+  For a debit directional diagonal, the same legacy column is interpreted as
+  the fraction of entry debit lost and must be in `(0, 1]`; for example `0.5`
+  means a 50% loss of entry debit. A value above `1` is unreachable for an
+  ordinary debit package and fails policy compilation.
   Live behavior can be flipped without changing the sheet by setting
   `KAMANDAL_EXIT_MAX_LOSS_ACTION`, `KAMANDAL_EXIT_LOSS_WATCH_CONFIRMATIONS_REQUIRED`,
   or `KAMANDAL_EXIT_LOSS_WATCH_WINDOW_MINUTES` in the runtime environment.
@@ -170,6 +174,12 @@ Notes:
 - `target_dte`: preferred expiration inside the inclusive `dte_min/max` window.
   The short-strangle row uses 45 inside 35-50; the builder chooses the nearest
   available expiration without weakening the hard window.
+- Directional diagonals intentionally leave `target_dte` and `spread_width`
+  blank. The builder targets the midpoint of the short and long DTE/delta
+  windows independently. Blank `spread_width` means no width constraint, not
+  `$5` and not one strike-grid interval. The current call/put mirror policy is
+  short 20-30 DTE at 20-30 absolute delta and long 45-60 DTE at 45-55 absolute
+  delta. If either hard window has no valid liquid leg, no candidate is built.
 - `range_gate_required`: when true, eligible candidates must receive a fresh
   `confirmed_range` answer from Market Cartographer before optimization. A
   missing, stale, failed, or broken-range answer rejects that candidate only.
@@ -182,6 +192,8 @@ Notes:
   half the original DTE. The unified manager measures original DTE from the
   completed opening fill to the earliest active expiration and closes the full
   strategy package; it does not manage one leg independently.
+- For directional diagonals, `exit_dte_min` is evaluated on the near short leg
+  and closes both legs. It is never evaluated only on the far long leg.
 - `exit_pre_event_days`: optional nonnegative calendar-day threshold. For
   ordinary strategies, diagonals, and strangles, the unified manager compares
   it with the latest captured earnings date and closes the full package when

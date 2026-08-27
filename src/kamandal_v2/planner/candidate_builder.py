@@ -967,63 +967,116 @@ def _put_calendar_candidates(idea: Idea, playbook: Playbook, quotes: list[Option
 
 
 def _put_diagonal_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> list[Candidate]:
-    candidates = []
-    fallback = _dte_fallback_settings(config)
-    far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=45)
-    short_selection = _near_delta_selection(
-        quotes, "put", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
-        fallback_settings=fallback, fallback_role="near",
+    return _directional_diagonal_candidates(
+        idea,
+        playbook,
+        quotes,
+        option_type="put",
+        config=config,
     )
-    long_selection = _near_delta_selection(
-        quotes, "put", playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
-        fallback_settings=fallback, fallback_role="far",
-    )
-    width = playbook.spread_width or 5.0
-    for short in short_selection.quotes[:4]:
-        long_choices = [
-            quote for quote in long_selection.quotes
-            if quote.expiration > short.expiration and quote.strike >= short.strike
-        ]
-        if not long_choices:
-            continue
-        long = sorted(long_choices, key=lambda quote: (abs((quote.strike - short.strike) - width), quote.dte))[0]
-        candidate = _candidate(idea, playbook, [
-            OptionLeg.from_quote(short, role="short_near", side="sell"),
-            OptionLeg.from_quote(long, role="long_far", side="buy"),
-        ])
-        _append_dte_fallback_warnings(candidate, [("near", short, short_selection), ("far", long, long_selection)])
-        candidates.append(candidate)
-    return candidates[:4]
 
 
 def _call_diagonal_candidates(idea: Idea, playbook: Playbook, quotes: list[OptionQuote], *, config: dict | None = None) -> list[Candidate]:
-    candidates = []
-    fallback = _dte_fallback_settings(config)
+    return _directional_diagonal_candidates(
+        idea,
+        playbook,
+        quotes,
+        option_type="call",
+        config=config,
+    )
+
+
+def _directional_diagonal_candidates(
+    idea: Idea,
+    playbook: Playbook,
+    quotes: list[OptionQuote],
+    *,
+    option_type: str,
+    config: dict | None = None,
+) -> list[Candidate]:
+    """Select each diagonal leg from its Sheet-owned DTE/delta target.
+
+    A directional diagonal has no fixed strike width.  The far long is chosen
+    near the middle of its own delta/DTE windows and the near short is chosen
+    near the middle of its windows.  Their strike separation is resulting
+    evidence, never an input or repository fallback.
+    """
+
+    # Directional-diagonal Sheet windows are hard live policy.  This
+    # capability may not silently move to a different expiration when no
+    # contract exists inside the operator's ranges.
+    fallback = DteFallbackSettings(enabled=False)
     far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=45)
     short_selection = _near_delta_selection(
-        quotes, "call", playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
+        quotes, option_type, playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
         fallback_settings=fallback, fallback_role="near",
     )
     long_selection = _near_delta_selection(
-        quotes, "call", playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
+        quotes, option_type, playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
         fallback_settings=fallback, fallback_role="far",
     )
-    width = playbook.spread_width or 5.0
-    for short in short_selection.quotes[:4]:
-        long_choices = [
-            quote for quote in long_selection.quotes
-            if quote.expiration > short.expiration and quote.strike <= short.strike
-        ]
-        if not long_choices:
-            continue
-        long = sorted(long_choices, key=lambda quote: (abs((short.strike - quote.strike) - width), quote.dte))[0]
-        candidate = _candidate(idea, playbook, [
-            OptionLeg.from_quote(short, role="short_near", side="sell"),
-            OptionLeg.from_quote(long, role="long_far", side="buy"),
-        ])
-        _append_dte_fallback_warnings(candidate, [("near", short, short_selection), ("far", long, long_selection)])
-        candidates.append(candidate)
-    return candidates[:4]
+
+    short_target_delta = _window_midpoint(playbook.short_delta_min, playbook.short_delta_max, default=0.25)
+    long_target_delta = _window_midpoint(playbook.long_delta_min, playbook.long_delta_max, default=0.50)
+    short_target_dte = float(playbook.target_dte or ((playbook.dte_min + playbook.dte_max) / 2.0))
+    long_target_dte = (far_min + far_max) / 2.0
+    ranked: list[tuple[float, Candidate]] = []
+    for short in short_selection.quotes[:8]:
+        for long in long_selection.quotes[:8]:
+            if long.expiration <= short.expiration:
+                continue
+            if option_type == "call" and long.strike > short.strike:
+                continue
+            if option_type == "put" and long.strike < short.strike:
+                continue
+            candidate = _candidate(idea, playbook, [
+                OptionLeg.from_quote(short, role="short_near", side="sell"),
+                OptionLeg.from_quote(long, role="long_far", side="buy"),
+            ])
+            _append_dte_fallback_warnings(candidate, [("near", short, short_selection), ("far", long, long_selection)])
+            actual_width = abs(short.strike - long.strike)
+            candidate.reasons.extend(
+                [
+                    "diagonal_pair_selection=independent_sheet_leg_targets",
+                    f"diagonal_short_target_delta={short_target_delta:.4f}",
+                    f"diagonal_long_target_delta={long_target_delta:.4f}",
+                    f"diagonal_short_target_dte={short_target_dte:.2f}",
+                    f"diagonal_long_target_dte={long_target_dte:.2f}",
+                    f"diagonal_actual_width={actual_width:g}",
+                ]
+            )
+            pair_score = _leg_rank_score(
+                short,
+                target_delta=short_target_delta,
+                target_dte=short_target_dte,
+            ) + _leg_rank_score(
+                long,
+                target_delta=long_target_delta,
+                target_dte=long_target_dte,
+            )
+            ranked.append((pair_score, candidate))
+    ranked.sort(key=lambda item: (-item[0], item[1].candidate_id))
+    passing = [
+        item
+        for item in ranked
+        if not _filter_rejections(item[1], playbook, config)
+    ]
+    selected_pool = passing or ranked
+    if not selected_pool:
+        return []
+    selected = selected_pool[0][1]
+    selected.reasons.append("diagonal_construction_rank=1")
+    return [selected]
+
+
+def _window_midpoint(low: float | None, high: float | None, *, default: float) -> float:
+    if low is None and high is None:
+        return default
+    if low is None:
+        return float(high)
+    if high is None:
+        return float(low)
+    return (float(low) + float(high)) / 2.0
 
 
 def _near_delta(
@@ -1173,7 +1226,11 @@ def _raw_candidate_build_diagnostic(
             "near": near_delta,
             "far": far_delta,
         },
-        "dte_fallback": _dte_fallback_settings(config).to_dict(),
+        "dte_fallback": (
+            DteFallbackSettings(enabled=False).to_dict()
+            if playbook.structure in {"put_diagonal", "call_diagonal"}
+            else _dte_fallback_settings(config).to_dict()
+        ),
     }
 
 
@@ -1231,16 +1288,23 @@ def _calendar_zero_reason(playbook: Playbook, quotes: list[OptionQuote], *, opti
 
 
 def _diagonal_zero_reason(playbook: Playbook, quotes: list[OptionQuote], *, option_type: str, config: dict | None) -> str:
+    strict_config = {
+        "planner": {
+            "expiry": {
+                "diagonal_calendar_dte_fallback": {"enabled": False},
+            }
+        }
+    }
     near_reason = _leg_zero_reason(
         quotes, option_type, playbook.short_delta_min, playbook.short_delta_max, playbook.dte_min, playbook.dte_max,
-        label="near", config=config,
+        label="near", config=strict_config,
     )
     if near_reason:
         return near_reason
     far_min, far_max = _far_dte_window(playbook, default_min_offset=20, default_max_offset=45)
     far_reason = _leg_zero_reason(
         quotes, option_type, playbook.long_delta_min, playbook.long_delta_max, far_min, far_max,
-        label="far", config=config,
+        label="far", config=strict_config,
     )
     if far_reason:
         return far_reason
