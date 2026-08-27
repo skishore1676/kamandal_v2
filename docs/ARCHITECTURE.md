@@ -218,6 +218,13 @@ new Kamandal capability.
 X, YouTube, My Ideas, correspondent profiles, market scans, and portfolio needs
 all normalize into a common signal contract. Adding another correspondent
 normally adds a collector/profile/translator, not another planner or manager.
+
+When a correspondent publishes an exact option package as an image, the first
+normalized object is evidence rather than an idea. Birdclaw preserves the
+sanitized public post and media; Agent Broker transcribes the bounded image;
+Kamandal deterministically validates exact legs into `ObservedPackageEvidence`.
+That object remains upstream of the planner until an explicit source-selection
+contract admits it. See [Observed Package Evidence](OBSERVED_PACKAGE_EVIDENCE.md).
 Once normalized, the signal is evaluated by every compatible enabled playbook.
 
 Normalization may be one-to-many. A source profile with a stable numbered

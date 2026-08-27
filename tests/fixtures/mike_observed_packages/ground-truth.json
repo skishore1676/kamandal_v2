@@ -1,0 +1,316 @@
+{
+  "schema": "kamandal.observed_package_calibration.v1",
+  "source_profile": "mike_butler",
+  "capture_method": "chrome_read_only_rendered_public_media",
+  "fixtures": [
+    {
+      "post_id": "2093009471861588321",
+      "url": "https://x.com/TraderMikeyB/status/2093009471861588321",
+      "published_at": "2026-08-27T11:15:00-05:00",
+      "post_text": "New $ADSK call calendar for earnings:",
+      "images": [
+        {
+          "path": "images/2093009471861588321-media1.jpg",
+          "sha256": "106beaec6a308cc8a6c73d74eadf7de95e0c60ee6b1b14b3b05269c5afefda74"
+        }
+      ],
+      "expected_extraction": {
+        "schema": "kamandal.observed_package_extraction.v1",
+        "post_disposition": "packages",
+        "post_blocker": null,
+        "packages": [
+          {
+            "media_index": 1,
+            "package_position": 1,
+            "action": "open",
+            "symbol": "ADSK",
+            "displayed_trade_time": "11:14a today",
+            "displayed_price": {"amount": "1.50", "effect": "debit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Aug 28", "strike": "290", "option_type": "call", "order_code": "STO"},
+              {"quantity": 1, "expiration": "Sep 4", "strike": "290", "option_type": "call", "order_code": "BTO"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "post_id": "2092635749921288284",
+      "url": "https://x.com/TraderMikeyB/status/2092635749921288284",
+      "published_at": "2026-08-26T10:30:00-05:00",
+      "post_text": "Double upside call calendar for earnings in $CRWD",
+      "images": [
+        {
+          "path": "images/2092635749921288284-media1.jpg",
+          "sha256": "c170acb6ce4ae1bfe43140a9ce2f9d9e0ed3536e469971d612083fdb2a41fb5f"
+        }
+      ],
+      "expected_extraction": {
+        "schema": "kamandal.observed_package_extraction.v1",
+        "post_disposition": "packages",
+        "post_blocker": null,
+        "packages": [
+          {
+            "media_index": 1,
+            "package_position": 1,
+            "action": "open",
+            "symbol": "CRWD",
+            "displayed_trade_time": "9:33a today",
+            "displayed_price": {"amount": "3.10", "effect": "debit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Aug 28", "strike": "200", "option_type": "call", "order_code": "STO"},
+              {"quantity": 1, "expiration": "Aug 28", "strike": "210", "option_type": "call", "order_code": "STO"},
+              {"quantity": 1, "expiration": "Sep 4", "strike": "200", "option_type": "call", "order_code": "BTO"},
+              {"quantity": 1, "expiration": "Sep 4", "strike": "210", "option_type": "call", "order_code": "BTO"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "post_id": "2091909308522824070",
+      "url": "https://x.com/TraderMikeyB/status/2091909308522824070",
+      "published_at": "2026-08-24T10:23:00-05:00",
+      "post_text": "Call diagonal in $UPS",
+      "images": [
+        {
+          "path": "images/2091909308522824070-media1.jpg",
+          "sha256": "533caa56fbb07fcd5205461b42e2ef2664c0134f2b1d2be94acdce32935f9867"
+        }
+      ],
+      "expected_extraction": {
+        "schema": "kamandal.observed_package_extraction.v1",
+        "post_disposition": "packages",
+        "post_blocker": null,
+        "packages": [
+          {
+            "media_index": 1,
+            "package_position": 1,
+            "action": "open",
+            "symbol": "UPS",
+            "displayed_trade_time": "8:49a today",
+            "displayed_price": {"amount": "6.66", "effect": "debit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Oct 16", "strike": "110", "option_type": "call", "order_code": "STO"},
+              {"quantity": 1, "expiration": "Dec 18", "strike": "100", "option_type": "call", "order_code": "BTO"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "post_id": "2086831063603491248",
+      "url": "https://x.com/TraderMikeyB/status/2086831063603491248",
+      "published_at": "2026-08-10T10:04:00-05:00",
+      "post_text": "In and out of an $SPX super bull with global trading hours this morning for $100 profit\n\nNew /NG super bull as well!",
+      "images": [
+        {
+          "path": "images/2086831063603491248-media1.jpg",
+          "sha256": "f21d9944e2be1b3749519f997ea23273608bb30377dd2fd0d7d3dd52de798aac"
+        }
+      ],
+      "expected_extraction": {
+        "schema": "kamandal.observed_package_extraction.v1",
+        "post_disposition": "packages",
+        "post_blocker": null,
+        "packages": [
+          {
+            "media_index": 1,
+            "package_position": 1,
+            "action": "close",
+            "symbol": "SPX",
+            "displayed_trade_time": "9:21a today",
+            "displayed_price": {"amount": "0.50", "effect": "credit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Aug 11", "strike": "7745", "option_type": "put", "order_code": "STC"},
+              {"quantity": 1, "expiration": "Aug 11", "strike": "7750", "option_type": "put", "order_code": "BTC"},
+              {"quantity": 1, "expiration": "Aug 11", "strike": "7800", "option_type": "call", "order_code": "STC"},
+              {"quantity": 1, "expiration": "Aug 11", "strike": "7810", "option_type": "call", "order_code": "BTC"}
+            ]
+          },
+          {
+            "media_index": 1,
+            "package_position": 2,
+            "action": "open",
+            "symbol": "/NGU6",
+            "displayed_trade_time": "8:15a today",
+            "displayed_price": {"amount": "0.005", "effect": "credit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Aug 26", "strike": "2.55", "option_type": "put", "order_code": "BTO"},
+              {"quantity": 1, "expiration": "Aug 26", "strike": "2.6", "option_type": "put", "order_code": "STO"},
+              {"quantity": 1, "expiration": "Aug 26", "strike": "3", "option_type": "call", "order_code": "BTO"},
+              {"quantity": 1, "expiration": "Aug 26", "strike": "3.05", "option_type": "call", "order_code": "STO"}
+            ]
+          },
+          {
+            "media_index": 1,
+            "package_position": 3,
+            "action": "open",
+            "symbol": "SPX",
+            "displayed_trade_time": "8:15a today",
+            "displayed_price": {"amount": "0.50", "effect": "credit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Aug 11", "strike": "7745", "option_type": "put", "order_code": "BTO"},
+              {"quantity": 1, "expiration": "Aug 11", "strike": "7750", "option_type": "put", "order_code": "STO"},
+              {"quantity": 1, "expiration": "Aug 11", "strike": "7800", "option_type": "call", "order_code": "BTO"},
+              {"quantity": 1, "expiration": "Aug 11", "strike": "7810", "option_type": "call", "order_code": "STO"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "post_id": "2092260506157400466",
+      "url": "https://x.com/TraderMikeyB/status/2092260506157400466",
+      "published_at": "2026-08-25T09:39:00-05:00",
+      "post_text": "Closed $180 winner in $META\nClosed $424 winner in /MCLX6\nNew $UAL diagonal spread\nRolled /MES strangle to a straddle\nClosed $426 winner in $USO\nNew call butterfly in $WDC",
+      "images": [
+        {
+          "path": "images/2092260506157400466-media1.jpg",
+          "sha256": "2356df8532a8e3bb7982be4f27110242a370fc850594bb8eac9fde770c6ef0ac"
+        },
+        {
+          "path": "images/2092260506157400466-media2.jpg",
+          "sha256": "ea68d7ae0d86186c6d3edb0b52b4d8e0276b4371e9d3b1fce99ea52119ff1844"
+        }
+      ],
+      "expected_extraction": {
+        "schema": "kamandal.observed_package_extraction.v1",
+        "post_disposition": "packages",
+        "post_blocker": null,
+        "packages": [
+          {
+            "media_index": 1,
+            "package_position": 1,
+            "action": "roll",
+            "symbol": "/MESU6",
+            "displayed_trade_time": "9:33a today",
+            "displayed_price": {"amount": "41.75", "effect": "credit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Sep 18", "strike": "7800", "option_type": "call", "order_code": "STO"},
+              {"quantity": 1, "expiration": "Sep 18", "strike": "8000", "option_type": "call", "order_code": "BTC"}
+            ]
+          },
+          {
+            "media_index": 1,
+            "package_position": 2,
+            "action": "open",
+            "symbol": "UAL",
+            "displayed_trade_time": "9:33a today",
+            "displayed_price": {"amount": "5.95", "effect": "debit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Oct 16", "strike": "130", "option_type": "call", "order_code": "STO"},
+              {"quantity": 1, "expiration": "Nov 20", "strike": "120", "option_type": "call", "order_code": "BTO"}
+            ]
+          },
+          {
+            "media_index": 1,
+            "package_position": 3,
+            "action": "close",
+            "symbol": "META",
+            "displayed_trade_time": "9:33a today",
+            "displayed_price": {"amount": "10.05", "effect": "credit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Sep 18", "strike": "600", "option_type": "call", "order_code": "BTC"},
+              {"quantity": 1, "expiration": "Oct 16", "strike": "600", "option_type": "call", "order_code": "STC"}
+            ]
+          },
+          {
+            "media_index": 1,
+            "package_position": 4,
+            "action": "close",
+            "symbol": "/MCLX6",
+            "displayed_trade_time": "8:12a today",
+            "displayed_price": {"amount": "10.18", "effect": "debit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Oct 15", "strike": "80", "option_type": "put", "order_code": "BTC"},
+              {"quantity": 1, "expiration": "Oct 15", "strike": "80", "option_type": "call", "order_code": "BTC"}
+            ]
+          },
+          {
+            "media_index": 2,
+            "package_position": 1,
+            "action": "open",
+            "symbol": "WDC",
+            "displayed_trade_time": "9:33a today",
+            "displayed_price": {"amount": "8.50", "effect": "debit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Sep 18", "strike": "450", "option_type": "call", "order_code": "BTO"},
+              {"quantity": 1, "expiration": "Sep 18", "strike": "550", "option_type": "call", "order_code": "BTO"},
+              {"quantity": 2, "expiration": "Sep 18", "strike": "500", "option_type": "call", "order_code": "STO"}
+            ]
+          },
+          {
+            "media_index": 2,
+            "package_position": 2,
+            "action": "close",
+            "symbol": "USO",
+            "displayed_trade_time": "9:33a today",
+            "displayed_price": {"amount": "9.70", "effect": "credit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Sep 18", "strike": "135", "option_type": "call", "order_code": "BTC"},
+              {"quantity": 1, "expiration": "Oct 16", "strike": "120", "option_type": "call", "order_code": "STC"}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "post_id": "2093034784033321091",
+      "url": "https://x.com/TraderMikeyB/status/2093034784033321091",
+      "published_at": "2026-08-27T12:55:00-05:00",
+      "post_text": "Closed $1022 winner in $MSTR!",
+      "images": [
+        {
+          "path": "images/2093034784033321091-media1.jpg",
+          "sha256": "8795e0facd3fa672a052d769a51fcb605e80ba13623be502bc1d6f4aeeb66695"
+        }
+      ],
+      "expected_extraction": {
+        "schema": "kamandal.observed_package_extraction.v1",
+        "post_disposition": "packages",
+        "post_blocker": null,
+        "packages": [
+          {
+            "media_index": 1,
+            "package_position": 1,
+            "action": "close",
+            "symbol": "MSTR",
+            "displayed_trade_time": "12:53p today",
+            "displayed_price": {"amount": "21.52", "effect": "credit"},
+            "complete": true,
+            "blocker": null,
+            "legs": [
+              {"quantity": 1, "expiration": "Oct 16", "strike": "140", "option_type": "call", "order_code": "BTC"},
+              {"quantity": 1, "expiration": "Nov 20", "strike": "110", "option_type": "call", "order_code": "STC"}
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

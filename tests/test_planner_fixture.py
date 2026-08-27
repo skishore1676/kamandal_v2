@@ -178,6 +178,10 @@ def test_live_plan_context_includes_open_live_groups(tmp_path) -> None:
     control.setdefault("runtime", {})["mode"] = "live"
     control["portfolio"]["max_positions"] = 15
     control["live"]["candidate_filter_mode"] = "warn"
+    # This test exercises live-position accounting, not the separately tested
+    # live Tastytrade IV overlay. Keep its market inputs deterministic even on
+    # developer checkouts that have usable ignored credentials.
+    control["broker"]["market_metrics_provider"] = "fixture"
 
     result = run_plan(
         control,

@@ -17,4 +17,5 @@ lanes:
   kamandal:
     actors:
       thesis_extractor: {brain: balanced}
+      observed_package_extractor: {brain: balanced}
       rejection_reviewer: {brain: balanced}

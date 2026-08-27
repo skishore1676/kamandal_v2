@@ -23,7 +23,13 @@ LOGGER = logging.getLogger(__name__)
 
 
 class JsonLlmClient(Protocol):
-    def chat_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def chat_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        images: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         ...
 
 
@@ -42,19 +48,40 @@ class BrokerJsonClient:
         self.timeout_seconds = timeout_seconds
         self.policy_path = resolve_path(PROJECT_ROOT) / ".agent-broker.yaml"
         self._fallback = fallback
+        self._last_receipt_summary: dict[str, Any] | None = None
 
-    def chat_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    @property
+    def last_receipt_summary(self) -> dict[str, Any] | None:
+        if self._last_receipt_summary is None:
+            return None
+        return dict(self._last_receipt_summary)
+
+    def chat_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        images: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         try:
-            return self._chat_json_broker(system_prompt, user_prompt)
+            return self._chat_json_broker(system_prompt, user_prompt, images=images)
         except Exception as e:
             if self._fallback is not None:
                 try:
+                    if images:
+                        return self._fallback.chat_json(system_prompt, user_prompt, images=images)
                     return self._fallback.chat_json(system_prompt, user_prompt)
                 except Exception as fe:
                     raise RuntimeError(f"Agent Broker failed -- chain exhausted; last broker error: {e}; fallback Codex CLI also failed: {fe}. Next retry at next scheduled slot.") from e
             raise RuntimeError(f"Agent Broker failed -- {e}. Will retry at next scheduled youtube slot; not a trading block.") from e
 
-    def _chat_json_broker(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def _chat_json_broker(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        images: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         from agent_broker import (  # noqa: PLC0415 - optional dependency
             AgentBroker,
             AgentContext,
@@ -68,12 +95,20 @@ class BrokerJsonClient:
         task = AgentTask(
             task_id=f"kamandal-{self.actor}-{uuid.uuid4().hex[:8]}",
             objective=f"{self.actor}: produce the requested JSON.",
-            context=AgentContext(system=system_prompt),
+            context=AgentContext(system=system_prompt, images=images),
             raw_prompt=user_prompt,  # kamandal owns its prompt -> verbatim
             allowed_outcomes=(),
             timeout_seconds=self.timeout_seconds,
         )
         receipt = broker.run(spec, task).receipt
+        self._last_receipt_summary = {
+            "status": receipt.status,
+            "provider_id": receipt.provider_id,
+            "provider_layer": receipt.provider_layer,
+            "provider_chain": list(receipt.provider_chain),
+            "degraded": receipt.degraded,
+            "created_at": receipt.created_at,
+        }
         text = (receipt.output_text or "").strip()
         if receipt.status != "succeeded" or not text:
             chain = list(receipt.provider_chain) if receipt.provider_chain else ["unknown"]
@@ -96,7 +131,13 @@ class CodexCliJsonClient:
         self.workdir = resolve_path(workdir or PROJECT_ROOT)
         self.timeout_seconds = timeout_seconds
 
-    def chat_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+    def chat_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        images: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         prompt = "\n\n".join(
             [
                 "<system>",
@@ -122,6 +163,9 @@ class CodexCliJsonClient:
         ]
         if self.model:
             args.extend(["--model", self.model])
+        if images:
+            args.append("--image")
+            args.extend(images)
         args.append("-")
         result = subprocess.run(
             args,
