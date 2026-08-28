@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +156,18 @@ def _column_letter(index: int) -> str:
     return text
 
 
+def _sheet_cell_equal(actual: Any, expected: Any) -> bool:
+    """Treat Google Sheets' harmless numeric display normalization as equal."""
+    actual_text = str(actual or "").strip()
+    expected_text = str(expected or "").strip()
+    if actual_text == expected_text:
+        return True
+    try:
+        return Decimal(actual_text) == Decimal(expected_text)
+    except InvalidOperation:
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
@@ -177,7 +190,10 @@ def main() -> None:
         raise ValueError("playbooks header differs from the approved append-only schema")
     existing = client.read_tab(title)
     proposed = build_rows(existing)
-    validation = validate_proposal(existing, proposed)
+    existing_without_targets = [
+        row for row in existing if str(row.get("playbook_id") or "") not in TARGET_IDS.values()
+    ]
+    validation = validate_proposal(existing_without_targets, proposed)
     existing_by_id = {str(row.get("playbook_id") or ""): index for index, row in enumerate(existing, start=2)}
     target_row_numbers: list[int] = []
     for row in proposed:
@@ -265,7 +281,7 @@ def main() -> None:
         raise RuntimeError("Sheet header readback mismatch")
     for expected in proposed:
         actual = readback_by_id.get(expected["playbook_id"])
-        if actual is None or any(str(actual.get(key) or "") != str(value or "") for key, value in expected.items()):
+        if actual is None or any(not _sheet_cell_equal(actual.get(key), value) for key, value in expected.items()):
             raise RuntimeError(f"Sheet row readback mismatch: {expected['playbook_id']}")
     readback_validation = validate_proposal(
         [row for row in readback_rows if row.get("playbook_id") not in TARGET_IDS.values()],
