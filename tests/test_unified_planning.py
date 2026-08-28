@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, Idea, OptionLeg, OptionQuote, Plan, Playbook, PortfolioState, PreflightResult, UniverseEntry
@@ -86,7 +87,11 @@ def test_orphaned_pending_live_lifecycle_retires_before_next_plan(tmp_path) -> N
 
 
 def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    tables = build_seed_tables(load_control())
+    # The production seed importer may intentionally discover an older
+    # Kamandal checkout.  Planner unit tests must not change with the host's
+    # filesystem, so exercise the checked-in fallback seed deterministically.
+    with patch("kamandal_v2.seed.OLD_KAMANDAL_ROOT", Path("/__kamandal_v2_test_no_legacy__")):
+        tables = build_seed_tables(load_control())
     headers = seed_headers()
     universe = [dict(zip(headers["universe"], [*row, *[""] * len(headers["universe"])])) for row in tables["universe"]]
     playbooks = [dict(zip(headers["playbooks"], [*row, *[""] * len(headers["playbooks"])])) for row in tables["playbooks"]]
@@ -96,6 +101,11 @@ def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
         if str(playbook.get("enabled") or "").lower() == "true":
             if not playbook.get("max_bid_ask_pct"):
                 playbook["max_bid_ask_pct"] = "0.25"
+            structure = str(playbook.get("structure") or "")
+            if not playbook.get("max_loss_multiple"):
+                playbook["max_loss_multiple"] = "1" if structure in {"call_calendar", "put_calendar"} else "2"
+            if not playbook.get("exit_dte_min"):
+                playbook["exit_dte_min"] = "14" if structure in {"call_calendar", "put_calendar"} else "21"
             playbook["resting_profit_enabled"] = "FALSE"
             playbook["resting_profit_arm_progress_pct"] = "25"
     playbooks.append(
