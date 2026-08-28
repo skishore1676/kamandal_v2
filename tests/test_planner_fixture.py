@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pytest
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, OptionQuote, Playbook, PreflightResult
+from kamandal_v2.domain.models import Candidate, Greeks, Idea, OptionLeg, OptionQuote, Playbook, PreflightResult, UniverseEntry
 from kamandal_v2.planner.candidate_builder import _build_for_playbook
 from kamandal_v2.planner.engine import _live_overlap_preflight_guard, _rejection_summary, run_plan, run_shadow_cycle
 from kamandal_v2.stores.audit import AuditWriter
@@ -169,12 +169,34 @@ def test_total_position_cap_includes_open_shadow_positions(tmp_path) -> None:
     assert second.metrics["candidates_eligible"] > 0
 
 
-def test_live_plan_context_includes_open_live_groups(tmp_path, monkeypatch) -> None:
-    import kamandal_v2.seed as seed_module
-
-    # This is a seed-planner unit test, not a migration test against whichever
-    # legacy Kamandal checkout happens to exist on the host.
-    monkeypatch.setattr(seed_module, "OLD_KAMANDAL_ROOT", tmp_path / "missing-legacy-root")
+def test_live_plan_context_includes_open_live_groups(tmp_path) -> None:
+    # This is a live-position accounting test, not a migration test against
+    # whichever legacy Kamandal seed files happen to exist on the host.
+    universe = [UniverseEntry(symbol="SPY", enabled=True, profile="index_etf", allowed_playbooks=["put_spread_fixture"])]
+    playbooks = [
+        Playbook(
+            playbook_id="put_spread_fixture",
+            enabled=True,
+            strategy_family="put_spread",
+            structure="put_spread",
+            variant="fixture",
+            leg_count=2,
+            profiles=["index_etf"],
+            applicable_direction=["bullish"],
+            applicable_thesis_tags=["index", "defined_risk"],
+            applicable_horizon_min=14,
+            applicable_horizon_max=60,
+            dte_min=30,
+            dte_max=45,
+            spread_width=5,
+            short_delta_min=0.15,
+            short_delta_max=0.30,
+            min_credit_to_width_ratio=0.01,
+            max_bid_ask_pct=0.50,
+            min_option_oi=0,
+            live_max_bpr_per_order=500,
+        )
+    ]
     store = LocalStore(tmp_path / "kamandal.db")
     group = _live_group("live_group_tsla")
     store.save_live_position_group(group["group_id"], group, status="open")
@@ -195,6 +217,8 @@ def test_live_plan_context_includes_open_live_groups(tmp_path, monkeypatch) -> N
         provider="fixture",
         store=store,
         audit=AuditWriter(tmp_path / "audit"),
+        universe_override=universe,
+        playbooks_override=playbooks,
     )
 
     assert result.plans
