@@ -508,6 +508,7 @@ def main() -> None:
             universe_symbols=[entry.symbol for entry in universe if entry.enabled],
             store=LocalStore(),
             intent_client=build_llm_client(correspondent_config, actor="correspondent_intent"),
+            observed_package_client=build_llm_client(correspondent_config, actor="observed_package_extractor"),
         )
         print(json.dumps(result.to_dict(), indent=2))
         return
@@ -549,6 +550,7 @@ def main() -> None:
         print(json.dumps({"schema_version": "kamandal.lifecycle-history.v1", "records": records}, indent=2, sort_keys=True))
         return
     if args.command == "unified-plan":
+        from kamandal_v2.intelligence.observed_packages import load_observed_package_feed
         from kamandal_v2.strategy_engine.planning import run_unified_books
         from kamandal_v2.strategy_lanes.daily_policy import capture_daily_policy_snapshot
 
@@ -565,18 +567,38 @@ def main() -> None:
         # live intent carries the exact daily snapshot identity the guarded
         # executor will later verify.
         daily_policy_snapshot = capture_daily_policy_snapshot(config, tables=tables)
+        active_store = LocalStore(args.db)
+        observed_package_batches = ()
+        observed_package_feed_warning = ""
+        correspondent_settings = ((config.get("source_intelligence") or {}).get("correspondents") or {})
+        feed_path = resolve_path(correspondent_settings.get("observed_package_feed") or "data/research/correspondent_signals/observed_packages/latest.json")
+        if feed_path.is_file():
+            try:
+                observed_package_batches = load_observed_package_feed(feed_path)
+            except Exception as exc:  # noqa: BLE001 - Mike shadow evidence cannot erase the live planning book.
+                observed_package_feed_warning = f"{type(exc).__name__}: {exc}"
+                active_store.event(
+                    "observed_package_feed_rejected",
+                    {"path": str(feed_path), "error": observed_package_feed_warning, "broker_effects": False},
+                )
         result = run_unified_books(
             config,
             universe_rows=daily_policy_snapshot.tables["universe"],
             playbook_rows=daily_policy_snapshot.tables["playbooks"],
             idea_paths=_expand_paths(args.ideas),
             provider=args.provider,
-            store=LocalStore(args.db),
+            store=active_store,
             write_sheet=args.write_sheet,
             daily_policy_snapshot=daily_policy_snapshot,
+            observed_package_batches=observed_package_batches,
         )
         print(json.dumps({
             "policy_errors": result.compilation.errors,
+            "observed_package_feed": {
+                "path": str(feed_path),
+                "batch_count": len(observed_package_batches),
+                "warning": observed_package_feed_warning or None,
+            },
             "live": {"policy_ids": result.live.policy_ids, "plans": len(result.live.result.plans) if result.live.result else None, "errors": result.live.errors},
             "shadow": {"policy_ids": result.shadow.policy_ids, "plans": len(result.shadow.result.plans) if result.shadow.result else None, "errors": result.shadow.errors},
         }, indent=2, sort_keys=True))

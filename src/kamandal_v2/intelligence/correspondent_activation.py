@@ -22,6 +22,12 @@ from kamandal_v2.intelligence.correspondent_signals import (
 )
 from kamandal_v2.intelligence.llm_client import JsonLlmClient
 from kamandal_v2.intelligence.market_questions import run_market_question_exchange
+from kamandal_v2.intelligence.observed_packages import (
+    PROMPT_VERSION as OBSERVED_PACKAGE_PROMPT_VERSION,
+    ObservedPackageBatch,
+    extract_observed_packages_from_correspondent_signal,
+    observed_package_batch_from_dict,
+)
 from kamandal_v2.paths import resolve_path
 from kamandal_v2.stores.sqlite import LocalStore
 
@@ -39,6 +45,8 @@ class CorrespondentActivationResult:
     planner_idea_count: int
     active_idea_paths: tuple[Path, ...]
     receipt_path: Path
+    observed_package_feed_path: Path | None = None
+    observed_package_batch_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +58,8 @@ class CorrespondentActivationResult:
             "planner_idea_count": self.planner_idea_count,
             "active_idea_paths": [str(path) for path in self.active_idea_paths],
             "receipt_path": str(self.receipt_path),
+            "observed_package_feed_path": str(self.observed_package_feed_path) if self.observed_package_feed_path else None,
+            "observed_package_batch_count": self.observed_package_batch_count,
             "effects": _effects(active_idea_publication=True),
         }
 
@@ -62,6 +72,7 @@ def activate_correspondent_sources(
     market_command_runner: CommandRunner | None = None,
     store: LocalStore | None = None,
     intent_client: JsonLlmClient | None = None,
+    observed_package_client: JsonLlmClient | None = None,
 ) -> CorrespondentActivationResult:
     """Translate configured Birdclaw correspondents and publish eligible ideas.
 
@@ -95,6 +106,8 @@ def activate_correspondent_sources(
     output_root.mkdir(parents=True, exist_ok=True)
     active_root.mkdir(parents=True, exist_ok=True)
     staged: list[dict[str, Any]] = []
+    observed_batches: list[ObservedPackageBatch] = []
+    observed_failures: list[dict[str, str]] = []
     active_paths = tuple(active_root / f"correspondent_{profile['profile_id']}.yaml" for profile in profiles)
 
     try:
@@ -124,6 +137,30 @@ def activate_correspondent_sources(
             packet_sha = hashlib.sha256(packet_text.encode()).hexdigest()
             packet_path = output_root / "packets" / profile["profile_id"] / f"{packet_sha}.json"
             _atomic_write(packet_path, packet_text)
+
+            if profile["source_mode"] == "observed_package":
+                batches, failures = _extract_observed_package_batches(
+                    packet,
+                    output_root=output_root,
+                    client=observed_package_client,
+                )
+                observed_batches.extend(batches)
+                observed_failures.extend(failures)
+                staged.append(
+                    {
+                        "profile_id": profile["profile_id"],
+                        "source_profile_id": source_profile_id,
+                        "batch_id": packet_sha,
+                        "record_count": len(packet.get("records") or []),
+                        "planner_idea_count": 0,
+                        "planner_text": _empty_planner_payload(profile["profile_id"], status="observed_package_evidence"),
+                        "active_path": active_root / f"correspondent_{profile['profile_id']}.yaml",
+                        "translation_path": "",
+                        "source_acquisition": packet.get("acquisition") or {"status": "missing"},
+                        "market_questions": {"status": "not_applicable", "reason": "source_exact_package"},
+                    }
+                )
+                continue
 
             profile_payload, _profile_text = load_correspondent_profile(profile["profile_path"])
             market_questions = run_market_question_exchange(
@@ -182,6 +219,13 @@ def activate_correspondent_sources(
     for item in staged:
         _atomic_write(item["active_path"], item["planner_text"])
 
+    observed_feed_path = _write_observed_package_feed(
+        output_root,
+        activated_at=activated_at,
+        batches=observed_batches,
+        failures=observed_failures,
+    )
+
     payload = {
         "schema": ACTIVATION_SCHEMA,
         "status": "succeeded",
@@ -206,6 +250,9 @@ def activate_correspondent_sources(
         ],
         "record_count": sum(int(item["record_count"]) for item in staged),
         "planner_idea_count": sum(int(item["planner_idea_count"]) for item in staged),
+        "observed_package_feed_path": str(observed_feed_path),
+        "observed_package_batch_count": len(observed_batches),
+        "observed_package_failure_count": len(observed_failures),
         "effects": _effects(active_idea_publication=True),
     }
     for profile in payload["profiles"]:
@@ -219,6 +266,8 @@ def activate_correspondent_sources(
         planner_idea_count=payload["planner_idea_count"],
         active_idea_paths=active_paths,
         receipt_path=receipt_path,
+        observed_package_feed_path=observed_feed_path,
+        observed_package_batch_count=len(observed_batches),
     )
 
 
@@ -232,8 +281,11 @@ def _enabled_profiles(raw_profiles: object) -> list[dict[str, Any]]:
             continue
         profile_id = str(raw.get("profile_id") or "").strip()
         source_profile_id = str(raw.get("source_profile_id") or profile_id).strip()
+        source_mode = str(raw.get("source_mode") or "idea").strip().lower()
         profile_path = str(raw.get("profile_path") or "").strip()
-        if not profile_id or not source_profile_id or not profile_path:
+        if source_mode not in {"idea", "observed_package"}:
+            raise ValueError(f"unsupported correspondent source mode: {source_mode}")
+        if not profile_id or not source_profile_id or (source_mode == "idea" and not profile_path):
             raise ValueError("enabled correspondent profile is incomplete")
         if profile_id in seen or not profile_id.replace("_", "").isalnum():
             raise ValueError(f"invalid or duplicate correspondent profile: {profile_id}")
@@ -243,9 +295,88 @@ def _enabled_profiles(raw_profiles: object) -> list[dict[str, Any]]:
                 "profile_id": profile_id,
                 "source_profile_id": source_profile_id,
                 "profile_path": resolve_path(profile_path),
+                "source_mode": source_mode,
             }
         )
     return profiles
+
+
+def _extract_observed_package_batches(
+    packet: dict[str, Any],
+    *,
+    output_root: Path,
+    client: JsonLlmClient | None,
+) -> tuple[list[ObservedPackageBatch], list[dict[str, str]]]:
+    """Extract/cache source-exact packages without turning them into ideas."""
+
+    cache_root = output_root / "observed_packages" / "cache"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    batches: list[ObservedPackageBatch] = []
+    failures: list[dict[str, str]] = []
+    for signal in packet.get("records") or []:
+        if not isinstance(signal, dict):
+            continue
+        classification = signal.get("classification") or {}
+        classification_type = str(classification.get("type") or "") if isinstance(classification, dict) else ""
+        if not classification_type.startswith("observed_package_"):
+            continue
+        source = signal.get("source") or {}
+        source_id = str(source.get("source_id") or signal.get("signal_id") or "unknown") if isinstance(source, dict) else "unknown"
+        media = source.get("media") if isinstance(source, dict) else None
+        if not isinstance(media, list) or not media:
+            failures.append({"source_id": source_id, "status": "not_extracted", "reason": "no_public_media"})
+            continue
+        cache_material = json.dumps(
+            {"prompt_version": OBSERVED_PACKAGE_PROMPT_VERSION, "signal": signal},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        cache_path = cache_root / f"{hashlib.sha256(cache_material.encode()).hexdigest()}.json"
+        try:
+            if cache_path.is_file():
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                batch = observed_package_batch_from_dict(cached)
+            else:
+                if client is None:
+                    raise RuntimeError("observed package extractor client is unavailable")
+                batch = extract_observed_packages_from_correspondent_signal(client, signal)
+                _atomic_write(cache_path, json.dumps(batch.to_dict(), indent=2, sort_keys=True) + "\n")
+            batches.append(batch)
+        except Exception as exc:  # noqa: BLE001 - one source record must not erase sibling evidence.
+            failures.append(
+                {
+                    "source_id": source_id,
+                    "status": "extraction_failed",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    return batches, failures
+
+
+def _write_observed_package_feed(
+    output_root: Path,
+    *,
+    activated_at: str,
+    batches: list[ObservedPackageBatch],
+    failures: list[dict[str, str]],
+) -> Path:
+    batches_payload = [batch.to_dict() for batch in batches]
+    canonical = json.dumps(batches_payload, sort_keys=True, separators=(",", ":"))
+    payload = {
+        "schema": "kamandal.observed_package_feed.v1",
+        "generated_at": activated_at,
+        "batches_sha256": hashlib.sha256(canonical.encode()).hexdigest(),
+        "batches": batches_payload,
+        "failures": failures,
+        "effects": _effects(active_idea_publication=False),
+    }
+    root = output_root / "observed_packages"
+    immutable_path = root / "runs" / f"{payload['batches_sha256']}.json"
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    _atomic_write(immutable_path, text)
+    latest = root / "latest.json"
+    _atomic_write(latest, text)
+    return latest
 
 
 def _run_command(args: list[str], cwd: Path) -> str:

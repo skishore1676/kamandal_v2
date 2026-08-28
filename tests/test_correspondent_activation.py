@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
 import yaml
 
 from kamandal_v2.intelligence.correspondent_activation import _chart_evaluation_paths, activate_correspondent_sources
+from kamandal_v2.intelligence.observed_packages import load_observed_package_feed
 from kamandal_v2.planner.idea_loader import load_ideas
 from kamandal_v2.stores.sqlite import LocalStore
 from tests.test_market_questions import _response as _market_response
@@ -161,6 +163,99 @@ def test_activation_failure_clears_previous_active_idea_and_writes_failure_recei
     )
     assert receipt["status"] == "failed_closed"
     assert receipt["effects"]["orders"] is False
+
+
+def test_observed_package_profile_publishes_typed_feed_and_reuses_cache(tmp_path: Path) -> None:
+    fixture_root = Path("tests/fixtures/mike_observed_packages")
+    manifest = json.loads((fixture_root / "ground-truth.json").read_text(encoding="utf-8"))
+    fixture = manifest["fixtures"][0]
+    image = fixture["images"][0]
+    image_path = (fixture_root / image["path"]).resolve()
+    settings = _settings(tmp_path)
+    settings["profiles"] = [
+        {
+            "profile_id": "mike_butler",
+            "source_profile_id": "mike_butler",
+            "source_mode": "observed_package",
+            "enabled": True,
+        }
+    ]
+    packet = {
+        "schema": "birdclaw.correspondent_signals.v1",
+        "generated_at": AS_OF,
+        "profile": {"profile_id": "mike_butler"},
+        "records": [
+            {
+                "schema": "birdclaw.correspondent_signal.v1",
+                "signal_id": f"x-post:{fixture['post_id']}",
+                "profile_id": "mike_butler",
+                "source": {
+                    "kind": "public_x_post",
+                    "source_id": f"x-post:{fixture['post_id']}",
+                    "published_at": fixture["published_at"],
+                    "media": [{
+                        "media_index": 1,
+                        "type": "photo",
+                        "cache_status": "cached",
+                        "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
+                        "artifact_path": str(image_path),
+                    }],
+                },
+                "classification": {
+                    "type": "observed_package_open",
+                    "rule_id": "explicit_new_package",
+                    "interpretation_status": "deterministic_profile",
+                },
+                "literal": {
+                    "text": fixture["post_text"],
+                    "symbols": [{"symbol": "ADSK", "origin": "literal_cashtag"}],
+                    "idea_number": None,
+                },
+            }
+        ],
+        "counts": {"observed_package_open": 1},
+        "safety": {
+            "visibility": "public",
+            "sanitization": "sanitized",
+            "read_only": True,
+            "network_call_performed": False,
+            "x_mutation_performed": False,
+            "raw_payload_returned": False,
+            "database_handle_exposed": False,
+        },
+    }
+
+    class FakeClient:
+        calls = 0
+
+        def chat_json(self, _system: str, _user: str, *, images: tuple[str, ...] = ()) -> dict:
+            self.calls += 1
+            assert images == (str(image_path),)
+            return fixture["expected_extraction"]
+
+    client = FakeClient()
+    runner = lambda _args, _cwd: json.dumps(packet)
+    result = activate_correspondent_sources(
+        settings,
+        universe_symbols=set(),
+        command_runner=runner,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        observed_package_client=client,
+    )
+    second = activate_correspondent_sources(
+        settings,
+        universe_symbols=set(),
+        command_runner=runner,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        observed_package_client=client,
+    )
+
+    assert result.planner_idea_count == 0
+    assert result.observed_package_batch_count == 1
+    assert second.observed_package_batch_count == 1
+    assert client.calls == 1
+    assert load_observed_package_feed(result.observed_package_feed_path)[0].packages[0].symbol == "ADSK"
+    assert load_ideas([result.active_idea_paths[0]]) == []
 
 
 def test_activation_records_outside_universe_mentions_for_weekly_review(tmp_path: Path) -> None:

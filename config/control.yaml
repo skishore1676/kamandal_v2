@@ -327,6 +327,7 @@ source_intelligence:
     mode: active_planner
     trial_root: ~/Documents/birdclaw
     output_dir: data/research/correspondent_signals
+    observed_package_feed: data/research/correspondent_signals/observed_packages/latest.json
     active_ideas_dir: data/ideas/active
     since_hours: 336
     limit: 200
@@ -342,6 +343,10 @@ source_intelligence:
       - profile_id: greg_harmon
         source_profile_id: greg_harmon
         profile_path: config/correspondents/greg_harmon.yaml
+        enabled: true
+      - profile_id: mike_butler
+        source_profile_id: mike_butler
+        source_mode: observed_package
         enabled: true
   x_digest:
     latest_state_file: ~/.openclaw/workspace-main/state/x_daily_digest/latest.json

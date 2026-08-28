@@ -11,6 +11,7 @@ from kamandal_v2.intelligence.observed_packages import (
     ObservedPackageValidationError,
     extract_observed_packages,
     extract_observed_packages_from_correspondent_signal,
+    load_observed_package_feed,
     normalize_observed_package_output,
 )
 
@@ -166,6 +167,33 @@ def test_source_event_survives_extraction_correction_but_revision_changes() -> N
 
     assert original.packages[0].source_event_id == corrected.packages[0].source_event_id
     assert original.packages[0].evidence_revision_id != corrected.packages[0].evidence_revision_id
+
+
+def test_activation_feed_round_trips_with_checksum(tmp_path: Path) -> None:
+    batch = _normalize(_manifest()["fixtures"][0])
+    batches = [batch.to_dict()]
+    canonical = json.dumps(batches, sort_keys=True, separators=(",", ":"))
+    path = tmp_path / "latest.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "kamandal.observed_package_feed.v1",
+                "generated_at": "2026-08-28T20:00:00Z",
+                "batches_sha256": hashlib.sha256(canonical.encode()).hexdigest(),
+                "batches": batches,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_observed_package_feed(path)
+
+    assert loaded == (batch,)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["batches"][0]["canonical_post_id"] = "tampered"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ObservedPackageValidationError, match="checksum mismatch"):
+        load_observed_package_feed(path)
 
 
 def test_package_signature_is_independent_of_model_leg_order() -> None:

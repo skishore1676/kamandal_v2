@@ -1,7 +1,7 @@
 # Observed Package Evidence
 
 Date: 2026-08-28
-Status: source evidence and one-planner shadow admission implemented locally; Sheet and runtime activation remain gated
+Status: source evidence, shared activation feed, and one-planner shadow admission implemented; protected deployment remains gated
 
 ## Purpose
 
@@ -94,6 +94,24 @@ unified lifecycle manager.
 This adds no Mike-specific selector, score boost, fill engine, manager, service,
 or Sheet tab. The source-exact row uses the ordinary playbook management fields.
 
+## Natural runtime seam
+
+The existing shared X job remains the only scheduler. Birdclaw refreshes every
+acquisition-enabled correspondent, and Kamandal's existing correspondent
+activation command exports each sanitized packet. For an
+`observed_package` profile, activation transcribes only classified package
+records with public cached media, caches the normalized evidence revision, and
+atomically publishes one checksummed `observed_package_feed`. The later
+`unified-plan` invocation reads that feed and supplies it to the same live and
+shadow planning call; the evidence is visible only to matching shadow policy.
+
+There is no Mike-only job. A corrupt Mike feed records a rejected-feed receipt
+but cannot erase or stop the live planning book. A valid unchanged post reuses
+its evidence cache rather than spending another model call. The Sheet rows
+state `source_exact_legs` in their operator notes: DTE/delta fields required by
+the registered capability remain validation metadata and never reconstruct an
+observed package.
+
 ## Current proof and stop line
 
 The bounded calibration corpus contains six public posts and seven original
@@ -114,8 +132,7 @@ evidence to candidate, optimizer selection, retry, ticket, open lifecycle,
 unified management, and profit-target close with source identity unchanged and
 broker effects false. Adversarial fixtures separately prove stale/wide parking,
 no-policy receipts, replay-stable identity, and first-mark independence from an
-economic rejection. Full runtime
-activation still requires a protected Sheet update, source publication, oldmac
-deployment, and natural-run proof. No live broker, live buying power, account
-permission, Sheet write, schedule, or runtime activation is granted by this
-contract.
+economic rejection. Natural runtime activation still requires the protected
+Sheet update, source publication, oldmac deployment, and a later natural-run
+proof. No live broker, live buying power, account permission, or live promotion
+is granted by this contract.

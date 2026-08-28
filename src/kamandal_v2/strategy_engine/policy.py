@@ -321,10 +321,11 @@ def _validate_directional_diagonal(
     if capability.key not in {"call_diagonal", "put_diagonal", "narrative_ignition"}:
         return
     lifecycle = management.get("lifecycle") or {}
-    serialized = json.dumps(lifecycle, sort_keys=True).lower()
-    if "short_leg" in serialized and "roll" in serialized:
+    short_leg = lifecycle.get("short_leg") or {}
+    long_only = lifecycle.get("long_only") or {}
+    if isinstance(short_leg, dict) and any(bool(short_leg.get(key)) for key in ("roll", "roll_dte")):
         raise PolicyError(f"{playbook_id}: directional diagonal short-leg roll is not permitted")
-    if "long_only" in serialized or "resale" in serialized:
+    if (isinstance(long_only, dict) and any(bool(value) for value in long_only.values())) or bool(lifecycle.get("resale")):
         raise PolicyError(f"{playbook_id}: directional diagonal long-only/resale management is not permitted")
     loss_fraction = _optional_number(row.get("max_loss_multiple"))
     if loss_fraction is None or not 0 < loss_fraction <= 1:

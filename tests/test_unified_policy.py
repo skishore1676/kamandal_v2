@@ -189,6 +189,31 @@ def test_live_approval_branch_and_diagonal_roll_are_rejected() -> None:
         )
 
 
+def test_directional_diagonal_can_state_forbidden_branches_explicitly_false() -> None:
+    policy = compile_playbook_policy(
+        _row(
+            playbook_id="mike_call_diagonal_observed",
+            strategy_family="call_diagonal",
+            structure="call_diagonal",
+            csa_stage="shadow",
+            mode="shadow",
+            source_mode="observed_package",
+            source_profiles="mike_butler",
+            management_policy_json=json.dumps(
+                {
+                    "lifecycle": {
+                        "short_leg": {"roll": False, "roll_dte": 0},
+                        "long_only": {"requires_approval": False},
+                    }
+                }
+            ),
+        )
+    )
+
+    assert policy.management["lifecycle"]["short_leg"]["roll"] is False
+    assert policy.management["lifecycle"]["long_only"]["requires_approval"] is False
+
+
 def test_legacy_baseline_diagonal_is_converted_to_paired_management() -> None:
     policy = compile_playbook_policy(
         _row(

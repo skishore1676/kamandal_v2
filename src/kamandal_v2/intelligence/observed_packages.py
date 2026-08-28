@@ -254,6 +254,103 @@ def extract_observed_packages_from_correspondent_signal(
     )
 
 
+def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageBatch:
+    """Rehydrate one locally persisted, already-normalized evidence batch.
+
+    The activation job writes this contract and the later planning job reads it.
+    Re-validating the shape here keeps that file seam typed instead of allowing
+    arbitrary JSON to enter candidate construction.
+    """
+
+    if raw.get("schema") != "kamandal.observed_package_batch.v1":
+        raise ObservedPackageValidationError("unexpected observed package batch schema")
+    source_profile = _required_text(raw.get("source_profile"), "source_profile")
+    canonical_post_id = _required_text(raw.get("canonical_post_id"), "canonical_post_id")
+    disposition = _choice(raw.get("post_disposition"), _POST_DISPOSITIONS, "post_disposition")
+    post_blocker = _optional_text(raw.get("post_blocker"))
+    packages_raw = raw.get("packages")
+    if not isinstance(packages_raw, list):
+        raise ObservedPackageValidationError("batch packages must be a list")
+    packages: list[ObservedPackageEvidence] = []
+    for index, item in enumerate(packages_raw, start=1):
+        if not isinstance(item, Mapping) or item.get("schema") != EVIDENCE_SCHEMA:
+            raise ObservedPackageValidationError(f"batch package {index} has an invalid schema")
+        locator = item.get("source_locator")
+        provenance = item.get("provenance")
+        legs_raw = item.get("legs")
+        if not isinstance(locator, Mapping) or not isinstance(provenance, Mapping) or not isinstance(legs_raw, list):
+            raise ObservedPackageValidationError(f"batch package {index} is incomplete")
+        legs: list[ObservedLegEvidence] = []
+        for leg_index, leg in enumerate(legs_raw, start=1):
+            if not isinstance(leg, Mapping):
+                raise ObservedPackageValidationError(f"batch package {index} leg {leg_index} is invalid")
+            quantity = leg.get("quantity")
+            if quantity is not None and (isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0):
+                raise ObservedPackageValidationError(f"batch package {index} leg {leg_index} quantity is invalid")
+            legs.append(
+                ObservedLegEvidence(
+                    quantity=quantity,
+                    expiration=_optional_text(leg.get("expiration")),
+                    strike=_optional_text(leg.get("strike")),
+                    option_type=_optional_text(leg.get("option_type")),
+                    order_code=_optional_text(leg.get("order_code")),
+                    side=_optional_text(leg.get("side")),
+                    effect=_optional_text(leg.get("effect")),
+                )
+            )
+        displayed_price = item.get("displayed_price")
+        if displayed_price is not None and not isinstance(displayed_price, Mapping):
+            raise ObservedPackageValidationError(f"batch package {index} displayed_price is invalid")
+        package = ObservedPackageEvidence(
+            source_event_id=_required_text(item.get("source_event_id"), f"packages[{index}].source_event_id"),
+            source_profile=source_profile,
+            canonical_post_id=canonical_post_id,
+            media_index=int(locator.get("media_index") or 0),
+            package_position=int(locator.get("package_position") or 0),
+            action=_required_text(item.get("action"), f"packages[{index}].action"),
+            structure=_optional_text(item.get("structure")),
+            symbol=_required_text(item.get("symbol"), f"packages[{index}].symbol"),
+            product_type=_required_text(item.get("product_type"), f"packages[{index}].product_type"),
+            displayed_trade_time=_optional_text(item.get("displayed_trade_time")),
+            displayed_price=dict(displayed_price) if displayed_price is not None else None,
+            complete=bool(item.get("complete")),
+            blocker=_optional_text(item.get("blocker")),
+            legs=tuple(legs),
+            package_signature=_optional_text(item.get("package_signature")),
+            evidence_revision_id=_required_text(item.get("evidence_revision_id"), f"packages[{index}].evidence_revision_id"),
+            image_sha256=_required_text(provenance.get("image_sha256"), f"packages[{index}].provenance.image_sha256"),
+            prompt_sha256=_required_text(provenance.get("prompt_sha256"), f"packages[{index}].provenance.prompt_sha256"),
+            output_sha256=_required_text(provenance.get("output_sha256"), f"packages[{index}].provenance.output_sha256"),
+        )
+        if package.action not in _PACKAGE_ACTIONS or package.media_index <= 0 or package.package_position <= 0:
+            raise ObservedPackageValidationError(f"batch package {index} has invalid identity fields")
+        packages.append(package)
+    return ObservedPackageBatch(
+        source_profile=source_profile,
+        canonical_post_id=canonical_post_id,
+        post_disposition=disposition,
+        post_blocker=post_blocker,
+        packages=tuple(packages),
+        prompt_sha256=_required_text(raw.get("prompt_sha256"), "prompt_sha256"),
+        output_sha256=_required_text(raw.get("output_sha256"), "output_sha256"),
+    )
+
+
+def load_observed_package_feed(path: str | Path) -> tuple[ObservedPackageBatch, ...]:
+    """Load the activation-to-planner feed and verify its declared checksum."""
+
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping) or payload.get("schema") != "kamandal.observed_package_feed.v1":
+        raise ObservedPackageValidationError("unexpected observed package feed schema")
+    batches_raw = payload.get("batches")
+    if not isinstance(batches_raw, list):
+        raise ObservedPackageValidationError("observed package feed batches must be a list")
+    declared_sha = _required_text(payload.get("batches_sha256"), "batches_sha256")
+    if declared_sha != _sha256_text(_stable_json(batches_raw)):
+        raise ObservedPackageValidationError("observed package feed checksum mismatch")
+    return tuple(observed_package_batch_from_dict(item) for item in batches_raw if isinstance(item, Mapping))
+
+
 def normalize_observed_package_output(
     raw: Mapping[str, Any],
     *,
