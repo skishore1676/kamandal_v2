@@ -112,6 +112,11 @@ state `source_exact_legs` in their operator notes: DTE/delta fields required by
 the registered capability remain validation metadata and never reconstruct an
 observed package.
 
+The shared X job requires the current canonical Birdclaw digest and never falls
+back to retired bookmark snapshots. If Birdclaw is unavailable, Kamandal marks
+the X input lane degraded for that cycle; it does not claim that live trading is
+blocked, and the other idea lanes, planner, and portfolio manager continue.
+
 ## Current proof and stop line
 
 The bounded calibration corpus contains six public posts and seven original
@@ -137,11 +142,9 @@ are deployed on oldmac. The Google Sheet contains four enabled, shadow-only
 Mike rows; the deployment compiler reports all 15 pre-existing policy hashes
 unchanged and no policy errors.
 
-The remaining proof is environmental and natural: Birdclaw's X reads currently
-return HTTP 403 because the X API monthly spend cap has been reached. Until that
-external money gate is reset or explicitly raised, the shared job cannot capture
-new Greg or Mike posts and therefore cannot publish a new Mike package feed.
-No credential, billing, live broker, live buying-power, account-permission, or
-live-promotion change is granted by this contract. After X reads recover, the
-next natural acquisition and unified-planning cycles must prove media capture,
-transcription, feed publication, optimizer admission, and the shadow lifecycle.
+The X API spend cap was refreshed on 2026-08-28 and direct read probes for both
+Greg and Mike succeeded. The remaining proof is natural: the next acquisition
+and unified-planning cycles must prove media capture, transcription, feed
+publication, optimizer admission, and the shadow lifecycle. No credential,
+billing, live broker, live buying-power, account-permission, or live-promotion
+change is granted by this contract.

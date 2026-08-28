@@ -64,6 +64,7 @@ HIGH_FREQUENCY_FAILURE_THRESHOLDS = {
     "live-approved-orders": 3,
     "unified-lifecycle-management": 3,
 }
+NON_BLOCKING_SOURCE_JOBS = {"x-bookmarks", "youtube"}
 LOCK_ALREADY_RUNNING = 75
 LOCK_UNVERIFIABLE = 76
 LIVE_RECONCILIATION_TIMEOUT_SECONDS = 300.0
@@ -328,18 +329,27 @@ def run_script(
 
 
 def failure_alert(args: argparse.Namespace, *, title: str, detail: str) -> AlertResult:
-    body = "\n".join(
-        [
+    is_source_lane = args.job in NON_BLOCKING_SOURCE_JOBS
+    if is_source_lane:
+        title = f"Kamandal source lane degraded: {args.job}"
+        body_lines = [
+            f"Source lane: {args.job}",
+            "This input source is unavailable for this cycle. Other idea lanes, planning, and portfolio management continue.",
+            f"Host repo: {Path.cwd()}",
+            "",
+            detail,
+        ]
+    else:
+        body_lines = [
             f"Job: {args.job}",
             f"Host repo: {Path.cwd()}",
             "",
             detail,
         ]
-    )
     return send_lathi_alert(
         title=title,
-        body=body,
-        level="error",
+        body="\n".join(body_lines),
+        level="warning" if is_source_lane else "error",
         mode=args.alert_mode,
         profile=args.alert_profile,
     )
@@ -381,7 +391,13 @@ def script_failure_attention(
         "threshold": threshold,
         "notified": notified,
         "notify": consecutive >= threshold and not notified,
-        "reason": "operator_incident" if consecutive >= threshold else "retrying_before_operator_page",
+        "reason": (
+            "source_lane_degraded"
+            if job in NON_BLOCKING_SOURCE_JOBS and consecutive >= threshold
+            else "operator_incident"
+            if consecutive >= threshold
+            else "retrying_before_operator_page"
+        ),
     }
     store.event(event_type, attention)
     return attention

@@ -94,6 +94,13 @@ def _settings(tmp_path: Path) -> dict:
     }
 
 
+def test_production_x_job_refuses_retired_bookmark_fallback() -> None:
+    script = Path("scripts/run_x_bookmark_extraction.sh").read_text(encoding="utf-8")
+
+    assert "import-x-bookmarks" not in script
+    assert "retired bookmark fallback is disabled" in script
+
+
 def test_activation_publishes_eligible_ideas_and_clears_them_when_no_longer_eligible(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     store = LocalStore(tmp_path / "kamandal.db")

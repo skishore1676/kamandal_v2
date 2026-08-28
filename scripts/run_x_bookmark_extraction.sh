@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 run_x_bookmark_extraction() {
   require_trading_day
 
-  local today source_root digest_dir ideas_dir limit import_json source_doc_dir source_doc activation_json
+  local today source_root digest_dir ideas_dir limit import_json import_error source_doc_dir activation_json
   today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
   source_root="${KAMANDAL_X_SOURCE_DOC_DIR:-data/source_docs/x_digest}"
   digest_dir="${KAMANDAL_X_BOOKMARK_DIGEST_DIR:-data/digest/x_bookmarks/$today}"
@@ -29,18 +29,9 @@ run_x_bookmark_extraction() {
     log "$import_json"
     source_doc_dir="$("$REPO_ROOT/.venv/bin/python" -c 'import json,sys; print(json.load(sys.stdin)["source_doc_dir"])' <<< "$import_json")"
   else
-    log "Canonical X digest import failed; falling back to legacy bookmark export. Output: $import_json"
-    source_root="${KAMANDAL_X_BOOKMARK_SOURCE_DOC_DIR:-data/source_docs/x_bookmarks}"
-    mkdir -p "$source_root"
-    import_json="$("$KAMANDAL_BIN" import-x-bookmarks \
-      --output-dir "$source_root" \
-      --digest-dir "$digest_dir" \
-      --limit "$limit" \
-      --config-source sheet \
-      --filter-universe)"
-    log "$import_json"
-    source_doc="$("$REPO_ROOT/.venv/bin/python" -c 'import json,sys; print(json.load(sys.stdin)["source_doc_path"])' <<< "$import_json")"
-    source_doc_dir="$(dirname "$source_doc")"
+    import_error="$(printf '%s\n' "$import_json" | tail -n 1)"
+    log "Birdclaw canonical X digest unavailable; retired bookmark fallback is disabled. $import_error"
+    return 1
   fi
 
   if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then

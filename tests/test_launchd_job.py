@@ -48,6 +48,36 @@ def test_script_job_failure_sends_alert(monkeypatch, tmp_path, capsys) -> None: 
     assert payload["alert"]["ok"] is True
 
 
+def test_source_job_failure_is_warning_and_does_not_claim_trading_is_blocked(monkeypatch) -> None:  # noqa: ANN001
+    args = SimpleNamespace(job="x-bookmarks", alert_mode="spool", alert_profile="test")
+    captured = {}
+    monkeypatch.setattr(
+        launchd_job,
+        "send_lathi_alert",
+        lambda **kwargs: captured.update(kwargs) or AlertResult(attempted=True, ok=True, mode="spool"),
+    )
+
+    launchd_job.failure_alert(args, title="ignored generic title", detail="Birdclaw digest is stale")
+
+    assert captured["title"] == "Kamandal source lane degraded: x-bookmarks"
+    assert captured["level"] == "warning"
+    assert "Other idea lanes, planning, and portfolio management continue" in captured["body"]
+    assert "trading may be blocked" not in captured["body"].lower()
+
+
+def test_source_job_failure_attention_is_degraded_lane_not_operator_incident(tmp_path) -> None:
+    completed = subprocess.CompletedProcess(["run"], 1, stdout="", stderr="Birdclaw digest is stale")
+
+    attention = launchd_job.script_failure_attention(
+        launchd_job.LocalStore(tmp_path / "kamandal.db"),
+        "x-bookmarks",
+        completed,
+    )
+
+    assert attention["notify"] is True
+    assert attention["reason"] == "source_lane_degraded"
+
+
 def test_frequent_script_failure_pages_once_after_retry_threshold(monkeypatch, tmp_path, capsys) -> None:  # noqa: ANN001
     args = SimpleNamespace(job="unified-lifecycle-management", force=False, alert_mode="spool", alert_profile="test")
     completed = subprocess.CompletedProcess(
