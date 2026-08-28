@@ -58,6 +58,9 @@ def _observed_calendar_row() -> dict[str, object]:
                     "score_weight_pop": 1,
                     "score_weight_liquidity": 1,
                     "score_weight_spread": 1,
+                    "profit_target_pct": 25,
+                    "max_loss_multiple": 1,
+                    "exit_dte_min": 0,
                     "management_policy_json": json.dumps(
                         {
                             "lifecycle": {
@@ -347,7 +350,7 @@ def test_exact_package_reaches_unified_management_and_closes_with_lineage(tmp_pa
         market=_ProfitableExitMarket(captured_at=observed_at),
         observed_at=observed_at,
     )
-    assert management.ok
+    assert management.ok, management.errors
     assert management.selected_actions == {"close": 1}
     closed = CsaStore(store.sqlite_path).lifecycle(lifecycle_id)
     assert closed is not None and closed.status == "closed"

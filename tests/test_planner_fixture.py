@@ -169,7 +169,12 @@ def test_total_position_cap_includes_open_shadow_positions(tmp_path) -> None:
     assert second.metrics["candidates_eligible"] > 0
 
 
-def test_live_plan_context_includes_open_live_groups(tmp_path) -> None:
+def test_live_plan_context_includes_open_live_groups(tmp_path, monkeypatch) -> None:
+    import kamandal_v2.seed as seed_module
+
+    # This is a seed-planner unit test, not a migration test against whichever
+    # legacy Kamandal checkout happens to exist on the host.
+    monkeypatch.setattr(seed_module, "OLD_KAMANDAL_ROOT", tmp_path / "missing-legacy-root")
     store = LocalStore(tmp_path / "kamandal.db")
     group = _live_group("live_group_tsla")
     store.save_live_position_group(group["group_id"], group, status="open")
