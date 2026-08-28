@@ -39,17 +39,17 @@ and already-pending lifecycles retain their frozen compiled policy.
    40% target and compiled policy hash; the pending `put_spread_default`
    lifecycle still holds its original 1.5x loss multiple. This is the intended
    per-trade policy freeze, not drift from the Sheet.
-5. Independent architecture review found that the deployed validator could let
+5. Independent architecture review found that the prior deployed validator could let
    blank management cells on legacy `baseline` rows reach model/config
-   fallbacks. Local source now makes every enabled row supply explicit
+   fallbacks. Deployed source now makes every enabled row supply explicit
    operator-owned quote and lifecycle controls, independent of `csa_stage`.
-   Nine negative tests were added; all 785 tests pass. The corrected local
-   validator read this same live Sheet and passed all 19 enabled rows with the
-   same snapshot hash. This hardening is source-ready but not deployed.
+   Negative tests cover missing and malformed values; all 788 tests pass on both
+   development Mac and oldmac. The corrected oldmac validator read this same
+   live Sheet and passed all 19 enabled rows at deployed commit `a3d7f45`.
 6. Columns `BY:BZ` were appended with native boolean and 0-100 validation. A
    readback confirmed 23 explicit row values, seven enabled shadow permissions,
    no live permission, and a 25% arming threshold on every row. The corrected
-   validator compiled all 19 enabled rows at `2026-08-28T22:02:30Z` with hash
+   validator compiled all 19 enabled rows at `2026-08-28T22:09:47Z` with hash
    `23476d60a59ca10b8378dc43cc530bfda5fb1369ae1874eccaa507d6d2b835f0`.
 7. No planning or lifecycle cycle was manually triggered. The next natural
    cycle remains the first runtime observation of the new future-entry policy.
