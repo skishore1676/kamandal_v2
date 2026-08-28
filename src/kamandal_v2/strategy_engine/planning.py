@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import Any
 
 from kamandal_v2.domain.models import ChainSnapshot, Idea, OptionLeg, Playbook, PortfolioState, UniverseEntry
+from kamandal_v2.intelligence.observed_packages import ObservedPackageBatch, ObservedPackageEvidence
 from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, _market_provider, _preflight_client, run_plan
+from kamandal_v2.planner.observed_package_candidates import (
+    build_observed_package_candidates,
+    persist_observed_package_batches,
+    record_observed_packages_not_authorized,
+)
 from kamandal_v2.market.venue_router import VenueAwareMarket
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
 from kamandal_v2.sheets import write_daily_plan
@@ -80,6 +86,7 @@ def run_unified_books(
     exclude_contract_keys: set[str] | None = None,
     register_plan_attempt: bool = True,
     include_shadow: bool = True,
+    observed_package_batches: tuple[ObservedPackageBatch, ...] = (),
 ) -> UnifiedPlanningResult:
     """Build independent books from one normalized Sheet snapshot.
 
@@ -95,9 +102,18 @@ def run_unified_books(
         }
     )
     active_store = store or LocalStore()
+    observed_packages: tuple[ObservedPackageEvidence, ...] = ()
+    if observed_package_batches:
+        observed_packages = persist_observed_package_batches(observed_package_batches, store=active_store)
     retire_orphaned_pending_live_lifecycles(active_store)
     universe = [UniverseEntry.from_row(row) for row in universe_rows if row.get("symbol")]
     if not compilation.ok:
+        if observed_packages:
+            record_observed_packages_not_authorized(
+                observed_packages,
+                store=active_store,
+                blocker="policy_compilation_failed",
+            )
         errors = compilation.errors
         return UnifiedPlanningResult(
             compilation=compilation,
@@ -121,7 +137,20 @@ def run_unified_books(
         register_plan_attempt=register_plan_attempt,
     )
     if include_shadow:
-        shadow = _run_book(ExecutionMode.SHADOW, compilation.policies, universe, config, idea_paths, provider, active_store, audit_root, write_sheet)
+        if observed_packages and not any(policy.mode is ExecutionMode.SHADOW for policy in compilation.policies):
+            record_observed_packages_not_authorized(observed_packages, store=active_store)
+        shadow = _run_book(
+            ExecutionMode.SHADOW,
+            compilation.policies,
+            universe,
+            config,
+            idea_paths,
+            provider,
+            active_store,
+            audit_root,
+            write_sheet,
+            observed_packages=observed_packages,
+        )
     else:
         shadow = PlanningBook(
             ExecutionMode.SHADOW,
@@ -148,6 +177,7 @@ def _run_book(
     exclude_candidate_ids: set[str] | None = None,
     exclude_contract_keys: set[str] | None = None,
     register_plan_attempt: bool = True,
+    observed_packages: tuple[ObservedPackageEvidence, ...] = (),
 ) -> PlanningBook:
     selected = tuple(policy for policy in policies if policy.mode is mode)
     mode_config = deepcopy(config)
@@ -217,6 +247,11 @@ def _run_book(
             venues=venues,
             provider=provider,
         )
+    elif mode is ExecutionMode.SHADOW and observed_packages and market_override is None:
+        # Exact packages need current quotes even when there are no thesis
+        # ideas.  This remains the configured read-only market provider; no
+        # broker preflight or account authorization is introduced here.
+        market_override = _market_provider(mode_config, provider=provider, store=store)
     playbooks = [Playbook.from_row(policy.fields) for policy in selected]
     def candidate_postprocessor(candidates: list[Any], current_store: LocalStore, current_config: dict[str, Any], portfolio: PortfolioState) -> None:
         _gate_earnings_calendar_entries(candidates, selected, sqlite_path=current_store.sqlite_path, observed_at=_planning_observed_at(current_config))
@@ -256,7 +291,20 @@ def _run_book(
                 policies=selected,
                 portfolio=portfolio,
             ),
+            supplemental_candidate_factory=(
+                lambda market, selected_playbooks, _portfolio, current_store: build_observed_package_candidates(
+                    observed_packages,
+                    policies=selected,
+                    playbooks=selected_playbooks,
+                    market=market,
+                    store=current_store,
+                    config=mode_config,
+                )
+            )
+            if mode is ExecutionMode.SHADOW and observed_packages
+            else None,
             market_override=market_override,
+            portfolio_override=_configured_shadow_portfolio(mode_config) if mode is ExecutionMode.SHADOW else None,
         )
     except Exception as exc:  # noqa: BLE001 - report failure-isolated book receipt.
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (f"{type(exc).__name__}: {exc}",))
@@ -718,7 +766,35 @@ def _materialize_shadow_handoff(
                     "execution_venue": candidate.execution_venue,
                     "policy_snapshot_hash": compiled.policy_hash,
                     "policy_snapshot_date": _plan_time(result)[:10],
-                    "source_identity": {"idea_id": candidate.idea_id, "plan_run_id": result.plan_run_id},
+                    "source_identity": {
+                        "idea_id": candidate.idea_id,
+                        "plan_run_id": result.plan_run_id,
+                        **{
+                            key: candidate.metadata[key]
+                            for key in (
+                                "source_mode",
+                                "source_profile",
+                                "source_event_id",
+                                "canonical_post_id",
+                                "package_signature",
+                                "evidence_revision_id",
+                            )
+                            if key in candidate.metadata
+                        },
+                    },
+                    **{
+                        key: candidate.metadata[key]
+                        for key in (
+                            "observational_entry_mark",
+                            "observational_mark_kind",
+                            "chain_snapshot_id",
+                            "chain_captured_at",
+                            "displayed_price",
+                            "displayed_trade_time",
+                            "broker_effects",
+                        )
+                        if key in candidate.metadata
+                    },
                 },
             ),
             compiled_policy=compiled.to_dict(),
@@ -870,6 +946,22 @@ def _planning_observed_at(config: dict[str, Any]) -> str:
     from kamandal_v2.domain.models import utc_now
 
     return utc_now()
+
+
+def _configured_shadow_portfolio(config: dict[str, Any]) -> PortfolioState:
+    """Return the Sheet-independent synthetic book without reading a broker account."""
+
+    shadow = config.get("shadow") or {}
+    required = ("account_size_override", "buying_power_override", "bpr_used_override")
+    missing = [name for name in required if shadow.get(name) in (None, "")]
+    if missing:
+        raise ValueError("shadow portfolio requires configured override(s): " + ", ".join(missing))
+    return PortfolioState(
+        account_size=float(shadow["account_size_override"]),
+        buying_power=float(shadow["buying_power_override"]),
+        bpr_used=float(shadow["bpr_used_override"]),
+        positions_count=0,
+    )
 
 
 def _plan_time(result: PlanRunResult) -> str:

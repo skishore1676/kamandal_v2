@@ -459,6 +459,7 @@ class Candidate:
     entry_credit_floor: float | None = None
     entry_debit_ceiling: float | None = None
     entry_economic_bound_source: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def eligible(self) -> bool:
@@ -484,6 +485,7 @@ class Candidate:
             "entry_credit_floor": self.entry_credit_floor,
             "entry_debit_ceiling": self.entry_debit_ceiling,
             "entry_economic_bound_source": self.entry_economic_bound_source,
+            "metadata": dict(self.metadata),
         }
 
 

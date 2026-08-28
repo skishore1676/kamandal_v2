@@ -20,6 +20,7 @@ class SourceMode(StrEnum):
     IDEA = "idea"
     MARKET_SCAN = "market_scan"
     PORTFOLIO_HEDGE = "portfolio_hedge"
+    OBSERVED_PACKAGE = "observed_package"
 
 
 class LaneId(StrEnum):

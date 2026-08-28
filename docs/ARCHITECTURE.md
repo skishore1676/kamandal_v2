@@ -84,7 +84,8 @@ The minimal operator contract is:
 | `playbook_id` | unique parameterized strategy row |
 | `strategy_family` | registered Kamandal capability |
 | `structure` | concrete option/order shape constructed by that capability |
-| `source_mode` | `idea`, `market_scan`, or `portfolio_hedge`; blank legacy values migrate to `idea` |
+| `source_mode` | `idea`, `market_scan`, `portfolio_hedge`, or shadow-only `observed_package`; blank legacy values migrate to `idea` |
+| `source_profiles` | explicit correspondent allowlist required only for `observed_package` rows |
 | `mode` | `shadow` or `live` effect choice |
 | typed parameter columns and management JSON | entry, sizing, and lifecycle policy |
 
@@ -222,10 +223,15 @@ normally adds a collector/profile/translator, not another planner or manager.
 When a correspondent publishes an exact option package as an image, the first
 normalized object is evidence rather than an idea. Birdclaw preserves the
 sanitized public post and media; Agent Broker transcribes the bounded image;
-Kamandal deterministically validates exact legs into `ObservedPackageEvidence`.
-That object remains upstream of the planner until an explicit source-selection
-contract admits it. See [Observed Package Evidence](OBSERVED_PACKAGE_EVIDENCE.md).
-Once normalized, the signal is evaluated by every compatible enabled playbook.
+Kamandal deterministically validates exact legs into `ObservedPackageEvidence`
+and appends every revision to a passive ledger. A complete opening enters the
+one planner only through a shadow-only `observed_package` playbook that
+explicitly allows the source profile and exact structure. Kamandal quotes and
+validates those source legs without rebuilding them. The existing optimizer may
+reject or not select the package; only a selected package uses the existing
+shadow adapter and unified manager. Close/roll/adjust posts remain benchmark
+facts and cannot manage the Kamandal lifecycle. See
+[Observed Package Evidence](OBSERVED_PACKAGE_EVIDENCE.md).
 
 Normalization may be one-to-many. A source profile with a stable numbered
 grammar may expand one announcement into several distinct template signals

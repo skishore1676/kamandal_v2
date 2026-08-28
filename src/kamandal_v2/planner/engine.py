@@ -77,7 +77,9 @@ def run_plan(
     universe_override: list[Any] | None = None,
     playbooks_override: list[Any] | None = None,
     source_groups_factory: Callable[[list[Idea], list[Any], list[Any], PortfolioState], list[PlanningSourceGroup]] | None = None,
+    supplemental_candidate_factory: Callable[[MarketDataProvider, list[Any], PortfolioState, LocalStore], list[Candidate]] | None = None,
     market_override: MarketDataProvider | None = None,
+    portfolio_override: PortfolioState | None = None,
 ) -> PlanRunResult:
     plan_run_id = "run_" + utc_now().replace(":", "").replace("-", "")
     store = store or LocalStore()
@@ -91,7 +93,7 @@ def run_plan(
     loaded_ideas = annotate_structural_breaks(load_ideas(idea_paths), config)
     market = market_override or _market_provider(config, provider=provider, store=store)
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
-    portfolio_raw = market.account_state()
+    portfolio_raw = portfolio_override if portfolio_override is not None else market.account_state()
     portfolio = _shadow_portfolio_override(portfolio_raw, config)
     portfolio = _shadow_portfolio_with_open_fills(portfolio, store, config)
     portfolio = _live_portfolio_with_open_groups(portfolio, store, config)
@@ -125,6 +127,8 @@ def run_plan(
             config=config,
         )
     ]
+    if supplemental_candidate_factory is not None:
+        candidates.extend(supplemental_candidate_factory(market, playbooks, portfolio, store))
     if candidate_postprocessor is not None:
         candidate_postprocessor(candidates, store, config, portfolio)
     _reject_open_shadow_candidates(candidates, store, config)

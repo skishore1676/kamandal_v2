@@ -1,7 +1,7 @@
 # Observed Package Evidence
 
-Date: 2026-08-27
-Status: source-side contract implemented locally; planner admission and runtime activation intentionally not implemented
+Date: 2026-08-28
+Status: source evidence and one-planner shadow admission implemented locally; Sheet and runtime activation remain gated
 
 ## Purpose
 
@@ -16,13 +16,16 @@ Birdclaw public post + sanitized image
     -> Agent Broker transcription
     -> Kamandal deterministic validation
     -> ObservedPackageEvidence
-    -> [future explicit selection decision]
+    -> passive evidence ledger
+    -> Sheet-authorized exact candidate
     -> ordinary Kamandal candidate / plan / shadow lifecycle
 ```
 
-`ObservedPackageEvidence` is deliberately upstream of `Idea`, `SourceMode`, and
-the planner. A verified source package is a fact about the source; it is not yet
-a portfolio recommendation, an approved plan, a simulated fill, or a trade.
+`ObservedPackageEvidence` is deliberately not converted into a thesis `Idea`.
+A verified source package is first a fact about the source. A complete opening
+may become an exact-leg candidate only through a shadow-only
+`source_mode=observed_package` playbook whose `source_profiles` explicitly
+allows that correspondent and whose structure matches exactly.
 
 ## Ownership
 
@@ -70,6 +73,27 @@ follow-up action, not an opening structure.
 This is a transcription capability, not a promise that every product can be
 quoted, selected, filled, or managed by Kamandal.
 
+## Planner admission contract
+
+Every evidence revision is appended to `observed_package_evidence` before any
+selection. Close, roll, adjust, incomplete, unsupported-product, unquoted, and
+unauthorized packages stay in that passive ledger and emit a precise receipt;
+they cannot create a candidate or lifecycle action.
+
+For an authorized opening, Kamandal fetches the current chain and matches every
+source expiration, strike, option type, side, and ratio exactly. Missing or
+duplicate contract matches park the package. Deterministic shape and liquidity
+guards then run without broker/account preflight. The first actionable complete-
+package midpoint is frozen in passive source accounting even if a separate BPR,
+debit/credit, portfolio, or optimizer rule rejects the candidate. Stale, crossed,
+one-sided, incomplete, or over-width markets cannot establish that first mark.
+The existing planner may reject or not select the candidate; a selected
+candidate alone proceeds through the existing conservative shadow adapter and
+unified lifecycle manager.
+
+This adds no Mike-specific selector, score boost, fill engine, manager, service,
+or Sheet tab. The source-exact row uses the ordinary playbook management fields.
+
 ## Current proof and stop line
 
 The bounded calibration corpus contains six public posts and seven original
@@ -78,16 +102,20 @@ with no provider failures and no falsely complete packages. That proves the
 current examples can be interpreted; it does not yet prove production capture
 completeness or future-image reliability.
 
-Development stops before planner admission. The next architecture decision
-must explicitly separate:
+The accepted architecture separates:
 
 1. a source-replication cohort that accounts for every validated package but
    creates no Kamandal fill; and
 2. a Kamandal-selected counterfactual that uses the existing optimizer and
    conservative shadow fill/lifecycle path.
 
-The source image's displayed price and the first valid market midpoint are
-observations, not fills. Any later shadow fill must retain Kamandal's existing
-quote-quality, limit, and fill-friction rules. No live broker, live buying
-power, account permission, Sheet write, schedule, or runtime activation belongs
-to this source-side contract.
+Focused local proof now shows one exact call calendar flowing from immutable
+evidence to candidate, optimizer selection, retry, ticket, open lifecycle,
+unified management, and profit-target close with source identity unchanged and
+broker effects false. Adversarial fixtures separately prove stale/wide parking,
+no-policy receipts, replay-stable identity, and first-mark independence from an
+economic rejection. Full runtime
+activation still requires a protected Sheet update, source publication, oldmac
+deployment, and natural-run proof. No live broker, live buying power, account
+permission, Sheet write, schedule, or runtime activation is granted by this
+contract.

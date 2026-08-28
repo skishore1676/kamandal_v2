@@ -106,6 +106,30 @@ class LocalStore:
                     committed_at TEXT NOT NULL,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS observed_package_evidence (
+                    evidence_revision_id TEXT PRIMARY KEY,
+                    source_event_id TEXT NOT NULL,
+                    source_profile TEXT NOT NULL,
+                    canonical_post_id TEXT NOT NULL,
+                    package_signature TEXT,
+                    action TEXT NOT NULL,
+                    structure TEXT,
+                    underlying TEXT NOT NULL,
+                    complete INTEGER NOT NULL,
+                    blocker TEXT,
+                    recorded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_observed_package_event
+                    ON observed_package_evidence(source_event_id, recorded_at);
+                CREATE TABLE IF NOT EXISTS observed_package_first_marks (
+                    observation_id TEXT PRIMARY KEY,
+                    source_event_id TEXT NOT NULL,
+                    package_signature TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    package_midpoint REAL NOT NULL,
+                    payload TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS shadow_fills (
                     id TEXT PRIMARY KEY,
                     plan_run_id TEXT NOT NULL,
@@ -325,6 +349,98 @@ class LocalStore:
             }
             for row in rows
         ]
+
+    def record_observed_package_evidence(self, payload: dict[str, Any]) -> bool:
+        """Append one immutable source-evidence revision without trading effects."""
+
+        revision_id = str(payload.get("evidence_revision_id") or "").strip()
+        source_event_id = str(payload.get("source_event_id") or "").strip()
+        source_profile = str(payload.get("source_profile") or "").strip()
+        canonical_post_id = str(payload.get("canonical_post_id") or "").strip()
+        if not all((revision_id, source_event_id, source_profile, canonical_post_id)):
+            raise ValueError("observed package evidence requires revision, event, profile, and post identity")
+        with self._connect() as conn:
+            inserted = conn.execute(
+                """
+                INSERT OR IGNORE INTO observed_package_evidence
+                (evidence_revision_id, source_event_id, source_profile, canonical_post_id,
+                 package_signature, action, structure, underlying, complete, blocker, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    revision_id,
+                    source_event_id,
+                    source_profile,
+                    canonical_post_id,
+                    payload.get("package_signature"),
+                    str(payload.get("action") or "unreadable"),
+                    payload.get("structure"),
+                    str(payload.get("symbol") or ""),
+                    int(bool(payload.get("complete"))),
+                    payload.get("blocker"),
+                    json.dumps(payload, sort_keys=True),
+                ),
+            ).rowcount > 0
+        return inserted
+
+    def observed_package_evidence(self, *, source_profile: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT payload FROM observed_package_evidence"
+        params: tuple[Any, ...] = ()
+        if source_profile:
+            query += " WHERE source_profile = ?"
+            params = (source_profile,)
+        query += " ORDER BY recorded_at, evidence_revision_id"
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [json.loads(row["payload"]) for row in rows]
+
+    def first_observed_package_mark(
+        self,
+        *,
+        source_event_id: str,
+        package_signature: str,
+        observed_at: str,
+        package_midpoint: float,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Freeze and return the first valid midpoint for one exact package."""
+
+        observation_id = hashlib.sha256(
+            f"{source_event_id}|{package_signature}".encode("utf-8")
+        ).hexdigest()
+        frozen = {
+            **payload,
+            "observation_id": observation_id,
+            "source_event_id": source_event_id,
+            "package_signature": package_signature,
+            "observed_at": observed_at,
+            "package_midpoint": float(package_midpoint),
+            "kind": "first_valid_complete_package_midpoint",
+            "economic_effect": False,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO observed_package_first_marks
+                (observation_id, source_event_id, package_signature, observed_at, package_midpoint, payload)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    observation_id,
+                    source_event_id,
+                    package_signature,
+                    observed_at,
+                    float(package_midpoint),
+                    json.dumps(frozen, sort_keys=True),
+                ),
+            )
+            row = conn.execute(
+                "SELECT payload FROM observed_package_first_marks WHERE observation_id = ?",
+                (observation_id,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("failed to persist observed package first mark")
+        return json.loads(row["payload"])
 
     def record_universe_review_commit(self, *, review_id: str, committed_at: str, payload: dict[str, Any] | None = None) -> None:
         """Record the committed review boundary used by discovery ranking.

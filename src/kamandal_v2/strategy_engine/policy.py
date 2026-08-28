@@ -114,8 +114,13 @@ def compile_playbook_policy(
 
     mode, compatibility = _mode_from_row(row, playbook_id)
     source_mode = str(row.get("source_mode") or "idea").strip().lower() or "idea"
-    if source_mode not in {"idea", "market_scan", "portfolio_hedge"}:
+    if source_mode not in {"idea", "market_scan", "portfolio_hedge", "observed_package"}:
         raise PolicyError(f"{playbook_id}: invalid source_mode={source_mode!r}")
+    if source_mode == "observed_package":
+        if mode is not ExecutionMode.SHADOW:
+            raise PolicyError(f"{playbook_id}: observed_package source mode is shadow-only")
+        if not _text_list(row.get("source_profiles")):
+            raise PolicyError(f"{playbook_id}: observed_package source mode requires source_profiles")
     execution_venue = str(row.get("execution_venue") or "public_primary").strip().lower()
     if execution_venue not in {"public_primary", "tasty_primary"}:
         raise PolicyError(f"{playbook_id}: unsupported execution_venue={execution_venue!r}")
@@ -432,6 +437,12 @@ def _as_bool(value: Any, *, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
 
 def _as_jsonable(value: Any) -> Any:

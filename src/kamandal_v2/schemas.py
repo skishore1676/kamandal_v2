@@ -103,6 +103,8 @@ PLAYBOOKS_HEADER = [
     # Explicit diagonal entry economics. Appended so every existing column
     # retains its position, validation, and formatting.
     "max_debit_to_width_ratio",
+    # Exact-package sources are explicitly allowlisted per shadow playbook.
+    "source_profiles",
 ]
 
 DAILY_PLAN_HEADER = [

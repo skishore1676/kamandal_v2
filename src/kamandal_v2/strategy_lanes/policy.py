@@ -52,11 +52,11 @@ class PolicyCompilation:
 
 
 _LANE_SOURCE_MODES = {
-    LaneId.SHORT_STRANGLE: {SourceMode.MARKET_SCAN},
-    LaneId.CALL_VERTICAL: {SourceMode.IDEA, SourceMode.PORTFOLIO_HEDGE},
-    LaneId.DIRECTIONAL_DIAGONAL: {SourceMode.IDEA},
-    LaneId.GENERIC_CLOSE_ONLY: {SourceMode.IDEA, SourceMode.MARKET_SCAN, SourceMode.PORTFOLIO_HEDGE},
-    LaneId.EARNINGS_CALENDAR: {SourceMode.IDEA},
+    LaneId.SHORT_STRANGLE: {SourceMode.MARKET_SCAN, SourceMode.OBSERVED_PACKAGE},
+    LaneId.CALL_VERTICAL: {SourceMode.IDEA, SourceMode.PORTFOLIO_HEDGE, SourceMode.OBSERVED_PACKAGE},
+    LaneId.DIRECTIONAL_DIAGONAL: {SourceMode.IDEA, SourceMode.OBSERVED_PACKAGE},
+    LaneId.GENERIC_CLOSE_ONLY: {SourceMode.IDEA, SourceMode.MARKET_SCAN, SourceMode.PORTFOLIO_HEDGE, SourceMode.OBSERVED_PACKAGE},
+    LaneId.EARNINGS_CALENDAR: {SourceMode.IDEA, SourceMode.OBSERVED_PACKAGE},
 }
 
 _COMMON_REQUIRED_FIELDS = (
@@ -169,6 +169,11 @@ def compile_csa_policy(
     if source_mode not in _LANE_SOURCE_MODES[lane]:
         allowed = ", ".join(sorted(item.value for item in _LANE_SOURCE_MODES[lane]))
         raise PolicyError(f"{_row_name(row)}: source_mode={source_mode.value!r} is incompatible; expected {allowed}")
+    if source_mode is SourceMode.OBSERVED_PACKAGE:
+        if stage is not CsaStage.SHADOW:
+            raise PolicyError(f"{_row_name(row)}: observed_package source mode is shadow-only")
+        if not _text_list(row.get("source_profiles")):
+            raise PolicyError(f"{_row_name(row)}: observed_package source mode requires source_profiles")
 
     missing = [
         field_name
@@ -303,6 +308,12 @@ def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _text_list(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
 
 
 def _validate_lifecycle_shape(management: dict[str, Any], *, lane: LaneId, source_mode: SourceMode, row_name: str) -> None:

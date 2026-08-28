@@ -34,6 +34,7 @@ def open_ticket_from_candidate(
         legs=legs,
         created_at=created_at,
         limit_price=limit_price,
+        metadata=dict(candidate.metadata),
     )
 
 
@@ -66,6 +67,7 @@ def _ticket(
     legs: tuple[TicketLeg, ...],
     created_at: str,
     limit_price: float,
+    metadata: dict[str, object] | None = None,
 ) -> StrategyTicket:
     ticket_id = stable_csa_id(
         "ticket",
@@ -90,6 +92,7 @@ def _ticket(
         policy_hash=policy.policy_hash,
         created_at=created_at,
         metadata={
+            **dict(metadata or {}),
             "execution_boundary": policy.stage.value,
             "playbook_id": policy.playbook_id,
             "deployment_stage": policy.stage.value,
