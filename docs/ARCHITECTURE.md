@@ -428,8 +428,8 @@ The unified manager can represent an exact full-package profit offer before the
 midpoint has reached the final target. This is a platform action, not another
 strategy manager and not another valuation rule:
 
-- a fresh, complete, non-crossed package midpoint must first make the configured
-  progress toward the lifecycle's frozen profit target;
+- a fresh, complete, non-crossed package midpoint must first make the
+  Sheet-authorized progress toward the lifecycle's frozen profit target;
 - the closing limit is calculated from original target-profit dollars and the
   lifecycle's cumulative filled cashflow, so filled adjustments change the
   remaining close price without changing the original target dollars;
@@ -444,6 +444,11 @@ strategy manager and not another valuation rule:
 - a live supersession persists the child and lineage before requesting cancel,
   waits for terminal unfilled parent state, verifies the owned position and
   fresh preflight, and only then submits. A parent fill aborts the child.
+
+The playbook Sheet owns `resting_profit_enabled` and
+`resting_profit_arm_progress_pct`; both values freeze when the lifecycle opens.
+The runtime live/shadow flags are upper-bound kill switches only: they may stop
+the action but may not authorize it or rewrite an existing lifecycle.
 
 Shadow uses the same observation, action, price, and typed ticket. Its effect
 adapter keeps one non-conceding working order per valid market observation,

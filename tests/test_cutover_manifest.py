@@ -164,7 +164,8 @@ def test_sheet_mapping_is_bounded_non_applying_and_preserves_generic_calendar_ro
             "applicable_direction", "dte_min", "dte_max", "long_dte_min", "long_dte_max",
             "max_loss_multiple", "sizing_method", "sizing_value", "max_contracts",
             "max_debit_to_width_ratio", "max_bid_ask_pct", "exit_dte_min",
-            "half_time_exit", "avoid_earnings", "loss_close_multiple",
+                "half_time_exit", "avoid_earnings", "loss_close_multiple",
+                "resting_profit_enabled", "resting_profit_arm_progress_pct",
     ]
     rows = [
         {
@@ -173,12 +174,14 @@ def test_sheet_mapping_is_bounded_non_applying_and_preserves_generic_calendar_ro
             "short_delta_min": "0.16", "short_delta_max": "0.25", "max_bid_ask_pct": "0.25",
             "exit_dte_min": "21", "half_time_exit": "TRUE", "avoid_earnings": "TRUE",
             "loss_close_multiple": "3",
+            "resting_profit_enabled": "FALSE", "resting_profit_arm_progress_pct": "25",
         },
         {
             "playbook_id": "generic_call_calendar", "enabled": "TRUE", "strategy_family": "call_calendar",
             "structure": "call_calendar", "csa_stage": "baseline",
             "profit_target_pct": "25", "max_loss_multiple": "1", "max_bid_ask_pct": "0.25",
             "exit_dte_min": "14", "half_time_exit": "TRUE", "avoid_earnings": "TRUE",
+            "resting_profit_enabled": "FALSE", "resting_profit_arm_progress_pct": "25",
             "management_policy_json": '{"event_expiration":{"near_before_days":2},"lifecycle":{"hold":true}}',
         },
         {
@@ -188,6 +191,7 @@ def test_sheet_mapping_is_bounded_non_applying_and_preserves_generic_calendar_ro
                 "max_contracts": "1", "max_debit_to_width_ratio": "0.75",
                 "profit_target_pct": "30", "max_bid_ask_pct": "0.25", "exit_dte_min": "14",
                 "half_time_exit": "FALSE", "avoid_earnings": "TRUE",
+                "resting_profit_enabled": "FALSE", "resting_profit_arm_progress_pct": "25",
             "management_policy_json": '{"lifecycle":{"fill":{"max_attempts":4,"price_increment":0.05},"long_only":{"requires_approval":true},"short_leg":{"roll":true}}}',
         },
     ]
@@ -204,6 +208,7 @@ def test_sheet_mapping_is_bounded_non_applying_and_preserves_generic_calendar_ro
             "mode": "live", "enabled": "TRUE", "profit_target_pct": 25,
             "max_loss_multiple": 1, "max_bid_ask_pct": 0.25,
             "half_time_exit": "FALSE", "avoid_earnings": "FALSE",
+            "resting_profit_enabled": "FALSE", "resting_profit_arm_progress_pct": "25",
         },
     )
 
@@ -334,6 +339,8 @@ def test_legacy_open_group_adopts_complete_sheet_policy_and_entry_economics(tmp_
                 "max_bid_ask_pct": "0.25",
                 "half_time_exit": "TRUE",
                 "avoid_earnings": "TRUE",
+                "resting_profit_enabled": "FALSE",
+                "resting_profit_arm_progress_pct": "25",
                 "management_policy_json": "{}",
         }
     ]

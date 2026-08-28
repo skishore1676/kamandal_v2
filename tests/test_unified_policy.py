@@ -29,6 +29,8 @@ def _row(**overrides: object) -> dict[str, object]:
         "exit_dte_min": "21",
         "half_time_exit": "TRUE",
         "avoid_earnings": "TRUE",
+        "resting_profit_enabled": "FALSE",
+        "resting_profit_arm_progress_pct": "25",
         "sizing_method": "fixed_contracts",
         "sizing_value": "1",
         "max_contracts": "1",

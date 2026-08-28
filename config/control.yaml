@@ -232,7 +232,6 @@ live:
   resting_profit:
     live_enabled: false
     shadow_enabled: false
-    arm_progress_pct: 25
   health:
     stale_close_order_minutes: 120
     # Keep the entry breaker fail-closed, but do not page until the first

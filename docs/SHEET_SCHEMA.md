@@ -208,11 +208,19 @@ Notes:
 - Shadow rows use these same frozen management fields after entry. Their final
   adapter remains broker-inert and quote-based: a selected entry may work across
   bounded retries or become `entry_missed`; shadow does not use live Plan 2.
+- `resting_profit_enabled`: explicit per-playbook permission for a non-conceding
+  full-package DAY limit at the frozen profit target. Missing is invalid on an
+  enabled row. The runtime live/shadow switches may disable this permission but
+  cannot create it.
+- `resting_profit_arm_progress_pct`: midpoint progress, from 0 through 100,
+  required before that exact target offer may be staged. This value freezes on
+  lifecycle open with the rest of the compiled policy.
 
 The 2026-08-23 corrective management design originally required no new Sheet
-column. The later autonomous-strangle migration appends five controls for venue
-routing, preferred DTE, the chart-range gate, and one canonical 3x strangle
-loss close. The
+column. The later autonomous-strangle migration appended five controls for
+venue routing, preferred DTE, the chart-range gate, and one canonical 3x
+strangle loss close. The resting-profit extension appends two more controls so
+permission and arming economics remain on the operator surface. The
 existing `mode`, `max_bid_ask_pct`, `profit_target_pct`, `max_loss_multiple`,
 `half_time_exit`, `exit_pre_event_days`, and lifecycle JSON already express the
 operator-owned strategy policy. Opening/closing adverse-loss buffers,

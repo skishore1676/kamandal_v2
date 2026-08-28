@@ -2363,10 +2363,19 @@ def _lifecycle_management_authorization(
         for item in store.live_order_intents_by_status(active_statuses)
         if str(item.get("csa_lifecycle_id") or "") == lifecycle_id
         and str(item.get("ticket_hash") or "") != str(ticket.get("ticket_hash") or "")
+        and not _terminal_resting_profit_intent(item)
     ]
     if conflicts:
         return False, "blocked_lifecycle_authorization_working_order_conflict"
     return True, "lifecycle_authorization_frozen"
+
+
+def _terminal_resting_profit_intent(ticket: dict[str, Any]) -> bool:
+    """Exclude completed DAY targets from current lifecycle conflicts."""
+
+    return bool(ticket.get("resting_profit_order")) and str(
+        ticket.get("_ledger_status") or ""
+    ) in {"expired", "expired_eod", EXPIRED_BROKER_MISSING_STATUS}
 
 
 def _ticket_from_row(row: dict[str, Any]) -> dict[str, Any]:

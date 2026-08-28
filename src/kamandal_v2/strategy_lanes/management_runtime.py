@@ -59,10 +59,9 @@ class ManagementRunResult:
 
 @dataclass(frozen=True, slots=True)
 class RestingProfitPolicy:
-    """Platform policy for exact, non-conceding package profit orders."""
+    """Platform kill switch for exact, non-conceding package profit orders."""
 
     enabled: bool = False
-    arm_progress_pct: float = 25.0
 
 
 def resting_profit_policy(config: dict[str, Any] | None, execution_mode: str) -> RestingProfitPolicy:
@@ -72,13 +71,7 @@ def resting_profit_policy(config: dict[str, Any] | None, execution_mode: str) ->
     if execution_mode not in {"live", "shadow"}:
         raise ValueError(f"unsupported resting-profit execution mode: {execution_mode}")
     enabled = _config_bool(raw.get(f"{execution_mode}_enabled"), False)
-    try:
-        arm_progress_pct = float(raw.get("arm_progress_pct", 25.0))
-    except (TypeError, ValueError) as exc:
-        raise ValueError("live.resting_profit.arm_progress_pct must be numeric") from exc
-    if not 0.0 <= arm_progress_pct <= 100.0:
-        raise ValueError("live.resting_profit.arm_progress_pct must be between 0 and 100")
-    return RestingProfitPolicy(enabled=enabled, arm_progress_pct=arm_progress_pct)
+    return RestingProfitPolicy(enabled=enabled)
 
 
 def run_shadow_lifecycle_management(
@@ -165,7 +158,11 @@ def _run_lifecycle_management(
         REPLACE_WAITING_CANCEL,
     }
     live_working_tickets = (
-        baseline_store.live_order_intents_by_status(active_statuses)
+        [
+            ticket
+            for ticket in baseline_store.live_order_intents_by_status(active_statuses)
+            if not _terminal_resting_profit_ticket(ticket)
+        ]
         if execution_mode == "live"
         else []
     )
@@ -937,8 +934,30 @@ def _resting_profit_proposal(
 ):
     if not resting_policy.enabled or not observation.quote_actionable:
         return None
+    raw_enabled = policy.resolved_fields.get("resting_profit_enabled")
+    if raw_enabled in (None, ""):
+        # Existing lifecycles predate this capability.  A platform deployment
+        # or kill-switch change must never opt them into new economics.
+        return None
+    if not policy_bool(raw_enabled, label=f"{policy.playbook_id}.resting_profit_enabled"):
+        return None
+    raw_arm_progress = policy.resolved_fields.get("resting_profit_arm_progress_pct")
+    if isinstance(raw_arm_progress, bool) or raw_arm_progress in (None, ""):
+        raise ValueError(
+            f"{policy.playbook_id}.resting_profit_arm_progress_pct must be numeric"
+        )
+    try:
+        arm_progress_pct = float(raw_arm_progress)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"{policy.playbook_id}.resting_profit_arm_progress_pct must be numeric"
+        ) from exc
+    if not 0.0 <= arm_progress_pct <= 100.0:
+        raise ValueError(
+            f"{policy.playbook_id}.resting_profit_arm_progress_pct must be between 0 and 100"
+        )
     progress = _target_progress(lifecycle, policy, observation)
-    if progress < resting_policy.arm_progress_pct:
+    if progress < arm_progress_pct:
         return None
     order_day = _parse_timestamp(proposed_at).date().isoformat()
     return propose_action(
@@ -949,7 +968,7 @@ def _resting_profit_proposal(
         proposed_at=proposed_at,
         payload={
             "resting_order_day": order_day,
-            "arm_progress_pct": resting_policy.arm_progress_pct,
+            "arm_progress_pct": arm_progress_pct,
             "target_progress_pct": round(progress, 6),
         },
     )
@@ -998,6 +1017,20 @@ def _is_resting_profit_ticket(ticket: Any) -> bool:
         nested = ticket.get("csa_strategy_ticket") or {}
         return bool((nested.get("metadata") or {}).get("resting_profit_order"))
     return bool(getattr(ticket, "metadata", {}).get("resting_profit_order"))
+
+
+def _terminal_resting_profit_ticket(ticket: dict[str, Any]) -> bool:
+    """Treat a broker-terminal DAY target as re-armable lifecycle history.
+
+    ``expired`` is also a transitional status for legacy cancel/reprice flows,
+    so it remains globally tracked.  Resting targets never use that flow; once
+    the broker reports their DAY order expired, they must stop suppressing the
+    next session's target.
+    """
+
+    return _is_resting_profit_ticket(ticket) and str(
+        ticket.get("_ledger_status") or ""
+    ) in {"expired", "expired_eod", "expired_broker_status_missing"}
 
 
 def _ticket_owns_lifecycle(ticket: Any, lifecycle: LifecycleState) -> bool:

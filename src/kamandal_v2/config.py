@@ -222,7 +222,6 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "live.exit_pricing.default_max_loss_multiple_debit": _env_float("KAMANDAL_EXIT_DEFAULT_MAX_LOSS_MULTIPLE_DEBIT"),
         "live.resting_profit.live_enabled": _env_bool("KAMANDAL_RESTING_PROFIT_LIVE_ENABLED"),
         "live.resting_profit.shadow_enabled": _env_bool("KAMANDAL_RESTING_PROFIT_SHADOW_ENABLED"),
-        "live.resting_profit.arm_progress_pct": _env_float("KAMANDAL_RESTING_PROFIT_ARM_PROGRESS_PCT"),
         "live.health.stale_close_order_minutes": _env_int("KAMANDAL_LIVE_HEALTH_STALE_CLOSE_ORDER_MINUTES"),
         "live.health.exit_pipeline_stalled_minutes": _env_int("KAMANDAL_LIVE_HEALTH_EXIT_PIPELINE_STALLED_MINUTES"),
         "live.health.urgent_close_order_stale_minutes": _env_int("KAMANDAL_LIVE_HEALTH_URGENT_CLOSE_ORDER_STALE_MINUTES"),

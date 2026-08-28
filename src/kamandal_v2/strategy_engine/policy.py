@@ -293,6 +293,8 @@ def _validate_operator_management_fields(
         "max_bid_ask_pct",
         "half_time_exit",
         "avoid_earnings",
+        "resting_profit_enabled",
+        "resting_profit_arm_progress_pct",
     }
     if capability.key == "short_strangle":
         required.add("loss_close_multiple")
@@ -324,6 +326,16 @@ def _validate_operator_management_fields(
         _required_nonnegative_integer(row.get("exit_dte_min"), field="exit_dte_min", playbook_id=playbook_id)
     for field in ("half_time_exit", "avoid_earnings"):
         _required_bool(row.get(field), field=field, playbook_id=playbook_id)
+    _required_bool(
+        row.get("resting_profit_enabled"),
+        field="resting_profit_enabled",
+        playbook_id=playbook_id,
+    )
+    resting_arm = _number(row, "resting_profit_arm_progress_pct", playbook_id)
+    if not 0 <= resting_arm <= 100:
+        raise PolicyError(
+            f"{playbook_id}: resting_profit_arm_progress_pct must be between 0 and 100"
+        )
 
 
 def _normalize_legacy_management(

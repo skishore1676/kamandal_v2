@@ -28,6 +28,11 @@ quotes, same-day deduplication, next-day re-arm, shadow working state,
 higher-priority arbitration, staged cancellation, full parent-fill races, and
 partial-fill reconciliation.
 
+The permission and arming threshold are playbook policy, not deployment
+configuration. They must come from the operator Sheet and freeze into the
+lifecycle. Runtime mode flags are kill switches only, so deploying code or
+flipping a platform switch cannot opt an existing trade into new economics.
+
 ## When It Applies
 
 Use this pattern for non-marketable package limits that may remain working while
@@ -45,6 +50,8 @@ loss confirmation, session gates, atomic package ownership, or broker preflight.
 5. Abort the child on a parent fill; force reconciliation on a partial fill.
 6. Keep source deployment, shadow activation, live activation, and economic
    proof as separate gates.
+7. Keep per-playbook authorization on the operator surface and fail closed when
+   an enabled row omits it.
 
 ## Dead Ends
 

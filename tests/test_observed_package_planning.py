@@ -59,6 +59,8 @@ def _observed_calendar_row() -> dict[str, object]:
                     "score_weight_liquidity": 1,
                     "score_weight_spread": 1,
                     "profit_target_pct": 25,
+                    "resting_profit_enabled": "TRUE",
+                    "resting_profit_arm_progress_pct": 25,
                     "max_loss_multiple": 1,
                     "exit_dte_min": 0,
                     "management_policy_json": json.dumps(

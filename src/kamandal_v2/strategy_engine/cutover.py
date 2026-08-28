@@ -75,6 +75,8 @@ _UNIFIED_PLAYBOOK_COLUMNS = (
     "event_near_expiry_after_days",
     "paired_order_required",
     "post_event_exit",
+    "resting_profit_enabled",
+    "resting_profit_arm_progress_pct",
 )
 
 
@@ -262,6 +264,23 @@ def build_sheet_mapping_manifest(
             blockers.append(f"{playbook_id}: unsupported csa_stage={row.get('csa_stage')!r}")
             continue
         _append_cell_change(changes, index, playbook_id, "mode", row.get("mode", ""), mode)
+        if str(row.get("enabled") or "").strip().lower() in {"1", "true", "yes", "y", "on"}:
+            _append_cell_change(
+                changes,
+                index,
+                playbook_id,
+                "resting_profit_enabled",
+                row.get("resting_profit_enabled", ""),
+                "FALSE",
+            )
+            _append_cell_change(
+                changes,
+                index,
+                playbook_id,
+                "resting_profit_arm_progress_pct",
+                row.get("resting_profit_arm_progress_pct", ""),
+                25,
+            )
         if not str(row.get("source_mode") or "").strip():
             _append_cell_change(changes, index, playbook_id, "source_mode", row.get("source_mode", ""), "idea")
         structure = str(row.get("structure") or "").strip().lower()
@@ -439,6 +458,12 @@ def _remove_legacy_diagonal_management(
 def _validated_earnings_calendar_row(values: dict[str, Any], header: tuple[str, ...]) -> dict[str, Any]:
     row = {column: "" for column in header}
     row.update(values)
+    row.setdefault("resting_profit_enabled", "FALSE")
+    row.setdefault("resting_profit_arm_progress_pct", 25)
+    if row.get("resting_profit_enabled") in (None, ""):
+        row["resting_profit_enabled"] = "FALSE"
+    if row.get("resting_profit_arm_progress_pct") in (None, ""):
+        row["resting_profit_arm_progress_pct"] = 25
     required = {
         "playbook_id", "strategy_family", "structure", "applicable_direction", "dte_min", "dte_max",
         "long_dte_min", "long_dte_max", "event_timing", "event_near_expiry_after_days",

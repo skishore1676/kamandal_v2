@@ -105,6 +105,10 @@ PLAYBOOKS_HEADER = [
     "max_debit_to_width_ratio",
     # Exact-package sources are explicitly allowlisted per shadow playbook.
     "source_profiles",
+    # Resting-profit economics are operator-owned and frozen on lifecycle open.
+    # Runtime mode flags remain upper-bound kill switches only.
+    "resting_profit_enabled",
+    "resting_profit_arm_progress_pct",
 ]
 
 DAILY_PLAN_HEADER = [

@@ -93,8 +93,11 @@ def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     # Legacy seed fixtures predate the fail-closed Sheet quote-policy contract;
     # make the operator value explicit in this planning fixture.
     for playbook in playbooks:
-        if str(playbook.get("enabled") or "").lower() == "true" and not playbook.get("max_bid_ask_pct"):
-            playbook["max_bid_ask_pct"] = "0.25"
+        if str(playbook.get("enabled") or "").lower() == "true":
+            if not playbook.get("max_bid_ask_pct"):
+                playbook["max_bid_ask_pct"] = "0.25"
+            playbook["resting_profit_enabled"] = "FALSE"
+            playbook["resting_profit_arm_progress_pct"] = "25"
     playbooks.append(
         {
             "playbook_id": "short_strangle_shadow",
@@ -109,6 +112,8 @@ def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
             "short_delta_max": "0.20",
             "max_bid_ask_pct": "0.25",
             "profit_target_pct": "40",
+            "resting_profit_enabled": "TRUE",
+            "resting_profit_arm_progress_pct": "25",
             "exit_dte_min": "21",
             "half_time_exit": "TRUE",
             "avoid_earnings": "TRUE",
@@ -267,9 +272,11 @@ def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> 
             "short_delta_min": "0.20",
             "short_delta_max": "0.30",
             "spread_width": "5",
-            "max_bid_ask_pct": "0.25",
-            "profit_target_pct": "50",
-            "max_loss_multiple": "2",
+                "max_bid_ask_pct": "0.25",
+                "profit_target_pct": "50",
+                "resting_profit_enabled": "FALSE",
+                "resting_profit_arm_progress_pct": "25",
+                "max_loss_multiple": "2",
             "exit_dte_min": "21",
             "half_time_exit": "TRUE",
             "avoid_earnings": "TRUE",
@@ -596,6 +603,8 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
         "spread_width": "5",
         "max_bid_ask_pct": "0.25",
         "profit_target_pct": "50",
+        "resting_profit_enabled": "FALSE",
+        "resting_profit_arm_progress_pct": "25",
         "max_loss_multiple": "2",
         "exit_dte_min": "21",
         "half_time_exit": "TRUE",
@@ -706,6 +715,8 @@ def test_active_unified_path_replans_once_into_typed_plan_two(tmp_path, monkeypa
         "spread_width": "5",
         "max_bid_ask_pct": "0.25",
         "profit_target_pct": "50",
+        "resting_profit_enabled": "FALSE",
+        "resting_profit_arm_progress_pct": "25",
         "max_loss_multiple": "2",
         "exit_dte_min": "21",
         "half_time_exit": "TRUE",

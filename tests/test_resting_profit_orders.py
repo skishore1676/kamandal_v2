@@ -11,6 +11,7 @@ from kamandal_v2.live.execution import (
     _close_expire_due,
     _close_reprice_due,
     _advance_staged_replacement,
+    _lifecycle_management_authorization,
     stage_live_management_replacement,
 )
 from kamandal_v2.live.orders import build_csa_live_ticket
@@ -43,7 +44,12 @@ def _policy(*, target: float = 50.0) -> CsaPolicy:
         stage=CsaStage.SHADOW,
         source_mode=SourceMode.IDEA,
         management={"lifecycle": {"fill": {"max_attempts": 0, "price_increment": 0.05}}},
-        resolved_fields={"profit_target_pct": target, "max_bid_ask_pct": 0.25},
+        resolved_fields={
+            "profit_target_pct": target,
+            "max_bid_ask_pct": 0.25,
+            "resting_profit_enabled": True,
+            "resting_profit_arm_progress_pct": 25,
+        },
         policy_hash="policy",
         source="fixture",
         read_at=NOW,
@@ -106,7 +112,7 @@ def _observation(*, actionable: bool = True, midpoint_pnl: float = 0.20) -> Pack
 def test_resting_profit_policy_is_disabled_by_default_and_mode_scoped() -> None:
     assert resting_profit_policy({}, "live").enabled is False
     assert resting_profit_policy({}, "shadow").enabled is False
-    config = {"live": {"resting_profit": {"live_enabled": True, "shadow_enabled": False, "arm_progress_pct": 25}}}
+    config = {"live": {"resting_profit": {"live_enabled": True, "shadow_enabled": False}}}
     assert resting_profit_policy(config, "live").enabled is True
     assert resting_profit_policy(config, "shadow").enabled is False
 
@@ -120,7 +126,7 @@ def test_target_close_price_preserves_original_target_dollars_after_adjustment()
 def test_resting_proposal_requires_actionable_arm_progress_and_is_day_stable() -> None:
     lifecycle = _lifecycle()
     policy = resting_profit_policy(
-        {"live": {"resting_profit": {"shadow_enabled": True, "arm_progress_pct": 25}}},
+        {"live": {"resting_profit": {"shadow_enabled": True}}},
         "shadow",
     )
     below = _resting_profit_proposal(lifecycle, _policy(), _observation(midpoint_pnl=0.18), policy, proposed_at=NOW)
@@ -133,6 +139,53 @@ def test_resting_proposal_requires_actionable_arm_progress_and_is_day_stable() -
     assert armed is not None
     assert armed.action_id == replay.action_id
     assert armed.reason_codes == ("profit_target_resting",)
+
+
+def test_legacy_lifecycle_is_not_opted_in_by_platform_switch() -> None:
+    legacy = replace(
+        _policy(),
+        resolved_fields={"profit_target_pct": 50, "max_bid_ask_pct": 0.25},
+    )
+    platform = resting_profit_policy(
+        {"live": {"resting_profit": {"live_enabled": True}}},
+        "live",
+    )
+
+    assert _resting_profit_proposal(
+        _lifecycle(),
+        legacy,
+        _observation(midpoint_pnl=0.30),
+        platform,
+        proposed_at=NOW,
+    ) is None
+
+
+def test_sheet_permission_and_arm_threshold_control_the_offer() -> None:
+    platform = resting_profit_policy(
+        {"live": {"resting_profit": {"shadow_enabled": True}}},
+        "shadow",
+    )
+    denied = replace(
+        _policy(),
+        resolved_fields={
+            **_policy().resolved_fields,
+            "resting_profit_enabled": False,
+        },
+    )
+    late_arm = replace(
+        _policy(),
+        resolved_fields={
+            **_policy().resolved_fields,
+            "resting_profit_arm_progress_pct": 80,
+        },
+    )
+
+    assert _resting_profit_proposal(
+        _lifecycle(), denied, _observation(midpoint_pnl=0.30), platform, proposed_at=NOW
+    ) is None
+    assert _resting_profit_proposal(
+        _lifecycle(), late_arm, _observation(midpoint_pnl=0.30), platform, proposed_at=NOW
+    ) is None
 
 
 @pytest.mark.parametrize(
@@ -362,6 +415,8 @@ def _runtime_lifecycle(mode: str) -> LifecycleState:
             "exit_dte_min": 21,
             "half_time_exit": False,
             "max_bid_ask_pct": 0.25,
+            "resting_profit_enabled": True,
+            "resting_profit_arm_progress_pct": 25,
         },
         "policy_hash": "policy",
         "source": "fixture",
@@ -417,7 +472,7 @@ def test_canonical_live_manager_stages_one_exact_target_and_default_is_inert(tmp
     assert LocalStore(disabled_db, read_only=True).live_order_intents_by_status({"stage_approved_pending_submit"}) == []
 
     database, _store = _runtime_store(tmp_path, "live")
-    config = {"live": {"resting_profit": {"live_enabled": True, "arm_progress_pct": 25}}}
+    config = {"live": {"resting_profit": {"live_enabled": True}}}
     first = run_live_lifecycle_management(
         config, sqlite_path=database, market=_RuntimeMarket(), observed_at=NOW
     )
@@ -435,7 +490,7 @@ def test_canonical_live_manager_stages_one_exact_target_and_default_is_inert(tmp
 
 def test_canonical_shadow_manager_keeps_one_day_target_then_rearms_next_day(tmp_path) -> None:
     database, store = _runtime_store(tmp_path, "shadow")
-    config = {"live": {"resting_profit": {"shadow_enabled": True, "arm_progress_pct": 25}}}
+    config = {"live": {"resting_profit": {"shadow_enabled": True}}}
 
     first = run_shadow_lifecycle_management(
         config, sqlite_path=database, market=_RuntimeMarket(), observed_at=NOW
@@ -446,11 +501,47 @@ def test_canonical_shadow_manager_keeps_one_day_target_then_rearms_next_day(tmp_
     next_day = run_shadow_lifecycle_management(
         config,
         sqlite_path=database,
-        market=_RuntimeMarket("2026-08-29T16:00:00Z"),
-        observed_at="2026-08-29T16:00:00Z",
+        market=_RuntimeMarket("2026-08-31T16:00:00Z"),
+        observed_at="2026-08-31T16:00:00Z",
     )
     intents = store.rows("csa_shadow_order_intents")
 
     assert first.ok and same_day.ok and next_day.ok
     assert len(intents) == 2
     assert [row["status"] for row in intents] == ["expired_eod", "working"]
+
+
+def test_canonical_live_manager_rearms_after_broker_day_expiry(tmp_path, monkeypatch) -> None:
+    database, _store = _runtime_store(tmp_path, "live")
+    config = {"live": {"resting_profit": {"live_enabled": True}}}
+
+    first = run_live_lifecycle_management(
+        config, sqlite_path=database, market=_RuntimeMarket(), observed_at=NOW
+    )
+    local = LocalStore(database)
+    first_ticket = local.live_order_intents_by_status({"stage_approved_pending_submit"})[0]
+    local.update_live_order_intent_status(first_ticket["ticket_hash"], "expired")
+
+    next_day = run_live_lifecycle_management(
+        config,
+        sqlite_path=database,
+        market=_RuntimeMarket("2026-08-31T16:00:00Z"),
+        observed_at="2026-08-31T16:00:00Z",
+    )
+    new_tickets = local.live_order_intents_by_status({"stage_approved_pending_submit"})
+
+    assert first.ok and next_day.ok
+    assert len(new_tickets) == 1
+    assert new_tickets[0]["ticket_hash"] != first_ticket["ticket_hash"]
+    assert new_tickets[0]["resting_order_day"] == "2026-08-31"
+    monkeypatch.setattr(
+        "kamandal_v2.live.reconciliation.reconciliation_blockers_for_group",
+        lambda *_args, **_kwargs: [],
+    )
+    authorized, reason = _lifecycle_management_authorization(
+        new_tickets[0],
+        config=config,
+        store=local,
+    )
+    assert authorized is True
+    assert reason == "lifecycle_authorization_frozen"

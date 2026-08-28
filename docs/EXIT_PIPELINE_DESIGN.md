@@ -199,7 +199,6 @@ live:
   resting_profit:
     live_enabled: false            # separate money-path activation gate
     shadow_enabled: false          # separate broker-inert experiment gate
-    arm_progress_pct: 25
   health:
     exit_pipeline_stalled_minutes: 20
     urgent_close_order_stale_minutes: 30
@@ -217,7 +216,6 @@ oldmac):
 - `KAMANDAL_EXIT_PROFIT_FLOOR_PCT`
 - `KAMANDAL_RESTING_PROFIT_LIVE_ENABLED`
 - `KAMANDAL_RESTING_PROFIT_SHADOW_ENABLED`
-- `KAMANDAL_RESTING_PROFIT_ARM_PROGRESS_PCT`
 - `KAMANDAL_LIVE_HEALTH_EXIT_PIPELINE_STALLED_MINUTES`
 - `KAMANDAL_LIVE_HEALTH_URGENT_CLOSE_ORDER_STALE_MINUTES`
 
@@ -227,6 +225,8 @@ The resting-profit feature is implemented in the canonical lifecycle source but
 checked in disabled. Enabling shadow, enabling live, deploying source, and
 proving natural fills are separate states. A higher-priority action uses the
 existing staged cancel-confirm-new lineage rather than bypassing the ledger.
+Per-playbook authorization and arming progress come from the Google Sheet and
+freeze on lifecycle open; runtime flags may only disable that frozen permission.
 
 ---
 
