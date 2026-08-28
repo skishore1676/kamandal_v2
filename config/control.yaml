@@ -230,7 +230,7 @@ live:
   # They use the immutable lifecycle target and remain DAY orders at that exact
   # price; the ordinary exit reprice ladder does not apply.
   resting_profit:
-    live_enabled: false
+    live_enabled: true
     shadow_enabled: false
   health:
     stale_close_order_minutes: 120
