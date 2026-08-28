@@ -1,7 +1,7 @@
 # Observed Package Evidence
 
 Date: 2026-08-28
-Status: source evidence, shared activation feed, and one-planner shadow admission implemented; protected deployment remains gated
+Status: deployed on oldmac with four Sheet-authorized Mike shadow rows; natural acquisition and lifecycle proof pending
 
 ## Purpose
 
@@ -127,12 +127,21 @@ The accepted architecture separates:
 2. a Kamandal-selected counterfactual that uses the existing optimizer and
    conservative shadow fill/lifecycle path.
 
-Focused local proof now shows one exact call calendar flowing from immutable
+Focused local and deployed proof now shows one exact call calendar flowing from immutable
 evidence to candidate, optimizer selection, retry, ticket, open lifecycle,
 unified management, and profit-target close with source identity unchanged and
 broker effects false. Adversarial fixtures separately prove stale/wide parking,
 no-policy receipts, replay-stable identity, and first-mark independence from an
-economic rejection. Natural runtime activation still requires the protected
-Sheet update, source publication, oldmac deployment, and a later natural-run
-proof. No live broker, live buying power, account permission, or live promotion
-is granted by this contract.
+economic rejection. Birdclaw commit `6c92b60` and Kamandal commit `15f71e6`
+are deployed on oldmac. The Google Sheet contains four enabled, shadow-only
+Mike rows; the deployment compiler reports all 15 pre-existing policy hashes
+unchanged and no policy errors.
+
+The remaining proof is environmental and natural: Birdclaw's X reads currently
+return HTTP 403 because the X API monthly spend cap has been reached. Until that
+external money gate is reset or explicitly raised, the shared job cannot capture
+new Greg or Mike posts and therefore cannot publish a new Mike package feed.
+No credential, billing, live broker, live buying-power, account-permission, or
+live-promotion change is granted by this contract. After X reads recover, the
+next natural acquisition and unified-planning cycles must prove media capture,
+transcription, feed publication, optimizer admission, and the shadow lifecycle.
