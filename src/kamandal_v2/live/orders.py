@@ -98,6 +98,11 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
         "exit_midpoint_net",
         "exit_natural_net",
         "exit_profit_floor_net",
+        "exit_target_net",
+        "target_profit_dollars",
+        "resting_profit_order",
+        "resting_profit_arm_progress_pct",
+        "resting_order_day",
         "execution_envelope",
     ):
         if key in ticket.metadata:

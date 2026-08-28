@@ -239,6 +239,14 @@ class CsaStore:
                 (fill.status, fill.filled_at if fill.status == "filled" else None, fill.ticket_id),
             )
 
+    def update_shadow_order_intent_status(self, ticket_id: str, status: str) -> None:
+        self._require_writable()
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE csa_shadow_order_intents SET status = ? WHERE id = ?",
+                (status, ticket_id),
+            )
+
     def working_shadow_orders(self) -> list[tuple[StrategyTicket, int]]:
         """Return durable working orders with their last attempted price step."""
         with self._connect() as conn:

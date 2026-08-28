@@ -163,6 +163,7 @@ is the parameterization and terminal state, per exit reason:
 | `profit_target` | validated mid | partway to validated natural | stop at retained-profit floor: max(`exit_pricing.min_profit_to_trigger`, `target_profit * profit_floor_pct`) |
 | `dte_target`, `half_time`, `pre_event` | validated mid | validated natural | keep the obligation due; alert if quote/order progress stalls |
 | `adverse_price_loss` | validated mid after confirmation | validated natural | never cross natural; opening/closing buffers observe only |
+| `profit_target_resting` | exact frozen strategy target | exact frozen strategy target | never reprice; broker DAY expiry returns control to the lifecycle manager |
 
 Why per-reason parameters are load-bearing (real numbers from the book,
 2026-07-01 DELL put spread): entry credit $220, close at mid $112.50 → keep
@@ -195,6 +196,10 @@ live:
     profit_target_trigger_pct: 95
     min_profit_to_trigger: 5
     profit_floor_pct: 50           # retain at least 50% of target profit on profit-target reprices
+  resting_profit:
+    live_enabled: false            # separate money-path activation gate
+    shadow_enabled: false          # separate broker-inert experiment gate
+    arm_progress_pct: 25
   health:
     exit_pipeline_stalled_minutes: 20
     urgent_close_order_stale_minutes: 30
@@ -210,10 +215,18 @@ oldmac):
 - `KAMANDAL_LIVE_EXIT_REPRICE_MAX_REPRICES`
 - `KAMANDAL_LIVE_EXIT_REPRICE_EXPIRE_AFTER_MINUTES`
 - `KAMANDAL_EXIT_PROFIT_FLOOR_PCT`
+- `KAMANDAL_RESTING_PROFIT_LIVE_ENABLED`
+- `KAMANDAL_RESTING_PROFIT_SHADOW_ENABLED`
+- `KAMANDAL_RESTING_PROFIT_ARM_PROGRESS_PCT`
 - `KAMANDAL_LIVE_HEALTH_EXIT_PIPELINE_STALLED_MINUTES`
 - `KAMANDAL_LIVE_HEALTH_URGENT_CLOSE_ORDER_STALE_MINUTES`
 
 `sheet_approval` and `disabled` exit modes keep working unchanged.
+
+The resting-profit feature is implemented in the canonical lifecycle source but
+checked in disabled. Enabling shadow, enabling live, deploying source, and
+proving natural fills are separate states. A higher-priority action uses the
+existing staged cancel-confirm-new lineage rather than bypassing the ledger.
 
 ---
 

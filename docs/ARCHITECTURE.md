@@ -415,6 +415,35 @@ and shadow. The specialised earnings-calendar capability is intentionally
 different: it holds through its confirmed event and uses its first eligible
 post-event exit contract rather than the ordinary pre-event rule.
 
+### Resting profit targets are canonical lifecycle state
+
+The unified manager can represent an exact full-package profit offer before the
+midpoint has reached the final target. This is a platform action, not another
+strategy manager and not another valuation rule:
+
+- a fresh, complete, non-crossed package midpoint must first make the configured
+  progress toward the lifecycle's frozen profit target;
+- the closing limit is calculated from original target-profit dollars and the
+  lifecycle's cumulative filled cashflow, so filled adjustments change the
+  remaining close price without changing the original target dollars;
+- the target is one atomic package `close` ticket with reason class
+  `resting_profit`, DAY duration, and an execution envelope whose initial and
+  terminal boundary are both the exact strategy target;
+- it never enters the midpoint-to-natural close reprice ladder;
+- one working target suppresses duplicate target tickets but remains visible to
+  the same manager, which may supersede it for a higher-priority emergency,
+  event, executable-profit, time, confirmed-loss, or allowed lane-adjustment
+  action; and
+- a live supersession persists the child and lineage before requesting cancel,
+  waits for terminal unfilled parent state, verifies the owned position and
+  fresh preflight, and only then submits. A parent fill aborts the child.
+
+Shadow uses the same observation, action, price, and typed ticket. Its effect
+adapter keeps one non-conceding working order per valid market observation,
+expires that DAY identity at the date boundary, and re-arms on a later valid
+cycle. Live and shadow activation are independent and disabled by default.
+Therefore source publication or deployment alone cannot create a broker order.
+
 ### Management permissions are capability-specific
 
 One lifecycle engine does not mean every strategy may perform every action.

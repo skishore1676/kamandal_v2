@@ -1591,6 +1591,39 @@ def _begin_staged_replacement(
     }
 
 
+def stage_live_management_replacement(
+    store: LocalStore,
+    parent: dict[str, Any],
+    replacement: dict[str, Any],
+) -> None:
+    """Persist a management child before the lifecycle owner requests cancel.
+
+    Broker mutation remains in ``sync_live_orders``.  This function only makes
+    the intended lineage and fail-closed waiting state durable.
+    """
+
+    parent_hash = str(parent.get("ticket_hash") or "")
+    if not parent_hash:
+        raise ValueError("management replacement parent requires ticket_hash")
+    child = json.loads(json.dumps(replacement, sort_keys=True, default=str))
+    child["parent_ticket_hash"] = parent_hash
+    child["replace_method"] = "staged_cancel"
+    child["replace_reason"] = "superseded_management_action"
+    child["replaces_order_id"] = client_order_id(parent)
+    child["replaces_broker_order_id"] = broker_order_id(parent)
+    store.save_live_order_intent(child, status=REPLACE_WAITING_CANCEL)
+    store.update_live_order_intent_status(parent_hash, REPLACE_CANCEL_PENDING)
+    store.event(
+        "live_management_replacement_staged",
+        {
+            "from_ticket_hash": parent_hash,
+            "to_ticket_hash": child.get("ticket_hash"),
+            "from_reason_class": parent.get("csa_action_reason_class") or parent.get("exit_reason_class"),
+            "to_reason_class": child.get("csa_action_reason_class") or child.get("exit_reason_class"),
+        },
+    )
+
+
 def _advance_staged_replacement(
     adapter: Any,
     store: LocalStore,
@@ -1611,18 +1644,37 @@ def _advance_staged_replacement(
         }
     replacement = max(children, key=lambda child: str(child.get("created_at") or ""))
     status = str(broker_status.get("status") or "UNKNOWN").upper()
-    close = str(replacement.get("intent_type") or "") == "close"
-    if status in {"FILLED", "PARTIALLY_FILLED"}:
-        parent_status = "close_filled" if close else "filled"
+    management = str(replacement.get("intent_type") or "") in {"close", "adjust"}
+    if status == "PARTIALLY_FILLED":
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "partially_filled")
+        store.update_live_order_intent_status(str(replacement["ticket_hash"]), "replace_aborted_parent_partial_fill")
+        return {
+            "reprice_status": "aborted_parent_partial_fill",
+            "reprice_method": "staged_cancel",
+            "broker_status": status,
+            "needs_position_reconciliation": True,
+        }
+    if status == "FILLED":
+        parent_close = str(ticket.get("intent_type") or "") == "close"
+        parent_status = "close_filled" if parent_close else "filled"
         store.update_live_order_intent_status(str(ticket["ticket_hash"]), parent_status)
         store.update_live_order_intent_status(str(replacement["ticket_hash"]), "replace_aborted_parent_filled")
+        lifecycle_projection = None
+        if ticket.get("csa_lifecycle_id"):
+            lifecycle_projection = _adopt_csa_live_fill(
+                store,
+                ticket,
+                broker_status,
+                filled_quantity=_filled_quantity(broker_status),
+            )
         return {
             "reprice_status": "aborted_parent_filled",
             "reprice_method": "staged_cancel",
             "broker_status": status,
+            "csa_lifecycle_projection": lifecycle_projection,
         }
 
-    position_evidence = _replacement_position_evidence(adapter, replacement) if close else {"intact": True, "reason": "entry_order"}
+    position_evidence = _replacement_position_evidence(adapter, replacement) if management else {"intact": True, "reason": "entry_order"}
     if position_evidence.get("intact") is not True:
         return {
             "reprice_status": "waiting_position_reconciliation",
@@ -1680,7 +1732,7 @@ def _advance_staged_replacement(
     store.update_live_order_intent_status(str(ticket["ticket_hash"]), "repriced")
     store.record_live_order_attempt(
         replacement,
-        action="submit_staged_replace_close" if close else "submit_staged_replace_open",
+        action="submit_staged_replace_management" if management else "submit_staged_replace_open",
         submit=True,
         ok=True,
         request_payload=dict(replacement.get("submit_payload") or {}),
@@ -1712,7 +1764,11 @@ def _replacement_position_evidence(adapter: Any, replacement: dict[str, Any]) ->
         positions = list(adapter.broker_positions())
     except Exception as exc:  # noqa: BLE001
         return {"intact": None, "reason": "portfolio_fetch_failed", "error": _safe_broker_error(exc)}
-    legs = list(replacement.get("legs") or [])
+    legs = [
+        leg
+        for leg in (replacement.get("legs") or [])
+        if str(leg.get("effect") or "close").lower() == "close"
+    ]
     missing = []
     for leg in legs:
         expected_quantity = max(float(leg.get("quantity") or 1), 0.0)
@@ -1765,6 +1821,8 @@ def _entry_expire_due(store: LocalStore, ticket: dict[str, Any], broker_status: 
 def _close_expire_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
     if str(ticket.get("intent_type") or "") != "close":
         return False
+    if bool(ticket.get("resting_profit_order")):
+        return False
     policy = ((config.get("live") or {}).get("exit_reprice") or {})
     if not _as_bool(policy.get("enabled"), False):
         return False
@@ -1800,6 +1858,8 @@ def _entry_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status:
 
 def _close_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
     if str(ticket.get("intent_type") or "") != "close":
+        return False
+    if bool(ticket.get("resting_profit_order")):
         return False
     policy = ((config.get("live") or {}).get("exit_reprice") or {})
     if not _as_bool(policy.get("enabled"), False):

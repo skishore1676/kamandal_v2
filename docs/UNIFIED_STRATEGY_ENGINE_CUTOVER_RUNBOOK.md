@@ -88,6 +88,25 @@ applies only manifest-owned Sheet cells, reads both surfaces back, and restores
 both surfaces automatically if either half fails. It never calls a broker or
 triggers a scheduled job.
 
+## Resting-profit activation ladder
+
+The checked-in resting-profit policy is disabled. Treat these as distinct
+review gates, in order:
+
+1. source-ready: focused/full tests and deterministic replay pass;
+2. published: the exact reviewed commit exists remotely;
+3. deployed-inert: oldmac reads back that commit with both enable flags false;
+4. shadow-activated: only `shadow_enabled=true`, followed by natural-cycle
+   evidence for arm, work, fill/miss, EOD expiry, and supersession;
+5. live-activated: separately approve `live_enabled=true` as a money-path
+   policy change; and
+6. economic proof: attribute actual additional fills and realized cashflow
+   before claiming benefit.
+
+Stop if source deployment and policy activation cannot be separated. Never use
+a manual lifecycle or broker trigger to substitute for natural proof unless the
+operator explicitly approves that exact effect.
+
 ## Scheduler replacement
 
 Replace ownership atomically at the session boundary:

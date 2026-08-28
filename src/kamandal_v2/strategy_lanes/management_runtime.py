@@ -12,6 +12,7 @@ from kamandal_v2.live.execution import (
     CANCEL_PENDING_TICKET_STATUSES,
     PENDING_TICKET_STATUSES,
     REPLACE_WAITING_CANCEL,
+    stage_live_management_replacement,
 )
 from kamandal_v2.live.orders import build_csa_live_ticket
 from kamandal_v2.live.option_sessions import submission_window
@@ -54,6 +55,30 @@ class ManagementRunResult:
 
     def to_dict(self) -> dict[str, Any]:
         return {**asdict(self), "ok": self.ok}
+
+
+@dataclass(frozen=True, slots=True)
+class RestingProfitPolicy:
+    """Platform policy for exact, non-conceding package profit orders."""
+
+    enabled: bool = False
+    arm_progress_pct: float = 25.0
+
+
+def resting_profit_policy(config: dict[str, Any] | None, execution_mode: str) -> RestingProfitPolicy:
+    raw = ((((config or {}).get("live") or {}).get("resting_profit") or {}))
+    if not isinstance(raw, dict):
+        raw = {}
+    if execution_mode not in {"live", "shadow"}:
+        raise ValueError(f"unsupported resting-profit execution mode: {execution_mode}")
+    enabled = _config_bool(raw.get(f"{execution_mode}_enabled"), False)
+    try:
+        arm_progress_pct = float(raw.get("arm_progress_pct", 25.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("live.resting_profit.arm_progress_pct must be numeric") from exc
+    if not 0.0 <= arm_progress_pct <= 100.0:
+        raise ValueError("live.resting_profit.arm_progress_pct must be between 0 and 100")
+    return RestingProfitPolicy(enabled=enabled, arm_progress_pct=arm_progress_pct)
 
 
 def run_shadow_lifecycle_management(
@@ -139,19 +164,17 @@ def _run_lifecycle_management(
         *CANCEL_PENDING_TICKET_STATUSES,
         REPLACE_WAITING_CANCEL,
     }
-    working_owner_ids = (
-        {
-            owner
-            for ticket in baseline_store.live_order_intents_by_status(active_statuses)
-            for owner in (
-                str(ticket.get("csa_lifecycle_id") or ""),
-                str(ticket.get("position_projection_id") or ticket.get("group_id") or ""),
-            )
-            if owner
-        }
+    live_working_tickets = (
+        baseline_store.live_order_intents_by_status(active_statuses)
         if execution_mode == "live"
-        else set()
+        else []
     )
+    shadow_working_tickets = (
+        [ticket for ticket, _attempt in store.working_shadow_orders()]
+        if execution_mode == "shadow"
+        else []
+    )
+    resting_policy = resting_profit_policy(config, execution_mode)
     registry = lifecycle_registry()
     counts: dict[str, int] = {}
     filled_actions = 0
@@ -164,6 +187,40 @@ def _run_lifecycle_management(
             continue
         underlying = str(lifecycle.metadata.get("underlying") or "")
         try:
+            owned_live_tickets = [
+                ticket for ticket in live_working_tickets if _ticket_owns_lifecycle(ticket, lifecycle)
+            ]
+            owned_shadow_tickets = [
+                ticket for ticket in shadow_working_tickets if _ticket_owns_lifecycle(ticket, lifecycle)
+            ]
+            if execution_mode == "shadow":
+                order_day = _parse_timestamp(started_at).date().isoformat()
+                for ticket in owned_shadow_tickets:
+                    if (
+                        _is_resting_profit_ticket(ticket)
+                        and str(ticket.metadata.get("resting_order_day") or "") != order_day
+                    ):
+                        store.update_shadow_order_intent_status(ticket.ticket_id, "expired_eod")
+                owned_shadow_tickets = [
+                    ticket
+                    for ticket in owned_shadow_tickets
+                    if not _is_resting_profit_ticket(ticket)
+                    or str(ticket.metadata.get("resting_order_day") or "") == order_day
+                ]
+            existing_resting = next(
+                (
+                    ticket
+                    for ticket in (
+                        owned_live_tickets if execution_mode == "live" else owned_shadow_tickets
+                    )
+                    if _ticket_owns_lifecycle(ticket, lifecycle)
+                    and _is_resting_profit_ticket(ticket)
+                ),
+                None,
+            )
+            ordinary_working_conflict = any(
+                not _is_resting_profit_ticket(ticket) for ticket in owned_live_tickets
+            )
             snapshot = market.chain_snapshot(underlying)
             active_legs = _active_option_legs(lifecycle, snapshot)
             context, plans, observed_lifecycle, observation = _management_context(
@@ -176,11 +233,40 @@ def _run_lifecycle_management(
                 config=config,
                 observed_at=started_at,
                 ownership_clear=True,
-                working_order_conflict=bool(
-                    {lifecycle.lifecycle_id, lifecycle.position_projection_id} & working_owner_ids
-                ),
+                working_order_conflict=ordinary_working_conflict,
             )
-            proposals = registry.resolve(lifecycle.lane)(observed_lifecycle, policy, context, proposed_at=started_at)
+            if (
+                execution_mode == "shadow"
+                and existing_resting is not None
+                and observation.quote_actionable
+            ):
+                adapter = ShadowExecutionAdapter()
+                fill = adapter.simulate_fill(
+                    existing_resting,
+                    _ticket_quote_map(existing_resting, snapshot),
+                    dict((policy.management.get("lifecycle") or {}).get("fill") or {}),
+                    observed_at=started_at,
+                    attempt=0,
+                )
+                store.save_shadow_fill(fill)
+                if fill.status == "filled":
+                    store.save_lifecycle(adapter.adopt_fill(observed_lifecycle, existing_resting, fill))
+                    filled_actions += 1
+                    counts["resting_profit_fill"] = counts.get("resting_profit_fill", 0) + 1
+                    continue
+            proposals = list(
+                registry.resolve(lifecycle.lane)(observed_lifecycle, policy, context, proposed_at=started_at)
+            )
+            if existing_resting is None:
+                resting_proposal = _resting_profit_proposal(
+                    observed_lifecycle,
+                    policy,
+                    observation,
+                    resting_policy,
+                    proposed_at=started_at,
+                )
+                if resting_proposal is not None:
+                    proposals.append(resting_proposal)
             raw_selected = arbitrate_actions(proposals).selected
             selected, observation = _apply_management_safety(
                 raw_selected,
@@ -224,12 +310,24 @@ def _run_lifecycle_management(
                 continue
             ticket = _management_ticket(selected, observed_lifecycle, policy, active_legs, plans, underlying, started_at, observation=observation, config=config)
             if execution_mode == "shadow":
-                store.save_shadow_order_intent(ticket)
+                if existing_resting is not None:
+                    store.update_shadow_order_intent_status(existing_resting.ticket_id, "cancelled_superseded")
+                    ticket = replace(
+                        ticket,
+                        metadata={
+                            **ticket.metadata,
+                            "parent_shadow_ticket_id": existing_resting.ticket_id,
+                            "replace_reason": "superseded_management_action",
+                        },
+                    )
+                is_resting = _is_resting_profit_ticket(ticket)
+                store.save_shadow_order_intent(ticket, status="working" if is_resting else "proposed")
                 quotes = _ticket_quote_map(ticket, snapshot)
                 fill_policy = dict((policy.management.get("lifecycle") or {}).get("fill") or {})
                 adapter = ShadowExecutionAdapter()
                 final_fill = None
-                for attempt in range(int(float(fill_policy["max_attempts"])) + 1):
+                attempts = (0,) if is_resting else range(int(float(fill_policy["max_attempts"])) + 1)
+                for attempt in attempts:
                     final_fill = adapter.simulate_fill(ticket, quotes, fill_policy, observed_at=started_at, attempt=attempt)
                     if final_fill.status in {"filled", "missed"}:
                         break
@@ -247,10 +345,28 @@ def _run_lifecycle_management(
                     }
                 )
                 if writable_live_store.live_order_intent(str(live_ticket["ticket_hash"])) is None:
-                    writable_live_store.save_live_order_intent(
-                        live_ticket,
-                        status="stage_approved_pending_submit",
-                    )
+                    if existing_resting is not None:
+                        parent_status = str(existing_resting.get("_ledger_status") or "")
+                        if parent_status in PENDING_TICKET_STATUSES:
+                            writable_live_store.update_live_order_intent_status(
+                                str(existing_resting["ticket_hash"]),
+                                "cancelled_superseded_pre_submit",
+                            )
+                            writable_live_store.save_live_order_intent(
+                                live_ticket,
+                                status="stage_approved_pending_submit",
+                            )
+                        else:
+                            stage_live_management_replacement(
+                                writable_live_store,
+                                existing_resting,
+                                live_ticket,
+                            )
+                    else:
+                        writable_live_store.save_live_order_intent(
+                            live_ticket,
+                            status="stage_approved_pending_submit",
+                        )
                     live_intent_count += 1
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{lifecycle.lifecycle_id}: {type(exc).__name__}: {' '.join(str(exc).split())[:200]}")
@@ -394,6 +510,7 @@ def _management_context(
     plans: dict[str, Any] = {
         "midpoint_liquidation": observation.midpoint_liquidation,
         "natural_liquidation": observation.natural_liquidation,
+        "profit_target_close": _target_close_price(lifecycle, policy),
     }
     metadata = dict(lifecycle.metadata)
     metadata.update(
@@ -626,7 +743,22 @@ def _management_ticket(
     config: dict[str, Any],
 ):
     if action.action_type is ActionType.CLOSE:
-        ticket = mixed_ticket(action, policy, underlying=underlying, close_legs=legs, open_legs=(), created_at=created_at, limit_price=float(plans["midpoint_liquidation"]))
+        reason_class = str(action.payload.get("arbiter_class") or "")
+        resting_profit = reason_class == "resting_profit"
+        limit_price = float(
+            plans.get("profit_target_close", _target_close_price(lifecycle, policy))
+            if resting_profit
+            else plans["midpoint_liquidation"]
+        )
+        ticket = mixed_ticket(
+            action,
+            policy,
+            underlying=underlying,
+            close_legs=legs,
+            open_legs=(),
+            created_at=created_at,
+            limit_price=limit_price,
+        )
         exit_policy = live_exit_policy(config)
         cumulative_dollars = float(lifecycle.metadata.get("cumulative_cashflow") or 0.0) * 100.0
         floor_pnl = max(
@@ -640,21 +772,42 @@ def _management_ticket(
                 **ticket.metadata,
                 "decision_observation_id": observation.observation_id,
                 "exit_reason": str(action.reason_codes[0] if action.reason_codes else ""),
-                "exit_reason_class": str(action.payload.get("arbiter_class") or ""),
+                "exit_reason_class": reason_class,
                 "exit_midpoint_net": observation.midpoint_liquidation * 100.0,
                 "exit_natural_net": observation.natural_liquidation * 100.0,
+                **(
+                    {
+                        "resting_profit_order": True,
+                        "resting_profit_arm_progress_pct": float(action.payload.get("arm_progress_pct") or 25.0),
+                        "resting_order_day": str(action.payload.get("resting_order_day") or ""),
+                        "exit_target_net": limit_price * 100.0,
+                        "target_profit_dollars": _target_profit_dollars(lifecycle, policy),
+                    }
+                    if resting_profit
+                    else {}
+                ),
                 **(
                     {"exit_profit_floor_net": floor_net}
                     if str(action.payload.get("arbiter_class") or "") == "executable_profit"
                     else {}
                 ),
-                "execution_envelope": {
-                    "initial": "midpoint",
-                    "boundary": "natural",
-                    "midpoint_net": observation.midpoint_liquidation * 100.0,
-                    "natural_net": observation.natural_liquidation * 100.0,
-                    "quote_max_bid_ask_pct": observation.max_bid_ask_pct,
-                },
+                "execution_envelope": (
+                    {
+                        "initial": "strategy_target",
+                        "boundary": "strategy_target",
+                        "target_net": limit_price * 100.0,
+                        "reprice_allowed": False,
+                        "quote_max_bid_ask_pct": observation.max_bid_ask_pct,
+                    }
+                    if resting_profit
+                    else {
+                        "initial": "midpoint",
+                        "boundary": "natural",
+                        "midpoint_net": observation.midpoint_liquidation * 100.0,
+                        "natural_net": observation.natural_liquidation * 100.0,
+                        "quote_max_bid_ask_pct": observation.max_bid_ask_pct,
+                    }
+                ),
             },
         )
         return _with_position_projection(ticket, lifecycle)
@@ -767,6 +920,41 @@ def _target_profit_dollars(lifecycle: LifecycleState, policy: CsaPolicy) -> floa
     return abs(entry) * 100.0 * float(policy.resolved_fields.get("profit_target_pct") or 0.0) / 100.0
 
 
+def _target_close_price(lifecycle: LifecycleState, policy: CsaPolicy) -> float:
+    """Return the signed package cashflow that realizes original target dollars."""
+
+    cumulative_dollars = float(lifecycle.metadata.get("cumulative_cashflow") or 0.0) * 100.0
+    return round((_target_profit_dollars(lifecycle, policy) - cumulative_dollars) / 100.0, 6)
+
+
+def _resting_profit_proposal(
+    lifecycle: LifecycleState,
+    policy: CsaPolicy,
+    observation: PackageObservation,
+    resting_policy: RestingProfitPolicy,
+    *,
+    proposed_at: str,
+):
+    if not resting_policy.enabled or not observation.quote_actionable:
+        return None
+    progress = _target_progress(lifecycle, policy, observation)
+    if progress < resting_policy.arm_progress_pct:
+        return None
+    order_day = _parse_timestamp(proposed_at).date().isoformat()
+    return propose_action(
+        lifecycle,
+        ActionType.CLOSE,
+        "profit_target_resting",
+        arbiter_class="resting_profit",
+        proposed_at=proposed_at,
+        payload={
+            "resting_order_day": order_day,
+            "arm_progress_pct": resting_policy.arm_progress_pct,
+            "target_progress_pct": round(progress, 6),
+        },
+    )
+
+
 def _target_progress(lifecycle: LifecycleState, policy: CsaPolicy, observation: PackageObservation) -> float:
     target = _target_profit_dollars(lifecycle, policy)
     return observation.midpoint_pnl * 100.0 / target * 100.0 if target > 0 else 0.0
@@ -801,3 +989,35 @@ def _cooldown_elapsed(metadata: dict[str, Any], policy: CsaPolicy, observed_at: 
 def _ticket_quote_map(ticket: Any, snapshot: Any) -> dict[str, dict[str, Any]]:
     quotes = {occ_symbol(snapshot.underlying, OptionLeg.from_quote(q, role="quote", side="buy")): q for q in snapshot.quotes}
     return {leg.instrument_id: {"bid": quotes[leg.instrument_id].bid, "ask": quotes[leg.instrument_id].ask, "fresh": True} for leg in ticket.legs if leg.instrument_id in quotes}
+
+
+def _is_resting_profit_ticket(ticket: Any) -> bool:
+    if isinstance(ticket, dict):
+        if bool(ticket.get("resting_profit_order")):
+            return True
+        nested = ticket.get("csa_strategy_ticket") or {}
+        return bool((nested.get("metadata") or {}).get("resting_profit_order"))
+    return bool(getattr(ticket, "metadata", {}).get("resting_profit_order"))
+
+
+def _ticket_owns_lifecycle(ticket: Any, lifecycle: LifecycleState) -> bool:
+    if isinstance(ticket, dict):
+        owners = {
+            str(ticket.get("csa_lifecycle_id") or ""),
+            str(ticket.get("position_projection_id") or ticket.get("group_id") or ""),
+        }
+        return bool({lifecycle.lifecycle_id, lifecycle.position_projection_id} & (owners - {""}))
+    return str(getattr(ticket, "lifecycle_id", "")) == lifecycle.lifecycle_id
+
+
+def _config_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError("resting-profit enable flags must be boolean")

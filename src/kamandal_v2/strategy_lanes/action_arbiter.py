@@ -17,6 +17,7 @@ _PRECEDENCE = (
     "time_decision",
     "adverse_price_loss",
     "lane_adjustment",
+    "resting_profit",
     "routine_management",
     "hold",
 )

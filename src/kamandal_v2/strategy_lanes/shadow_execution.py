@@ -23,7 +23,8 @@ class ShadowExecutionAdapter:
         attempt: int,
     ) -> ShadowFill:
         max_attempts = _nonnegative_int(fill_policy, "max_attempts")
-        increment = _nonnegative_number(fill_policy, "price_increment")
+        standing_target = bool(ticket.metadata.get("resting_profit_order"))
+        increment = 0.0 if standing_target else _nonnegative_number(fill_policy, "price_increment")
         if attempt < 0:
             raise ValueError("shadow fill attempt cannot be negative")
         missing = sorted(leg.instrument_id for leg in ticket.legs if leg.instrument_id not in quotes)
@@ -33,8 +34,8 @@ class ShadowExecutionAdapter:
             if leg.instrument_id in quotes and not bool(quotes[leg.instrument_id].get("fresh", False))
         )
         quote_evidence = {key: dict(value) for key, value in sorted(quotes.items()) if key in {leg.instrument_id for leg in ticket.legs}}
-        if missing or stale or attempt > max_attempts:
-            status = "missed"
+        if missing or stale or (attempt > max_attempts and not standing_target):
+            status = "working" if standing_target else "missed"
             natural_price = 0.0
             working_price = _working_price(ticket, increment, min(attempt, max_attempts))
             filled_price = None
@@ -46,7 +47,7 @@ class ShadowExecutionAdapter:
             natural_price = round(_natural_price(ticket, quotes), 6)
             working_price = round(_working_price(ticket, increment, attempt), 6)
             fillable = natural_price >= working_price if ticket.order_kind == "credit" else natural_price <= working_price
-            status = "filled" if fillable else ("missed" if attempt >= max_attempts else "working")
+            status = "filled" if fillable else ("working" if standing_target else ("missed" if attempt >= max_attempts else "working"))
             filled_price = natural_price if fillable else None
         fill_id = stable_csa_id("shadow-fill", [ticket.ticket_id, attempt, observed_at, status, natural_price, working_price])
         return ShadowFill(

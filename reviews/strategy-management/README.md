@@ -32,8 +32,8 @@ Each review should:
 
 ## Next review focus
 
-- Verify whether the resting profit-target order design is ready for a bounded
-  shadow test.
+- Run the separately approved bounded shadow activation for the implemented,
+  disabled-by-default resting profit-target policy and review natural evidence.
 - Compare 1.5x versus 2.0x credit-vertical close-debit outcomes using new and
   historical lifecycle evidence.
 - Review a real directional-diagonal Thinkorswim example after the construction
