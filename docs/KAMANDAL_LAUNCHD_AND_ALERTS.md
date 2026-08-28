@@ -253,15 +253,12 @@ bound still fails visibly and is not hidden.
 
 - Healthy `live-health-report` runs print `KAMANDAL_LAUNCHD_JOB={...}` and do
   not send a message.
-- Successful order submission, fill, intermediate reprice, cancellation, and
-  auto-repair do not send messages. Their normal command output and SQLite
-  records remain the audit trail. One exception is an entry workflow that ends
-  without a position: after the broker confirms the terminal unfilled status,
-  Kamandal sends one informational summary containing the symbol, structure,
-  attempt count, limit path, and explicit `no live position was opened` result.
-  This terminal summary is claimed by an atomic ledger transition, so competing
-  sync cycles cannot send duplicates.
-  `KAMANDAL_ENTRY_TERMINAL_RECEIPT_ENABLED=false` disables it, and
+- Successful order submission, fill, intermediate reprice, cancellation,
+  terminal-unfilled completion, and auto-repair do not send messages. Their
+  normal command output and SQLite records remain the audit trail, and the daily
+  report lists the resulting intents. The terminal-unfilled notification path
+  remains available for bounded tests or an explicit operator opt-in through
+  `KAMANDAL_ENTRY_TERMINAL_RECEIPT_ENABLED=true`; production keeps it disabled.
   `KAMANDAL_ENTRY_TERMINAL_RECEIPT_MODE=spool` exercises the projection without
   a network send.
 - A selected opening ticket that has aged past its preflight window gets one

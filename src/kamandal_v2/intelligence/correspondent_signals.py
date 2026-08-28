@@ -298,11 +298,18 @@ def validate_correspondent_packet(payload: object) -> dict[str, Any]:
             "command", "query", "requested_limit", "returned_count", "accepted_count", "earliest_post_id",
             "earliest_published_at", "latest_post_id", "latest_published_at", "expected_poll_interval_hours",
             "started_at", "finished_at", "status", "error_stage", "error", "continuity", "limit_reached",
-            "coverage_status", "last_successful_at",
+            "coverage_status", "last_successful_at", "cached_media_count",
         }
         for attempt in acquisition["attempts"]:
             if not isinstance(attempt, dict) or not set(attempt).issubset(allowed_attempt_keys):
                 raise ValueError("correspondent packet acquisition attempt contains unsupported fields")
+            cached_media_count = attempt.get("cached_media_count")
+            if cached_media_count is not None and (
+                isinstance(cached_media_count, bool)
+                or not isinstance(cached_media_count, int)
+                or cached_media_count < 0
+            ):
+                raise ValueError("correspondent packet acquisition cached_media_count must be a non-negative integer")
     records = payload.get("records")
     if not isinstance(records, list):
         raise ValueError("correspondent packet records must be an array")

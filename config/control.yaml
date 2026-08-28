@@ -174,7 +174,10 @@ live:
     improvement_multipliers: [0.5, 0.0]
     expire_after_minutes: 30
     terminal_unfilled_receipt:
-      enabled: true
+      # A broker-confirmed unfilled entry is fully retained in the order ledger
+      # and daily report. It is routine autonomous workflow status, not an
+      # operator-attention event.
+      enabled: false
       mode: live
   exit_reprice:
     enabled: true

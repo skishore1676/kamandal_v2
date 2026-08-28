@@ -21,9 +21,9 @@ on every scheduled report.
 Severity and progress are not operator attention. Beacon should fire only when a
 condition is unresolved, a human action is required, and safe automatic recovery
 is exhausted or unavailable. Everything else belongs in SQLite, launchd logs,
-CLI output, and Control Tower. The narrow informational exception is a completed
-entry attempt that opened no position: without one terminal summary, the operator
-cannot distinguish inactivity from an attempted order that expired unfilled.
+CLI output, Control Tower, and the daily report. A completed entry attempt that
+opened no position is routine evidence rather than an interruption: the canonical
+order ledger and daily report distinguish it from inactivity.
 
 ## Why / When It Applies
 
@@ -65,9 +65,10 @@ and operator-state metadata rather than color or lifecycle milestones alone.
 - Intraday daily reports are passive JSON/Markdown evidence for TradeLab and
   operator surfaces. They do not send Telegram status or repeat an incident
   already owned by planning, execution, reconciliation, or live health.
-- A broker-confirmed terminal unfilled entry sends one informational summary of
-  its attempts, reprices, limit path, and expiration while keeping intermediate
-  submit and reprice milestones silent (`src/kamandal_v2/live/execution.py:252`).
+- A broker-confirmed terminal unfilled entry retains its attempts, reprices,
+  limit path, expiration, and terminal state in the order ledger. The daily
+  report surfaces those intents; immediate Telegram delivery is disabled in
+  production while the opt-in notification path remains testable.
 - The ledger status transition is an atomic claim, so overlapping sync cycles
   cannot both send the terminal summary (`src/kamandal_v2/stores/sqlite.py:664`).
 - Production-host tests must default every notification capability to effect-off
@@ -93,8 +94,8 @@ spool still mutates the operator outbox even when it performs no network call.
   decision.
 - Sending success receipts makes the pager an execution feed and hides the rare
   event that genuinely needs intervention.
-- Sending every submit, reprice, cancel, and expiration step recreates the noisy
-  execution feed. Summarize the lineage once, after the broker confirms the entry
-  ended without a position.
+- Sending submit, reprice, cancellation, or terminal-unfilled milestones recreates
+  a noisy execution feed. Keep the lineage in canonical evidence and summarize it
+  through the daily report unless the exhausted workflow requires operator action.
 - Treating sandbox spool as effect-free is incorrect on an operator host: it can
   leave realistic fixture receipts in the real outbox and confuse later audits.

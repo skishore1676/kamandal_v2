@@ -55,6 +55,8 @@ Birdclaw's acquisition health is carried into the translation, review, and recei
 failed, may have hit its result limit, or was missing. It does not invalidate an
 otherwise authentic captured post, but it prevents Kamandal review from confusing
 "we translated what we captured" with "Birdclaw captured everything visible on X."
+The acquisition attempt may also carry a non-negative `cached_media_count`; this is
+source-provenance evidence for image-bearing posts, not a planner or trading signal.
 
 ## Commands
 

@@ -208,7 +208,14 @@ def test_birdclaw_acquisition_receipt_is_preserved_in_translation_and_review(tmp
         "status": "succeeded",
         "receipt_generated_at": AS_OF,
         "receipt_run_id": "birdclaw-run-1",
-        "attempts": [{"profile_id": "greg_harmon", "status": "succeeded", "coverage_status": "continuous"}],
+        "attempts": [
+            {
+                "profile_id": "greg_harmon",
+                "status": "succeeded",
+                "coverage_status": "continuous",
+                "cached_media_count": 3,
+            }
+        ],
     }
     input_path = _write_json(tmp_path / "signals.json", packet)
     result = import_correspondent_signals(
@@ -222,6 +229,7 @@ def test_birdclaw_acquisition_receipt_is_preserved_in_translation_and_review(tmp
     receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
     review = result.review_path.read_text(encoding="utf-8")
     assert translation["source_acquisition"]["status"] == "succeeded"
+    assert translation["source_acquisition"]["attempts"][0]["cached_media_count"] == 3
     assert receipt["source_acquisition"]["receipt_run_id"] == "birdclaw-run-1"
     assert "Birdclaw acquisition: `succeeded`" in review
 
