@@ -28,6 +28,8 @@ def _tables(*, watch_multiple: int | None = 2) -> dict[str, list[dict[str, objec
         "max_loss_multiple": 3,
         "loss_close_multiple": 3,
         "exit_dte_min": 21,
+        "half_time_exit": "TRUE",
+        "avoid_earnings": "TRUE",
         "sizing_method": "fixed_contracts",
         "sizing_value": 1,
         "max_contracts": 1,
@@ -96,3 +98,29 @@ def test_sheet_policy_gate_catches_missing_universe_operator_columns() -> None:
 
     assert not result.ok
     assert any("universe_header_missing" in error for error in result.model_errors)
+
+
+def test_sheet_policy_gate_rejects_blank_management_cells_on_baseline_rows() -> None:
+    tables = _tables()
+    row = tables["playbooks"][0]
+    row.update(
+        {
+            "playbook_id": "put_spread_default",
+            "strategy_family": "put_spread",
+            "structure": "put_spread",
+            "csa_stage": "baseline",
+            "source_mode": "idea",
+            "loss_close_multiple": "",
+            "half_time_exit": "TRUE",
+            "avoid_earnings": "TRUE",
+        }
+    )
+
+    for field in ("profit_target_pct", "max_loss_multiple", "exit_dte_min"):
+        candidate = {name: [dict(item) for item in rows] for name, rows in tables.items()}
+        candidate["playbooks"][0][field] = ""
+
+        result = validate_sheet_policy({}, tables=candidate, read_at="2026-08-24T15:00:00Z")
+
+        assert not result.ok
+        assert any(field in error for error in result.unified_errors)

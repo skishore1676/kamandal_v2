@@ -59,6 +59,13 @@ data, or call a broker. A failure blocks activation and identifies the contract
 that rejected the row. This closes the gap where repository fixtures could be
 green while a live Sheet JSON edit made the next natural planner fail.
 
+The unified compiler applies that gate to every enabled row, regardless of its
+legacy `csa_stage`. Operator-owned quote and lifecycle controls—including the
+profit target, applicable loss boundary, DTE exit, half-time choice, and
+earnings choice—must be explicit Sheet values. A blank cell is a policy error;
+domain-model compatibility defaults may read historical snapshots but may not
+complete a current enabled Sheet row.
+
 Policy compilation remains system-wide and fail-closed today. A malformed
 enabled row can therefore block both live and shadow books. Per-lane policy
 quarantine is a separate architecture change; it must preserve visibility and

@@ -36,7 +36,14 @@ and already-pending lifecycles retain their frozen compiled policy.
    40% target and compiled policy hash; the pending `put_spread_default`
    lifecycle still holds its original 1.5x loss multiple. This is the intended
    per-trade policy freeze, not drift from the Sheet.
-5. No planning or lifecycle cycle was manually triggered. The next natural
+5. Independent architecture review found that the deployed validator could let
+   blank management cells on legacy `baseline` rows reach model/config
+   fallbacks. Local source now makes every enabled row supply explicit
+   operator-owned quote and lifecycle controls, independent of `csa_stage`.
+   Nine negative tests were added; all 785 tests pass. The corrected local
+   validator read this same live Sheet and passed all 19 enabled rows with the
+   same snapshot hash. This hardening is source-ready but not deployed.
+6. No planning or lifecycle cycle was manually triggered. The next natural
    cycle remains the first runtime observation of the new future-entry policy.
 
 The resting-profit platform policy is not a Sheet playbook change and is not

@@ -23,7 +23,12 @@ def _row(**overrides: object) -> dict[str, object]:
         "source_mode": "idea",
         "dte_min": "30",
         "dte_max": "45",
+        "max_bid_ask_pct": "0.25",
+        "profit_target_pct": "50",
         "max_loss_multiple": "0.5",
+        "exit_dte_min": "21",
+        "half_time_exit": "TRUE",
+        "avoid_earnings": "TRUE",
         "sizing_method": "fixed_contracts",
         "sizing_value": "1",
         "max_contracts": "1",
@@ -43,6 +48,7 @@ def _strangle_row(**overrides: object) -> dict[str, object]:
         short_delta_min="0.14",
         short_delta_max="0.20",
         exit_dte_min="21",
+        loss_close_multiple="3",
         management_policy_json=json.dumps(
             {
                 "lifecycle": {
@@ -161,6 +167,46 @@ def test_strangle_sheet_controls_compile_as_one_immutable_policy() -> None:
 def test_unknown_execution_venue_fails_closed() -> None:
     with pytest.raises(PolicyError, match="unsupported execution_venue"):
         compile_playbook_policy(_strangle_row(execution_venue="oldmac_clone"))
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "profit_target_pct",
+        "max_loss_multiple",
+        "exit_dte_min",
+        "max_bid_ask_pct",
+        "half_time_exit",
+        "avoid_earnings",
+    ),
+)
+def test_enabled_baseline_policy_rejects_blank_operator_management_fields(field: str) -> None:
+    with pytest.raises(PolicyError, match=field):
+        compile_playbook_policy(_row(**{field: ""}))
+
+
+def test_short_strangle_requires_canonical_sheet_loss_close_multiple() -> None:
+    with pytest.raises(PolicyError, match="loss_close_multiple"):
+        compile_playbook_policy(_strangle_row(loss_close_multiple=""))
+
+
+def test_earnings_calendar_does_not_invent_management_values_but_allows_no_dte_exit() -> None:
+    base = _row(
+        playbook_id="event",
+        strategy_family="earnings_calendar",
+        structure="call_calendar",
+        applicable_direction="bullish,bearish",
+        long_dte_min="45",
+        long_dte_max="60",
+        dte_min="5",
+        dte_max="7",
+        event_timing="confirmed",
+        near_expiry_after_event="TRUE",
+        exit_dte_min="",
+    )
+    assert compile_playbook_policy(base).capability.key == "earnings_calendar"
+    with pytest.raises(PolicyError, match="profit_target_pct"):
+        compile_playbook_policy(dict(base, profit_target_pct=""))
 
 
 def test_strangle_management_delta_never_falls_back_to_entry_delta() -> None:

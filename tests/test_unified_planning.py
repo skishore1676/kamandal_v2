@@ -90,6 +90,11 @@ def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     headers = seed_headers()
     universe = [dict(zip(headers["universe"], [*row, *[""] * len(headers["universe"])])) for row in tables["universe"]]
     playbooks = [dict(zip(headers["playbooks"], [*row, *[""] * len(headers["playbooks"])])) for row in tables["playbooks"]]
+    # Legacy seed fixtures predate the fail-closed Sheet quote-policy contract;
+    # make the operator value explicit in this planning fixture.
+    for playbook in playbooks:
+        if str(playbook.get("enabled") or "").lower() == "true" and not playbook.get("max_bid_ask_pct"):
+            playbook["max_bid_ask_pct"] = "0.25"
     playbooks.append(
         {
             "playbook_id": "short_strangle_shadow",
@@ -102,7 +107,12 @@ def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
             "dte_max": "45",
             "short_delta_min": "0.14",
             "short_delta_max": "0.20",
+            "max_bid_ask_pct": "0.25",
+            "profit_target_pct": "40",
             "exit_dte_min": "21",
+            "half_time_exit": "TRUE",
+            "avoid_earnings": "TRUE",
+            "loss_close_multiple": "3",
             "management_policy_json": json.dumps(
                 {"lifecycle": {"tested_side_confirmation": 2, "roll": {"min_credit": 0.1}, "fill": {"max_attempts": 2, "price_increment": 0.05}}}
             ),
@@ -257,6 +267,12 @@ def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> 
             "short_delta_min": "0.20",
             "short_delta_max": "0.30",
             "spread_width": "5",
+            "max_bid_ask_pct": "0.25",
+            "profit_target_pct": "50",
+            "max_loss_multiple": "2",
+            "exit_dte_min": "21",
+            "half_time_exit": "TRUE",
+            "avoid_earnings": "TRUE",
             "management_policy_json": json.dumps({"lifecycle": {"portfolio_delta_trigger": -999, "hedge_underlyings": ["SPY"]}}),
         }
     )
@@ -578,6 +594,12 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
         "short_delta_min": "0.20",
         "short_delta_max": "0.30",
         "spread_width": "5",
+        "max_bid_ask_pct": "0.25",
+        "profit_target_pct": "50",
+        "max_loss_multiple": "2",
+        "exit_dte_min": "21",
+        "half_time_exit": "TRUE",
+        "avoid_earnings": "TRUE",
         "management_policy_json": "{}",
     }
     candidate = Candidate(
@@ -682,6 +704,12 @@ def test_active_unified_path_replans_once_into_typed_plan_two(tmp_path, monkeypa
         "short_delta_min": "0.20",
         "short_delta_max": "0.30",
         "spread_width": "5",
+        "max_bid_ask_pct": "0.25",
+        "profit_target_pct": "50",
+        "max_loss_multiple": "2",
+        "exit_dte_min": "21",
+        "half_time_exit": "TRUE",
+        "avoid_earnings": "TRUE",
         "management_policy_json": "{}",
     }
     tables = {

@@ -111,6 +111,7 @@ def compile_playbook_policy(
     if structure not in capability.allowed_structures:
         allowed = ", ".join(sorted(capability.allowed_structures))
         raise PolicyError(f"{playbook_id}: structure={structure!r} is incompatible with {capability.key}; expected {allowed}")
+    _validate_operator_management_fields(row, capability=capability, playbook_id=playbook_id)
 
     mode, compatibility = _mode_from_row(row, playbook_id)
     source_mode = str(row.get("source_mode") or "idea").strip().lower() or "idea"
@@ -273,6 +274,58 @@ def _validate_entry_targets(
             )
 
 
+def _validate_operator_management_fields(
+    row: dict[str, Any],
+    *,
+    capability: Capability,
+    playbook_id: str,
+) -> None:
+    """Fail closed when an enabled row omits operator-owned lifecycle policy.
+
+    Domain models retain compatibility defaults for old snapshots and isolated
+    callers.  The unified compiler is the Sheet deployment/runtime boundary, so
+    a current enabled row may not reach those defaults by leaving a controlling
+    cell blank.
+    """
+
+    required = {
+        "profit_target_pct",
+        "max_bid_ask_pct",
+        "half_time_exit",
+        "avoid_earnings",
+    }
+    if capability.key == "short_strangle":
+        required.add("loss_close_multiple")
+    else:
+        required.add("max_loss_multiple")
+    if capability.key != "earnings_calendar":
+        required.add("exit_dte_min")
+
+    missing = sorted(field for field in required if row.get(field) in (None, ""))
+    if missing:
+        raise PolicyError(
+            f"{playbook_id}: missing required operator Sheet fields: {', '.join(missing)}"
+        )
+
+    profit_target = _number(row, "profit_target_pct", playbook_id)
+    if not 0 < profit_target <= 100:
+        raise PolicyError(f"{playbook_id}: profit_target_pct must be in (0, 100]")
+    max_bid_ask = _number(row, "max_bid_ask_pct", playbook_id)
+    if max_bid_ask < 0:
+        raise PolicyError(f"{playbook_id}: max_bid_ask_pct must be non-negative")
+
+    if capability.key == "short_strangle":
+        if _number(row, "loss_close_multiple", playbook_id) <= 0:
+            raise PolicyError(f"{playbook_id}: loss_close_multiple must be positive")
+    elif _number(row, "max_loss_multiple", playbook_id) <= 0:
+        raise PolicyError(f"{playbook_id}: max_loss_multiple must be positive")
+
+    if capability.key != "earnings_calendar":
+        _required_nonnegative_integer(row.get("exit_dte_min"), field="exit_dte_min", playbook_id=playbook_id)
+    for field in ("half_time_exit", "avoid_earnings"):
+        _required_bool(row.get(field), field=field, playbook_id=playbook_id)
+
+
 def _normalize_legacy_management(
     capability: Capability,
     management: dict[str, Any],
@@ -430,6 +483,21 @@ def _integer(value: Any, *, default: int, field: str, playbook_id: str) -> int:
     if not number.is_integer() or number < 0:
         raise PolicyError(f"{playbook_id}: {field} must be a non-negative integer")
     return int(number)
+
+
+def _required_nonnegative_integer(value: Any, *, field: str, playbook_id: str) -> int:
+    if value in (None, ""):
+        raise PolicyError(f"{playbook_id}: {field} is required")
+    return _integer(value, default=0, field=field, playbook_id=playbook_id)
+
+
+def _required_bool(value: Any, *, field: str, playbook_id: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value or "").strip().lower()
+    if normalized not in {"1", "0", "true", "false", "yes", "no", "y", "n"}:
+        raise PolicyError(f"{playbook_id}: {field} must be an explicit boolean")
+    return normalized in {"1", "true", "yes", "y"}
 
 
 def _as_bool(value: Any, *, default: bool = False) -> bool:
