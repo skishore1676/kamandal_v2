@@ -266,14 +266,6 @@ def _validate_entry_targets(
         maximum = _number(row, "dte_max", playbook_id)
         if not minimum <= target <= maximum:
             raise PolicyError(f"{playbook_id}: target_dte must fall inside dte_min/dte_max")
-    if capability.key == "short_strangle" and _as_bool(row.get("range_gate_required")):
-        maximum_age = _optional_number(row.get("range_gate_max_age_days"))
-        if maximum_age is None or maximum_age < 0 or not maximum_age.is_integer():
-            raise PolicyError(
-                f"{playbook_id}: range_gate_max_age_days must be a nonnegative integer"
-            )
-
-
 def _validate_operator_management_fields(
     row: dict[str, Any],
     *,

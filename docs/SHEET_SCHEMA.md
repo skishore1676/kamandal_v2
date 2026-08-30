@@ -148,7 +148,8 @@ Notes:
 - `universe_expansion_enabled`: optional operator switch. For a short-strangle
   row, `TRUE` allows already-enabled universe symbols outside the row's normal
   profile/allowlist routing to be considered. It does not add symbols or bypass
-  any other gate.
+  any other gate. For `short_strangle_high_iv`, the operator-approved intent is
+  all enabled universe profiles rather than indices only.
 - `underlying_price_min/max`: required Sheet-owned bounds when universe expansion
   is enabled. The same row's `iv_rank_min/max` are also required. Missing values
   fail closed; the repository provides no fallback range.
@@ -186,10 +187,11 @@ Notes:
   `$5` and not one strike-grid interval. The current call/put mirror policy is
   short 20-30 DTE at 20-30 absolute delta and long 45-60 DTE at 40-55 absolute
   delta. If either hard window has no valid liquid leg, no candidate is built.
-- `range_gate_required`: when true, eligible candidates must receive a fresh
-  `confirmed_range` answer from Market Cartographer before optimization. A
-  missing, stale, failed, or broken-range answer rejects that candidate only.
-- `range_gate_max_age_days`: maximum age of the Cartographer daily observation.
+- `range_gate_required` and `range_gate_max_age_days`: retired compatibility
+  columns. They are retained so historical snapshots and all later appended
+  columns keep stable positions, but the compiler and planner ignore them. The
+  canonical short-strangle row sets the former to `FALSE` and leaves the latter
+  blank.
 - `loss_close_multiple`: canonical package-loss close threshold for strangles.
   The short-strangle policy uses 3x entry credit. The older
   `max_loss_multiple` remains the ordinary credit-spread loss-watch control and

@@ -1,6 +1,6 @@
 from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
-from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_price_metadata
+from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_price_metadata, shadow_entry_limit_price
 from kamandal_v2.market.public import PublicAdapter
 
 
@@ -159,6 +159,17 @@ def test_liquidity_adjusted_pricing_demands_more_improvement_for_low_oi() -> Non
     metadata = entry_price_metadata(candidate, config)
     assert metadata["min_open_interest"] == 0
     assert metadata["improvement_pct_of_spread"] == 35
+
+    candidate.structure = "short_strangle"
+    candidate.reasons.append("low_oi_price_through=true")
+    assert shadow_entry_limit_price(candidate, config) == 1.07
+    assert shadow_entry_limit_price(candidate, config, max_concession=0.03) == 1.03
+
+
+def test_shadow_entry_limit_keeps_midpoint_without_price_through_warning() -> None:
+    candidate = _credit_spread_candidate()
+
+    assert shadow_entry_limit_price(candidate, _config()) == candidate.net_credit
 
 
 def test_liquidity_adjusted_pricing_uses_nonlinear_width_improvement() -> None:

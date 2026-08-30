@@ -97,6 +97,8 @@ PLAYBOOKS_HEADER = [
     # columns and formulas keep their exact positions.
     "execution_venue",
     "target_dte",
+    # Retired 2026-08-30. Preserve these inert columns so the operator Sheet's
+    # appended schema and every later column retain their established positions.
     "range_gate_required",
     "range_gate_max_age_days",
     "loss_close_multiple",

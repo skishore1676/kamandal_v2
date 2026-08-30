@@ -1745,7 +1745,10 @@ def _filter_rejection(candidate: Candidate, playbook: Playbook) -> str:
 def _low_oi_price_through_enabled(rejection: str, config: dict | None) -> bool:
     if not rejection.startswith("open_interest_below_min:"):
         return False
-    if str((((config or {}).get("runtime") or {}).get("mode") or "")).strip().lower() != "live":
+    # Shadow is the promotion evidence for the live decision path.  Liquidity
+    # policy therefore has to classify the same package the same way in both
+    # books; only the execution adapter is allowed to differ.
+    if str((((config or {}).get("runtime") or {}).get("mode") or "")).strip().lower() not in {"shadow", "live"}:
         return False
     mode = str((((config or {}).get("live") or {}).get("liquidity_policy") or {}).get("low_oi_mode") or "").strip().lower()
     return mode == "price_through"

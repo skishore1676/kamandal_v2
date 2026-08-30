@@ -556,7 +556,9 @@ live/shadow book identity, quote coverage for owned expirations, Sheet-owned
 half-time and pre-event clocks, terminal lifecycle/projection convergence,
 complete order-lineage ownership, and pricing-envelope preservation for entry
 replacements and Plan 2. They must stay in the regression suite even though no
-new implementation is required for them in this correction.
+new implementation is required for them in this correction. For entry-side
+liquidity parity, see
+`docs/lessons/shadow-liquidity-policy-must-match-live-selection.md`.
 
 The old live manager is evidence and reusable mechanics, not a runtime to
 revive. The repair absorbs the behaviors above into the one canonical manager,
@@ -677,17 +679,19 @@ short-lived access tokens are generated automatically at runtime.
 
 ### Autonomous short-strangle admission
 
-The Sheet is authoritative for the volatility, DTE, delta, range, profit, time,
-event, and loss controls. The current intended policy is IV percentile 70-100,
+The Sheet is authoritative for the volatility, DTE, delta, profit, time, event,
+and loss controls. The current intended policy is IV percentile 70-100,
 IV rank 50-100, 35-50 DTE with target 45, 14-22 delta, 40% profit, exit at 21
 DTE, pre-event exit at five days, and a 3x package-loss close.
 
-After deterministic volatility and structure eligibility, Kamandal asks Market
-Cartographer a source-neutral `range_regime` question. Only a fresh
-`confirmed_range` answer reaches optimization. `broken`, `no_range`, stale,
-missing, and exchange-failure answers fail the dependent candidate closed while
-leaving unrelated strategy lanes operational. Cartographer owns chart facts;
-Kamandal owns strategy admission and every trading effect.
+Kamandal does not require current-range evidence from Market Cartographer. The
+retired rule confused a description of recent price containment with a forecast
+of future realized movement and caused missing or insufficient chart data to
+block otherwise valid shadow evidence. Short-strangle admission instead begins
+with the options-economic thesis: premium, implied movement, liquidity, DTE/delta,
+events, BPR, and portfolio risk. Cartographer may later supply a forward-looking
+`TUSSLE_EXPECTED` annotation, but it remains non-blocking until a controlled
+comparison shows incremental economic or risk value over that baseline.
 
 This direction matters because the CSA scanner currently selects the best
 candidate inside each opportunity; it does not replace the established

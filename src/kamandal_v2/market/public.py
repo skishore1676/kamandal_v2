@@ -62,10 +62,14 @@ class PublicAdapter:
         self.session_file = resolve_path(str(public_cfg.get("session_file") or "config/public_session.json"))
         self.account_cache_file = resolve_path(str(public_cfg.get("account_cache_file") or "config/public_account.json"))
         self.token_validity_minutes = int(public_cfg.get("token_validity_minutes") or 60)
+        self.api_requests_per_second = max(float(public_cfg.get("api_requests_per_second") or 0.0), 0.0)
+        self.retry_attempts = max(int(public_cfg.get("retry_attempts") or 3), 1)
+        self.retry_base_delay_seconds = max(float(public_cfg.get("retry_base_delay_seconds") or 1.0), 0.0)
         self.expiration_dates = list(expiration_dates or _configured_expiration_dates(public_cfg))
         self._session = requests.Session()
         self._access_token = ""
         self._expires_at = 0.0
+        self._last_request_at = 0.0
 
     def available(self) -> bool:
         return bool(self.secret_token)
@@ -458,18 +462,35 @@ class PublicAdapter:
         return self._request("DELETE", endpoint)
 
     def _request(self, method: str, endpoint: str, *, params: Any = None, json_data: dict[str, Any] | None = None) -> dict[str, Any]:
-        response = self._session.request(
-            method,
-            f"{self.api_base_url}{endpoint}",
-            headers={"Authorization": f"Bearer {self._token()}", "Content-Type": "application/json"},
-            params=params,
-            json=json_data,
-            timeout=30,
-        )
-        if not response.ok:
+        for attempt in range(self.retry_attempts):
+            self._pace_request()
+            response = self._session.request(
+                method,
+                f"{self.api_base_url}{endpoint}",
+                headers={"Authorization": f"Bearer {self._token()}", "Content-Type": "application/json"},
+                params=params,
+                json=json_data,
+                timeout=30,
+            )
+            self._last_request_at = time.monotonic()
+            if response.ok:
+                return response.json() if response.text else {}
+            if response.status_code == 429 and attempt + 1 < self.retry_attempts:
+                retry_after = _as_float(getattr(response, "headers", {}).get("Retry-After"), 0.0)
+                delay = retry_after if retry_after > 0 else self.retry_base_delay_seconds * (2 ** attempt)
+                time.sleep(delay)
+                continue
             body = response.text[:1000] if response.text else ""
             raise RuntimeError(f"Public API {method} {endpoint} failed status={response.status_code}: {body}")
-        return response.json() if response.text else {}
+        raise RuntimeError(f"Public API {method} {endpoint} exhausted retries")
+
+    def _pace_request(self) -> None:
+        if self.api_requests_per_second <= 0 or self._last_request_at <= 0:
+            return
+        interval = 1.0 / self.api_requests_per_second
+        remaining = interval - (time.monotonic() - self._last_request_at)
+        if remaining > 0:
+            time.sleep(remaining)
 
     def _account_id(self) -> str:
         if self.account_id:

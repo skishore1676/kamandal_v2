@@ -34,6 +34,7 @@ from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
 from kamandal_v2.strategy_lanes.sources import idea_opportunity, market_scan_opportunities, portfolio_hedge_opportunities
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_lanes.tickets import open_ticket_from_candidate
+from kamandal_v2.live.pricing import shadow_entry_limit_price
 from kamandal_v2.strategy_engine.lifecycle import freeze_lifecycle_policy
 
 
@@ -348,17 +349,18 @@ def _run_csa_scan(
         proposal = propose_action(lifecycle, ActionType.OPEN, "admitted", arbiter_class="routine_management", proposed_at=started_at)
         action = arbitrate_actions((proposal,)).selected
         csa_store.save_action(action)
+        fill_policy = dict((policy.management.get("lifecycle") or {}).get("fill") or {})
+        max_concession = float(fill_policy.get("max_attempts") or 0) * float(fill_policy.get("price_increment") or 0)
         ticket = open_ticket_from_candidate(
             candidate,
             action,
             policy,
             created_at=started_at,
-            limit_price=candidate.net_credit,
+            limit_price=shadow_entry_limit_price(candidate, config, max_concession=max_concession),
         )
         if execution_mode == "shadow":
             csa_store.save_shadow_order_intent(ticket)
             quotes = _ticket_quotes(ticket, snapshot)
-            fill_policy = dict((policy.management.get("lifecycle") or {}).get("fill") or {})
             adapter = ShadowExecutionAdapter()
             # One market observation gets one fill attempt. A working order is
             # persisted and reconsidered on the next natural scan with fresh quotes.

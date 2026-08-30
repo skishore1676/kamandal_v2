@@ -221,6 +221,29 @@ def test_live_low_oi_price_through_warns_without_rejecting() -> None:
     )
 
 
+def test_shadow_low_oi_price_through_matches_live_candidate_eligibility() -> None:
+    idea = Idea.from_dict({
+        "idea_id": "tsla_shadow_low_oi",
+        "source": "test",
+        "underlying": "TSLA",
+        "direction": "bearish",
+        "thesis_tags": ["overextended"],
+        "horizon_days": 21,
+    })
+    candidates = build_candidates(
+        [idea],
+        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [_playbook(min_option_oi=999_999, max_bid_ask_pct=10.0)],
+        FixtureMarketDataProvider(),
+        FixturePreflightClient(),
+        candidate_filter_mode="strict",
+        config={"runtime": {"mode": "shadow"}, "live": {"liquidity_policy": {"low_oi_mode": "price_through"}}},
+    )
+
+    assert any(candidate.eligible for candidate in candidates)
+    assert any("low_oi_price_through=true" in candidate.reasons for candidate in candidates)
+
+
 def test_live_diagonal_package_spread_stays_hard_when_leg_price_through_is_enabled() -> None:
     idea = Idea.from_dict({
         "idea_id": "tsla_overextended",

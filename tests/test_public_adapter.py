@@ -4,10 +4,11 @@ from kamandal_v2.planner.engine import _preflight_client
 
 
 class _Response:
-    def __init__(self, payload: dict) -> None:
+    def __init__(self, payload: dict, *, status_code: int = 200, headers: dict | None = None) -> None:
         self._payload = payload
-        self.ok = True
-        self.status_code = 200
+        self.ok = status_code < 400
+        self.status_code = status_code
+        self.headers = headers or {}
         self.text = "{}"
         self.reason = "OK"
 
@@ -29,6 +30,16 @@ class _FakeSession:
 
     def post(self, url: str, **kwargs):  # noqa: ANN001, ARG002
         return _Response({"accessToken": "token", "expiresIn": 900})
+
+
+class _SequencedSession:
+    def __init__(self, responses):  # noqa: ANN001
+        self.responses = list(responses)
+        self.requests = []
+
+    def request(self, method: str, url: str, **kwargs):  # noqa: ANN001
+        self.requests.append({"method": method, "url": url, **kwargs})
+        return self.responses.pop(0)
 
 
 def test_occ_symbol_round_trip() -> None:
@@ -87,6 +98,19 @@ def test_public_adapter_uses_configured_expiration_window() -> None:
     })
 
     assert len(adapter.expiration_dates) == 8
+
+
+def test_public_adapter_retries_http_429_then_returns_payload() -> None:
+    adapter = PublicAdapter({"broker": {"public": {"retry_attempts": 2, "retry_base_delay_seconds": 0}}})
+    adapter._access_token = "token"
+    adapter._expires_at = 10**12
+    adapter._session = _SequencedSession([
+        _Response({}, status_code=429, headers={"Retry-After": "0"}),
+        _Response({"ok": True}),
+    ])
+
+    assert adapter._get("/test") == {"ok": True}
+    assert len(adapter._session.requests) == 2
 
 
 def test_public_account_state_reads_nested_buying_power_and_equity_total(tmp_path) -> None:

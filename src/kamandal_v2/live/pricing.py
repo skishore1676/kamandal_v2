@@ -291,6 +291,30 @@ def entry_price_metadata(candidate: Candidate, config: dict[str, Any] | None) ->
     return metadata
 
 
+def shadow_entry_limit_price(
+    candidate: Candidate,
+    config: dict[str, Any] | None,
+    *,
+    max_concession: float | None = None,
+) -> float:
+    """Freeze the low-liquidity price-through decision into a shadow ticket.
+
+    Existing shadow fills intentionally start at the candidate midpoint.  Only
+    a candidate explicitly admitted under the low-OI warning policy should ask
+    for additional credit, matching the live pricing calculation without
+    turning unrelated shadow evidence into a pricing-policy migration.
+    """
+
+    reasons = {str(reason) for reason in (candidate.reasons or [])}
+    if candidate.structure not in {"short_strangle", "strangle"} or "low_oi_price_through=true" not in reasons:
+        return float(candidate.net_credit)
+    midpoint = abs(float(candidate.net_credit))
+    improved = abs(float(entry_price_metadata(candidate, config)["improved_limit"]))
+    if max_concession is not None:
+        improved = min(improved, midpoint + max(float(max_concession), 0.0))
+    return improved
+
+
 def normalize_campaign_entry_metadata(
     candidate: Candidate,
     metadata: dict[str, Any],

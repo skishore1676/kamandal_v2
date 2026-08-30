@@ -146,7 +146,7 @@ def test_short_strangle_compiles_frozen_management_policy_separate_from_entry_de
     assert policy.compatibility["legacy_inversion_ignored"] is True
 
 
-def test_strangle_sheet_controls_compile_as_one_immutable_policy() -> None:
+def test_strangle_sheet_controls_compile_as_one_immutable_policy_with_retired_range_fields() -> None:
     policy = compile_playbook_policy(
         _strangle_row(
             execution_venue="tasty_primary",
@@ -154,8 +154,10 @@ def test_strangle_sheet_controls_compile_as_one_immutable_policy() -> None:
             dte_max="50",
             target_dte="45",
             short_delta_max="0.22",
+            # Retained only for compatibility with historical Sheet snapshots.
+            # These values no longer validate or gate candidate admission.
             range_gate_required="TRUE",
-            range_gate_max_age_days="7",
+            range_gate_max_age_days="not-a-number",
             loss_close_multiple="3",
         )
     )

@@ -30,7 +30,6 @@ from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_engine.lifecycle import freeze_lifecycle_policy
 from kamandal_v2.strategy_engine.ownership import retire_orphaned_pending_live_lifecycles
 from kamandal_v2.strategy_engine.policy import ExecutionMode, PlaybookPolicy, PolicyCompilation, compile_playbook_policies
-from kamandal_v2.strategy_engine.range_gate import apply_range_regime_gate
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, policy_tables_hash
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, ShadowFill, SourceMode, stable_csa_id
@@ -40,6 +39,7 @@ from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_lanes.tickets import open_ticket_from_candidate
 from kamandal_v2.strategy_lanes.lane_common import propose_action
 from kamandal_v2.market.public import occ_symbol
+from kamandal_v2.live.pricing import shadow_entry_limit_price
 from kamandal_v2.strategy_engine.event_timing import entry_session_due
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
 
@@ -255,13 +255,6 @@ def _run_book(
     playbooks = [Playbook.from_row(policy.fields) for policy in selected]
     def candidate_postprocessor(candidates: list[Any], current_store: LocalStore, current_config: dict[str, Any], portfolio: PortfolioState) -> None:
         _gate_earnings_calendar_entries(candidates, selected, sqlite_path=current_store.sqlite_path, observed_at=_planning_observed_at(current_config))
-        range_receipt = apply_range_regime_gate(
-            candidates,
-            selected,
-            ((current_config.get("planner") or {}).get("range_regime_gate") or {}),
-            observed_at=_planning_observed_at(current_config),
-        )
-        current_store.event("cartographer_range_regime_gate", range_receipt)
         if live_renderer is not None:
             live_renderer[1](
                 candidates,
@@ -334,7 +327,7 @@ def _run_book(
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (), tuple(handoffs))
     elif result.plans and result.plans[0].operator_action == "approve":
         try:
-            handoffs = _materialize_shadow_handoff(result, selected, sqlite_path=store.sqlite_path)
+            handoffs = _materialize_shadow_handoff(result, selected, config=mode_config, sqlite_path=store.sqlite_path)
         except Exception as exc:  # noqa: BLE001 - a missing typed handoff is an unhealthy book.
             return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (f"shadow handoff failed: {type(exc).__name__}: {exc}",))
         store.event("unified_shadow_plan_auto_approved", {"plan_run_id": result.plan_run_id, "plan_id": result.plans[0].plan_id, "handoffs": handoffs})
@@ -721,6 +714,7 @@ def _materialize_shadow_handoff(
     result: PlanRunResult,
     policies: tuple[PlaybookPolicy, ...],
     *,
+    config: dict[str, Any],
     sqlite_path: str | Path,
 ) -> list[dict[str, Any]]:
     """Persist the rank-one selected shadow package as typed lifecycle state.
@@ -824,9 +818,17 @@ def _materialize_shadow_handoff(
         proposal = propose_action(lifecycle, ActionType.OPEN, "unified_plan_selected", arbiter_class="routine_management", proposed_at=_plan_time(result))
         action = arbitrate_actions((proposal,)).selected
         csa_store.save_action(action)
-        ticket = open_ticket_from_candidate(candidate, action, compiled, created_at=_plan_time(result), limit_price=candidate.net_credit)
+        fill_policy = _shadow_fill_policy(compiled)
+        max_concession = float(fill_policy["max_attempts"]) * float(fill_policy["price_increment"])
+        ticket = open_ticket_from_candidate(
+            candidate,
+            action,
+            compiled,
+            created_at=_plan_time(result),
+            limit_price=shadow_entry_limit_price(candidate, config, max_concession=max_concession),
+        )
         csa_store.save_shadow_order_intent(ticket)
-        fill = adapter.simulate_fill(ticket, _candidate_quotes(candidate), _shadow_fill_policy(compiled), observed_at=_plan_time(result), attempt=0)
+        fill = adapter.simulate_fill(ticket, _candidate_quotes(candidate), fill_policy, observed_at=_plan_time(result), attempt=0)
         csa_store.save_shadow_fill(fill)
         if fill.status == "filled" and lifecycle.status == "proposed":
             csa_store.save_lifecycle(adapter.adopt_fill(lifecycle, ticket, fill))

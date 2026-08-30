@@ -41,9 +41,12 @@ not let an unexpectedly small preflight value shrink known maximum loss.
 
 ## Eligibility overlay
 
-The overlay does not invent symbols and does not bypass the operator universe. It
-only broadens which already-enabled universe rows can reach the `short_strangle`
-playbook.
+The overlay does not invent symbols and does not bypass the operator universe. The
+operator decision is that every already-enabled universe profile is source-eligible
+for the `short_strangle` experiment, including single names such as MSTR and bond
+ETFs such as TLT and IEF. The Sheet price/IV bands and all remaining strategy,
+liquidity, risk, and execution gates still decide whether an eligible symbol becomes
+a candidate or plan.
 
 An additional enabled symbol qualifies only when the operator sets all of these
 fields on the relevant Google Sheet `playbooks` row:
@@ -51,13 +54,19 @@ fields on the relevant Google Sheet `playbooks` row:
 - `universe_expansion_enabled=TRUE`;
 - `underlying_price_min` and `underlying_price_max` contain the operator's range;
 - `iv_rank_min` and `iv_rank_max` contain the operator's range; and
-- the idea, playbook, DTE/delta, earnings/event, quote integrity, option OI,
-  liquidity, broker preflight, BPR, portfolio, concentration, health, ranking,
+- the idea, playbook, DTE/delta, earnings/event, quote integrity, liquidity,
+  broker preflight, BPR, portfolio, concentration, health, ranking,
   approval, session, and execution gates all pass.
 
 Existing explicit strangle permissions remain valid even outside this range. The
 overlay removes only universe-profile and per-row allowed-playbook mismatches for
 `short_strangle`; it does not relax any other rejection reason.
+
+`min_option_oi` is a liquidity reference threshold, not a hard exclusion, when
+`live.liquidity_policy.low_oi_mode=price_through`. Both shadow and live planning
+retain the low-OI warning and ask for more credit than midpoint using the shared
+liquidity-adjusted entry campaign. Structurally invalid quotes and the separate
+package-spread safety gates remain hard failures.
 
 The Google Sheet is canonical. The repository contains no price/IV fallback for
 this expansion. A missing switch or bound fails closed and leaves only existing
