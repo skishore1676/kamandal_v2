@@ -692,6 +692,9 @@ with the options-economic thesis: premium, implied movement, liquidity, DTE/delt
 events, BPR, and portfolio risk. Cartographer may later supply a forward-looking
 `TUSSLE_EXPECTED` annotation, but it remains non-blocking until a controlled
 comparison shows incremental economic or risk value over that baseline.
+See
+[`docs/lessons/current-range-is-not-a-short-strangle-entry-edge.md`](lessons/current-range-is-not-a-short-strangle-entry-edge.md)
+for the reusable decision test and rejected alternatives.
 
 This direction matters because the CSA scanner currently selects the best
 candidate inside each opportunity; it does not replace the established
