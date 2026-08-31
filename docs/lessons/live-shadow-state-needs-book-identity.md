@@ -4,7 +4,7 @@ type: bug
 area: unified planning and portfolio risk
 date: 2026-08-18
 tags: [live-shadow, account-snapshots, risk, reporting]
-refs: [6dff40f, src/kamandal_v2/stores/sqlite.py, src/kamandal_v2/live/risk_manager.py]
+refs: [6dff40f, src/kamandal_v2/stores/sqlite.py, src/kamandal_v2/live/risk_manager.py, src/kamandal_v2/ops/daily_report.py]
 ---
 
 # Live and shadow state needs book identity at persistence
@@ -28,6 +28,13 @@ live risk/health query only live history, and reports the two books separately.
 The regression test saves both account series and proves the shadow peak cannot
 trip the live breaker.
 
+The same rule applies across migrations, not only across execution modes. After
+the unified manager made typed `csa_lifecycles` canonical, the daily RYG report
+continued reading `shadow_fills` and displayed zero open shadow packages while
+the canonical store contained two. Legacy rows remain useful historical
+evidence, but current-state reporting must prefer the canonical owner and fall
+back only when the typed store has never contained that book.
+
 ## When It Applies
 
 Use this invariant for any state written by both execution modes: account
@@ -38,7 +45,9 @@ It is not needed for immutable source facts that are deliberately shared.
 
 When a live metric resembles a paper-account default, inspect persistence
 identity before tuning risk thresholds. Add a mixed-book fixture and prove each
-consumer returns only its requested mode.
+consumer returns only its requested mode. When a unified migration leaves old
+tables in place, inventory every current-state consumer and prove canonical
+state wins over deliberately contradictory legacy fixtures.
 
 ## Dead Ends
 

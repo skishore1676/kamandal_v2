@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from datetime import date
 from pathlib import Path
 
 from kamandal_v2.domain.models import PortfolioState
@@ -79,6 +81,54 @@ def test_live_position_report_excludes_historical_rows() -> None:
     rows = daily_report._load_live_positions(conn)
 
     assert [row["group_id"] for row in rows] == ["open-1"]
+
+
+def test_shadow_summary_uses_canonical_typed_lifecycles_over_legacy_rows() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE csa_lifecycles ("
+        "id TEXT, status TEXT, opened_at TEXT, updated_at TEXT, payload TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO csa_lifecycles VALUES (?,?,?,?,?)",
+        [
+            (
+                "shadow-open",
+                "open",
+                "2026-08-30T15:00:00Z",
+                "2026-08-31T16:00:00Z",
+                json.dumps({"metadata": {"execution_mode": "shadow"}}),
+            ),
+            (
+                "shadow-closed",
+                "closed",
+                "2026-08-30T15:00:00Z",
+                "2026-09-01T01:00:00Z",
+                json.dumps({"metadata": {"execution_mode": "shadow"}}),
+            ),
+            (
+                "live-open",
+                "open",
+                "2026-08-31T15:00:00Z",
+                "2026-08-31T16:00:00Z",
+                json.dumps({"metadata": {"execution_mode": "live"}}),
+            ),
+        ],
+    )
+    conn.execute("CREATE TABLE shadow_fills (status TEXT, opened_at TEXT, closed_at TEXT)")
+    conn.executemany(
+        "INSERT INTO shadow_fills VALUES (?,?,?)",
+        [("open", "2026-08-31", None), ("open", "2026-08-31", None)],
+    )
+
+    summary = daily_report._load_shadow_summary(conn, date(2026, 8, 31))
+
+    assert summary == {
+        "open": 1,
+        "closed_today": 1,
+        "source": "canonical_csa_lifecycles",
+    }
 
 
 def test_daily_report_health_probe_is_read_only(monkeypatch, tmp_path) -> None:  # noqa: ANN001

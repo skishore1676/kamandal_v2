@@ -14,6 +14,7 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from kamandal_v2.live.health import run_live_health
 
@@ -99,7 +100,7 @@ def build_daily_report(
         live_status = _load_live_status(conn, day)
         positions = _load_live_positions(conn)
         groups = _load_live_groups(conn)
-        shadow_fills = _load_shadow_fills(conn, day)
+        shadow_summary = _load_shadow_summary(conn, day)
         recon_issues = _load_recon_issues(conn)
 
     event_counts = Counter(e["event_type"] for e in events)
@@ -127,8 +128,9 @@ def build_daily_report(
         "total_groups": len(groups),
         "live_positions": len(positions),
         "historical_group_rows": len(groups),
-        "shadow_open": len([f for f in shadow_fills if f["status"] == "open"]),
-        "shadow_closed_today": len([f for f in shadow_fills if f["status"] == "closed"]),
+        "shadow_open": shadow_summary["open"],
+        "shadow_closed_today": shadow_summary["closed_today"],
+        "shadow_state_source": shadow_summary["source"],
         "intents_today": len(live_intents),
         "intents_by_status": dict(intent_by_status),
         "intents_by_type": dict(intent_by_type),
@@ -285,12 +287,78 @@ def _load_live_groups(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return out
 
 
-def _load_shadow_fills(conn: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
+def _load_shadow_summary(conn: sqlite3.Connection, day: date) -> dict[str, Any]:
+    """Summarize shadow state from the canonical typed lifecycle store.
+
+    Once typed shadow lifecycles exist, ``shadow_fills`` is retained evidence,
+    not current state. Falling back only for pre-migration databases keeps the
+    operator report aligned with the unified manager instead of double-counting
+    or hiding active packages.
+    """
+
     try:
-        cur = conn.execute("SELECT id, status, underlying FROM shadow_fills WHERE date(opened_at)=? OR date(closed_at)=?", (day.isoformat(), day.isoformat()))
+        typed_rows = conn.execute(
+            "SELECT status, opened_at, updated_at, payload FROM csa_lifecycles ORDER BY opened_at, id"
+        ).fetchall()
     except sqlite3.OperationalError:
-        return []
-    return [dict(row) for row in cur]
+        typed_rows = []
+
+    shadow_rows: list[dict[str, Any]] = []
+    for row in typed_rows:
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+        except (TypeError, ValueError):
+            payload = {}
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        if str(metadata.get("execution_mode") or "") != "shadow":
+            continue
+        shadow_rows.append(
+            {
+                "status": str(row["status"] or payload.get("status") or "").lower(),
+                "opened_at": row["opened_at"] or payload.get("opened_at"),
+                "updated_at": row["updated_at"] or payload.get("updated_at"),
+            }
+        )
+
+    if shadow_rows:
+        active_statuses = {"open", "proposed", "pending_live_submission"}
+        return {
+            "open": sum(row["status"] in active_statuses for row in shadow_rows),
+            "closed_today": sum(
+                row["status"] == "closed" and _market_day(row.get("updated_at")) == day
+                for row in shadow_rows
+            ),
+            "source": "canonical_csa_lifecycles",
+        }
+
+    try:
+        legacy_rows = conn.execute(
+            "SELECT status, opened_at, closed_at FROM shadow_fills "
+            "WHERE lower(status) = 'open' OR date(closed_at) = ?",
+            (day.isoformat(),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        legacy_rows = []
+    return {
+        "open": sum(str(row["status"] or "").lower() == "open" for row in legacy_rows),
+        "closed_today": sum(
+            str(row["status"] or "").lower() == "closed" and _market_day(row["closed_at"]) == day
+            for row in legacy_rows
+        ),
+        "source": "legacy_shadow_fills" if legacy_rows else "no_shadow_state",
+    }
+
+
+def _market_day(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(ZoneInfo("America/Chicago")).date()
 
 
 def _load_recon_issues(conn: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -535,8 +603,9 @@ def _build_ryg_tables(report: dict[str, Any]) -> dict[str, list[tuple[str, str, 
     recovered = int(shadow.get("recovered_run_error_count") or 0)
     shadow_rows.append(("Current runtime", shadow_runtime, ryg_for_level(shadow_runtime), f"active errors={len(shadow.get('active_run_errors') or [])}"))
     shadow_rows.append(("Day evidence", shadow_evidence, ryg_for_level(shadow_evidence), f"recovered errors={recovered}"))
-    shadow_rows.append(("Shadow open", str(summary.get("shadow_open",0)), "🟢", "shadow_fills open"))
-    shadow_rows.append(("Shadow closed today", str(summary.get("shadow_closed_today",0)), "🟢", "shadow_fills closed"))
+    shadow_source = str(summary.get("shadow_state_source") or "no_shadow_state")
+    shadow_rows.append(("Shadow open", str(summary.get("shadow_open",0)), "🟢", shadow_source))
+    shadow_rows.append(("Shadow closed today", str(summary.get("shadow_closed_today",0)), "🟢", shadow_source))
     shadow_rows.append(("Advisory runs", str((report.get("advisory") or {}).get("runs",0)), "🟢", "plan_run events"))
     shadow_bpr = shadow_book.get("bpr_used_pct")
     shadow_rows.append(("Shadow BPR", str(shadow_bpr) if shadow_bpr is not None else "missing", "⚪" if shadow_bpr is None else "🟢", "shadow-scoped paper snapshot"))
