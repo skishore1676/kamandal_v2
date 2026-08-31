@@ -96,6 +96,11 @@ The minimal operator contract is:
 | `mode` | `shadow` or `live` effect choice |
 | typed parameter columns and management JSON | entry, sizing, and lifecycle policy |
 
+`mode` chooses the shared effect path; it does not supersede a narrower safety
+envelope such as `csa_stage=pilot_live`. See
+[`docs/lessons/live-mode-normalization-must-preserve-pilot-envelope.md`](lessons/live-mode-normalization-must-preserve-pilot-envelope.md)
+before changing mode or stage normalization.
+
 At the initial cutover, the existing `call_calendar_low_iv` and
 `put_calendar_low_iv` rows remain generic low-IV calendar capabilities in live
 mode. Their fixed DTE windows and earnings blackout must be preserved. They are
