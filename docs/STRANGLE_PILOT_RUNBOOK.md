@@ -74,6 +74,9 @@ one shadow week proves positive strategy expectancy.
 - After promotion: let the normal planner and executor own selection and
   submission. Observe the resulting lifecycle through normal reporting. The
   canary reservation prevents a second lifecycle for that pilot policy.
+- If the final September 8 planner window ends without a canary reservation,
+  restore both Sheet controls to shadow. This authorization does not roll into
+  a later trading day merely because no candidate qualified on Tuesday.
 
 ## Exception and rollback policy
 
