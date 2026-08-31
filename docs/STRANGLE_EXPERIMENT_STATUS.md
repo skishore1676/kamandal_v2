@@ -47,8 +47,9 @@ available as descriptive research context but is no longer an admission gate.
 4. A natural scheduled run produces at least one reviewable shadow plan/fill or a
    truthful zero-candidate receipt whose blockers are strategy facts rather than
    machinery defects.
-5. Tastytrade production preflight, account BPR/capacity, lifecycle management, and
-   reconciliation are read back before the separate operator gate for pilot live.
+5. Fresh natural production `tastytrade_dry_run` BPR, account capacity, lifecycle
+   routing, and reconciliation readiness are read back before the separate operator
+   gate for a one-contract pilot. A separate certification sandbox is optional.
 
 ## Promotion decision
 

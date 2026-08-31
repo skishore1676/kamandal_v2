@@ -6,29 +6,26 @@ Kamandal has the broker-order primitives needed for the short-strangle lane:
 two-leg open and close, mixed close/open adjustment, broker dry-run, submit,
 status, cancel, atomic replacement, partial-fill normalization, and
 venue-qualified reconciliation. The strategy remains `shadow`; none of these
-capabilities grants authority to authenticate or place an order.
+capabilities grants authority to place an order.
 
-Production readiness requires an explicit account number, OAuth material, and
-the pinned Orders API version. The documented production API is
-`https://api.tastyworks.com`; the documented sandbox API is
-`https://api.cert.tastyworks.com`.
+The oldmac production runtime already has an explicit account number, OAuth
+material, and the pinned Orders API version. Natural shadow candidates on
+2026-08-26 through 2026-08-28 recorded `bpr_source=tastytrade_dry_run`, proving
+that the configured production authentication, exact-leg dry-run, and BPR path
+are reachable. No additional account or credential setup is required for the
+short-strangle pilot.
 
-## Information Suman must provide
+## Operator boundary
 
-Before an authenticated check, obtain:
+The remaining operator gate is money authority, not setup labor. Before a live
+pilot, Suman must explicitly authorize both:
 
-1. A rotated production OAuth client secret and refresh token. Create the
-   initial refresh token in Tastytrade under `OAuth Applications -> Manage ->
-   Create Grant`. Rotate the previously exposed values before they are used
-   again. A client id is not required for this personal-application grant flow.
-2. The production Tastytrade account number approved for uncovered options.
-3. A separate sandbox OAuth client and sandbox account number.
+1. the Google Sheet promotion from `shadow` to the bounded live-pilot policy;
+2. submission of the first real one-contract Tastytrade order.
 
-Do not paste these values into Codex, chat, Git, the Google Sheet, an Obsidian
-note, or a shell command. Enter them only through the hidden interactive prompt
-on Old Mac.
-
-For production:
+Existing credentials remain secret and deploy-preserved. If rotation is ever
+needed, do not paste values into Codex, chat, Git, the Google Sheet, an Obsidian
+note, or a shell command. Use the hidden oldmac prompt:
 
 ```bash
 ssh oldmac
@@ -36,58 +33,52 @@ cd /Users/sunny/Documents/kamandal_v2
 .venv/bin/python scripts/configure_tastytrade_runtime.py --rotate-oauth
 ```
 
-This atomically updates `/Users/sunny/Documents/kamandal_v2/.env` with owner-only
-permissions. It writes the Tastytrade client secret, refresh token, account
-number, documented production host, and pinned Orders API version. It
-prints key names only, never values.
+The helper atomically updates the owner-only runtime environment and prints key
+names only, never values.
 
-For sandbox, use separate credentials and a separate file:
+## Required verification ladder
+
+1. `kamandal tastytrade-readiness` must report production configuration ready,
+   account configured, the documented host, the pinned Orders API version, and
+   all multileg payload capabilities except the separately known DXLink gap.
+2. A natural shadow candidate must retain an exact-leg production
+   `tastytrade_dry_run` BPR receipt. The 2026-08-26 through 2026-08-28 TLT/IEF
+   candidates already establish this path historically; the corrected shadow
+   week supplies fresh evidence.
+3. The natural planner must prove that the retired range veto and corrected
+   low-OI pricing behavior no longer create machinery blockers.
+4. Immediately before promotion, read production account capacity, current
+   positions, exact candidate dry-run BPR, live health, Sheet policy hash, and
+   venue-qualified reconciliation readiness without submitting an order.
+5. After a separate operator approval, promote only the bounded one-contract
+   pilot and submit one canary. Submission, status, management, close, and
+   reconciliation receipts determine whether the lane remains live or returns
+   to `shadow`.
+
+The default readiness check remains broker-inert and does not authenticate or
+use the network:
 
 ```bash
-cd /Users/sunny/Documents/kamandal_v2
+.venv/bin/kamandal tastytrade-readiness
+```
+
+## Optional certification sandbox
+
+A separate certification sandbox may be used when a future broker-adapter change
+needs disposable order-state experiments. It is not a promotion prerequisite for
+this pilot: it needs separate credentials, supplies delayed quotes, resets trade
+state daily, and cannot prove production fill quality or strategy economics.
+
+If intentionally used later, configure it in its own ignored file:
+
+```bash
 .venv/bin/python scripts/configure_tastytrade_runtime.py \
   --env-file .env.tastytrade-sandbox --sandbox --rotate-oauth
 ```
 
-The sandbox file is ignored by Git.
-
-## Verification ladder
-
-The default check is broker-inert. It builds and displays synthetic open,
-close, adjustment, and replacement payloads without authenticating or using
-the network:
-
-```bash
-.venv/bin/python scripts/tastytrade_contract_check.py \
-  --env-file .env.tastytrade-sandbox
-```
-
-After explicit approval to authenticate, read account state and chain inventory:
-
-```bash
-.venv/bin/python scripts/tastytrade_contract_check.py \
-  --env-file .env.tastytrade-sandbox --authenticate --underlying QQQ
-```
-
-After choosing a currently listed sandbox expiration and strikes, a separately
-approved broker dry-run can be sent. It validates buying-power effect but never
-submits the order:
-
-```bash
-.venv/bin/python scripts/tastytrade_contract_check.py \
-  --env-file .env.tastytrade-sandbox --authenticate --dry-run-open \
-  --underlying QQQ --expiration YYYY-MM-DD \
-  --put-strike PUT_STRIKE --call-strike CALL_STRIKE --credit CREDIT
-```
-
-A full sandbox lifecycle needs a real fake-money sandbox position so that open,
-partial-fill handling, cancel/replace, adjustment, and close can be observed.
-Those are external broker effects and require a new explicit approval even
-though no real money is involved.
-
-The final protected gate is a bounded one-contract production canary followed
-by the separate Google Sheet stage change from `shadow` to `live`. Neither is
-part of deployment.
+See
+[`docs/lessons/production-dry-run-can-replace-separate-broker-sandbox-gate.md`](lessons/production-dry-run-can-replace-separate-broker-sandbox-gate.md)
+for the decision test.
 
 ## Broker references
 

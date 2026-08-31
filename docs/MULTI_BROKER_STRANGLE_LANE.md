@@ -55,11 +55,12 @@ The broker contract is now explicit:
 Market data and execution remain deliberately separate. Public/shared quotes
 may build and manage the strategy; Tastytrade supplies native dry-runs, order
 receipts, status, and positions for its venue. DXLink is not yet a Kamandal
-quote provider. Before the protected live flip, run the same two-leg open,
-two-leg close, mixed adjustment, partial-fill, and cancel-replace contract
-against a Tastytrade sandbox account, then perform a separately approved bounded
-one-contract canary with live quotes. The sandbox is evidence for broker
-plumbing, not evidence of fill quality or strategy economics.
+quote provider. Natural shadow planning has already produced exact-leg production
+Tastytrade dry-run BPR receipts. Before the protected live flip, refresh that
+evidence, read production account capacity and reconciliation readiness, and then
+perform a separately approved bounded one-contract canary with current live quote
+evidence. A separate certification sandbox is optional and does not prove fill
+quality or strategy economics.
 
 See [TASTYTRADE_LIVE_HANDOFF.md](TASTYTRADE_LIVE_HANDOFF.md) for the secure
 credential placement and staged broker-validation procedure.

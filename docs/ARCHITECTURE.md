@@ -651,9 +651,12 @@ never interpreted as a flat account.
 The current quote/Greek surface remains the shared Public/fixture market-data
 provider. Tastytrade owns its venue's dry-run, account, order, and position
 receipts, but Kamandal does not yet consume DXLink quotes. That is an explicit
-live-pilot gate: sandbox multileg contract proof first, then a separately
-approved one-contract canary using current live quote evidence. A green sandbox
-order proves syntax and lifecycle plumbing, not execution quality or alpha.
+live-pilot constraint, not a requirement to build another account. The already
+configured production account has produced exact-leg dry-run BPR receipts during
+natural shadow planning. Fresh shadow reachability plus an immediate production
+account/capacity/dry-run readback precede a separately approved one-contract
+canary using current live quote evidence. A separate certification sandbox is
+optional because it cannot prove production fill quality or alpha.
 
 #### Tastytrade readiness is an explicit ladder
 
@@ -668,9 +671,10 @@ operator action.
 gaps and builds representative two-leg open, two-leg close, mixed adjustment,
 and replacement payloads without authentication or network use. The secure runtime
 configuration helper accepts credentials through hidden prompts, atomically
-writes a `0600` environment file, and never prints values. Authenticated account
-reads, broker dry-runs, sandbox submissions, the bounded production canary, and
-the Sheet promotion are successive and separately authorized gates. See
+writes a `0600` environment file, and never prints values. The existing production
+OAuth/account configuration and natural `tastytrade_dry_run` BPR receipts satisfy
+the setup boundary; fresh account/capacity readback, the bounded production canary,
+and Sheet promotion remain separately authorized gates. See
 [TASTYTRADE_LIVE_HANDOFF.md](TASTYTRADE_LIVE_HANDOFF.md).
 
 For Kamandal's personal OAuth application, the refresh exchange uses the
