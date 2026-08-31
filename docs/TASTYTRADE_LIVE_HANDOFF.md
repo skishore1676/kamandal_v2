@@ -5,8 +5,9 @@
 Kamandal has the broker-order primitives needed for the short-strangle lane:
 two-leg open and close, mixed close/open adjustment, broker dry-run, submit,
 status, cancel, atomic replacement, partial-fill normalization, and
-venue-qualified reconciliation. The strategy remains `shadow`; none of these
-capabilities grants authority to place an order.
+venue-qualified reconciliation. The strategy remains `shadow` during the evidence
+week. Suman has granted the specific conditional authority described below; these
+capabilities alone grant no broader authority to place an order.
 
 The oldmac production runtime already has an explicit account number, OAuth
 material, and the pinned Orders API version. Natural shadow candidates on
@@ -17,11 +18,11 @@ short-strangle pilot.
 
 ## Operator boundary
 
-The remaining operator gate is money authority, not setup labor. Before a live
-pilot, Suman must explicitly authorize both:
-
-1. the Google Sheet promotion from `shadow` to the bounded live-pilot policy;
-2. submission of the first real one-contract Tastytrade order.
+On 2026-08-30 Suman authorized both the Google Sheet promotion and one real
+one-contract Tastytrade canary, conditionally: Friday, 2026-09-04 must be `GO`,
+Tuesday, 2026-09-08 final gates must remain green, and the normal planner and
+executor must select and submit the order. Otherwise the row remains shadow.
+There is no remaining credential or routine setup task for Suman.
 
 Existing credentials remain secret and deploy-preserved. If rotation is ever
 needed, do not paste values into Codex, chat, Git, the Google Sheet, an Obsidian
@@ -50,10 +51,14 @@ names only, never values.
 4. Immediately before promotion, read production account capacity, current
    positions, exact candidate dry-run BPR, live health, Sheet policy hash, and
    venue-qualified reconciliation readiness without submitting an order.
-5. After a separate operator approval, promote only the bounded one-contract
-   pilot and submit one canary. Submission, status, management, close, and
+5. Under the recorded conditional operator approval, promote only the bounded
+   one-contract pilot and permit one canary lifecycle. Submission, status,
+   management, close, and
    reconciliation receipts determine whether the lane remains live or returns
    to `shadow`.
+
+See [STRANGLE_PILOT_RUNBOOK.md](STRANGLE_PILOT_RUNBOOK.md) for the dated checklist,
+state machine, wakeups, and exception policy.
 
 The default readiness check remains broker-inert and does not authenticate or
 use the network:

@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import date
+import json
 from pathlib import Path
 from typing import Any
 
@@ -256,6 +257,7 @@ def _run_book(
     def candidate_postprocessor(candidates: list[Any], current_store: LocalStore, current_config: dict[str, Any], portfolio: PortfolioState) -> None:
         _gate_earnings_calendar_entries(candidates, selected, sqlite_path=current_store.sqlite_path, observed_at=_planning_observed_at(current_config))
         if live_renderer is not None:
+            _gate_reserved_pilot_live_candidates(candidates, selected, CsaStore(current_store.sqlite_path, read_only=True))
             live_renderer[1](
                 candidates,
                 current_store,
@@ -500,6 +502,7 @@ def _bind_selected_live_lifecycle(
     selected_plan = result.plans[0]
     policy_by_id = {policy.playbook_id: policy for policy in policies}
     csa_store = CsaStore(store.sqlite_path)
+    _assert_pilot_live_reservation_available(selected_plan, policy_by_id, csa_store)
     handoffs: list[dict[str, Any]] = []
     for candidate in selected_plan.candidates:
         policy = policy_by_id.get(candidate.playbook_id)
@@ -507,7 +510,11 @@ def _bind_selected_live_lifecycle(
             raise ValueError(f"selected candidate {candidate.candidate_id} has no unified policy")
         if daily_policy_snapshot is None:  # Defended above, retained for direct callers.
             raise ValueError("live selected-entry handoff requires a daily policy snapshot")
-        compiled = _shadow_csa_policy(policy, stage=CsaStage.LIVE)
+        pilot_live = _is_pilot_live(policy)
+        compiled = _shadow_csa_policy(
+            policy,
+            stage=CsaStage.PILOT_LIVE if pilot_live else CsaStage.LIVE,
+        )
         lifecycle_id = stable_csa_id("unified-live-lifecycle", [selected_plan.plan_id, candidate.candidate_id])
         lifecycle = freeze_lifecycle_policy(
             LifecycleState(
@@ -535,6 +542,8 @@ def _bind_selected_live_lifecycle(
                     "policy_snapshot_hash": daily_policy_snapshot.snapshot_hash,
                     "policy_snapshot_date": daily_policy_snapshot.trading_date,
                     "entry_policy_hash": compiled.policy_hash,
+                    "pilot_live": pilot_live,
+                    "pilot_policy_hash": policy.policy_hash if pilot_live else None,
                     "source_identity": {"idea_id": candidate.idea_id, "plan_run_id": result.plan_run_id},
                 },
             ),
@@ -571,13 +580,83 @@ def _bind_selected_live_lifecycle(
                 "execution_venue": candidate.execution_venue,
                 "csa_compiled_policy_hash": compiled.policy_hash,
                 "stage_authorized": True,
+                "pilot_contract_cap": 1 if pilot_live else None,
             }
         )
         store.save_live_order_intent(ticket, status=str(ticket["_ledger_status"]))
         handoffs.append(
-            {"source_id": candidate.idea_id, "plan_id": selected_plan.plan_id, "candidate_id": candidate.candidate_id, "playbook_id": compiled.playbook_id, "capability": policy.capability.key, "mode": "live", "lifecycle_id": lifecycle_id, "ticket_id": strategy_ticket.ticket_id, "adapter_state": str(ticket["_ledger_status"])}
+            {"source_id": candidate.idea_id, "plan_id": selected_plan.plan_id, "candidate_id": candidate.candidate_id, "playbook_id": compiled.playbook_id, "capability": policy.capability.key, "mode": "pilot_live" if pilot_live else "live", "lifecycle_id": lifecycle_id, "ticket_id": strategy_ticket.ticket_id, "adapter_state": str(ticket["_ledger_status"])}
         )
     return handoffs
+
+
+def _is_pilot_live(policy: PlaybookPolicy) -> bool:
+    """Preserve the bounded canary envelope while the unified engine has two modes."""
+
+    return str(policy.fields.get("csa_stage") or "").strip().lower() == CsaStage.PILOT_LIVE.value
+
+
+def _assert_pilot_live_reservation_available(
+    selected_plan: Any,
+    policy_by_id: dict[str, PlaybookPolicy],
+    csa_store: CsaStore,
+) -> None:
+    """Permit one lifecycle for a pilot policy version, including idempotent replay.
+
+    The reservation is deliberately stronger than a per-day limit.  Once a
+    pilot policy creates its canary lifecycle, another lifecycle requires the
+    row to leave ``pilot_live`` (or an explicitly revised policy version).
+    """
+
+    intended: dict[tuple[str, str], set[str]] = {}
+    for candidate in selected_plan.candidates:
+        policy = policy_by_id.get(candidate.playbook_id)
+        if policy is None or not _is_pilot_live(policy):
+            continue
+        key = (policy.playbook_id, policy.policy_hash)
+        intended.setdefault(key, set()).add(
+            stable_csa_id("unified-live-lifecycle", [selected_plan.plan_id, candidate.candidate_id])
+        )
+    for (playbook_id, policy_hash), lifecycle_ids in intended.items():
+        if len(lifecycle_ids) != 1:
+            raise ValueError(f"pilot_live {playbook_id} selected more than one canary lifecycle")
+
+        reservations = _pilot_live_reservations(csa_store, playbook_id=playbook_id, policy_hash=policy_hash)
+        if reservations and reservations != lifecycle_ids:
+            raise ValueError(f"pilot_live {playbook_id} already reserved its one canary lifecycle")
+
+
+def _gate_reserved_pilot_live_candidates(
+    candidates: list[Any],
+    policies: tuple[PlaybookPolicy, ...],
+    csa_store: CsaStore,
+) -> None:
+    by_playbook = {policy.playbook_id: policy for policy in policies if _is_pilot_live(policy)}
+    for candidate in candidates:
+        policy = by_playbook.get(candidate.playbook_id)
+        if policy is None or candidate.rejection_reason:
+            continue
+        if _pilot_live_reservations(csa_store, playbook_id=policy.playbook_id, policy_hash=policy.policy_hash):
+            candidate.rejection_reason = "pilot_live_canary_already_reserved"
+
+
+def _pilot_live_reservations(
+    csa_store: CsaStore,
+    *,
+    playbook_id: str,
+    policy_hash: str,
+) -> set[str]:
+    reservations: set[str] = set()
+    for row in csa_store.rows("csa_lifecycles"):
+        payload = json.loads(str(row.get("payload") or "{}"))
+        metadata = payload.get("metadata") or {}
+        if (
+            str(metadata.get("playbook_id") or "") == playbook_id
+            and metadata.get("pilot_live") is True
+            and str(metadata.get("pilot_policy_hash") or "") == policy_hash
+        ):
+            reservations.add(str(payload.get("lifecycle_id") or row.get("id") or ""))
+    return reservations
 
 
 def _register_unified_rank_one_attempt(

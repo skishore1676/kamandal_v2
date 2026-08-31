@@ -17,7 +17,8 @@ from kamandal_v2.strategy_lanes.operator_policy import OperatorPolicyBundle
 from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_engine.ownership import retire_orphaned_pending_live_lifecycles
-from kamandal_v2.strategy_engine.planning import run_unified_books, run_unified_fallback_plan
+from kamandal_v2.strategy_engine.planning import _gate_reserved_pilot_live_candidates, _is_pilot_live, run_unified_books, run_unified_fallback_plan
+from kamandal_v2.strategy_engine.policy import compile_playbook_policy
 from kamandal_v2.live.execution import _advance_plan_fallbacks, execute_live_approved
 from kamandal_v2.live.plan_fallback import attempt_event_type
 
@@ -705,6 +706,46 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
 
     assert executed["source"] == "stage_authorized_ledger"
     assert executed["results"][0]["status"] == "dry_run"
+
+
+def test_unified_pilot_live_policy_reserves_only_one_canary_lifecycle(tmp_path) -> None:
+    store = _migrated_store(tmp_path)
+    _, playbooks = _rows()
+    row = next(item for item in playbooks if item["playbook_id"] == "short_strangle_shadow")
+    row["mode"] = "live"
+    row["csa_stage"] = "pilot_live"
+    policy = compile_playbook_policy(row)
+    assert _is_pilot_live(policy) is True
+    candidate = SimpleNamespace(playbook_id=policy.playbook_id, rejection_reason="")
+
+    _gate_reserved_pilot_live_candidates([candidate], (policy,), CsaStore(store.sqlite_path, read_only=True))
+    assert candidate.rejection_reason == ""
+
+    CsaStore(store.sqlite_path).save_lifecycle(
+        LifecycleState(
+            lifecycle_id="pilot-canary-one",
+            opportunity_id="pilot-opportunity-one",
+            lane=LaneId.SHORT_STRANGLE,
+            version=1,
+            status="pending_live_submission",
+            active_legs=(),
+            cashflow_ledger=(),
+            opened_at="2026-09-08T13:35:00Z",
+            updated_at="2026-09-08T13:35:00Z",
+            policy_hash=policy.policy_hash,
+            metadata={
+                "playbook_id": policy.playbook_id,
+                "execution_mode": "live",
+                "pilot_live": True,
+                "pilot_policy_hash": policy.policy_hash,
+            },
+        )
+    )
+    later_candidate = SimpleNamespace(playbook_id=policy.playbook_id, rejection_reason="")
+
+    _gate_reserved_pilot_live_candidates([later_candidate], (policy,), CsaStore(store.sqlite_path, read_only=True))
+
+    assert later_candidate.rejection_reason == "pilot_live_canary_already_reserved"
 
 
 def test_active_unified_path_replans_once_into_typed_plan_two(tmp_path, monkeypatch) -> None:  # noqa: ANN001

@@ -1,7 +1,7 @@
 # Short Strangle Experiment: Current State and Target
 
 Updated: 2026-08-30
-Status: shadow evidence collection; not approved for live activation
+Status: shadow evidence collection; conditionally authorized for one pilot on 2026-09-08
 
 ## Stable picture
 
@@ -13,7 +13,7 @@ available as descriptive research context but is no longer an admission gate.
 
 ## Current verified state
 
-- The experiment is `mode=shadow`, one contract, with all enabled universe profiles
+- The experiment is currently `mode=shadow`, one contract, with all enabled universe profiles
   source-eligible. Price/IV, 35-50 DTE, 14-22 delta, earnings, quote, BPR, portfolio,
   concentration, and lifecycle gates remain active.
 - Four complete historical shadow strangles exist: three winners and one loser,
@@ -43,17 +43,20 @@ available as descriptive research context but is no longer an admission gate.
    selection authority.
 3. Public calls are paced and HTTP 429 responses retry with provider-directed or
    exponential backoff; a quote outage remains fail-closed. This correction is
-   source-ready and still requires session-boundary deployment/readback.
+   deployed on oldmac and still needs natural-week evidence.
 4. A natural scheduled run produces at least one reviewable shadow plan/fill or a
    truthful zero-candidate receipt whose blockers are strategy facts rather than
    machinery defects.
-5. Fresh natural production `tastytrade_dry_run` BPR, account capacity, lifecycle
-   routing, and reconciliation readiness are read back before the separate operator
-   gate for a one-contract pilot. A separate certification sandbox is optional.
+5. Fresh natural production `tastytrade_dry_run` BPR, actual account capacity after
+   the expected Wednesday/Thursday funding, lifecycle routing, and reconciliation
+   readiness are read back before Tuesday activation. A separate certification
+   sandbox is optional.
 
 ## Promotion decision
 
-Do not activate live yet. The machinery is substantially present, but this week's
-zero-trade result was dominated by a liquidity-parity bug and the now-retired chart
-veto rather than a clean strategy-selection result. Reassess after the fixes are
-deployed at a session boundary and one natural shadow cycle is observed.
+Keep the row shadow through the evidence week. Suman has authorized promotion on
+Tuesday, 2026-09-08 only if the Friday, 2026-09-04 checklist recommendation is `GO`
+and Tuesday's final account and safety readback remains green. That promotion permits
+the normal planner and executor to submit one qualifying one-contract Tastytrade
+canary; otherwise the row remains shadow. The authoritative checklist and state
+machine are in [STRANGLE_PILOT_RUNBOOK.md](STRANGLE_PILOT_RUNBOOK.md).

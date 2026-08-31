@@ -31,7 +31,7 @@ Status: current pre-convergence operating contract
 | --- | --- | --- |
 | blank / `baseline` | established planner and live pipeline | existing approval policy |
 | `shadow` | strategy capability engine + shadow adapter | CSA tables only; no broker effect |
-| `pilot_live` | strategy capability engine + guarded live adapter | at most one new lifecycle per playbook per trading day; one contract |
+| `pilot_live` | strategy capability engine + guarded live adapter | one canary lifecycle per pilot policy version; one contract |
 | `live` | strategy capability engine + guarded live adapter | normal Sheet sizing and existing live risk limits |
 
 At 08:15 CT, before the market opens, Kamandal reads `universe` and `playbooks` once
@@ -112,7 +112,9 @@ That proposal is machinery readiness only and explicitly carries no alpha claim.
    a parameter/policy variant; add code only for a genuinely new structure or lifecycle
    capability.
 3. Run three or more natural shadow sessions and let TradeLab publish its recommendation.
-4. If the operator accepts a pilot recommendation, change only `csa_stage` to
-   `pilot_live`. Kamandal consumes it in the next trading-day snapshot.
+4. If the operator accepts a pilot recommendation, set `mode=live` and
+   `csa_stage=pilot_live`. `mode` routes the unified engine; `csa_stage` retains
+   the one-canary safety envelope. Kamandal consumes both in the next trading-day
+   snapshot.
 5. Treat a later change to `live` as a separate operator decision. TradeLab never writes
    the stage and neither recommendation state can place an order.
