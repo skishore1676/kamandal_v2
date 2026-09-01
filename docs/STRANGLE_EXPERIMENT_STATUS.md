@@ -57,6 +57,24 @@ available as descriptive research context but is no longer an admission gate.
   already holds its per-underlying position cap; there were no reconciliation
   blockers or pending entry orders.
 
+### Tuesday, 2026-09-01
+
+- All four natural unified-planning windows completed without policy or runtime
+  errors. No additional shadow strangle was opened because the TLT and IEF
+  lifecycles already own the eligible observations; both remained open and were
+  refreshed through the natural lifecycle-management schedule.
+- The experiment scorecard advanced to `COLLECTING`, with no unexpected broker,
+  order, Sheet, or stage effect. The open-lifecycle marks still lack an actionable
+  price/P&L value, so the day adds repeatability evidence but not economic evidence.
+- The morning correspondent-source schema mismatch failed closed twice and then
+  recovered on its scheduled 11:45 run. It did not interrupt the market-scan
+  strangle lane.
+- Current live health is RED for two cancelled close orders in Kamandal's existing
+  live portfolio. Reconciliation itself is GREEN and the strangle row remains
+  shadow, but unresolved failed closes are a pilot-readiness blocker: Friday cannot
+  be `GO` unless the normal live-order recovery or operator handling clears them
+  and a later health readback is green.
+
 ## Target before pilot live
 
 1. Shadow and live classify low-OI packages identically; shadow freezes the
