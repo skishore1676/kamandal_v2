@@ -3,9 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
-from kamandal_v2.intelligence.correspondent_signals import import_correspondent_signals
+from kamandal_v2.intelligence.correspondent_signals import (
+    import_correspondent_signals,
+    validate_correspondent_packet,
+)
 from kamandal_v2.planner.idea_loader import load_ideas
 
 
@@ -214,6 +218,9 @@ def test_birdclaw_acquisition_receipt_is_preserved_in_translation_and_review(tmp
                 "status": "succeeded",
                 "coverage_status": "continuous",
                 "cached_media_count": 3,
+                "enriched_media_post_count": 2,
+                "live_media_read_count": 1,
+                "indexed_media_hit_count": 1,
             }
         ],
     }
@@ -229,9 +236,49 @@ def test_birdclaw_acquisition_receipt_is_preserved_in_translation_and_review(tmp
     receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
     review = result.review_path.read_text(encoding="utf-8")
     assert translation["source_acquisition"]["status"] == "succeeded"
-    assert translation["source_acquisition"]["attempts"][0]["cached_media_count"] == 3
+    acquisition_attempt = translation["source_acquisition"]["attempts"][0]
+    assert acquisition_attempt["cached_media_count"] == 3
+    assert acquisition_attempt["enriched_media_post_count"] == 2
+    assert acquisition_attempt["live_media_read_count"] == 1
+    assert acquisition_attempt["indexed_media_hit_count"] == 1
     assert receipt["source_acquisition"]["receipt_run_id"] == "birdclaw-run-1"
     assert "Birdclaw acquisition: `succeeded`" in review
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("cached_media_count", True),
+        ("enriched_media_post_count", "2"),
+        ("live_media_read_count", 1.5),
+        ("indexed_media_hit_count", -1),
+    ],
+)
+def test_birdclaw_acquisition_media_counters_fail_closed_for_invalid_values(
+    field: str,
+    value: object,
+) -> None:
+    packet = _packet([])
+    packet["acquisition"] = {
+        "schema": "birdclaw.correspondent_acquisition_reference.v1",
+        "status": "succeeded",
+        "attempts": [{field: value}],
+    }
+
+    with pytest.raises(ValueError, match=rf"{field} must be a non-negative integer"):
+        validate_correspondent_packet(packet)
+
+
+def test_birdclaw_acquisition_attempt_unknown_fields_still_fail_closed() -> None:
+    packet = _packet([])
+    packet["acquisition"] = {
+        "schema": "birdclaw.correspondent_acquisition_reference.v1",
+        "status": "succeeded",
+        "attempts": [{"unexpected_private_detail": 1}],
+    }
+
+    with pytest.raises(ValueError, match="acquisition attempt contains unsupported fields"):
+        validate_correspondent_packet(packet)
 
 
 def test_unsupported_and_out_of_universe_signals_remain_visible_but_parked(tmp_path: Path) -> None:
