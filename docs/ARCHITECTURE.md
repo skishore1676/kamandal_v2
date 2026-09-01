@@ -759,7 +759,10 @@ scanner or management entry points. In particular:
   broker orders, evaluate the `live` branch, drain its guarded close/adjust
   tickets, synchronize and clean up, and only then evaluate the broker-inert
   `shadow` branch. A lifecycle error is retained in its branch receipt but
-  cannot prevent successfully staged live effects from completing;
+  cannot prevent successfully staged live effects from completing. A branch
+  containing only SQLite `database is locked` failures receives one bounded,
+  idempotent replay before the guarded broker-effect boundary; mixed or repeated
+  failures remain visible;
 - `live-approved-orders` is the open-entry executor. It does not claim
   lifecycle `close` or `adjust` tickets and performs only a read-only status
   refresh before opening work. Active-order repricing, expiry, close recovery,

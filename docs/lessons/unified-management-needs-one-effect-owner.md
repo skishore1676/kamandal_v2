@@ -30,6 +30,15 @@ was orchestration: inline pre/post synchronization disappeared, live effects
 were separated from their decision by shadow work, and two scheduled jobs could
 advance management state.
 
+Independent owners can also collide at the persistence layer without violating
+effect ownership. Runtime evidence on August 25 and August 31 showed three
+`OperationalError: database is locked` failures in live lifecycle management;
+the next five-minute tick recovered each one. Planning and open-entry recovery
+legitimately write the same SQLite database, so changing schedule minutes would
+only reduce one observed overlap. The durable recovery is one idempotent
+lifecycle-branch replay after the existing 30-second busy wait, before the
+guarded broker-effect executor runs.
+
 ## When It Applies
 
 Apply this whenever a decision engine stages effects for another command or
@@ -48,6 +57,9 @@ or page before recovery is exhausted.
 4. Run broker-inert shadow only after the live effect boundary completes.
 5. Treat `retryable_current_session` and `retryable_next_session` as
    machine-owned states; page only from terminal recovery state.
+6. Retry a lifecycle branch only when every failure is the exact transient
+   SQLite lock signature. Never replay mixed failures, and never retry after
+   the broker-effect boundary.
 
 The fastest regression check is to stage a close and prove the open-entry
 executor leaves it unchanged while the unified close executor drains it.
@@ -58,3 +70,7 @@ Filtering close tickets out of the open executor while leaving mutating order
 synchronization in both jobs is incomplete: both jobs can still race on close
 repricing or expiry. The open runner may perform a read-only status refresh as
 an entry precondition; active-order recovery belongs to the unified cycle.
+
+Staggering launchd minutes is an optimization, not a lock-correctness contract:
+job duration varies with broker and market-data latency, so two writers can
+still overlap on another day.

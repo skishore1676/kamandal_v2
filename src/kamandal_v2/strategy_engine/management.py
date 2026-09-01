@@ -8,10 +8,12 @@ each receipt independently auditable.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import time
 from typing import Any, Callable
 
 
 Manager = Callable[[], Any]
+SQLITE_LOCK_RETRY_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +75,14 @@ def run_unified_lifecycle_management(
 
 
 def _run_branch(branch: str, manager: Manager) -> ManagementBranchReceipt:
+    receipt = _invoke_branch(branch, manager)
+    if not _sqlite_lock_only_failure(receipt):
+        return receipt
+    time.sleep(SQLITE_LOCK_RETRY_SECONDS)
+    return _invoke_branch(branch, manager)
+
+
+def _invoke_branch(branch: str, manager: Manager) -> ManagementBranchReceipt:
     try:
         result = manager()
     except Exception as exc:  # noqa: BLE001 - one branch may never starve another.
@@ -83,3 +93,27 @@ def _run_branch(branch: str, manager: Manager) -> ManagementBranchReceipt:
         result = {"value": result}
     explicit_ok = bool(result.get("ok", True))
     return ManagementBranchReceipt(branch, explicit_ok, result, "" if explicit_ok else "manager reported not ok")
+
+
+def _sqlite_lock_only_failure(receipt: ManagementBranchReceipt) -> bool:
+    """Retry only the transient SQLite writer collision we can safely identify.
+
+    Lifecycle management stages idempotent intents before the scheduled runner
+    performs broker effects, so replaying this branch once cannot duplicate a
+    broker submission. All non-lock and mixed failures remain visible without
+    retrying or broadening recovery authority.
+    """
+
+    if receipt.ok:
+        return False
+    if receipt.result is None:
+        return _is_sqlite_lock_error(receipt.error)
+    raw_errors = receipt.result.get("errors")
+    if not isinstance(raw_errors, (list, tuple)) or not raw_errors:
+        return False
+    return all(_is_sqlite_lock_error(str(error)) for error in raw_errors)
+
+
+def _is_sqlite_lock_error(error: str) -> bool:
+    normalized = " ".join(str(error).lower().split())
+    return "operationalerror" in normalized and "database is locked" in normalized

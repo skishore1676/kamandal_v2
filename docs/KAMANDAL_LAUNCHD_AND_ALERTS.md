@@ -248,8 +248,11 @@ KAMANDAL_SHEETS_RETRY_MAX_DELAY_SECONDS=4
 
 Kamandal's two runtime SQLite stores use a bounded 30-second busy wait. This
 lets coincident five- and fifteen-minute workers serialize a short write instead
-of dropping a lifecycle tick with `database is locked`; a lock held beyond that
-bound still fails visibly and is not hidden.
+of dropping a lifecycle tick with `database is locked`. If unified lifecycle
+management still receives only that exact transient lock error after the busy
+wait, it replays the idempotent branch once after one second, before any broker
+effect executor runs. A second lock or any mixed/non-lock error fails visibly;
+recovery never hides an unrelated failure.
 
 - Healthy `live-health-report` runs print `KAMANDAL_LAUNCHD_JOB={...}` and do
   not send a message.

@@ -62,6 +62,66 @@ def test_unified_management_can_finish_live_effect_boundary_before_shadow() -> N
     assert receipt.ok is True
 
 
+def test_unified_management_retries_only_transient_sqlite_lock(monkeypatch) -> None:  # noqa: ANN001
+    calls = 0
+    sleeps: list[float] = []
+
+    def typed_live():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "ok": False,
+                "errors": ["fixture: OperationalError: database is locked"],
+            }
+        return {"ok": True, "errors": []}
+
+    monkeypatch.setattr("kamandal_v2.strategy_engine.management.time.sleep", sleeps.append)
+    receipt = run_unified_lifecycle_management(
+        {},
+        sqlite_path="fixture.db",
+        provider="fixture",
+        branch="live",
+        live_lifecycle_manager=typed_live,
+        shadow_lifecycle_manager=lambda: {"ok": True},
+    )
+
+    assert calls == 2
+    assert sleeps == [1.0]
+    assert receipt.ok is True
+
+
+def test_unified_management_does_not_retry_mixed_or_nonlock_failures(monkeypatch) -> None:  # noqa: ANN001
+    calls = 0
+
+    def typed_live():
+        nonlocal calls
+        calls += 1
+        return {
+            "ok": False,
+            "errors": [
+                "fixture: OperationalError: database is locked",
+                "fixture: RuntimeError: quote unavailable",
+            ],
+        }
+
+    monkeypatch.setattr(
+        "kamandal_v2.strategy_engine.management.time.sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("unexpected retry")),
+    )
+    receipt = run_unified_lifecycle_management(
+        {},
+        sqlite_path="fixture.db",
+        provider="fixture",
+        branch="live",
+        live_lifecycle_manager=typed_live,
+        shadow_lifecycle_manager=lambda: {"ok": True},
+    )
+
+    assert calls == 1
+    assert receipt.ok is False
+
+
 def test_scheduled_management_completes_live_cycle_before_shadow() -> None:
     source = Path("scripts/run_unified_lifecycle_management.sh").read_text(encoding="utf-8")
 
