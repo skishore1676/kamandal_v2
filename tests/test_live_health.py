@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from kamandal_v2.domain.models import PortfolioState
 from kamandal_v2.live.health import entry_health_gate, run_live_health
 from kamandal_v2.stores.sqlite import LocalStore
@@ -376,6 +378,99 @@ def test_live_health_yellow_for_working_close_order(tmp_path: Path) -> None:
     assert report["counts"]["working_close_orders"] == 1
     assert "working_close_order" in report["reasons"]
     assert any(event["reason"] == "working_close_order" for event in report["events"])
+
+
+def test_live_health_keeps_old_working_resting_profit_target_quiet(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_resting", target_progress=25.0, trigger_progress=100.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "resting-target",
+            "order_id": "order-resting-target",
+            "plan_id": "plan-resting",
+            "candidate_id": "cand-resting",
+            "idea_id": "idea-resting",
+            "group_id": "group_resting",
+            "intent_type": "close",
+            "underlying": "AAPL",
+            "resting_profit_order": True,
+            "exit_reason_class": "resting_profit",
+        },
+        status="submitted",
+    )
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute(
+            "UPDATE live_order_intents SET updated_at = ?, created_at = ? WHERE ticket_hash = ?",
+            ("2000-01-01 00:00:00", "2000-01-01 00:00:00", "resting-target"),
+        )
+
+    report = run_live_health(store, stale_close_order_minutes=1)
+
+    assert report["overall"] == "GREEN"
+    assert report["counts"]["working_resting_profit_orders"] == 1
+    assert report["counts"]["stale_close_orders"] == 0
+    assert report["reasons"] == []
+    assert report["close_orders"][0]["reason"] == "working_resting_profit_order"
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    ["canceled", "cancelled", "expired", "expired_broker_status_missing", "expired_eod"],
+)
+def test_live_health_treats_unfilled_resting_profit_day_order_as_normal(
+    tmp_path: Path,
+    terminal_status: str,
+) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_resting_done", target_progress=5.0, trigger_progress=100.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "resting-target-done",
+            "order_id": "order-resting-target-done",
+            "plan_id": "plan-resting-done",
+            "candidate_id": "cand-resting-done",
+            "idea_id": "idea-resting-done",
+            "group_id": "group_resting_done",
+            "intent_type": "close",
+            "underlying": "AAPL",
+            "resting_profit_order": True,
+            "csa_action_reason_class": "resting_profit",
+        },
+        status=terminal_status,
+    )
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "GREEN"
+    assert report["counts"]["failed_close_orders"] == 0
+    assert report["counts"]["resting_profit_orders_unfilled"] == 1
+    assert report["reasons"] == []
+    assert report["close_orders"][0]["reason"] == "resting_profit_order_unfilled"
+
+
+def test_live_health_still_pages_rejected_resting_profit_target(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(store, "group_resting_rejected", target_progress=25.0, trigger_progress=100.0)
+    store.save_live_order_intent(
+        {
+            "ticket_hash": "resting-target-rejected",
+            "order_id": "order-resting-target-rejected",
+            "plan_id": "plan-resting-rejected",
+            "candidate_id": "cand-resting-rejected",
+            "idea_id": "idea-resting-rejected",
+            "group_id": "group_resting_rejected",
+            "intent_type": "close",
+            "underlying": "AAPL",
+            "resting_profit_order": True,
+        },
+        status="rejected",
+    )
+
+    report = run_live_health(store)
+
+    assert report["overall"] == "RED"
+    assert report["counts"]["failed_close_orders"] == 1
+    assert "failed_close_order" in report["reasons"]
 
 
 def test_live_health_follows_replacement_child_when_cancelled_parent_updated_later(tmp_path: Path) -> None:

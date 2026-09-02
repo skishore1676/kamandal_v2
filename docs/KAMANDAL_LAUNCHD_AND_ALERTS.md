@@ -264,6 +264,13 @@ recovery never hides an unrelated failure.
   `KAMANDAL_ENTRY_TERMINAL_RECEIPT_ENABLED=true`; production keeps it disabled.
   `KAMANDAL_ENTRY_TERMINAL_RECEIPT_MODE=spool` exercises the projection without
   a network send.
+- A selected entry whose broker lineage already ended `canceled`, `cancelled`,
+  or `expired` is the same routine terminal-unfilled outcome. The next execution
+  cycle must not relabel it as an operator failure.
+- A broker-working resting profit target remains healthy regardless of age. Its
+  normal DAY cancellation or expiry is an unfilled target, not a failed close.
+  Rejection, partial-fill ambiguity, replacement failure, and other true
+  execution conflicts remain actionable.
 - A selected opening ticket that has aged past its preflight window gets one
   bounded recovery attempt. Kamandal rebuilds the current rank-1 plan from
   current-day ideas and fresh market/account data, reruns health and risk
@@ -292,6 +299,9 @@ recovery never hides an unrelated failure.
 - Live-health incidents have a stable fingerprint. An unchanged open incident
   sends once, remains visible in Control Tower, and can notify again only after
   it clears or its affected reason/group/order changes.
+- Additive X and YouTube source lanes retain their first two identical failures
+  as bounded self-healing evidence. The third consecutive natural failure pages
+  once; recovery is announced only when that page was actually sent.
 - `exit_pipeline_stalled` is RED. It means policy approved a close locally but
   `unified-lifecycle-management` did not submit it within
   `live.health.exit_pipeline_stalled_minutes`.

@@ -49,14 +49,22 @@ and operator-state metadata rather than color or lifecycle milestones alone.
 - A close deferred by the session guard with `retryable_current_session` or
   `retryable_next_session` remains owned by lifecycle recovery. The direct
   placement summary must not turn that normal waiting state into an error page.
+- An opening basket already terminalized as canceled or expired is routine
+  unfilled evidence. A later execution tick must not translate that status into
+  a generic `selected entry not placed` page.
+- A patient DAY resting-profit order is neither stale while broker-working nor a
+  failed close when it expires unfilled. Health continues to surface it in
+  structured counts while keeping Beacon quiet; genuine rejection or ownership
+  ambiguity remains visible.
 - Scheduled health compares observations only with ticks that occurred after
   the current plist activation. Installing a changed schedule after an earlier
   tick cannot make the new job retroactively stale.
 - A stable reason/group/order fingerprint suppresses an unchanged incident until
   it clears or materially changes (`src/kamandal_v2/tools/launchd_job.py:310`).
-- High-frequency launchd jobs persist a stable failure fingerprint, absorb the
-  first two identical failures as bounded retry evidence, page once on the
-  third, and send one recovery notice only if an incident was previously paged.
+- High-frequency and additive source-lane launchd jobs persist a stable failure
+  fingerprint, absorb the first two identical failures as bounded retry
+  evidence, page once on the third, and send one recovery notice only if an
+  incident was previously paged.
   Scheduled health excludes failures already owned by this direct incident
   state instead of projecting the same problem a second time.
 - Derived health conditions do not create a second owner. In particular, a

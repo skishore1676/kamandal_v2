@@ -450,6 +450,11 @@ strategy manager and not another valuation rule:
   waits for terminal unfilled parent state, verifies the owned position and
   fresh preflight, and only then submits. A parent fill aborts the child.
 
+Operational health treats that DAY target as a distinct order class: age alone
+does not make a working target stale, and normal unfilled cancellation or expiry
+does not become a failed close. True rejection, partial-fill ambiguity, or an
+unsafe replacement state still follows the ordinary execution-incident path.
+
 The playbook Sheet owns `resting_profit_enabled` and
 `resting_profit_arm_progress_pct`; both values freeze when the lifecycle opens.
 The runtime live/shadow flags are upper-bound kill switches only: they may stop

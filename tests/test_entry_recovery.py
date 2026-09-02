@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from kamandal_v2.live import advisory, execution
 from kamandal_v2.ops.alerts import AlertResult
 from kamandal_v2.stores.sqlite import LocalStore
@@ -168,6 +170,41 @@ def test_no_selected_entry_is_silent(tmp_path, monkeypatch) -> None:
     result = execution.execute_live_approved_with_recovery(_config(), submit=True, store=store)
 
     assert result["operator_notification"]["needed"] is False
+
+
+@pytest.mark.parametrize("terminal_status", ["canceled", "cancelled", "expired"])
+def test_terminal_unfilled_selected_entry_is_routine_and_silent(
+    tmp_path, monkeypatch, terminal_status
+) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    monkeypatch.setattr(
+        execution,
+        "execute_live_approved",
+        lambda *_args, **_kwargs: {
+            "processed": 1,
+            "results": [
+                {
+                    "status": "blocked",
+                    "reason": f"basket_ticket_failed:{terminal_status}",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        execution,
+        "send_lathi_alert",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("terminal unfilled entry must stay in evidence surfaces")
+        ),
+    )
+
+    result = execution.execute_live_approved_with_recovery(_config(), submit=True, store=store)
+
+    assert result["operator_notification"] == {
+        "needed": False,
+        "attempted": False,
+        "reason": "no_selected_entry_failure",
+    }
 
 
 def test_self_handled_risk_limit_does_not_page_operator(tmp_path, monkeypatch) -> None:

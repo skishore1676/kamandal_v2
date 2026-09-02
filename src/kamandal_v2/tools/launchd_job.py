@@ -63,6 +63,11 @@ SCRIPT_JOB_FAILURE_STATE_PREFIX = "launchd_job_failure_state"
 HIGH_FREQUENCY_FAILURE_THRESHOLDS = {
     "live-approved-orders": 3,
     "unified-lifecycle-management": 3,
+    # Source lanes are additive and retry on later scheduled pulls. Preserve a
+    # first or second miss as self-healing evidence; page only when the lane has
+    # remained unavailable across three consecutive natural pulls.
+    "x-bookmarks": 3,
+    "youtube": 3,
 }
 NON_BLOCKING_SOURCE_JOBS = {"x-bookmarks", "youtube"}
 LOCK_ALREADY_RUNNING = 75

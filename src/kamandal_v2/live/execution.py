@@ -3085,6 +3085,15 @@ def _selected_entry_failure(execution: dict[str, Any], *, submit: bool) -> dict[
             continue
         if reason.startswith("basket_ticket_active:"):
             continue
+        if reason.lower() in {
+            "basket_ticket_failed:canceled",
+            "basket_ticket_failed:cancelled",
+            "basket_ticket_failed:expired",
+        }:
+            # The broker terminalized an opening attempt without a fill. That is
+            # routine autonomous evidence, not an operator incident; the order
+            # lineage and daily report retain the complete outcome.
+            continue
         if reason == "basket_complete_or_no_pending_tickets":
             continue
         if _self_handled_health_block(execution, reason):

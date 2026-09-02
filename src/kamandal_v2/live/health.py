@@ -35,6 +35,13 @@ WORKING_CLOSE_STATUSES = {
 }
 CLOSED_CLOSE_STATUSES = {"filled", "manual_fill_recorded", "close_filled"}
 NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES = {"expired_stale_close_approval", "retired_stale_close_failure", "rejected_by_operator", "expired_eod"}
+RESTING_PROFIT_TERMINAL_UNFILLED_STATUSES = {
+    "canceled",
+    "cancelled",
+    "expired",
+    "expired_broker_status_missing",
+    "expired_eod",
+}
 DEFERRED_CLOSE_STATUSES = {"deferred_market_closed"}
 FAILED_CLOSE_STATUSES = {
     "rejected",
@@ -360,6 +367,12 @@ def run_live_health(
             "pending_entry_approvals": len(pending_entry_approvals),
             "reconciliation_blockers": len(reconciliation_blockers),
             "working_close_orders": len([order for order in close_findings if order["reason"] in {"working_close_order", "close_order_stale", "urgent_close_order_stale"}]),
+            "working_resting_profit_orders": len(
+                [order for order in close_findings if order["reason"] == "working_resting_profit_order"]
+            ),
+            "resting_profit_orders_unfilled": len(
+                [order for order in close_findings if order["reason"] == "resting_profit_order_unfilled"]
+            ),
             "exit_pipeline_pending": len([order for order in close_findings if order["reason"] == "exit_pipeline_pending"]),
             "exit_pipeline_stalled": len([order for order in close_findings if order["reason"] == "exit_pipeline_stalled"]),
             "stale_close_orders": len([order for order in close_findings if order["reason"] == "close_order_stale"]),
@@ -587,8 +600,18 @@ def _close_order_finding(order: dict[str, Any]) -> dict[str, Any]:
     group_id = str(order.get("group_id") or "")
     is_failed_close = False
     reason = "working_close_order"
+    resting_profit = _is_resting_profit_order(order)
     if status in CLOSED_CLOSE_STATUSES:
         reason = "close_completed"
+    elif resting_profit and status == "submitted":
+        # A DAY profit target is intentionally patient. Its age does not make it
+        # stale because the manager still observes the lifecycle and may safely
+        # supersede it when a higher-priority action appears.
+        reason = "working_resting_profit_order"
+    elif resting_profit and status in RESTING_PROFIT_TERMINAL_UNFILLED_STATUSES:
+        # Broker DAY cancellation/expiry means only that the target did not fill
+        # in this session. The next lifecycle cycle owns any renewed target.
+        reason = "resting_profit_order_unfilled"
     elif status in NON_ACTIONABLE_TERMINAL_CLOSE_STATUSES:
         reason = "close_expired"
     elif status in DEFERRED_CLOSE_STATUSES:
@@ -616,6 +639,16 @@ def _close_order_finding(order: dict[str, Any]) -> dict[str, Any]:
         "reason": reason,
         "is_failed_close": is_failed_close,
     }
+
+
+def _is_resting_profit_order(order: dict[str, Any]) -> bool:
+    metadata = order.get("metadata") or {}
+    return bool(
+        order.get("resting_profit_order")
+        or metadata.get("resting_profit_order")
+        or str(order.get("exit_reason_class") or order.get("csa_action_reason_class") or "")
+        == "resting_profit"
+    )
 
 
 def _close_order_detail(finding: dict[str, Any], stale_minutes: int) -> str:
