@@ -1,6 +1,6 @@
 # Short Strangle Experiment: Current State and Target
 
-Updated: 2026-08-31 after the natural close
+Updated: 2026-09-02 after the natural close
 Status: shadow evidence collection; conditionally authorized for one pilot on 2026-09-08
 
 ## Stable picture
@@ -74,6 +74,39 @@ available as descriptive research context but is no longer an admission gate.
   shadow, but unresolved failed closes are a pilot-readiness blocker: Friday cannot
   be `GO` unless the normal live-order recovery or operator handling clears them
   and a later health readback is green.
+
+### Wednesday, 2026-09-02
+
+- The frozen policy snapshot remained unchanged and valid at
+  `40f9f66b35418016740ec3693c6ff01c8b469dc8a1bbd3b11c5fcb5bd7b015de`:
+  `mode=shadow`, `csa_stage=shadow`, one contract, `tasty_primary`, full enabled
+  universe expansion, `$2,500` maximum per-order BPR, and
+  `range_gate_required=FALSE`.
+- The natural shadow planner produced a truthful strategy-driven zero-candidate
+  receipt: 94 in-universe ideas were evaluated, none matched every current IV,
+  price, event, and universe gate, and no candidate or plan was constructed.
+  The latest receipt contains no Cartographer range rejection, low-OI veto,
+  preflight failure, or active planning error.
+- Both Monday strangles remain open. Same-day validated midpoint marks now show
+  `$7.50` combined unrealized P&L on `$3,271.14` recorded open BPR. This proves
+  that the natural mark/economics path is operating; it is not a realized result
+  or evidence of strategy expectancy.
+- Deployed commit `d972060` makes shadow account and BPR capacity observational
+  rather than an admission veto and records provider-aligned daily volatility
+  evidence. Tastytrade supplies daily absolute IV and percentile when available;
+  IV Rank remains an explicitly labeled local-history fallback when the broker
+  response does not provide it. No new qualifying package existed today, so the
+  Monday exact-leg Tastytrade dry-runs remain the latest natural BPR evidence.
+- The two cancelled close orders are now correctly classified as routine unfilled
+  resting profit orders rather than failed closes. Live health improved from RED
+  to YELLOW with zero failed closes and zero reconciliation blockers; the remaining
+  warnings are self-handled META and megacap-tech position caps. The prior failed-
+  close pilot blocker is therefore cleared.
+- A read-only Tastytrade account check still showed only `$200` of account value
+  and buying power. Sufficient post-funding capacity is not yet proven and remains
+  a Friday/Tuesday activation gate. One transient SQLite lock recurred and was
+  recovered by the bounded retry path; no Public HTTP 429 appeared in the day's
+  retained events.
 
 ## Target before pilot live
 
