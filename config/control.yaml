@@ -61,8 +61,8 @@ shadow:
   max_new_positions_per_plan: 4
   max_new_plans_per_day: 5
   basket:
-    target_new_bpr_pct: 10
-    hard_new_bpr_pct: 20
+    # Shadow records estimated/dry-run BPR but never treats synthetic account
+    # capacity as an admission or basket-sizing veto. Live keeps its own caps.
     min_marginal_score: 2
     max_new_positions_per_plan: 4
   idea_cooldown_days: 1
@@ -259,9 +259,10 @@ volatility:
   dte_min: 30
   dte_max: 45
   sample_size: 12
-  # capture-iv writes one row per metric below, per symbol, per run.
-  # Each entry is computed the same way (near-ATM weighted mean IV) over its DTE window.
-  # The legacy keys above remain the default/primary 30-45 metric for overlay reads.
+  # capture-iv retains the near-ATM tenor rows below and writes one provider-
+  # agnostic daily IV/IV Rank/IV percentile row per symbol. The afternoon run
+  # replaces the morning daily row; Tastytrade is primary and these tenors are
+  # the local fallback/evidence history.
   metrics:
     - metric: atm_30_45_mean_iv
       dte_min: 30

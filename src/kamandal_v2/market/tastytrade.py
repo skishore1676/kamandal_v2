@@ -281,6 +281,28 @@ class TastytradeAdapter:
         metric = self._market_metric(underlying)
         return normalize_iv_abs(_find_optional_number(metric, ("implied-volatility-index", "implied-volatility", "iv-index")))
 
+    def volatility_metrics(self, underlying: str) -> dict[str, Any]:
+        """Return one cached, read-only market-metrics bundle for daily evidence."""
+
+        metric = self._market_metric(underlying)
+        return {
+            "symbol": underlying.upper(),
+            "iv_abs": normalize_iv_abs(
+                _find_optional_number(metric, ("implied-volatility-index", "implied-volatility", "iv-index"))
+            ),
+            "iv_rank": normalize_iv_rank(
+                _find_optional_number(metric, ("iv-rank", "implied-volatility-rank"))
+            ),
+            "iv_percentile": normalize_iv_percentile(
+                _find_optional_number(metric, ("iv-percentile", "implied-volatility-percentile"))
+            ),
+            "provider_asof": _find_optional_text(
+                metric,
+                ("updated-at", "updated_at", "as-of", "as_of", "timestamp", "time"),
+            ),
+            "provider": "tastytrade",
+        }
+
     def event_status(self, underlying: str) -> str:
         return "unknown"
 
@@ -674,6 +696,20 @@ def _find_optional_number(payload: Any, keys: tuple[str, ...]) -> float | None:
         elif isinstance(item, list):
             stack.extend(item)
     return None
+
+
+def _find_optional_text(payload: Any, keys: tuple[str, ...]) -> str:
+    stack: list[Any] = [payload]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key in keys:
+                if key in item and item[key] not in (None, ""):
+                    return str(item[key])
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return ""
 
 
 def _find_list(payload: Any, keys: tuple[str, ...]) -> list[Any]:

@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from kamandal_v2.domain.models import ChainSnapshot, OptionQuote
 from kamandal_v2.market.fixture import FixtureMarketDataProvider
 from kamandal_v2.market.interfaces import MarketDataProvider
 from kamandal_v2.market.public import PublicAdapter
+from kamandal_v2.market.tastytrade import TastytradeAdapter
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.stores.sqlite import LocalStore
-from kamandal_v2.volatility.iv_store import IvSnapshot, IvStore, today_iso
+from kamandal_v2.volatility.iv_store import (
+    DAILY_IV_ABS_METRIC,
+    DAILY_IV_PERCENTILE_METRIC,
+    DAILY_IV_RANK_METRIC,
+    IvSnapshot,
+    IvStore,
+    today_iso,
+)
 from kamandal_v2.volatility.scale import normalize_iv_abs, normalize_iv_percentile, normalize_iv_rank
 
 
@@ -19,11 +28,13 @@ from kamandal_v2.volatility.scale import normalize_iv_abs, normalize_iv_percenti
 class IvCaptureResult:
     snapshots: list[IvSnapshot]
     failures: dict[str, str]
+    fallbacks: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "snapshots": [snapshot.to_dict() for snapshot in self.snapshots],
             "failures": dict(self.failures),
+            "fallbacks": dict(self.fallbacks),
         }
 
 
@@ -54,6 +65,9 @@ class IvOverlayMarket:
         return self.inner.chain_snapshot(underlying)
 
     def iv_percentile(self, underlying: str) -> float | None:
+        daily = self.iv_store.latest_metric_value(underlying, DAILY_IV_PERCENTILE_METRIC)
+        if daily is not None:
+            return normalize_iv_percentile(daily)
         local = self.iv_store.percentile(
             underlying,
             metric=self.metric,
@@ -70,6 +84,9 @@ class IvOverlayMarket:
         return None
 
     def iv_rank(self, underlying: str) -> float | None:
+        daily = self.iv_store.latest_metric_value(underlying, DAILY_IV_RANK_METRIC)
+        if daily is not None:
+            return normalize_iv_rank(daily)
         local = self.iv_store.rank(
             underlying,
             metric=self.metric,
@@ -81,6 +98,9 @@ class IvOverlayMarket:
         return normalize_iv_rank(self.inner.iv_rank(underlying))
 
     def iv_abs(self, underlying: str) -> float | None:
+        daily = self.iv_store.latest_metric_value(underlying, DAILY_IV_ABS_METRIC)
+        if daily is not None:
+            return normalize_iv_abs(daily)
         latest = self.iv_store.latest(underlying, metric=self.metric)
         if latest is not None:
             return latest.iv
@@ -229,35 +249,136 @@ def capture_iv_snapshots(
     config_source: str = "sheet",
     provider: str = "public",
     store: IvStore | None = None,
+    primary_market: Any | None = None,
 ) -> IvCaptureResult:
     store = store or IvStore()
     symbols = symbols or _universe_symbols(config, source=config_source)
     market = _market_provider(config, provider=provider)
+    primary_market = primary_market if primary_market is not None else _preferred_volatility_market(config)
     local_store = LocalStore()
     specs = _metric_specs(config)
     snapshots: list[IvSnapshot] = []
     failures: dict[str, str] = {}
+    fallbacks: dict[str, str] = {}
+    lookback = int((config.get("volatility") or {}).get("lookback_days") or 252)
+    primary_metric = str((config.get("volatility") or {}).get("metric") or "atm_30_45_mean_iv")
     for symbol in symbols:
+        native: dict[str, Any] = {}
+        if primary_market is not None:
+            try:
+                native = dict(primary_market.volatility_metrics(symbol) or {})
+            except Exception as exc:  # noqa: BLE001 - local evidence is the declared fallback.
+                fallbacks[symbol] = f"tastytrade_unavailable:{type(exc).__name__}"
+        chain: ChainSnapshot | None = None
         try:
             chain = market.chain_snapshot(symbol)
             local_store.save_chain_snapshot(chain)
         except Exception as exc:  # noqa: BLE001
-            failures[symbol] = str(exc)
+            failures[f"{symbol}:local_chain"] = str(exc)
+
+        local_primary: IvSnapshot | None = None
+        if chain is not None:
+            for spec in specs:
+                try:
+                    snapshot = snapshot_from_chain(
+                        chain,
+                        metric=spec.metric,
+                        dte_min=spec.dte_min,
+                        dte_max=spec.dte_max,
+                        sample_size=spec.sample_size,
+                    )
+                    store.save(snapshot)
+                    snapshots.append(snapshot)
+                    if spec.metric == primary_metric:
+                        local_primary = snapshot
+                except Exception as exc:  # noqa: BLE001
+                    failures[f"{symbol}:{spec.metric}"] = str(exc)
+
+        daily = _daily_metric_snapshots(
+            symbol,
+            native=native,
+            local_primary=local_primary,
+            store=store,
+            lookback=lookback,
+        )
+        native_missing = [
+            field
+            for field in ("iv_abs", "iv_rank", "iv_percentile")
+            if native.get(field) in (None, "")
+        ]
+        if native and native_missing:
+            fallbacks.setdefault(symbol, "tastytrade_metrics_incomplete")
+        if not native and local_primary is not None:
+            fallbacks.setdefault(symbol, "tastytrade_metrics_unavailable")
+        if not daily:
+            failures.setdefault(symbol, "daily IV, IV Rank, and IV percentile unavailable")
+        for snapshot in daily:
+            store.save(snapshot)
+            snapshots.append(snapshot)
+    return IvCaptureResult(snapshots=snapshots, failures=failures, fallbacks=fallbacks)
+
+
+def _daily_metric_snapshots(
+    symbol: str,
+    *,
+    native: dict[str, Any],
+    local_primary: IvSnapshot | None,
+    store: IvStore,
+    lookback: int,
+) -> list[IvSnapshot]:
+    captured_at = datetime.now(UTC).isoformat()
+    history_count = len(store.history(symbol, metric=local_primary.metric, limit=lookback + 1)) if local_primary else 0
+    local_values = {
+        DAILY_IV_ABS_METRIC: local_primary.iv if local_primary else None,
+        DAILY_IV_RANK_METRIC: (
+            store.local_rank(symbol, metric=local_primary.metric, lookback=lookback) if local_primary else None
+        ),
+        DAILY_IV_PERCENTILE_METRIC: (
+            store.local_percentile(symbol, metric=local_primary.metric, lookback=lookback) if local_primary else None
+        ),
+    }
+    native_values = {
+        DAILY_IV_ABS_METRIC: normalize_iv_abs(native.get("iv_abs")),
+        DAILY_IV_RANK_METRIC: normalize_iv_rank(native.get("iv_rank")),
+        DAILY_IV_PERCENTILE_METRIC: normalize_iv_percentile(native.get("iv_percentile")),
+    }
+    snapshots: list[IvSnapshot] = []
+    for metric in (DAILY_IV_ABS_METRIC, DAILY_IV_RANK_METRIC, DAILY_IV_PERCENTILE_METRIC):
+        native_value = native_values[metric]
+        local_value = local_values[metric]
+        value = native_value if native_value is not None else local_value
+        if value is None:
             continue
-        for spec in specs:
-            try:
-                snapshot = snapshot_from_chain(
-                    chain,
-                    metric=spec.metric,
-                    dte_min=spec.dte_min,
-                    dte_max=spec.dte_max,
-                    sample_size=spec.sample_size,
-                )
-                store.save(snapshot)
-                snapshots.append(snapshot)
-            except Exception as exc:  # noqa: BLE001
-                failures[f"{symbol}:{spec.metric}"] = str(exc)
-    return IvCaptureResult(snapshots=snapshots, failures=failures)
+        native_source = native_value is not None
+        source = "tastytrade" if native_source else "local_fallback"
+        if native_source:
+            quality = "native"
+        elif metric == DAILY_IV_ABS_METRIC:
+            quality = "local_observed"
+        elif metric == DAILY_IV_PERCENTILE_METRIC:
+            quality = "local_full_history" if history_count >= lookback + 1 else "local_provisional_history"
+        else:
+            quality = "local_full_history" if history_count >= lookback else "local_provisional_history"
+        snapshots.append(
+            IvSnapshot(
+                symbol=symbol,
+                snapshot_date=today_iso(),
+                iv=round(float(value), 4),
+                source=source,
+                metric=metric,
+                quote_count=0 if native_source else int(local_primary.quote_count if local_primary else 0),
+                raw={
+                    "captured_at": captured_at,
+                    "provider_asof": str(native.get("provider_asof") or "") if native_source else "",
+                    "upstream_source": "tastytrade" if native_source else str(local_primary.source if local_primary else ""),
+                    "formula_version": "provider_native" if native_source else "thinkscript_252_v1",
+                    "lookback_requested": lookback,
+                    "history_count": history_count,
+                    "quality": quality,
+                },
+            )
+        )
+    return snapshots
 
 
 def snapshot_from_chain(
@@ -332,3 +453,12 @@ def _market_provider(config: dict[str, Any], *, provider: str) -> MarketDataProv
     if provider == "public":
         return PublicAdapter(config)
     return FixtureMarketDataProvider()
+
+
+def _preferred_volatility_market(config: dict[str, Any]) -> Any | None:
+    broker = config.get("broker") or {}
+    provider = str(broker.get("market_metrics_provider") or "").strip().lower()
+    if provider not in {"tastytrade", "tasty"}:
+        return None
+    adapter = TastytradeAdapter(config)
+    return adapter if adapter.available() else None

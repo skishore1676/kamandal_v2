@@ -110,18 +110,19 @@ def _constraint_violation(
     control: dict,
 ) -> str:
     total_bpr = sum(candidate.estimated_bpr for candidate in plan)
-    if hard_new_bpr_pct is not None and (total_bpr / max(portfolio.account_size, 1.0)) * 100 > hard_new_bpr_pct:
-        return "new_bpr_cap"
-    if ((portfolio.bpr_used + total_bpr) / max(portfolio.account_size, 1.0)) * 100 > max_bpr_pct:
-        return "portfolio_bpr_cap"
-    if violation := _venue_bpr_violation(plan, control):
-        return violation
-    per_underlying: dict[str, float] = dict(portfolio.per_underlying_bpr)
-    for candidate in plan:
-        per_underlying[candidate.underlying] = per_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
-    for value in per_underlying.values():
-        if (value / max(portfolio.account_size, 1.0)) * 100 > max_underlying_pct:
-            return "underlying_bpr_cap"
+    if _bpr_capacity_enforced(control):
+        if hard_new_bpr_pct is not None and (total_bpr / max(portfolio.account_size, 1.0)) * 100 > hard_new_bpr_pct:
+            return "new_bpr_cap"
+        if ((portfolio.bpr_used + total_bpr) / max(portfolio.account_size, 1.0)) * 100 > max_bpr_pct:
+            return "portfolio_bpr_cap"
+        if violation := _venue_bpr_violation(plan, control):
+            return violation
+        per_underlying: dict[str, float] = dict(portfolio.per_underlying_bpr)
+        for candidate in plan:
+            per_underlying[candidate.underlying] = per_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
+        for value in per_underlying.values():
+            if (value / max(portfolio.account_size, 1.0)) * 100 > max_underlying_pct:
+                return "underlying_bpr_cap"
     if violation := _delta_guard_violation(plan, portfolio, control):
         return violation
     return ""
@@ -236,6 +237,8 @@ def _score_components(plan: list[Candidate], portfolio: PortfolioState, control:
 
 
 def _new_bpr_target_score(total_bpr: float, portfolio: PortfolioState, control: dict) -> float | None:
+    if not _bpr_capacity_enforced(control):
+        return None
     target_new_bpr_pct = _basket_policy(control).target_new_bpr_pct
     if target_new_bpr_pct is None or target_new_bpr_pct <= 0:
         return None
@@ -264,11 +267,23 @@ def _basket_policy(control: dict, *, max_new_positions: int | None = None) -> _B
     limits = [limit for limit in configured_limits if limit is not None]
 
     return _BasketPolicy(
-        target_new_bpr_pct=_optional_float(basket_cfg.get("target_new_bpr_pct", planner_cfg.get("target_new_bpr_pct"))),
-        hard_new_bpr_pct=_optional_float(basket_cfg.get("hard_new_bpr_pct", planner_cfg.get("hard_new_bpr_pct"))),
+        target_new_bpr_pct=(
+            _optional_float(basket_cfg.get("target_new_bpr_pct", planner_cfg.get("target_new_bpr_pct")))
+            if mode != "shadow"
+            else None
+        ),
+        hard_new_bpr_pct=(
+            _optional_float(basket_cfg.get("hard_new_bpr_pct", planner_cfg.get("hard_new_bpr_pct")))
+            if mode != "shadow"
+            else None
+        ),
         min_marginal_score=_optional_float(basket_cfg.get("min_marginal_score", planner_cfg.get("min_marginal_score"))),
         max_new_positions_per_plan=min(limits) if limits else None,
     )
+
+
+def _bpr_capacity_enforced(control: dict) -> bool:
+    return str((control.get("runtime") or {}).get("mode") or "shadow").strip().lower() != "shadow"
 
 
 def _optional_float(value: object) -> float | None:
@@ -474,6 +489,7 @@ def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState,
             _marginal_scores(plan, portfolio, control),
             _rank_adjustment(plan, portfolio, control, rank_context),
             _rank_score(plan, portfolio, control, rank_context),
+            capacity_mode="enforced" if _bpr_capacity_enforced(control) else "observe_only",
         ),
         blocked_by=[],
         operator_action=operator_action,
@@ -516,11 +532,14 @@ def _reasons(
     marginal_scores: list[float],
     rank_adjustment: float,
     rank_score: float,
+    *,
+    capacity_mode: str,
 ) -> list[str]:
     last_marginal_score = marginal_scores[-1] if marginal_scores else 0.0
     return [
         f"{len(plan)} trades",
         f"bpr={total_bpr:.2f}",
+        f"bpr_capacity_mode={capacity_mode}",
         f"delta_change={greeks.delta:.2f}",
         f"theta_change={greeks.theta:.2f}",
         f"vega_change={greeks.vega:.2f}",

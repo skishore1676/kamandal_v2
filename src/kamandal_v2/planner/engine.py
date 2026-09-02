@@ -323,7 +323,7 @@ def _iv_market(
     missing_policy: str,
     provisional_percentile: float,
 ) -> MarketDataProvider:
-    if _use_tastytrade_live_iv(config):
+    if _use_tastytrade_iv(config):
         tastytrade = TastytradeAdapter(config)
         if tastytrade.available():
             return PrimaryIvOverlayMarket(
@@ -347,11 +347,10 @@ def _iv_market(
     )
 
 
-def _use_tastytrade_live_iv(config: dict[str, Any]) -> bool:
-    mode = str((config.get("runtime") or {}).get("mode") or "shadow").lower()
+def _use_tastytrade_iv(config: dict[str, Any]) -> bool:
     metrics_provider = str((config.get("broker") or {}).get("market_metrics_provider") or "").lower()
     active_broker = str((config.get("broker") or {}).get("active") or "").lower()
-    return mode == "live" and (metrics_provider or active_broker) in {"tastytrade", "tasty"}
+    return (metrics_provider or active_broker) in {"tastytrade", "tasty"}
 
 
 def _preflight_client(market: Any) -> Any:

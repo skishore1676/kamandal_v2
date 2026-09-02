@@ -8,7 +8,13 @@ from kamandal_v2.volatility.iv import (
     capture_iv_snapshots,
     snapshot_from_chain,
 )
-from kamandal_v2.volatility.iv_store import IvSnapshot, IvStore
+from kamandal_v2.volatility.iv_store import (
+    DAILY_IV_ABS_METRIC,
+    DAILY_IV_PERCENTILE_METRIC,
+    DAILY_IV_RANK_METRIC,
+    IvSnapshot,
+    IvStore,
+)
 
 
 def _quote(*, strike: float, dte: int, option_type: str, iv: float) -> OptionQuote:
@@ -66,7 +72,7 @@ def test_short_dated_metric_uses_only_near_term_quotes() -> None:
     assert short.iv != long_.iv
 
 
-def test_capture_iv_snapshots_writes_both_metrics(tmp_path) -> None:
+def test_capture_iv_snapshots_writes_chain_and_daily_metrics(tmp_path) -> None:
     config = {
         "volatility": {
             "metrics": [
@@ -97,10 +103,101 @@ def test_capture_iv_snapshots_writes_both_metrics(tmp_path) -> None:
 
     assert result.failures == {}
     metrics = sorted(snap.metric for snap in result.snapshots)
-    assert metrics == ["atm_2_10_mean_iv", "atm_30_45_mean_iv"]
+    assert metrics == [
+        "atm_2_10_mean_iv",
+        "atm_30_45_mean_iv",
+        DAILY_IV_ABS_METRIC,
+        DAILY_IV_PERCENTILE_METRIC,
+        DAILY_IV_RANK_METRIC,
+    ]
     assert market.calls == 1  # chain fetched once, reused for both metrics
     assert store.latest("TSLA", metric="atm_2_10_mean_iv").iv == 70.0
     assert store.latest("TSLA", metric="atm_30_45_mean_iv").iv == 50.0
+    assert store.latest("TSLA", metric=DAILY_IV_ABS_METRIC).source == "local_fallback"
+    assert store.latest("TSLA", metric=DAILY_IV_RANK_METRIC).raw["quality"] == "local_provisional_history"
+    assert result.fallbacks == {"TSLA": "tastytrade_metrics_unavailable"}
+
+
+def test_capture_prefers_tastytrade_native_daily_metrics(tmp_path) -> None:
+    config = {"volatility": {"metrics": [{"metric": "atm_30_45_mean_iv", "dte_min": 30, "dte_max": 45}]}}
+    store = IvStore(tmp_path / "iv.db")
+    market = _ShortDatedChainMarket()
+
+    class _Primary:
+        def volatility_metrics(self, underlying: str) -> dict:
+            assert underlying == "TSLA"
+            return {
+                "iv_abs": 31.5,
+                "iv_rank": 60.0,
+                "iv_percentile": 72.0,
+                "provider_asof": "2026-09-02T15:00:00Z",
+            }
+
+    import kamandal_v2.volatility.iv as iv_module
+
+    class _NullLocalStore:
+        def save_chain_snapshot(self, snapshot) -> None:  # noqa: ANN001
+            return None
+
+    original_provider = iv_module._market_provider
+    original_local_store = iv_module.LocalStore
+    iv_module._market_provider = lambda config, *, provider: market
+    iv_module.LocalStore = _NullLocalStore
+    try:
+        result = capture_iv_snapshots(
+            config,
+            symbols=["TSLA"],
+            provider="public",
+            store=store,
+            primary_market=_Primary(),
+        )
+    finally:
+        iv_module._market_provider = original_provider
+        iv_module.LocalStore = original_local_store
+
+    assert result.failures == {}
+    assert result.fallbacks == {}
+    assert store.metric_evidence("TSLA", DAILY_IV_ABS_METRIC)["value"] == 31.5
+    rank = store.metric_evidence("TSLA", DAILY_IV_RANK_METRIC)
+    assert rank["value"] == 60.0
+    assert rank["source"] == "tastytrade"
+    assert rank["raw"]["quality"] == "native"
+    assert rank["raw"]["provider_asof"] == "2026-09-02T15:00:00Z"
+
+
+def test_capture_records_partial_tastytrade_fallback_per_metric(tmp_path) -> None:
+    config = {"volatility": {"metrics": [{"metric": "atm_30_45_mean_iv", "dte_min": 30, "dte_max": 45}]}}
+    store = IvStore(tmp_path / "iv.db")
+    market = _ShortDatedChainMarket()
+
+    class _PartialPrimary:
+        def volatility_metrics(self, underlying: str) -> dict:
+            return {"iv_abs": 32.0, "iv_rank": 61.0, "iv_percentile": None}
+
+    import kamandal_v2.volatility.iv as iv_module
+
+    class _NullLocalStore:
+        def save_chain_snapshot(self, snapshot) -> None:  # noqa: ANN001
+            return None
+
+    original_provider = iv_module._market_provider
+    original_local_store = iv_module.LocalStore
+    iv_module._market_provider = lambda config, *, provider: market
+    iv_module.LocalStore = _NullLocalStore
+    try:
+        result = capture_iv_snapshots(
+            config,
+            symbols=["TSLA"],
+            provider="public",
+            store=store,
+            primary_market=_PartialPrimary(),
+        )
+    finally:
+        iv_module._market_provider = original_provider
+        iv_module.LocalStore = original_local_store
+
+    assert result.fallbacks == {"TSLA": "tastytrade_metrics_incomplete"}
+    assert store.latest("TSLA", metric=DAILY_IV_PERCENTILE_METRIC).source == "local_fallback"
 
 
 def test_snapshot_from_chain_uses_near_atm_iv_quotes() -> None:
@@ -168,7 +265,7 @@ def test_iv_overlay_prefers_local_percentile(tmp_path) -> None:
         )
     overlay = IvOverlayMarket(FixtureMarketDataProvider(), store)
 
-    assert overlay.iv_percentile("TSLA") == 50.0
+    assert overlay.iv_percentile("TSLA") == 0.0
     assert overlay.iv_rank("TSLA") == 0.0
     assert overlay.iv_abs("TSLA") == 30.0
 
@@ -277,6 +374,6 @@ def test_primary_iv_overlay_falls_back_to_local_history(tmp_path) -> None:
         )
     overlay = PrimaryIvOverlayMarket(FixtureMarketDataProvider(), store, primary=MissingPrimaryMarket())
 
-    assert overlay.iv_percentile("TSLA") == 50.0
+    assert overlay.iv_percentile("TSLA") == 0.0
     assert overlay.iv_rank("TSLA") == 0.0
     assert overlay.iv_abs("TSLA") == 30.0

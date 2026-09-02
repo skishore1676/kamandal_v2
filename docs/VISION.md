@@ -161,11 +161,12 @@ fields.
 
 Therefore Kamandal V2 should maintain its own IV analytics store:
 
-- Store a daily normalized IV value per underlying.
-- Prefer a consistent definition such as 30 DTE ATM/interpolated IV, or another
-  explicit approximation if chain coverage is thin.
-- Compute IV rank and IV percentile internally over a configurable lookback,
-  defaulting to 252 trading days.
+- Store daily IV, IV Rank, and IV percentile per enabled underlying.
+- Prefer Tastytrade-native market metrics; use the 30-45 DTE near-ATM Public
+  chain approximation only as a labeled local fallback.
+- For fallback, compute IV rank and IV percentile over a configurable lookback,
+  defaulting to 252 trading days, and retain the actual available observation
+  count when history is incomplete.
 - Record the source and formula version on every value so the number is
   auditable and can be recalculated later.
 

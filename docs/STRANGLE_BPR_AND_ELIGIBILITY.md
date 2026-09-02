@@ -28,12 +28,15 @@ broker's account and portfolio rules. Kamandal therefore uses this order:
 5. If broker preflight succeeds but omits BPR, the local estimate may be used and
    the candidate is labeled `bpr_source=local_fallback` and
    `broker_bpr_missing=true`.
-6. All portfolio, per-underlying, basket, and structure caps consume the resolved
-   BPR before ranking or selection.
+6. In shadow, resolved BPR is recorded but synthetic account, venue, basket, and
+   per-underlying capacity do not veto or size the experiment. In pilot/live,
+   all portfolio, per-underlying, basket, broker, and structure caps consume the
+   resolved BPR before ranking or selection.
 
 The shadow receipt distinguishes `quote_source=public`,
 `bpr_source=tastytrade_dry_run|local_estimate`, `shadow_eligible=true`, and
-`live_blocker=public_level_4_required`. Public quotes are kept as one coherent
+`live_blocker=public_level_4_required`, and `shadow_bpr_capacity_mode=observe_only`.
+Public quotes are kept as one coherent
 snapshot; Kamandal does not mix individual legs from different providers.
 
 Defined-risk structures retain the existing safety-floor behavior: Kamandal does
@@ -55,7 +58,7 @@ fields on the relevant Google Sheet `playbooks` row:
 - `underlying_price_min` and `underlying_price_max` contain the operator's range;
 - `iv_rank_min` and `iv_rank_max` contain the operator's range; and
 - the idea, playbook, DTE/delta, earnings/event, quote integrity, liquidity,
-  broker preflight, BPR, portfolio, concentration, health, ranking,
+  broker preflight evidence, portfolio ownership, health, ranking,
   approval, session, and execution gates all pass.
 
 Existing explicit strangle permissions remain valid even outside this range. The
@@ -68,9 +71,9 @@ retain the low-OI warning and ask for more credit than midpoint using the shared
 liquidity-adjusted entry campaign. Structurally invalid quotes and the separate
 package-spread safety gates remain hard failures.
 
-The Google Sheet is canonical. The repository contains no price/IV fallback for
-this expansion. A missing switch or bound fails closed and leaves only existing
-explicit universe/playbook permissions active.
+The Google Sheet is canonical. The repository contains no price or IV-Rank
+threshold fallback for this expansion. A missing switch or bound fails closed
+and leaves only existing explicit universe/playbook permissions active.
 
 ## Deployment proof required
 

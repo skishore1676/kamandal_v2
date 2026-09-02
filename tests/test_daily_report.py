@@ -211,3 +211,47 @@ def test_daily_report_emits_exact_strategy_evidence_packet(tmp_path) -> None:
     assert Path(artifacts["weekly_economics"]).name == "csa1_weekly_economics_2026-08-21.json"
     assert Path(artifacts["experiment_status"]).name == "csa1_experiment_status_2026-08-21.json"
     assert all(Path(path).exists() for path in artifacts.values())
+
+
+def test_operations_digest_is_passive_and_separates_attention_states() -> None:
+    events = [
+        {"event_type": "manager_retry", "payload": {"operator_state": "self_handled"}},
+        {"event_type": "routine", "payload": {}},
+    ]
+    attention_history = [
+        {
+            "created_at": "2026-09-02T14:00:00Z",
+            "event_type": "launchd_job_failure_state:x-bookmarks",
+            "payload": {"status": "open", "reason": "transient"},
+        },
+        {
+            "created_at": "2026-09-02T14:05:00Z",
+            "event_type": "launchd_job_failure_state:x-bookmarks",
+            "payload": {"status": "cleared"},
+        },
+        {
+            "created_at": "2026-09-02T14:10:00Z",
+            "event_type": "manager_attention_state",
+            "payload": {"status": "open", "reason": "close rejected"},
+        },
+    ]
+    live_intents = [
+        {"status": "resting_profit_order_unfilled", "payload": {"resting_profit_order": True}},
+    ]
+
+    digest = daily_report._operations_digest(
+        date(2026, 9, 2),
+        events=events,
+        attention_history=attention_history,
+        live_intents=live_intents,
+    )
+
+    assert digest["attention_opened_today"] == 2
+    assert digest["attention_cleared_today"] == 1
+    assert digest["operator_attention_open"] == 1
+    assert digest["open_attention"][0]["reason"] == "close rejected"
+    assert digest["self_handled_events_today"] == 1
+    assert digest["source_degradations_today"] == 1
+    assert digest["source_recoveries_today"] == 1
+    assert digest["routine_unfilled_profit_targets_today"] == 1
+    assert digest["contract"] == "passive_read_model_no_notification_owner"

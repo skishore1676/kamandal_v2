@@ -13,7 +13,7 @@ run_iv_capture() {
   config_source="${KAMANDAL_IV_CONFIG_SOURCE:-sheet}"
 
   mkdir -p data/logs
-  log "Capturing IV snapshot provider=$provider config_source=$config_source."
+  log "Capturing Tastytrade-first daily IV metrics with provider=$provider local fallback config_source=$config_source."
   "$KAMANDAL_BIN" capture-iv \
     --config-source "$config_source" \
     --provider "$provider"

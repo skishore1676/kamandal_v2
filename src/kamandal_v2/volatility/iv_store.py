@@ -11,6 +11,11 @@ from typing import Any
 from kamandal_v2.paths import resolve_path
 
 
+DAILY_IV_ABS_METRIC = "daily_iv_abs"
+DAILY_IV_RANK_METRIC = "daily_iv_rank"
+DAILY_IV_PERCENTILE_METRIC = "daily_iv_percentile"
+
+
 @dataclass(slots=True)
 class IvSnapshot:
     symbol: str
@@ -107,17 +112,49 @@ class IvStore:
         items = self.history(symbol, metric=metric, limit=1)
         return items[-1] if items else None
 
+    def latest_metric_value(self, symbol: str, metric: str) -> float | None:
+        snapshot = self.latest(symbol, metric=metric)
+        return snapshot.iv if snapshot is not None else None
+
+    def metric_evidence(self, symbol: str, metric: str) -> dict[str, Any] | None:
+        snapshot = self.latest(symbol, metric=metric)
+        if snapshot is None:
+            return None
+        return {
+            "value": snapshot.iv,
+            "source": snapshot.source,
+            "snapshot_date": snapshot.snapshot_date,
+            "metric": snapshot.metric,
+            "raw": dict(snapshot.raw),
+        }
+
     def percentile(self, symbol: str, *, metric: str = "atm_30_45_mean_iv", lookback: int = 252, min_observations: int = 1) -> float | None:
-        items = self.history(symbol, metric=metric, limit=lookback)
+        native = self.latest_metric_value(symbol, DAILY_IV_PERCENTILE_METRIC)
+        if native is not None:
+            return native
+        return self.local_percentile(symbol, metric=metric, lookback=lookback, min_observations=min_observations)
+
+    def local_percentile(self, symbol: str, *, metric: str = "atm_30_45_mean_iv", lookback: int = 252, min_observations: int = 1) -> float | None:
+        # ThinkScript compares today's IV with the preceding TimePeriod bars.
+        # Exclude the current observation and use a strict-below comparison so
+        # ties and the current row do not inflate the percentile.
+        items = self.history(symbol, metric=metric, limit=lookback + 1)
         if len(items) < min_observations:
             return None
         if len(items) == 1:
             return 50.0
         latest = items[-1].iv
-        less_or_equal = sum(1 for item in items if item.iv <= latest)
-        return round((less_or_equal / len(items)) * 100.0, 2)
+        prior = items[:-1][-lookback:]
+        counts_below = sum(1 for item in prior if item.iv < latest)
+        return round((counts_below / len(prior)) * 100.0, 2)
 
     def rank(self, symbol: str, *, metric: str = "atm_30_45_mean_iv", lookback: int = 252, min_observations: int = 1) -> float | None:
+        native = self.latest_metric_value(symbol, DAILY_IV_RANK_METRIC)
+        if native is not None:
+            return native
+        return self.local_rank(symbol, metric=metric, lookback=lookback, min_observations=min_observations)
+
+    def local_rank(self, symbol: str, *, metric: str = "atm_30_45_mean_iv", lookback: int = 252, min_observations: int = 1) -> float | None:
         items = self.history(symbol, metric=metric, limit=lookback)
         if len(items) < min_observations:
             return None

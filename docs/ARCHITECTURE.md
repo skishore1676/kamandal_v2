@@ -694,9 +694,25 @@ short-lived access tokens are generated automatically at runtime.
 ### Autonomous short-strangle admission
 
 The Sheet is authoritative for the volatility, DTE, delta, profit, time, event,
-and loss controls. The current intended policy is IV percentile 70-100,
-IV rank 50-100, 35-50 DTE with target 45, 14-22 delta, 40% profit, exit at 21
-DTE, pre-event exit at five days, and a 3x package-loss close.
+and loss controls. The current short-strangle volatility admission policy is IV
+Rank 50-100; raw IV and IV percentile are retained as daily evidence but are not
+co-gates. The remaining policy is 35-50 DTE with target 45, 14-22 delta, 40%
+profit, exit at 21 DTE, pre-event exit at five days, and a 3x package-loss close.
+
+Kamandal stores one daily IV, IV Rank, and IV percentile observation for every
+enabled universe symbol. Tastytrade market metrics are preferred. The Public
+option-chain approximation is a labeled fallback whose receipt includes the
+actual local observation count and formula version; a partial history is never
+presented as a complete 252-day measure. The 13:45 CT capture becomes the final
+daily row, while every planning candidate retains the values observed when it
+was built.
+
+Shadow BPR is evidence, not capacity authority. Kamandal records broker dry-run
+BPR when available and the labeled local estimate otherwise, but synthetic
+account size, venue buying power, basket BPR, and per-underlying BPR cannot veto
+a shadow lifecycle. Structural, quote, liquidity, event, duplicate, ownership,
+and lifecycle-safety gates remain active. Pilot/live retain every real account,
+broker, concentration, and BPR gate.
 
 Kamandal does not require current-range evidence from Market Cartographer. The
 retired rule confused a description of recent price containment with a forecast

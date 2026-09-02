@@ -303,7 +303,7 @@ def test_plan_reasons_include_optimizer_components() -> None:
     assert "volatility_capture:" in reasons
 
 
-def test_staged_basket_controls_allow_multi_candidate_shadow_plan() -> None:
+def test_shadow_basket_is_ranked_without_bpr_target_scoring() -> None:
     candidates = [
         _candidate(
             f"put_spread_{index}",
@@ -334,14 +334,15 @@ def test_staged_basket_controls_allow_multi_candidate_shadow_plan() -> None:
 
     assert len(plans[0].candidates) == 3
     reasons = " ".join(plans[0].reasons)
-    assert "new_bpr_target_fit:" in reasons
+    assert "new_bpr_target_fit:" not in reasons
+    assert "bpr_capacity_mode=observe_only" in reasons
     assert "basket_controls=" in reasons
-    assert "target_new_bpr_pct:15.00" in reasons
+    assert "target_new_bpr_pct:none" in reasons
     assert "max_new_positions_per_plan:3" in reasons
     assert "marginal_score=" in reasons
 
 
-def test_hard_new_bpr_caps_staged_basket_size() -> None:
+def test_shadow_ignores_synthetic_hard_new_bpr_cap() -> None:
     candidates = [
         _candidate(
             f"candidate_{index}",
@@ -370,8 +371,42 @@ def test_hard_new_bpr_caps_staged_basket_size() -> None:
         ),
     )
 
+    assert len(plans[0].candidates) == 3
+    assert plans[0].total_bpr == 1800
+
+
+def test_live_still_enforces_hard_new_bpr_cap() -> None:
+    candidates = [
+        _candidate(
+            f"candidate_{index}",
+            underlying=underlying,
+            structure="put_spread",
+            bpr=600,
+            delta=-0.06,
+            gamma=-0.004,
+            theta=0.05,
+            vega=-0.10,
+            net_credit=1.0,
+            iv_pct=70.0,
+            iv_rank=70.0,
+        )
+        for index, underlying in enumerate(["MSFT", "AAPL", "NVDA"], start=1)
+    ]
+    control = _control()
+    control["planner"] = {
+        "basket": {
+            "target_new_bpr_pct": 18,
+            "hard_new_bpr_pct": 12,
+            "min_marginal_score": 0.01,
+            "max_new_positions_per_plan": 4,
+        }
+    }
+
+    plans = generate_plans(candidates, _portfolio(), control)
+
     assert len(plans[0].candidates) == 2
     assert plans[0].total_bpr == 1200
+    assert "bpr_capacity_mode=enforced" in " ".join(plans[0].reasons)
 
 
 def test_min_marginal_score_stops_weak_basket_additions() -> None:

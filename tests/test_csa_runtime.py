@@ -288,7 +288,7 @@ def test_shadow_scan_uses_paper_account_and_ignores_live_account_entry_bars(tmp_
     assert shadow_lifecycles[0].metadata["bpr"] > 100
 
 
-def test_shadow_scan_reserves_csa_bpr_against_shared_paper_buying_power(tmp_path) -> None:
+def test_shadow_scan_measures_bpr_without_capacity_veto(tmp_path) -> None:
     database = tmp_path / "kamandal.db"
     LocalStore(database)
     migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
@@ -318,8 +318,44 @@ def test_shadow_scan_reserves_csa_bpr_against_shared_paper_buying_power(tmp_path
 
     assert result.ok
     assert result.opportunity_count == 2
-    assert result.admitted_count == 1
-    assert len(CsaStore(database, read_only=True).open_lifecycles()) == 1
+    assert result.admitted_count == 2
+    lifecycles = CsaStore(database, read_only=True).open_lifecycles()
+    assert len(lifecycles) == 2
+    assert all(item.metadata["bpr"] > 0 for item in lifecycles)
+
+
+def test_shadow_does_not_override_unknown_structural_preflight_failure() -> None:
+    policy = load_csa_operator_policy({}, tables=_tables(), read_at="2026-08-10T12:00:00Z").policies[0]
+    candidate = Candidate(
+        candidate_id="candidate",
+        idea_id="idea",
+        underlying="XYZ",
+        playbook_id=policy.playbook_id,
+        structure="short_strangle",
+        legs=[],
+        net_credit=2.0,
+        estimated_bpr=3100.0,
+        greeks=Greeks(),
+        liquidity_score=1.0,
+        score=0.0,
+    )
+    structural = PreflightResult(
+        ok=False,
+        bpr=3100.0,
+        message="invalid option contract",
+        raw={"public_api_error": {"http_status": 400, "code": 422}},
+    )
+
+    resolved = _resolve_preflight(
+        candidate,
+        policy,
+        structural,
+        shadow_bpr_preflight=None,
+        execution_mode="shadow",
+    )
+
+    assert resolved is structural
+    assert resolved.ok is False
 
 
 def test_shadow_runtime_ignores_nonshadow_stage_without_duplicate_execution(tmp_path) -> None:

@@ -210,6 +210,12 @@ def test_tastytrade_preflight_preserves_bpr_from_failed_margin_check(tmp_path) -
 def test_tastytrade_market_metrics_use_symbols_query(tmp_path) -> None:
     adapter = _adapter(tmp_path)
 
+    bundle = adapter.volatility_metrics("TSLA")
+    assert bundle["symbol"] == "TSLA"
+    assert bundle["iv_abs"] == 42.0
+    assert bundle["iv_rank"] == 0.0
+    assert bundle["iv_percentile"] == 71.2
+    assert bundle["provider"] == "tastytrade"
     assert adapter.iv_abs("TSLA") == 42.0
     assert adapter.iv_rank("TSLA") == 0.0
     assert adapter.iv_percentile("TSLA") == 71.2

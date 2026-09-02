@@ -73,6 +73,11 @@ and operator-state metadata rather than color or lifecycle milestones alone.
 - Intraday daily reports are passive JSON/Markdown evidence for TradeLab and
   operator surfaces. They do not send Telegram status or repeat an incident
   already owned by planning, execution, reconciliation, or live health.
+- The daily report may project a compact operations digest from existing event,
+  order, and lifecycle facts: attention opened/cleared, unresolved operator
+  attention, self-handled events, source degradation/recovery, and routine
+  unfilled profit targets. This is a read model, not another incident ledger,
+  scheduler, or notification owner.
 - A broker-confirmed terminal unfilled entry retains its attempts, reprices,
   limit path, expiration, and terminal state in the order ledger. The daily
   report surfaces those intents; immediate Telegram delivery is disabled in

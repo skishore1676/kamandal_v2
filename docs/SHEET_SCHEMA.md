@@ -144,12 +144,15 @@ Notes:
   `live_max_bpr_per_order` until a protected Sheet migration defines one unit
   and updates every row.
 - `iv_percentile_min/max`: optional distribution percentile gate.
-- `iv_rank_min/max`: optional min/max-rank gate against the local lookback.
+- `iv_rank_min/max`: optional min/max-rank gate. Tastytrade-native IV Rank is
+  preferred; a labeled local 252-day formula is the fallback.
 - `universe_expansion_enabled`: optional operator switch. For a short-strangle
   row, `TRUE` allows already-enabled universe symbols outside the row's normal
   profile/allowlist routing to be considered. It does not add symbols or bypass
   any other gate. For `short_strangle_high_iv`, the operator-approved intent is
-  all enabled universe profiles rather than indices only.
+  all enabled universe profiles rather than indices only. Its IV-percentile
+  cells are intentionally blank: IV Rank is the volatility admission signal,
+  while IV and IV percentile remain stored research/reporting evidence.
 - `underlying_price_min/max`: required Sheet-owned bounds when universe expansion
   is enabled. The same row's `iv_rank_min/max` are also required. Missing values
   fail closed; the repository provides no fallback range.

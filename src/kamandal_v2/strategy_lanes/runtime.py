@@ -436,11 +436,9 @@ def _resolve_preflight(
     shadow_bpr_preflight: Any | None,
     execution_mode: str,
 ) -> PreflightResult:
-    if primary.ok or execution_mode != "shadow" or policy.lane is not LaneId.SHORT_STRANGLE:
+    if primary.ok or execution_mode != "shadow":
         return primary
-    raw = primary.raw if isinstance(primary.raw, dict) else {}
-    public_error = raw.get("public_api_error") if isinstance(raw.get("public_api_error"), dict) else {}
-    if int(public_error.get("code") or 0) != 159:
+    if not _shadow_capacity_only_failure(primary):
         return primary
 
     secondary = shadow_bpr_preflight.preflight(candidate) if shadow_bpr_preflight is not None else None
@@ -448,18 +446,48 @@ def _resolve_preflight(
     if bpr <= 0:
         return primary
     secondary_raw = secondary.raw if secondary is not None and isinstance(secondary.raw, dict) else {}
+    primary_raw = primary.raw if isinstance(primary.raw, dict) else {}
+    public_error = primary_raw.get("public_api_error") if isinstance(primary_raw.get("public_api_error"), dict) else {}
     return PreflightResult(
         ok=True,
         bpr=round(bpr, 2),
-        message="shadow BPR estimated after Public Level 4 entitlement rejection",
+        message="shadow BPR recorded after a capacity-only broker preflight failure",
         raw={
             "bpr_source": "broker_preflight" if secondary_raw.get("response") else "local_fallback",
             "bpr_broker": "tastytrade" if secondary_raw.get("response") else "local",
-            "public_live_eligibility": "level_4_required",
-            "public_error_code": 159,
+            "shadow_bpr_capacity_mode": "observe_only",
+            "primary_preflight_message": primary.message,
+            "public_live_eligibility": "level_4_required" if int(public_error.get("code") or 0) == 159 else "capacity_blocked",
+            "public_error_code": int(public_error.get("code") or 0),
             "secondary_preflight_ok": secondary.ok if secondary is not None else None,
-            "shadow_only_warning": "public_short_strangle_level_4_required",
+            "shadow_only_warning": "broker_capacity_not_live_eligible",
         },
+    )
+
+
+def _shadow_capacity_only_failure(preflight: PreflightResult) -> bool:
+    raw = preflight.raw if isinstance(preflight.raw, dict) else {}
+    public_error = raw.get("public_api_error") if isinstance(raw.get("public_api_error"), dict) else {}
+    if int(public_error.get("code") or 0) == 159:
+        return True
+    searchable = " ".join(
+        [
+            str(preflight.message or ""),
+            str(public_error.get("message") or ""),
+            str(raw.get("response") or ""),
+        ]
+    ).lower()
+    return any(
+        phrase in searchable
+        for phrase in (
+            "buying power",
+            "buying-power",
+            "margin requirement",
+            "insufficient funds",
+            "level 4",
+            "options level",
+            "not approved for",
+        )
     )
 
 def _advance_working_orders(
@@ -557,11 +585,15 @@ def _admission_context(
             if execution_mode == "shadow"
             else bpr <= float(policy.resolved_fields["live_max_bpr_per_order"])
         ),
-        buying_power_available=bpr <= float(portfolio.buying_power),
+        buying_power_available=(True if execution_mode == "shadow" else bpr <= float(portfolio.buying_power)),
         ownership_clear=ownership_clear,
         working_order_conflict=False,
         event_state=str(opportunity.event_context.get("state") or "not_applicable"),
-        evidence={"candidate_id": candidate.candidate_id, "shape_reason": shape.reason},
+        evidence={
+            "candidate_id": candidate.candidate_id,
+            "shape_reason": shape.reason,
+            "bpr_capacity_mode": "observe_only" if execution_mode == "shadow" else "enforced",
+        },
     )
 
 

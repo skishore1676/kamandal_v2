@@ -102,6 +102,7 @@ def build_daily_report(
         groups = _load_live_groups(conn)
         shadow_summary = _load_shadow_summary(conn, day)
         recon_issues = _load_recon_issues(conn)
+        attention_history = _load_attention_history(conn, day)
 
     event_counts = Counter(e["event_type"] for e in events)
     live_health = _safe_live_health(path, config, now=now)
@@ -122,6 +123,12 @@ def build_daily_report(
 
     # Advisory summary from events
     advisory_metrics = _advisory_metrics(events)
+    operations_digest = _operations_digest(
+        day,
+        events=events,
+        attention_history=attention_history,
+        live_intents=live_intents,
+    )
 
     trade_summary = {
         "live_open_groups": len([g for g in groups if g["status"] in ("open", "pending")]),
@@ -149,6 +156,7 @@ def build_daily_report(
         "live_health": live_health,
         "portfolio_books": portfolio_books,
         "advisory": advisory_metrics,
+        "operations_digest": operations_digest,
         "trade_summary": trade_summary,
         "positions": positions[:20],
         "groups": groups[:20],
@@ -185,6 +193,15 @@ def _empty_report(day: date) -> dict[str, Any]:
         "live_health": {"overall": "NO_DATA", "reasons": []},
         "portfolio_books": {"live": {}, "shadow": {}},
         "advisory": {},
+        "operations_digest": {
+            "attention_opened_today": 0,
+            "attention_cleared_today": 0,
+            "operator_attention_open": 0,
+            "self_handled_events_today": 0,
+            "source_degradations_today": 0,
+            "source_recoveries_today": 0,
+            "routine_unfilled_profit_targets_today": 0,
+        },
         "trade_summary": {},
         "positions": [],
         "groups": [],
@@ -369,6 +386,99 @@ def _load_recon_issues(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return [dict(row) for row in cur]
 
 
+def _load_attention_history(conn: sqlite3.Connection, day: date) -> list[dict[str, Any]]:
+    try:
+        rows = conn.execute(
+            "SELECT created_at, event_type, payload FROM events "
+            "WHERE date(created_at) <= ? AND (event_type LIKE '%attention_state' "
+            "OR event_type LIKE 'launchd_job_failure_state:%') ORDER BY created_at",
+            (day.isoformat(),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    history: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+        except (TypeError, ValueError):
+            payload = {}
+        history.append(
+            {
+                "created_at": str(row["created_at"] or ""),
+                "event_type": str(row["event_type"] or ""),
+                "payload": payload if isinstance(payload, dict) else {},
+            }
+        )
+    return history
+
+
+def _operations_digest(
+    day: date,
+    *,
+    events: list[dict[str, Any]],
+    attention_history: list[dict[str, Any]],
+    live_intents: list[dict[str, Any]],
+) -> dict[str, Any]:
+    today_attention = [item for item in attention_history if str(item.get("created_at") or "")[:10] == day.isoformat()]
+    latest_by_owner: dict[str, dict[str, Any]] = {}
+    for item in attention_history:
+        latest_by_owner[str(item.get("event_type") or "")] = item
+    open_attention = [
+        item
+        for item in latest_by_owner.values()
+        if str((item.get("payload") or {}).get("status") or "").lower() == "open"
+    ]
+    source_prefixes = {
+        "launchd_job_failure_state:x-bookmarks",
+        "launchd_job_failure_state:youtube",
+    }
+    self_handled_states = {"self_handled", "self_healing"}
+    routine_unfilled = sum(
+        1
+        for item in live_intents
+        if str(item.get("status") or "").lower() == "resting_profit_order_unfilled"
+        or (
+            bool((item.get("payload") or {}).get("resting_profit_order"))
+            and str(item.get("status") or "").lower() in {"cancelled", "expired"}
+        )
+    )
+    return {
+        "attention_opened_today": sum(
+            str((item.get("payload") or {}).get("status") or "").lower() == "open"
+            for item in today_attention
+        ),
+        "attention_cleared_today": sum(
+            str((item.get("payload") or {}).get("status") or "").lower() == "cleared"
+            for item in today_attention
+        ),
+        "operator_attention_open": len(open_attention),
+        "open_attention": [
+            {
+                "owner": str(item.get("event_type") or ""),
+                "reason": str((item.get("payload") or {}).get("reason") or ""),
+                "job": str((item.get("payload") or {}).get("job") or ""),
+            }
+            for item in open_attention
+        ],
+        "self_handled_events_today": sum(
+            str((item.get("payload") or {}).get("operator_state") or "") in self_handled_states
+            for item in events
+        ),
+        "source_degradations_today": sum(
+            str(item.get("event_type") or "") in source_prefixes
+            and str((item.get("payload") or {}).get("status") or "").lower() == "open"
+            for item in today_attention
+        ),
+        "source_recoveries_today": sum(
+            str(item.get("event_type") or "") in source_prefixes
+            and str((item.get("payload") or {}).get("status") or "").lower() == "cleared"
+            for item in today_attention
+        ),
+        "routine_unfilled_profit_targets_today": routine_unfilled,
+        "contract": "passive_read_model_no_notification_owner",
+    }
+
+
 def _safe_live_health(db_path: Path, config: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     try:
         from kamandal_v2.stores.sqlite import LocalStore
@@ -524,6 +634,19 @@ def render_daily_report_markdown(report: dict[str, Any]) -> str:
         f"- recon open: `{summary.get('recon_open',0)}` retired: `{summary.get('recon_retired',0)}`",
         f"- ideas active files: `{(report.get('idea_freshness') or {}).get('active_files',0)}`",
     ]
+    operations = report.get("operations_digest") or {}
+    lines.extend(
+        [
+            "",
+            "## Operations Digest",
+            "",
+            f"- attention opened/cleared today: `{operations.get('attention_opened_today',0)}/{operations.get('attention_cleared_today',0)}`",
+            f"- unresolved operator attention: `{operations.get('operator_attention_open',0)}`",
+            f"- self-handled or self-healing events: `{operations.get('self_handled_events_today',0)}`",
+            f"- source degradation/recovery: `{operations.get('source_degradations_today',0)}/{operations.get('source_recoveries_today',0)}`",
+            f"- routine unfilled profit targets: `{operations.get('routine_unfilled_profit_targets_today',0)}`",
+        ]
+    )
     if health.get("counts"):
         lines.append(f"- health counts: `{health['counts']}`")
     if report.get("event_type_counts"):
@@ -582,6 +705,14 @@ def _build_ryg_tables(report: dict[str, Any]) -> dict[str, list[tuple[str, str, 
     app_rows.append(("Ideas active", str(freshness.get("active_files",0)), "🟢" if freshness.get("active_files",0) > 0 else "🟡", "intelligence pipeline"))
     app_rows.append(("Events today", str(report.get("total_events",0)), "🟢", "db events"))
     app_rows.append(("Health probe", health_level, ryg_for_level(health_level), ",".join(health.get("reasons",[])[:2])))
+    operations = report.get("operations_digest") or {}
+    open_attention = int(operations.get("operator_attention_open") or 0)
+    app_rows.append((
+        "Operator attention",
+        str(open_attention),
+        "🔴" if open_attention else "🟢",
+        f"opened/cleared today={operations.get('attention_opened_today',0)}/{operations.get('attention_cleared_today',0)}",
+    ))
 
     # LIVE: book + exits + reconciliation
     live_rows: list[tuple[str, str, str, str]] = []
