@@ -197,6 +197,56 @@ def test_exact_package_enters_existing_planner_and_shadow_handoff(tmp_path: Path
     assert lifecycle.metadata["broker_effects"] is False
 
 
+def test_mike_exact_package_uses_existing_playbook_under_source_shadow_ceiling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from kamandal_v2.strategy_engine import planning
+
+    row = _observed_calendar_row()
+    row.update(
+        {
+            "playbook_id": "call_calendar_low_iv",
+            "mode": "live",
+            "csa_stage": "live",
+            "source_mode": "idea",
+            "source_profiles": "",
+            "accepted_inputs": "idea,exact_package",
+        }
+    )
+    source_rows = [
+        {"source_id": "greg_harmon", "output_kind": "idea", "mode": "live"},
+        {"source_id": "greg_harmon", "output_kind": "exact_package", "mode": "observe"},
+        {"source_id": "mike_butler", "output_kind": "idea", "mode": "observe"},
+        {"source_id": "mike_butler", "output_kind": "exact_package", "mode": "shadow"},
+    ]
+    store = _migrated_store(tmp_path)
+    monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: _Market())
+
+    result = run_unified_books(
+        load_control(),
+        universe_rows=[],
+        playbook_rows=[row],
+        idea_paths=[],
+        provider="fixture",
+        store=store,
+        audit_root=tmp_path / "audit",
+        observed_package_batches=(_batch(),),
+        trade_source_rows=source_rows,
+    )
+
+    assert result.compilation.ok
+    assert result.shadow.policy_ids == ("call_calendar_low_iv",)
+    assert result.shadow.errors == ()
+    candidate = result.shadow.result.candidates[0]
+    assert candidate.playbook_id == "call_calendar_low_iv"
+    assert [(leg.role, leg.side) for leg in candidate.legs] == [
+        ("short_near", "sell"),
+        ("long_far", "buy"),
+    ]
+    assert candidate.preflight.raw["broker_effects"] is False
+
+
 def test_stale_chain_parks_before_candidate_or_fill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from kamandal_v2.strategy_engine import planning
 
@@ -309,7 +359,7 @@ def test_no_shadow_policy_records_one_not_authorized_receipt(tmp_path: Path) -> 
     receipts = [json.loads(row[0]) for row in rows]
     assert len(receipts) == 1
     assert receipts[0]["status"] == "not_authorized"
-    assert receipts[0]["blocker"] == "no_matching_observed_package_policy"
+    assert receipts[0]["blocker"] == "unsupported"
 
 
 def test_exact_package_reaches_unified_management_and_closes_with_lineage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

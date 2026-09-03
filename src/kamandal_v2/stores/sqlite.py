@@ -1907,6 +1907,29 @@ class LocalStore:
         payload = json.loads(str(row["payload"]))
         return {**payload, "_created_at": str(row["created_at"])}
 
+    def recent_events(self, event_types: tuple[str, ...], *, limit: int = 2000) -> list[dict[str, Any]]:
+        if not event_types:
+            return []
+        placeholders = ",".join("?" for _ in event_types)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT id, created_at, event_type, payload FROM events "
+                f"WHERE event_type IN ({placeholders}) ORDER BY id DESC LIMIT ?",
+                (*event_types, max(int(limit), 1)),
+            ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in reversed(rows):
+            payload = json.loads(str(row["payload"]))
+            result.append(
+                {
+                    **payload,
+                    "_event_id": int(row["id"]),
+                    "_created_at": str(row["created_at"]),
+                    "_event_type": str(row["event_type"]),
+                }
+            )
+        return result
+
 
 def _typed_shadow_lifecycles(
     conn: sqlite3.Connection,

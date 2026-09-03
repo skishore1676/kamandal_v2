@@ -17,6 +17,13 @@ from typing import Any
 
 from kamandal_v2.domain.models import ChainSnapshot, Idea, OptionLeg, Playbook, PortfolioState, UniverseEntry
 from kamandal_v2.intelligence.observed_packages import ObservedPackageBatch, ObservedPackageEvidence
+from kamandal_v2.intelligence.trade_sources import (
+    TradeSourceMode,
+    TradeSourceOutputKind,
+    TradeSourcePolicy,
+    compile_trade_source_policies,
+    source_id_from_idea_source,
+)
 from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, _market_provider, _preflight_client, run_plan
 from kamandal_v2.planner.observed_package_candidates import (
     build_observed_package_candidates,
@@ -88,6 +95,7 @@ def run_unified_books(
     register_plan_attempt: bool = True,
     include_shadow: bool = True,
     observed_package_batches: tuple[ObservedPackageBatch, ...] = (),
+    trade_source_rows: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
 ) -> UnifiedPlanningResult:
     """Build independent books from one normalized Sheet snapshot.
 
@@ -95,13 +103,42 @@ def run_unified_books(
     masquerade as complete.  Once policy compilation succeeds, failures stay
     per-book: a shadow failure cannot erase a valid live result and vice versa.
     """
+    effective_trade_source_rows = trade_source_rows
+    if (
+        effective_trade_source_rows is None
+        and daily_policy_snapshot is not None
+        and "trade_sources" in daily_policy_snapshot.tables
+    ):
+        effective_trade_source_rows = daily_policy_snapshot.tables["trade_sources"]
     compilation = compile_playbook_policies(playbook_rows)
-    supplied_policy_hash = policy_tables_hash(
-        {
-            "universe": [dict(row) for row in universe_rows],
-            "playbooks": [dict(row) for row in playbook_rows],
-        }
+    required_sources = (
+        tuple(
+            str(profile.get("profile_id") or "")
+            for profile in (((config.get("source_intelligence") or {}).get("correspondents") or {}).get("profiles") or [])
+            if isinstance(profile, dict) and profile.get("enabled") is True
+        )
+        if effective_trade_source_rows is not None
+        else ()
     )
+    source_compilation = compile_trade_source_policies(
+        effective_trade_source_rows or (),
+        required_source_ids=required_sources,
+    )
+    source_policies = source_compilation.by_key() if effective_trade_source_rows is not None else None
+    if source_compilation.errors:
+        compilation = PolicyCompilation(
+            policies=compilation.policies,
+            errors=tuple((*compilation.errors, *source_compilation.errors)),
+        )
+    supplied_tables = {
+        "universe": [dict(row) for row in universe_rows],
+        "playbooks": [dict(row) for row in playbook_rows],
+    }
+    # Preserve read compatibility with a snapshot frozen before the atomic
+    # trade-source migration.  New snapshots always carry trade_sources.
+    if effective_trade_source_rows is not None:
+        supplied_tables["trade_sources"] = [dict(row) for row in effective_trade_source_rows]
+    supplied_policy_hash = policy_tables_hash(supplied_tables)
     active_store = store or LocalStore()
     observed_packages: tuple[ObservedPackageEvidence, ...] = ()
     if observed_package_batches:
@@ -136,10 +173,17 @@ def run_unified_books(
         exclude_candidate_ids=exclude_candidate_ids,
         exclude_contract_keys=exclude_contract_keys,
         register_plan_attempt=register_plan_attempt,
+        trade_source_policies=source_policies,
     )
     if include_shadow:
-        if observed_packages and not any(policy.mode is ExecutionMode.SHADOW for policy in compilation.policies):
-            record_observed_packages_not_authorized(observed_packages, store=active_store)
+        if observed_packages and not any(
+            "exact_package" in policy.accepted_inputs for policy in compilation.policies
+        ):
+            record_observed_packages_not_authorized(
+                observed_packages,
+                store=active_store,
+                blocker="unsupported",
+            )
         shadow = _run_book(
             ExecutionMode.SHADOW,
             compilation.policies,
@@ -151,6 +195,7 @@ def run_unified_books(
             audit_root,
             write_sheet,
             observed_packages=observed_packages,
+            trade_source_policies=source_policies,
         )
     else:
         shadow = PlanningBook(
@@ -179,8 +224,23 @@ def _run_book(
     exclude_contract_keys: set[str] | None = None,
     register_plan_attempt: bool = True,
     observed_packages: tuple[ObservedPackageEvidence, ...] = (),
+    trade_source_policies: dict[tuple[str, TradeSourceOutputKind], TradeSourcePolicy] | None = None,
 ) -> PlanningBook:
-    selected = tuple(policy for policy in policies if policy.mode is mode)
+    shadow_input_kinds = {
+        output_kind.value
+        for (_source_id, output_kind), source_policy in (trade_source_policies or {}).items()
+        if source_policy.mode is TradeSourceMode.SHADOW
+    }
+    selected = tuple(
+        policy
+        for policy in policies
+        if policy.mode is mode
+        or (
+            mode is ExecutionMode.SHADOW
+            and policy.mode is ExecutionMode.LIVE
+            and bool(shadow_input_kinds.intersection(policy.accepted_inputs))
+        )
+    )
     mode_config = deepcopy(config)
     mode_config.setdefault("runtime", {})["mode"] = mode.value
     live_renderer = None
@@ -285,6 +345,8 @@ def _run_book(
                 selected_playbooks,
                 policies=selected,
                 portfolio=portfolio,
+                mode=mode,
+                trade_source_policies=trade_source_policies,
             ),
             supplemental_candidate_factory=(
                 lambda market, selected_playbooks, _portfolio, current_store: build_observed_package_candidates(
@@ -294,6 +356,7 @@ def _run_book(
                     market=market,
                     store=current_store,
                     config=mode_config,
+                    trade_source_policies=trade_source_policies,
                 )
             )
             if mode is ExecutionMode.SHADOW and observed_packages
@@ -303,6 +366,7 @@ def _run_book(
         )
     except Exception as exc:  # noqa: BLE001 - report failure-isolated book receipt.
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (f"{type(exc).__name__}: {exc}",))
+    _record_trade_source_plan_dispositions(result, store=store, mode=mode)
     if mode is ExecutionMode.LIVE:
         rows = live_renderer[0](result, mode_config, store=store, mode="live_advisory")
         try:
@@ -335,6 +399,53 @@ def _run_book(
         store.event("unified_shadow_plan_auto_approved", {"plan_run_id": result.plan_run_id, "plan_id": result.plans[0].plan_id, "handoffs": handoffs})
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (), tuple(handoffs))
     return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, ())
+
+
+def _record_trade_source_plan_dispositions(
+    result: PlanRunResult,
+    *,
+    store: LocalStore,
+    mode: ExecutionMode,
+) -> None:
+    rank_one_ids = {
+        candidate.candidate_id
+        for candidate in (result.plans[0].candidates if result.plans else [])
+    }
+    for idea in result.ideas:
+        source_id = source_id_from_idea_source(idea.source)
+        if source_id is None:
+            continue
+        candidates = [candidate for candidate in result.candidates if candidate.idea_id == idea.idea_id]
+        selected = [candidate for candidate in candidates if candidate.candidate_id in rank_one_ids]
+        eligible = [candidate for candidate in candidates if candidate.eligible]
+        if selected:
+            status = "selected_rank_1"
+            reason = ""
+        elif eligible:
+            status = "eligible_not_selected"
+            reason = "portfolio_optimizer"
+        elif candidates:
+            status = "candidate_rejected"
+            reason = candidates[0].rejection_reason
+        else:
+            status = "no_candidate"
+            diagnostic = next(
+                (item for item in result.idea_diagnostics if str(item.get("idea_id") or "") == idea.idea_id),
+                {},
+            )
+            reason = str(diagnostic.get("status") or "no_compatible_candidate")
+        store.event(
+            "trade_source_planner_disposition",
+            {
+                "source_id": source_id,
+                "idea_id": idea.idea_id,
+                "plan_run_id": result.plan_run_id,
+                "status": status,
+                "reason": reason,
+                "mode": mode.value,
+                "broker_effects": False,
+            },
+        )
 
 
 def _advance_working_shadow_orders(
@@ -1064,17 +1175,50 @@ def _source_groups(
     *,
     policies: tuple[PlaybookPolicy, ...],
     portfolio: PortfolioState,
+    mode: ExecutionMode,
+    trade_source_policies: dict[tuple[str, TradeSourceOutputKind], TradeSourcePolicy] | None,
 ) -> list[PlanningSourceGroup]:
     """Normalize every supported source mode before one candidate/plan pass."""
     policy_by_id = {policy.playbook_id: policy for policy in policies}
     groups: list[PlanningSourceGroup] = []
-    for source_mode in ("idea", "market_scan", "portfolio_hedge"):
-        selected = [playbook for playbook in playbooks if policy_by_id[playbook.playbook_id].source_mode == source_mode]
+    idea_groups: dict[tuple[str, ...], list[Idea]] = {}
+    for idea in idea_inputs:
+        source_id = source_id_from_idea_source(idea.source)
+        source_policy = (
+            (trade_source_policies or {}).get((source_id, TradeSourceOutputKind.IDEA))
+            if source_id is not None
+            else None
+        )
+        if source_id is not None and trade_source_policies is not None and (
+            source_policy is None or not source_policy.planner_enabled
+        ):
+            continue
+        eligible_ids: list[str] = []
+        for playbook in playbooks:
+            policy = policy_by_id[playbook.playbook_id]
+            if "idea" not in policy.accepted_inputs:
+                continue
+            effective_mode = policy.mode
+            if source_policy is not None and source_policy.mode is TradeSourceMode.SHADOW:
+                effective_mode = ExecutionMode.SHADOW
+            if effective_mode is mode:
+                eligible_ids.append(playbook.playbook_id)
+        if eligible_ids:
+            idea_groups.setdefault(tuple(sorted(eligible_ids)), []).append(idea)
+    playbook_by_id = {playbook.playbook_id: playbook for playbook in playbooks}
+    for playbook_ids, inputs in idea_groups.items():
+        groups.append(PlanningSourceGroup("idea", inputs, [playbook_by_id[item] for item in playbook_ids]))
+
+    for source_mode in ("market_scan", "portfolio_hedge"):
+        selected = [
+            playbook
+            for playbook in playbooks
+            if source_mode in policy_by_id[playbook.playbook_id].accepted_inputs
+            and policy_by_id[playbook.playbook_id].mode is mode
+        ]
         if not selected:
             continue
-        if source_mode == "idea":
-            inputs = list(idea_inputs)
-        elif source_mode == "market_scan":
+        if source_mode == "market_scan":
             inputs = _market_scan_ideas(universe)
         else:
             inputs = _portfolio_hedge_ideas(selected, policy_by_id, portfolio)

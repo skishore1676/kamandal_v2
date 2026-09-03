@@ -9,7 +9,13 @@ from typing import Any
 import yaml
 
 from kamandal_v2.paths import OLD_KAMANDAL_ROOT
-from kamandal_v2.schemas import DAILY_PLAN_HEADER, PLAYBOOKS_HEADER, UNIVERSE_HEADER
+from kamandal_v2.schemas import (
+    DAILY_PLAN_HEADER,
+    PLAYBOOKS_HEADER,
+    TRADE_SOURCE_ACTIVITY_HEADER,
+    TRADE_SOURCES_HEADER,
+    UNIVERSE_HEADER,
+)
 
 CORE_ENABLED_PLAYBOOKS = {
     "short_put",
@@ -168,13 +174,23 @@ def build_seed_tables(control: dict[str, Any]) -> dict[str, list[list[Any]]]:
     playbooks = [row + [""] * (len(PLAYBOOKS_HEADER) - len(row)) for row in playbooks]
     family_index = PLAYBOOKS_HEADER.index("strategy_family")
     debit_width_index = PLAYBOOKS_HEADER.index("max_debit_to_width_ratio")
+    source_mode_index = PLAYBOOKS_HEADER.index("source_mode")
+    accepted_inputs_index = PLAYBOOKS_HEADER.index("accepted_inputs")
     for row in playbooks:
         if row[family_index] in {"call_diagonal", "put_diagonal"}:
             row[debit_width_index] = 0.75
+        row[accepted_inputs_index] = row[source_mode_index] or "idea"
     return {
         "universe": _universe_rows(control, playbooks),
         "playbooks": playbooks,
         "daily_plan": [],
+        "trade_sources": [
+            ["greg_harmon", "idea", "live", "Existing inferred idea source"],
+            ["greg_harmon", "exact_package", "observe", "Passive exact-package evidence only"],
+            ["mike_butler", "idea", "observe", "Calibration and operator review"],
+            ["mike_butler", "exact_package", "shadow", "Broker-inert exact-package experiment"],
+        ],
+        "trade_source_activity": [],
     }
 
 
@@ -183,6 +199,8 @@ def seed_headers() -> dict[str, list[str]]:
         "universe": UNIVERSE_HEADER,
         "playbooks": PLAYBOOKS_HEADER,
         "daily_plan": DAILY_PLAN_HEADER,
+        "trade_sources": TRADE_SOURCES_HEADER,
+        "trade_source_activity": TRADE_SOURCE_ACTIVITY_HEADER,
     }
 
 

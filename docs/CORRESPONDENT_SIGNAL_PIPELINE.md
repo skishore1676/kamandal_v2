@@ -1,7 +1,7 @@
 # Trade-source signal pipeline
 
 Date: 2026-09-03
-Status: current Greg/Mike pipeline deployed; source-neutral Sheet routing approved and pending implementation
+Status: source-neutral routing implemented locally; Sheet migration and oldmac deployment pending
 
 Kamandal translates Birdclaw correspondent batches through declarative profiles.
 Greg Harmon and Mike Butler are profiles, not dedicated subsystems. The approved
@@ -29,8 +29,9 @@ The machine-owned `trade_source_activity` tab projects the complete post ->
 output -> capability -> planner -> effect funnel from canonical receipts. It is
 an observation surface, not policy or a second source of truth.
 
-The remaining sections describe the currently deployed pipeline until that
-migration lands.
+The remaining sections describe the pre-migration deployed behavior and the
+stable normalization semantics retained by the new implementation. Runtime
+behavior changes only after the protected Sheet migration and oldmac deployment.
 
 ```text
 configured read-only Birdclaw acquisition

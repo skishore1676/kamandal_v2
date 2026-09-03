@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState, PreflightResult
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState, PreflightResult, UniverseEntry
 from kamandal_v2.events.earnings import EarningsStore, capture_earnings_snapshots, earnings_event_status
 from kamandal_v2.intelligence.chart_seeds import import_chart_seed_evaluation
 from kamandal_v2.intelligence.correspondent_activation import activate_correspondent_sources
@@ -502,15 +502,46 @@ def main() -> None:
             settings["output_dir"] = args.output_dir
         if args.trial_root:
             settings["trial_root"] = args.trial_root
-        universe, _playbooks = load_planner_config(correspondent_config, source=args.config_source)
+        if args.config_source == "sheet":
+            tables = pull_sheet_tables(correspondent_config)
+        else:
+            headers = seed_headers()
+            seeded = build_seed_tables(correspondent_config)
+            tables = {
+                key: [dict(zip(headers[key], row, strict=False)) for row in seeded[key]]
+                for key in ("universe", "playbooks", "trade_sources")
+            }
+        universe = [UniverseEntry.from_row(row) for row in tables["universe"] if row.get("symbol")]
+        active_store = LocalStore()
         result = activate_correspondent_sources(
             settings,
             universe_symbols=[entry.symbol for entry in universe if entry.enabled],
-            store=LocalStore(),
+            store=active_store,
             intent_client=build_llm_client(correspondent_config, actor="correspondent_intent"),
             observed_package_client=build_llm_client(correspondent_config, actor="observed_package_extractor"),
+            trade_source_rows=tables["trade_sources"],
         )
-        print(json.dumps(result.to_dict(), indent=2))
+        payload = result.to_dict()
+        if args.config_source == "sheet":
+            try:
+                from kamandal_v2.intelligence.trade_source_activity import project_trade_source_activity
+
+                payload["activity_projection"] = {
+                    "status": "succeeded",
+                    "rows": project_trade_source_activity(correspondent_config, active_store),
+                }
+            except Exception as exc:  # noqa: BLE001 - observation cannot block source activation.
+                active_store.event(
+                    "trade_source_activity_projection_failed",
+                    {"stage": "activation", "error": f"{type(exc).__name__}: {exc}", "broker_effects": False},
+                )
+                payload["activity_projection"] = {
+                    "status": "failed_non_blocking",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        print(json.dumps(payload, indent=2))
+        if result.status != "succeeded":
+            raise SystemExit(1)
         return
 
     config = load_control()
@@ -560,7 +591,7 @@ def main() -> None:
             headers = seed_headers()
             tables = {
                 key: [dict(zip(headers[key], row, strict=False)) for row in build_seed_tables(config)[key]]
-                for key in ("universe", "playbooks")
+                for key in ("universe", "playbooks", "trade_sources")
             }
         # Capture (or reload) the one immutable Sheet policy view before
         # planning.  The planner must use these frozen rows, so every selected
@@ -591,8 +622,9 @@ def main() -> None:
             write_sheet=args.write_sheet,
             daily_policy_snapshot=daily_policy_snapshot,
             observed_package_batches=observed_package_batches,
+            trade_source_rows=daily_policy_snapshot.tables.get("trade_sources"),
         )
-        print(json.dumps({
+        output = {
             "policy_errors": result.compilation.errors,
             "observed_package_feed": {
                 "path": str(feed_path),
@@ -601,7 +633,25 @@ def main() -> None:
             },
             "live": {"policy_ids": result.live.policy_ids, "plans": len(result.live.result.plans) if result.live.result else None, "errors": result.live.errors},
             "shadow": {"policy_ids": result.shadow.policy_ids, "plans": len(result.shadow.result.plans) if result.shadow.result else None, "errors": result.shadow.errors},
-        }, indent=2, sort_keys=True))
+        }
+        if args.config_source == "sheet":
+            try:
+                from kamandal_v2.intelligence.trade_source_activity import project_trade_source_activity
+
+                output["activity_projection"] = {
+                    "status": "succeeded",
+                    "rows": project_trade_source_activity(config, active_store),
+                }
+            except Exception as exc:  # noqa: BLE001 - observation cannot block the money path.
+                active_store.event(
+                    "trade_source_activity_projection_failed",
+                    {"stage": "planning", "error": f"{type(exc).__name__}: {exc}", "broker_effects": False},
+                )
+                output["activity_projection"] = {
+                    "status": "failed_non_blocking",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        print(json.dumps(output, indent=2, sort_keys=True))
         if not result.compilation.ok or result.live.errors or result.shadow.errors:
             raise SystemExit(1)
         return

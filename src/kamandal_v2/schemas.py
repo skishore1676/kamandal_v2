@@ -111,6 +111,30 @@ PLAYBOOKS_HEADER = [
     # Runtime mode flags remain upper-bound kill switches only.
     "resting_profit_enabled",
     "resting_profit_arm_progress_pct",
+    # Source-neutral input acceptance. Appended to preserve every deployed
+    # playbook column position and formula.
+    "accepted_inputs",
+]
+
+TRADE_SOURCES_HEADER = [
+    "source_id",
+    "output_kind",
+    "mode",
+    "notes",
+]
+
+TRADE_SOURCE_ACTIVITY_HEADER = [
+    "observed_at",
+    "source_id",
+    "post_ref",
+    "output_id",
+    "acquisition_status",
+    "classification",
+    "normalized_output",
+    "capability_support",
+    "planner_disposition",
+    "effective_mode",
+    "reason",
 ]
 
 DAILY_PLAN_HEADER = [

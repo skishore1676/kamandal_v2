@@ -231,6 +231,7 @@ class Playbook:
     underlying_price_max: float | None = None
     deployment_stage: str = "baseline"
     execution_venue: str = "public_primary"
+    accepted_inputs: list[str] = field(default_factory=lambda: ["idea"])
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "Playbook":
@@ -292,6 +293,7 @@ class Playbook:
             underlying_price_max=_optional_float(row.get("underlying_price_max")),
             deployment_stage=str(row.get("csa_stage") or "baseline").strip().lower() or "baseline",
             execution_venue=str(row.get("execution_venue") or "public_primary").strip().lower(),
+            accepted_inputs=_accepted_inputs(row),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -574,3 +576,11 @@ def _as_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
     return [item.strip() for item in str(value).split(",") if item.strip()]
+
+
+def _accepted_inputs(row: dict[str, Any]) -> list[str]:
+    explicit = [item.lower() for item in _as_list(row.get("accepted_inputs"))]
+    if explicit:
+        return explicit
+    legacy = str(row.get("source_mode") or "idea").strip().lower() or "idea"
+    return ["exact_package" if legacy == "observed_package" else legacy]

@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from kamandal_v2.domain.models import Playbook, UniverseEntry, utc_now
+from kamandal_v2.intelligence.trade_sources import compile_trade_source_policies
 from kamandal_v2.planner.config_validator import validate_config
-from kamandal_v2.schemas import UNIVERSE_HEADER
+from kamandal_v2.schemas import TRADE_SOURCES_HEADER, UNIVERSE_HEADER
 from kamandal_v2.sheets import pull_sheet_tables
 from kamandal_v2.strategy_engine.policy import compile_playbook_policies
 from kamandal_v2.strategy_lanes.daily_policy import policy_tables_hash
@@ -31,11 +32,19 @@ class SheetPolicyGateResult:
     unified_errors: tuple[str, ...]
     csa_policy_count: int
     csa_errors: tuple[str, ...]
+    trade_source_count: int = 0
+    trade_source_errors: tuple[str, ...] = ()
     model_errors: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
-        return not (self.model_errors or self.planner_errors or self.unified_errors or self.csa_errors)
+        return not (
+            self.model_errors
+            or self.planner_errors
+            or self.unified_errors
+            or self.csa_errors
+            or self.trade_source_errors
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +73,11 @@ class SheetPolicyGateResult:
                 "policy_count": self.csa_policy_count,
                 "errors": list(self.csa_errors),
             },
+            "trade_sources": {
+                "ok": not self.trade_source_errors,
+                "policy_count": self.trade_source_count,
+                "errors": list(self.trade_source_errors),
+            },
         }
 
 
@@ -79,6 +93,7 @@ def validate_sheet_policy(
     policy_tables = {
         "universe": [dict(row) for row in (resolved.get("universe") or [])],
         "playbooks": [dict(row) for row in (resolved.get("playbooks") or [])],
+        "trade_sources": [dict(row) for row in (resolved.get("trade_sources") or [])],
     }
     observed_at = read_at or utc_now()
     model_errors: list[str] = []
@@ -92,6 +107,23 @@ def validate_sheet_policy(
             model_errors.append(
                 "universe_header_missing:" + ",".join(missing_universe_headers)
             )
+
+    if policy_tables["playbooks"]:
+        observed_headers = set(policy_tables["playbooks"][0])
+        if "accepted_inputs" not in observed_headers:
+            model_errors.append("playbooks_header_missing:accepted_inputs")
+    else:
+        model_errors.append("playbooks_header_missing:accepted_inputs")
+
+    if policy_tables["trade_sources"]:
+        observed_headers = set(policy_tables["trade_sources"][0])
+        missing_source_headers = sorted(set(TRADE_SOURCES_HEADER) - observed_headers)
+        if missing_source_headers:
+            model_errors.append(
+                "trade_sources_header_missing:" + ",".join(missing_source_headers)
+            )
+    else:
+        model_errors.append("trade_sources_header_missing:" + ",".join(TRADE_SOURCES_HEADER))
 
     for index, row in enumerate(policy_tables["universe"], start=2):
         if not row.get("symbol"):
@@ -115,6 +147,15 @@ def validate_sheet_policy(
         source="google_sheet",
         read_at=observed_at,
     )
+    required_source_ids = [
+        str(profile.get("profile_id") or "")
+        for profile in (((config.get("source_intelligence") or {}).get("correspondents") or {}).get("profiles") or [])
+        if isinstance(profile, dict) and profile.get("enabled") is True
+    ]
+    trade_sources = compile_trade_source_policies(
+        policy_tables["trade_sources"],
+        required_source_ids=required_source_ids,
+    )
     enabled_count = sum(
         str(row.get("enabled") or "").strip().lower() in {"1", "true", "yes", "y", "on"}
         for row in policy_tables["playbooks"]
@@ -133,4 +174,6 @@ def validate_sheet_policy(
         unified_errors=unified.errors,
         csa_policy_count=len(csa.policies),
         csa_errors=csa.errors,
+        trade_source_count=len(trade_sources.policies),
+        trade_source_errors=trade_sources.errors,
     )

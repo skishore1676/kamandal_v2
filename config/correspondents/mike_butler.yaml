@@ -1,0 +1,58 @@
+schema: kamandal.correspondent_profile.v1
+profile_id: mike_butler
+version: "1"
+source_profile_id: mike_butler
+interpretation_posture: explicit_only
+
+# Exact option screenshots are handled by the exact_package route. These
+# families stay ignored by the Idea translator so one post cannot become both a
+# reconstructed Kamandal idea and an exact-package opportunity by accident.
+families:
+  observed_package_open: {mode: ignore}
+  observed_package_close: {mode: ignore}
+  observed_package_roll: {mode: ignore}
+  observed_package_adjust: {mode: ignore}
+  trade_idea:
+    mode: trade_journal
+    max_age_hours: 24
+    planner:
+      supported: true
+      map_directional_to_planner: true
+      allowed_structures_by_direction:
+        bullish: [call_spread, call_calendar, call_diagonal]
+        bearish: [put_calendar, put_diagonal]
+      thesis_tags: [correspondent_mike, source_trade]
+      horizon_days: 30
+  trade_journal:
+    mode: trade_journal
+    max_age_hours: 24
+    planner:
+      supported: true
+      map_directional_to_planner: true
+      allowed_structures_by_direction:
+        bullish: [call_spread, call_calendar, call_diagonal]
+        bearish: [put_calendar, put_diagonal]
+      thesis_tags: [correspondent_mike, source_trade]
+      horizon_days: 30
+  market_commentary: {mode: ignore}
+
+strategy_rules:
+  - {id: call_calendar, regex: "\\bcall calendar\\b|\\bcalendar call\\b", strategy_family: call_calendar, direction: bullish, allowed_structures: [call_calendar]}
+  - {id: put_calendar, regex: "\\bput calendar\\b|\\bcalendar put\\b", strategy_family: put_calendar, direction: bearish, allowed_structures: [put_calendar]}
+  - {id: call_diagonal, regex: "\\bcall diagonal\\b|\\bdiagonal call\\b", strategy_family: call_diagonal, direction: bullish, allowed_structures: [call_diagonal]}
+  - {id: put_diagonal, regex: "\\bput diagonal\\b|\\bdiagonal put\\b", strategy_family: put_diagonal, direction: bearish, allowed_structures: [put_diagonal]}
+  - id: call_spread
+    regex: "\\bcall (?:vertical|spread)\\b"
+    strategy_family: call_spread
+    direction: bullish
+    allowed_structures: [call_spread]
+  - id: put_spread
+    regex: "\\bput (?:vertical|spread)\\b"
+    strategy_family: put_spread
+    direction: bearish
+    allowed_structures: [put_spread]
+
+journal_actions:
+  - {action: close, regex: "\\b(?:closed|covered|took off|exited|all out)\\b"}
+  - {action: adjust, regex: "\\b(?:rolled|adjusted|added|trimmed|reduced|half off)\\b"}
+  - {action: open, regex: "\\b(?:bought|sold|buying|selling|entered|opened|took)\\b"}

@@ -2,7 +2,7 @@
 
 The source ledger and planner are intentionally separate.  Every evidence
 revision is retained, but only complete ``open`` packages authorized by a
-shadow ``observed_package`` playbook become candidates.  This module never
+source policy and one compatible existing playbook become candidates. This module never
 chooses substitute expirations or strikes and never calls broker preflight.
 """
 
@@ -16,6 +16,11 @@ from typing import Any
 
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PreflightResult, utc_now
 from kamandal_v2.intelligence.observed_packages import ObservedPackageBatch, ObservedPackageEvidence
+from kamandal_v2.intelligence.trade_sources import (
+    TradeSourceMode,
+    TradeSourceOutputKind,
+    TradeSourcePolicy,
+)
 from kamandal_v2.liquidity import candidate_liquidity_metrics
 from kamandal_v2.market.interfaces import MarketDataProvider
 from kamandal_v2.planner.candidate_builder import (  # shared deterministic economics; no leg construction
@@ -75,27 +80,47 @@ def build_observed_package_candidates(
     market: MarketDataProvider,
     store: LocalStore,
     config: dict[str, Any] | None = None,
+    trade_source_policies: dict[tuple[str, TradeSourceOutputKind], TradeSourcePolicy] | None = None,
 ) -> list[Candidate]:
     """Hydrate source-exact legs and return ordinary optimizer candidates."""
 
     playbook_by_id = {playbook.playbook_id: playbook for playbook in playbooks}
-    exact_policies = tuple(policy for policy in policies if policy.source_mode == "observed_package")
+    exact_policies = tuple(
+        policy
+        for policy in policies
+        if "exact_package" in getattr(
+            policy,
+            "accepted_inputs",
+            ("exact_package",) if getattr(policy, "source_mode", "") == "observed_package" else (),
+        )
+    )
     chain_cache: dict[str, Any] = {}
     candidates: list[Candidate] = []
 
     for package in packages:
         blocker = _evidence_blocker(package)
+        source_policy = (trade_source_policies or {}).get(
+            (package.source_profile.lower(), TradeSourceOutputKind.EXACT_PACKAGE)
+        )
+        if trade_source_policies is not None and (
+            source_policy is None or source_policy.mode not in {TradeSourceMode.SHADOW, TradeSourceMode.LIVE}
+        ):
+            mode = source_policy.mode.value if source_policy is not None else "missing"
+            _receipt(store, package, status="observed", blocker=f"source_mode_{mode}")
+            continue
         matching = [
             policy
             for policy in exact_policies
             if policy.structure == package.structure
-            and package.source_profile.lower() in {item.lower() for item in _text_list(policy.fields.get("source_profiles"))}
         ]
         if blocker:
             _receipt(store, package, status="parked", blocker=blocker)
             continue
         if not matching:
-            _receipt(store, package, status="not_authorized", blocker="no_matching_observed_package_policy")
+            _receipt(store, package, status="parked", blocker="unsupported")
+            continue
+        if len(matching) > 1:
+            _receipt(store, package, status="parked", blocker="ambiguous_playbook_match")
             continue
 
         if package.symbol not in chain_cache:
@@ -182,6 +207,7 @@ def _evidence_blocker(package: ObservedPackageEvidence) -> str:
 
 
 def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> list[OptionLeg]:
+    roles = _canonical_roles(package)
     legs: list[OptionLeg] = []
     for position, observed in enumerate(package.legs, start=1):
         if None in (observed.quantity, observed.expiration, observed.strike, observed.option_type, observed.side):
@@ -199,12 +225,34 @@ def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> 
         legs.append(
             OptionLeg.from_quote(
                 matches[0],
-                role=f"source_leg_{position}",
+                role=roles[position - 1],
                 side=str(observed.side),
                 quantity=int(observed.quantity),
             )
         )
     return legs
+
+
+def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
+    """Assign manager roles without changing a source-observed contract."""
+
+    if package.structure not in {"call_calendar", "put_calendar", "call_diagonal", "put_diagonal"}:
+        raise ValueError(f"unsupported_exact_structure:{package.structure}")
+    if len(package.legs) != 2:
+        raise ValueError("exact_calendar_or_diagonal_requires_two_legs")
+    indexed = list(enumerate(package.legs))
+    sold = [(index, leg) for index, leg in indexed if leg.side == "sell"]
+    bought = [(index, leg) for index, leg in indexed if leg.side == "buy"]
+    if len(sold) != 1 or len(bought) != 1:
+        raise ValueError("exact_calendar_or_diagonal_requires_one_buy_and_one_sell")
+    sold_index, sold_leg = sold[0]
+    bought_index, bought_leg = bought[0]
+    if not sold_leg.expiration or not bought_leg.expiration or sold_leg.expiration >= bought_leg.expiration:
+        raise ValueError("exact_calendar_or_diagonal_requires_short_near_long_far")
+    roles = ["", ""]
+    roles[sold_index] = "short_near"
+    roles[bought_index] = "long_far"
+    return roles
 
 
 def _candidate(

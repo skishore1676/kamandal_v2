@@ -90,6 +90,7 @@ def capture_daily_policy_snapshot(
     frozen_tables = {
         "universe": [dict(row) for row in (pulled.get("universe") or [])],
         "playbooks": [dict(row) for row in (pulled.get("playbooks") or [])],
+        "trade_sources": [dict(row) for row in (pulled.get("trade_sources") or [])],
     }
     policy = load_csa_operator_policy(config, tables=frozen_tables, read_at=observed_at)
     if not policy.ok:
@@ -131,6 +132,11 @@ def load_daily_policy_snapshot(
         "universe": [dict(row) for row in (tables.get("universe") or [])],
         "playbooks": [dict(row) for row in (tables.get("playbooks") or [])],
     }
+    # Pre-migration snapshots did not contain trade_sources. Their persisted
+    # hash remains valid and they can finish the day under their frozen policy;
+    # every newly captured snapshot includes the new operator table.
+    if "trade_sources" in tables:
+        frozen_tables["trade_sources"] = [dict(row) for row in (tables.get("trade_sources") or [])]
     digest = policy_tables_hash(frozen_tables)
     if digest != str(payload.get("snapshot_hash") or ""):
         raise ValueError(f"daily strategy policy hash mismatch: {path}")

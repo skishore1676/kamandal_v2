@@ -156,20 +156,64 @@ def test_activation_failure_clears_previous_active_idea_and_writes_failure_recei
     def failed_runner(_args: list[str], _cwd: Path) -> str:
         raise OSError("Birdclaw unavailable")
 
-    with pytest.raises(RuntimeError, match="failed closed"):
-        activate_correspondent_sources(
-            settings,
-            universe_symbols={"TSLA"},
-            command_runner=failed_runner,
-            store=LocalStore(tmp_path / "kamandal.db"),
-        )
+    result = activate_correspondent_sources(
+        settings,
+        universe_symbols={"TSLA"},
+        command_runner=failed_runner,
+        store=LocalStore(tmp_path / "kamandal.db"),
+    )
 
+    assert result.status == "degraded"
+    assert result.source_failure_count == 1
     assert load_ideas([active_path]) == []
     receipt = json.loads(
         (Path(settings["output_dir"]) / "activation" / "latest.json").read_text(encoding="utf-8")
     )
-    assert receipt["status"] == "failed_closed"
+    assert receipt["status"] == "degraded"
+    assert receipt["source_failures"][0]["profile_id"] == "greg_harmon"
     assert receipt["effects"]["orders"] is False
+
+
+def test_one_source_failure_does_not_clear_a_healthy_sibling(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings["profiles"].append(
+        {
+            "profile_id": "mike_butler",
+            "source_profile_id": "mike_butler",
+            "enabled": True,
+        }
+    )
+    mike_packet = _packet(actionable=False)
+    mike_packet["profile"]["profile_id"] = "mike_butler"
+    rows = [
+        {"source_id": "greg_harmon", "output_kind": "idea", "mode": "live"},
+        {"source_id": "greg_harmon", "output_kind": "exact_package", "mode": "observe"},
+        {"source_id": "mike_butler", "output_kind": "idea", "mode": "off"},
+        {"source_id": "mike_butler", "output_kind": "exact_package", "mode": "shadow"},
+    ]
+
+    def runner(args: list[str], _cwd: Path) -> str:
+        profile = args[args.index("--profile") + 1]
+        if profile == "greg_harmon":
+            raise OSError("Greg fetch unavailable")
+        return json.dumps(mike_packet)
+
+    result = activate_correspondent_sources(
+        settings,
+        universe_symbols={"TSLA"},
+        command_runner=runner,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        trade_source_rows=rows,
+    )
+
+    assert result.status == "degraded"
+    assert result.profile_count == 2
+    assert result.source_failure_count == 1
+    assert load_ideas([Path(settings["active_ideas_dir"]) / "correspondent_greg_harmon.yaml"]) == []
+    assert load_ideas([Path(settings["active_ideas_dir"]) / "correspondent_mike_butler.yaml"]) == []
+    receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
+    assert [profile["profile_id"] for profile in receipt["profiles"]] == ["mike_butler"]
+    assert receipt["source_failures"][0]["profile_id"] == "greg_harmon"
 
 
 def test_observed_package_profile_publishes_typed_feed_and_reuses_cache(tmp_path: Path) -> None:

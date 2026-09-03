@@ -295,8 +295,21 @@ def pull_sheet_tables(config: dict[str, Any]) -> dict[str, list[dict[str, str]]]
     tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
     return {
         logical_name: client.read_tab(str(tab_names.get(logical_name) or logical_name))
-        for logical_name in ("universe", "playbooks", "daily_plan")
+        for logical_name in ("universe", "playbooks", "daily_plan", "trade_sources")
     }
+
+
+def write_trade_source_activity(
+    config: dict[str, Any],
+    rows: list[list[Any]],
+    header: list[str],
+) -> int:
+    """Replace the bounded machine projection; never treat it as policy."""
+
+    client = GoogleSheetClient.from_config(config)
+    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    title = str(tab_names.get("trade_source_activity") or "trade_source_activity")
+    return client.replace_tab(title, header=header, rows=rows)
 
 
 def write_daily_plan(

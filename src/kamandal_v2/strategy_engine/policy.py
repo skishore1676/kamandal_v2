@@ -50,6 +50,7 @@ class PlaybookPolicy:
     capability: Capability
     structure: str
     source_mode: str
+    accepted_inputs: tuple[str, ...]
     mode: ExecutionMode
     fields: dict[str, Any]
     management: dict[str, Any]
@@ -89,6 +90,16 @@ def compile_playbook_policies(
             continue
         seen.add(policy.playbook_id)
         policies.append(policy)
+    exact_owners: dict[str, list[str]] = {}
+    for policy in policies:
+        if "exact_package" in policy.accepted_inputs:
+            exact_owners.setdefault(policy.structure, []).append(policy.playbook_id)
+    for structure, playbook_ids in sorted(exact_owners.items()):
+        if len(playbook_ids) > 1:
+            errors.append(
+                f"exact_package structure={structure!r} has ambiguous accepting playbooks: "
+                + ", ".join(sorted(playbook_ids))
+            )
     return PolicyCompilation(tuple(policies), tuple(errors))
 
 
@@ -122,6 +133,7 @@ def compile_playbook_policy(
             raise PolicyError(f"{playbook_id}: observed_package source mode is shadow-only")
         if not _text_list(row.get("source_profiles")):
             raise PolicyError(f"{playbook_id}: observed_package source mode requires source_profiles")
+    accepted_inputs = _compile_accepted_inputs(row, source_mode=source_mode, playbook_id=playbook_id)
     execution_venue = str(row.get("execution_venue") or "public_primary").strip().lower()
     if execution_venue not in {"public_primary", "tasty_primary"}:
         raise PolicyError(f"{playbook_id}: unsupported execution_venue={execution_venue!r}")
@@ -139,8 +151,12 @@ def compile_playbook_policy(
         "capability": capability.key,
         "structure": structure,
         "source_mode": source_mode,
+        "accepted_inputs": accepted_inputs,
         "mode": mode.value,
-        "fields": fields,
+        # accepted_inputs is already normalized above. Excluding its raw cell
+        # representation keeps a blank legacy cell and an explicit equivalent
+        # value hash-identical across the bounded Sheet migration.
+        "fields": {key: value for key, value in fields.items() if key != "accepted_inputs"},
         "management": management,
         "compatibility": compatibility,
         "strangle_management": _as_jsonable(strangle_management),
@@ -151,6 +167,7 @@ def compile_playbook_policy(
         capability=capability,
         structure=structure,
         source_mode=source_mode,
+        accepted_inputs=accepted_inputs,
         mode=mode,
         fields=fields,
         management=management,
@@ -158,6 +175,26 @@ def compile_playbook_policy(
         policy_hash=policy_hash,
         strangle_management=strangle_management,
     )
+
+
+def _compile_accepted_inputs(
+    row: dict[str, Any],
+    *,
+    source_mode: str,
+    playbook_id: str,
+) -> tuple[str, ...]:
+    allowed = {"idea", "market_scan", "portfolio_hedge", "exact_package"}
+    if source_mode == "observed_package":
+        return ("exact_package",)
+    explicit = tuple(dict.fromkeys(item.lower() for item in _text_list(row.get("accepted_inputs"))))
+    if explicit:
+        invalid = sorted(set(explicit) - allowed)
+        if invalid:
+            raise PolicyError(f"{playbook_id}: invalid accepted_inputs={','.join(invalid)!r}")
+        return explicit
+    # Compatibility for already-frozen snapshots and the atomic migration
+    # boundary. New Sheet rows are required to make accepted_inputs explicit.
+    return (source_mode,)
 
 
 def _mode_from_row(row: dict[str, Any], playbook_id: str) -> tuple[ExecutionMode, dict[str, Any]]:

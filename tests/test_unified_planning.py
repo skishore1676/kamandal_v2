@@ -156,6 +156,14 @@ def _migrated_store(tmp_path) -> LocalStore:  # noqa: ANN001
     return store
 
 
+def _trade_source_rows() -> list[dict[str, object]]:
+    headers = seed_headers()["trade_sources"]
+    return [
+        dict(zip(headers, row, strict=True))
+        for row in build_seed_tables(load_control())["trade_sources"]
+    ]
+
+
 def test_sheet_backed_unified_cli_reaches_planner_without_import_shadowing(tmp_path, monkeypatch, capsys) -> None:  # noqa: ANN001
     universe, playbooks = _rows()
     from kamandal_v2 import cli
@@ -655,6 +663,7 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
     tables = {
         "universe": [{"symbol": "XYZ", "enabled": "TRUE", "profile": "large_cap"}],
         "playbooks": [live_row],
+        "trade_sources": _trade_source_rows(),
     }
     monkeypatch.setenv("KAMANDAL_STRATEGY_POLICY_SNAPSHOT_DIR", str(tmp_path / "policy"))
     snapshot = capture_daily_policy_snapshot(
@@ -777,6 +786,7 @@ def test_active_unified_path_replans_once_into_typed_plan_two(tmp_path, monkeypa
     tables = {
         "universe": [{"symbol": "XYZ", "enabled": "TRUE", "profile": "large_cap"}],
         "playbooks": [live_row],
+        "trade_sources": _trade_source_rows(),
     }
     control = load_control()
     control.setdefault("live", {}).update(

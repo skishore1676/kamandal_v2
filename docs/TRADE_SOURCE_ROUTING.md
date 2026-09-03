@@ -1,7 +1,20 @@
 # Trade Source Routing
 
 Date: 2026-09-03
-Status: approved target architecture; implementation and Sheet migration pending
+Status: architecture frozen; code implemented and verified; Sheet migration and deployment pending
+
+## Implementation status
+
+The source-neutral compiler, per-output activation, failure isolation,
+source-ceiling planner routing, exact-package adapter, activity projection, and
+daily policy snapshot integration are implemented. The protected migration is
+`scripts/apply_trade_source_routing_sheet.py`; it is dry-run by default and
+replaces the retired four-row Mike migration.
+
+The local implementation is not yet the live system. The operator Sheet still
+needs the bounded migration and oldmac still needs deployment at one stopped-job
+session boundary. The next natural daily snapshot—not a manual planner or order
+run—is the intended proof of policy consumption.
 
 ## Decision
 

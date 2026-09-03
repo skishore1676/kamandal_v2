@@ -293,6 +293,8 @@ google_sheets:
     playbooks: playbooks
     daily_plan: daily_plan
     my_ideas: my_ideas
+    trade_sources: trade_sources
+    trade_source_activity: trade_source_activity
 
 broker:
   active: public
@@ -358,7 +360,7 @@ source_intelligence:
         enabled: true
       - profile_id: mike_butler
         source_profile_id: mike_butler
-        source_mode: observed_package
+        profile_path: config/correspondents/mike_butler.yaml
         enabled: true
   x_digest:
     latest_state_file: ~/.openclaw/workspace-main/state/x_daily_digest/latest.json

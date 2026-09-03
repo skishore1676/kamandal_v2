@@ -18,6 +18,7 @@ def _tables(*, watch_multiple: int | None = 2) -> dict[str, list[dict[str, objec
         "profiles": "index_etf",
         "csa_stage": "shadow",
         "source_mode": "market_scan",
+        "accepted_inputs": "market_scan",
         "dte_min": 35,
         "dte_max": 50,
         "short_delta_min": 0.14,
@@ -69,6 +70,12 @@ def _tables(*, watch_multiple: int | None = 2) -> dict[str, list[dict[str, objec
         "universe": [universe_row],
         "playbooks": [playbook],
         "daily_plan": [],
+        "trade_sources": [
+            {"source_id": "greg_harmon", "output_kind": "idea", "mode": "live", "notes": ""},
+            {"source_id": "greg_harmon", "output_kind": "exact_package", "mode": "observe", "notes": ""},
+            {"source_id": "mike_butler", "output_kind": "idea", "mode": "observe", "notes": ""},
+            {"source_id": "mike_butler", "output_kind": "exact_package", "mode": "shadow", "notes": ""},
+        ],
     }
 
 
