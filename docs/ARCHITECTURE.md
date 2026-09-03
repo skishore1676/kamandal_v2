@@ -1,7 +1,7 @@
 # Kamandal V2 Architecture
 
-Date: 2026-08-24
-Status: Multi-broker architecture deployed on Old Mac; Tastytrade authentication and broker-effect proof pending
+Date: 2026-09-03
+Status: One-engine architecture deployed; trade-source routing design approved, implementation pending
 
 ## Purpose
 
@@ -91,8 +91,9 @@ The minimal operator contract is:
 | `playbook_id` | unique parameterized strategy row |
 | `strategy_family` | registered Kamandal capability |
 | `structure` | concrete option/order shape constructed by that capability |
-| `source_mode` | `idea`, `market_scan`, `portfolio_hedge`, or shadow-only `observed_package`; blank legacy values migrate to `idea` |
-| `source_profiles` | explicit correspondent allowlist required only for `observed_package` rows |
+| `accepted_inputs` | prospective source-neutral input contract; values may include `idea`, `market_scan`, `portfolio_hedge`, and `exact_package` |
+| `source_mode` | compatibility evidence retired from new authoring after `accepted_inputs` migration |
+| source authorization | target state comes from `trade_sources`, not a person-specific playbook row; legacy `source_profiles` is removed during that migration |
 | `mode` | `shadow` or `live` effect choice |
 | typed parameter columns and management JSON | entry, sizing, and lifecycle policy |
 
@@ -226,24 +227,46 @@ The Sheet contains typed parameters, not executable strategy code. A parameter
 variant is another row. A genuinely new entry shape or lifecycle behavior is a
 new Kamandal capability.
 
-### Input sources are profiles, not trading lanes
+### Trade sources are profiles, not trading lanes
 
-X, YouTube, My Ideas, correspondent profiles, market scans, and portfolio needs
-all normalize into a common signal contract. Adding another correspondent
-normally adds a collector/profile/translator, not another planner or manager.
+X, YouTube, My Ideas, trade-source profiles, market scans, and portfolio needs
+all normalize into common evidence and opportunity contracts. Adding another
+person normally adds a collector/profile and two Sheet control rows, not another
+planner or manager. The approved target contract is defined in
+[Trade Source Routing](TRADE_SOURCE_ROUTING.md); it is not yet the deployed
+Sheet/runtime contract.
 
-When a correspondent publishes an exact option package as an image, the first
-normalized object is evidence rather than an idea. Birdclaw preserves the
-sanitized public post and media; Agent Broker transcribes the bounded image;
-Kamandal deterministically validates exact legs into `ObservedPackageEvidence`
-and appends every revision to a passive ledger. A complete opening enters the
-one planner only through a shadow-only `observed_package` playbook that
-explicitly allows the source profile and exact structure. Kamandal quotes and
-validates those source legs without rebuilding them. The existing optimizer may
-reject or not select the package; only a selected package uses the existing
-shadow adapter and unified manager. Close/roll/adjust posts remain benchmark
-facts and cannot manage the Kamandal lifecycle. See
-[Observed Package Evidence](OBSERVED_PACKAGE_EVIDENCE.md).
+A post may produce zero, one, or multiple outputs and may mix an `idea`, an
+`exact_package`, and non-executable residual evidence. The parent post retains
+one identity while every output receives a stable child identity. Birdclaw
+preserves the sanitized public post and media; Agent Broker may perform bounded
+model labor; Kamandal owns the questions, schemas, deterministic validation,
+classification, and trading meaning.
+
+An `idea` enters the ordinary Idea adapter and compatible Sheet playbooks, so a
+Mike call-calendar thesis is constructed and managed by the same Kamandal
+capability as the equivalent Greg, YouTube, or My Ideas thesis. An
+`exact_package` first enters the passive evidence ledger, then quotes and
+validates the source legs without rebuilding them. It reuses exactly one
+existing playbook whose `accepted_inputs` permits exact packages; no Mike or
+generic exact-only playbook is created. Zero matches park as unsupported and
+multiple matches park as ambiguous rather than letting optimizer rank choose a
+management policy.
+
+Exact calendars and diagonals retain every observed contract term but receive
+the canonical `short_near` and `long_far` roles required by the existing
+lifecycle manager. A `trade_sources.mode` ceiling may allow planner consideration;
+the optimizer may still reject or not select it. Only a selected, supported
+package uses the existing shadow/live adapter and unified manager. During the
+first migration, exact packages remain shadow-only. Close/roll/adjust posts
+remain benchmark facts and cannot manage a Kamandal lifecycle. See [Observed
+Package Evidence](OBSERVED_PACKAGE_EVIDENCE.md).
+
+The operator surface contains exactly two `trade_sources` rows per person—one
+for `idea` and one for `exact_package`. `off`, `observe`, `shadow`, and `live`
+are ceilings; the effective effect is always the safer of source mode and
+playbook mode, followed by every existing safety gate. A source row never grants
+live authority by itself.
 
 Normalization may be one-to-many. A source profile with a stable numbered
 grammar may expand one announcement into several distinct template signals

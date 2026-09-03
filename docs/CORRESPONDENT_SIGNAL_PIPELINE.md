@@ -1,7 +1,36 @@
-# Correspondent signal pipeline
+# Trade-source signal pipeline
 
-Kamandal translates Birdclaw correspondent batches through declarative profiles. Greg
-Harmon is the first profile, not a dedicated subsystem.
+Date: 2026-09-03
+Status: current Greg/Mike pipeline deployed; source-neutral Sheet routing approved and pending implementation
+
+Kamandal translates Birdclaw correspondent batches through declarative profiles.
+Greg Harmon and Mike Butler are profiles, not dedicated subsystems. The approved
+target routing and migration contract lives in
+[Trade Source Routing](TRADE_SOURCE_ROUTING.md).
+
+## Approved target
+
+One source post owns zero or more normalized `outputs[]`. Each output is an
+`idea`, an `exact_package`, or a non-executable `residual`; a post may be mixed.
+Ideas use the ordinary planner adapter. Exact packages preserve and validate the
+source legs before entering the same planner. The exact package reuses exactly
+one existing playbook that explicitly accepts this input; it does not create a
+Mike-specific or exact-only strategy row. Calendar and diagonal contracts are
+assigned the manager's canonical `short_near` and `long_far` roles without
+changing the source terms. Residuals remain visible with a precise reason.
+
+The operator controls each source with exactly two rows in `trade_sources`:
+one for `idea` and one for `exact_package`. Modes are `off`, `observe`,
+`shadow`, and `live`, and they are ceilings rather than independent execution
+authority. The matched playbook and every existing safety gate can only reduce
+that authority. Exact packages remain shadow-only in the first implementation.
+
+The machine-owned `trade_source_activity` tab projects the complete post ->
+output -> capability -> planner -> effect funnel from canonical receipts. It is
+an observation surface, not policy or a second source of truth.
+
+The remaining sections describe the currently deployed pipeline until that
+migration lands.
 
 ```text
 configured read-only Birdclaw acquisition
@@ -15,7 +44,7 @@ configured read-only Birdclaw acquisition
   -> existing planner candidate and plan gates
 ```
 
-## Greg's current semantics
+## Current Greg semantics
 
 Greg uses `interpretation_posture: inference_allowed`. The model returns only:
 
@@ -138,21 +167,28 @@ fabricating a clean packet, translation can succeed without automatically runnin
 planner, and production activation is independently visible in
 `data/research/correspondent_signals/activation/latest.json`.
 
-## Add another correspondent
+## Add another source after the routing migration
 
 1. Add a Birdclaw source profile identifying the author and post families; enable its
    bounded `acquisition` section when the account should be deliberately monitored.
 2. Add `config/correspondents/<profile>.yaml`, choose
    `interpretation_posture: explicit_only|inference_allowed`, and map family names to one of the
    supported modes: `chart_watch`, `numbered_template`, `trade_journal`, or `ignore`.
-3. Configure strategy regexes, numbered templates, direction-to-structure mappings,
+3. Add exactly two operator rows to `trade_sources`, for `idea` and
+   `exact_package`, starting at `observe` unless a narrower existing authority is
+   deliberately being preserved.
+4. Configure strategy regexes, numbered templates, direction-to-structure mappings,
    thesis tags, horizons, recency windows, and whether a family asks Cartographer.
-4. Add one Birdclaw fixture and one Kamandal fixture.
-5. Replay capture, translation, planner loading, and at least one parked case.
+5. Add one Birdclaw fixture and one Kamandal fixture.
+6. Replay mixed-output classification, observation, planner loading, and at
+   least one parked case.
 
-No Python or JavaScript change is needed for a new person whose publishing grammar fits
-those modes. A genuinely new semantic family should add one reusable mode rather than
-an author-specific branch.
+No Python or JavaScript change is needed for a new person whose publishing
+grammar fits existing modes and executable capabilities. A genuinely new
+semantic family should add one reusable mode rather than an author-specific
+branch. A newly recognized option structure remains residual evidence until
+Kamandal has a complete reusable capability for quoting, planning, management,
+and reconciliation.
 
 Before changing a correspondent posture or prompt, replay a bounded recent production
 window and compare Kamandal's action, symbol, direction, and reason with operator
@@ -162,8 +198,8 @@ rather than silently changing the current run.
 
 ## Safety boundary
 
-The import and fixture replay perform no broker call, order, Sheet write, external send,
-shadow admission, or live admission. Production activation publishes only eligible
-`Idea` records to the existing active-idea directory; it does not bypass planner,
-portfolio, health, risk, preflight, ranking, live-approval, or execution gates. The
-emitted prices in fixture replays are `DEMO DATA`.
+The import and fixture replay perform no broker call, order, Sheet write,
+external send, shadow admission, or live admission. Production activation does
+not bypass planner, portfolio, health, risk, preflight, ranking, approval, or
+execution gates. A source Sheet mode is only a ceiling. The emitted prices in
+fixture replays are `DEMO DATA`.

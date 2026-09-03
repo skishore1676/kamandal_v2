@@ -1,13 +1,21 @@
 # Kamandal V2 Sheet Schema
 
-Date: 2026-08-22
-Status: Current lean operator contract
+Date: 2026-09-03
+Status: Current contract plus approved trade-source additions pending implementation
 
-Create one blank Google Sheet with these tabs:
+The currently deployed policy uses these tabs:
 
 - `universe`
 - `playbooks`
 - `daily_plan`
+
+The approved trade-source migration adds:
+
+- `trade_sources` — operator-owned source routing;
+- `trade_source_activity` — machine-owned, bounded observation projection.
+
+Do not create or edit these tabs manually before the matching code and atomic
+Sheet migration are ready. See [Trade Source Routing](TRADE_SOURCE_ROUTING.md).
 
 Runtime control is intentionally not a sheet tab for now. Keep these in env or
 local config:
@@ -95,6 +103,7 @@ csa_stage
 source_mode
 management_policy_json
 notes
+accepted_inputs
 ```
 
 Examples:
@@ -160,8 +169,26 @@ Notes:
   It does not select an active runtime path when `mode` is present. `mode` is
   the authoritative `shadow|live` operator switch; no new policy should be
   authored against `csa_stage`.
-- `source_mode` (column BB): `idea`, `market_scan`, or `portfolio_hedge`. The
-  value must be compatible with the row's structure and fails closed otherwise.
+- `source_mode` (column BB): currently `idea`, `market_scan`,
+  `portfolio_hedge`, or legacy shadow-only `observed_package`. It becomes a
+  compatibility column after the trade-source migration; no new policy is
+  authored against it.
+- `accepted_inputs`: approved pending replacement for `source_mode`. Allowed
+  values are any comma-separated combination of `idea`, `market_scan`,
+  `portfolio_hedge`, and `exact_package`. Migration begins from each row's
+  current `source_mode`, so existing non-idea lanes do not change. A blank
+  historical `source_mode` resolves to `idea`, but every enabled row in the new
+  Sheet must be explicit. Initially, exactly one enabled call calendar, put
+  calendar, call diagonal, and put diagonal playbook may accept exact packages.
+  An exact package keeps every observed contract term, receives canonical leg
+  roles, and uses that existing playbook's eligibility, portfolio, effect, and
+  lifecycle policy. Zero matching managers park as `unsupported`; multiple
+  matches park as `ambiguous_playbook_match`. The migration appends this field
+  after every currently deployed playbook column; it does not shift the stable
+  positions of `management_policy_json` or `notes`.
+- `source_profiles`: legacy person-specific observed-package allowlist. It is
+  removed with the four `mike_*_observed` rows during the trade-source migration;
+  `trade_sources` becomes the only source authorization surface.
 - `management_policy_json` (column BC): operator-visible CSA lifecycle policy
   that is not already represented by a normal playbook column. It must contain a
   non-empty `lifecycle` object. The existing `score_weight_credit/pop/liquidity/spread`
@@ -239,6 +266,54 @@ value during migration. Before deployment, Old Mac must run
 row, including `max_bid_ask_pct`, against the planner, unified compiler, and
 strict CSA compatibility compiler from one live Sheet snapshot. Kamandal must
 not silently invent a fallback for a missing operator value.
+
+## `trade_sources`
+
+Operator-owned routing ceiling for translated people or feeds. There is exactly
+one row per `(source_id, output_kind)` and therefore two rows per source in the
+initial contract.
+
+```text
+source_id
+output_kind
+mode
+notes
+```
+
+Notes:
+
+- `output_kind`: `idea` or `exact_package`.
+- `mode`: `off`, `observe`, `shadow`, or `live`.
+- The source mode is a ceiling, not execution permission. The effective mode is
+  the safer of source mode and matched playbook mode, followed by all existing
+  portfolio and safety gates.
+- `exact_package=live` is invalid in the first release. Exact packages remain
+  broker-inert shadow even if a broader source or playbook mode says `live`.
+- Missing, duplicate, or invalid rows fail only that source activation closed.
+  They do not block management or exits for existing positions.
+
+## `trade_source_activity`
+
+Machine-owned, bounded projection of canonical trade-source receipts. This tab
+is for observation and debugging; it is not policy or a database.
+
+```text
+observed_at
+source_id
+post_ref
+output_id
+acquisition_status
+classification
+normalized_output
+capability_support
+planner_disposition
+effective_mode
+reason
+```
+
+Every normalized output receives one row, including residual, unsupported, and
+ambiguous results. A projection outage retries from canonical receipts and must
+not block planning, existing lifecycle management, exits, or reconciliation.
 
 ## `daily_plan`
 
