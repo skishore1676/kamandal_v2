@@ -1,7 +1,7 @@
 # Trade Source Routing
 
 Date: 2026-09-03
-Status: architecture frozen; code implemented and verified; Sheet migration and deployment pending
+Status: deployed and Sheet-migrated; next natural scheduled-run proof pending
 
 ## Implementation status
 
@@ -11,10 +11,18 @@ daily policy snapshot integration are implemented. The protected migration is
 `scripts/apply_trade_source_routing_sheet.py`; it is dry-run by default and
 replaces the retired four-row Mike migration.
 
-The local implementation is not yet the live system. The operator Sheet still
-needs the bounded migration and oldmac still needs deployment at one stopped-job
-session boundary. The next natural daily snapshot—not a manual planner or order
-run—is the intended proof of policy consumption.
+The implementation was deployed to oldmac at commit `72a05d2` on 2026-09-03
+after the market session. The bounded Sheet migration passed its complete
+readback gate at snapshot hash
+`ca834b95640d2253d9faa26cbc8f70c496b4031016cda1f482d1885e984a3fb6`:
+19 named playbooks, 15 enabled unified policies, four source-policy rows, no
+retired Mike playbooks, and exactly one exact-package acceptor for each supported
+calendar/diagonal structure. All scheduled jobs remained loaded and idle; no
+planner, broker, entry, exit, or lifecycle cycle was triggered manually.
+
+Source-ready, deployed, and Sheet-activated are now proven. The next natural
+Birdclaw activation, daily policy snapshot, unified planning run, and activity
+projection remain the required proof of scheduled consumption and behavior.
 
 ## Decision
 
