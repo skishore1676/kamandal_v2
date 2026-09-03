@@ -108,6 +108,37 @@ available as descriptive research context but is no longer an admission gate.
   recovered by the bounded retry path; no Public HTTP 429 appeared in the day's
   retained events.
 
+### Thursday, 2026-09-03
+
+- The natural policy snapshot moved to
+  `5e768ab4bddf065e7b4344abf3e7dc8c73d540096990bcef4874bdce2b8195e6`
+  after the intentional IV-policy alignment in `d972060`. The row remains
+  `mode=shadow`, `csa_stage=shadow`, one contract, `tasty_primary`, full enabled
+  universe expansion, `$2,500` maximum per-order BPR, and
+  `range_gate_required=FALSE`. IV Rank `50-100` is now the sole volatility
+  admission gate; the IV-percentile cells are intentionally blank and percentile
+  remains evidence rather than a co-gate.
+- The natural shadow planner evaluated 100 in-universe ideas and truthfully built
+  zero candidates because no market-scan symbol cleared every current IV Rank,
+  price, event, and universe condition. There was no Cartographer range rejection,
+  low-OI veto, preflight failure, active run error, Public HTTP 429, or unexpected
+  broker effect.
+- Both shadow strangles remain open on `$3,271.14` recorded BPR. Only one had an
+  actionable same-day package mark, so aggregate unrealized P&L correctly returned
+  to unavailable rather than carrying Wednesday's `$7.50` value forward.
+- The Tastytrade deposit is visible as `$10,200` buying power with zero positions.
+  This clears the simple cash-capacity concern for a candidate within the `$2,500`
+  order cap, but a new natural candidate did not exist, so Monday remains the latest
+  exact-leg production dry-run BPR receipt.
+- Reconciliation completed with zero blockers and two existing live positions
+  closed naturally. However, the latest Public-backed live account snapshot reports
+  `$9,040.91` BPR used on `$11,951.93` account value (`75.64%`), above the `55%`
+  hard portfolio cap. Live health is RED and correctly blocks new entries. The
+  five open groups account for only `$2,317` in the per-underlying BPR breakdown,
+  so the discrepancy requires either a later normalized broker snapshot or an
+  explained account-level obligation before Friday can be `GO`. Two close actions
+  deferred after the product cutoff have a defined next-session self-healing path.
+
 ## Target before pilot live
 
 1. Shadow and live classify low-OI packages identically; shadow freezes the
