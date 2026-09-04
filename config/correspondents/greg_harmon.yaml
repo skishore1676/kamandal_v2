@@ -28,6 +28,8 @@ episode_interpreter:
   action_overrides:
     - {id: bought_to_close, regex: "\\bbought to close\\b", action: close}
     - {id: expires_then_close, regex: "\\bputs? expire\\b.*\\b(?:buy|sell) to close\\b", action: adjust}
+    - {id: explicit_exit_instruction, regex: "\\b(?:buy|sell) to close\\b", action: adjust}
+    - {id: roll_management, regex: "\\b(?:will )?(?:need to )?roll(?:ed|ing)?\\b", action: roll}
     - {id: looks_to_expire, regex: "\\blook(?:s)? to expire\\b", action: hold}
     - {id: added, regex: "\\b(?:also )?added\\b", action: scale_in}
   composite_structure_rules:

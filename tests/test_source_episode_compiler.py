@@ -513,3 +513,69 @@ def test_greg_added_trade_remains_a_new_idea_without_prior_position_history() ->
     assert event["evidence_status"] == "complete"
     assert "idea" in event["projections"]
     assert event["planner_new_entry"] is True
+
+
+def test_greg_quoted_entry_inside_management_post_cannot_reopen_trade() -> None:
+    record = _record(
+        "management-with-quote",
+        (
+            '$LULU "Trade Idea 1: Buy the September 4 Expiry 118/113-112 1x2 Put Spread '
+            'for a 5 cent credit." sell to close a 118/113 put spread near $5 and roll the '
+            "remaining put down and out."
+        ),
+        ["LULU"],
+        classification="earnings_idea",
+    )
+    response = {
+        "schema": PROMPT_SCHEMA,
+        "episodes": [
+            {
+                "signal_id": record["signal_id"],
+                "events": [
+                    _event(
+                        action="open",
+                        structure_hint="short_put",
+                        projections=["idea", "exact_package"],
+                        exact_packages=[
+                            {
+                                "complete": True,
+                                "blocker": None,
+                                "displayed_price": {"amount": "0.05", "effect": "credit"},
+                                "legs": [
+                                    {
+                                        "quantity": 1,
+                                        "expiration": "Sep 4 2026",
+                                        "strike": "118",
+                                        "option_type": "put",
+                                        "order_code": "BTO",
+                                    }
+                                ],
+                                "field_provenance": ["text"],
+                            }
+                        ],
+                    ),
+                    _event(
+                        action="hold",
+                        structure_hint="short_put",
+                        projections=["residual"],
+                    ),
+                ],
+            }
+        ],
+    }
+
+    compilation = compile_source_episode_packet(
+        _packet([record]),
+        _profile("greg_harmon"),
+        FakeClient(response),
+    )
+
+    events = compilation.episodes[0]["events"]
+    assert events
+    assert {event["action"] for event in events} == {"adjust"}
+    assert all(event["planner_new_entry"] is False for event in events)
+    assert all(
+        disposition["disposition"] != "ready_for_source_policy"
+        for event in events
+        for disposition in event["projection_dispositions"]
+    )
