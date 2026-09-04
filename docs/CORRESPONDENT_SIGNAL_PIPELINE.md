@@ -1,7 +1,7 @@
 # Trade-source signal pipeline
 
 Date: 2026-09-04
-Status: source-neutral routing deployed; source-episode interpreter implemented locally, deployment pending
+Status: source-neutral routing and source-episode interpreter deployed; first natural scheduled execution pending
 
 Kamandal translates Birdclaw correspondent batches through declarative profiles.
 Greg Harmon and Mike Butler are profiles, not dedicated subsystems. The approved

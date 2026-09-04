@@ -1,7 +1,7 @@
 # Observed Package Evidence
 
 Date: 2026-09-04
-Status: exact-evidence path deployed; source-episode integration implemented locally, deployment pending
+Status: exact-evidence and source-episode integration deployed; first natural image-backed execution pending
 
 ## Purpose
 

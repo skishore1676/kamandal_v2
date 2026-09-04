@@ -1,7 +1,7 @@
 # Trade Source Routing
 
 Date: 2026-09-04
-Status: routing deployed and Sheet-migrated; richer source-episode interpretation implemented locally, deployment pending
+Status: routing, Sheet controls, and richer source-episode interpretation deployed; first natural scheduled execution pending
 
 ## Implementation status
 

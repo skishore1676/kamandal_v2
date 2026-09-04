@@ -1,7 +1,7 @@
 # Kamandal V2 Architecture
 
 Date: 2026-09-04
-Status: one-engine and source routing deployed; source-episode interpretation implemented locally, deployment pending
+Status: one-engine, source routing, and source-episode interpretation deployed; first natural source-episode execution pending
 
 ## Purpose
 

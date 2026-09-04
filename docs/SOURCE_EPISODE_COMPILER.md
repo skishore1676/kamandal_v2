@@ -1,7 +1,7 @@
 # Source Episode Compiler
 
 Date: 2026-09-04
-Status: compiler, downstream adapters, and evaluation harness implemented locally; deployment pending
+Status: deployed on oldmac; first natural scheduled execution pending
 
 ## Decision
 

@@ -1,7 +1,7 @@
 # Kamandal V2 Sheet Schema
 
 Date: 2026-09-04
-Status: trade-source controls deployed; richer source-episode activity projection implemented locally, deployment pending
+Status: trade-source controls and richer source-episode activity projection deployed; natural Sheet readback pending
 
 The currently deployed policy uses these tabs:
 
