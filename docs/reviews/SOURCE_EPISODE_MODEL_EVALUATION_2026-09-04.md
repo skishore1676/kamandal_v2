@@ -2,8 +2,10 @@
 
 ## Verdict
 
-Use **Terra** for the Source Episode Compiler. Do not activate the new compiler
-in Kamandal's planner path yet.
+Use **Terra** for the Source Episode Compiler. The compiler and its projection
+adapters may be deployed under the existing Sheet ceilings: Greg ideas retain
+their existing live planner ceiling, Mike ideas remain observe-only, and Mike
+exact packages remain shadow-only.
 
 Terra passed the hard safety gate in all three repeated runs. Luna failed all
 three repeated runs and also failed a later post-hardening check because it
@@ -11,9 +13,9 @@ reversed explicit structure language in two cases. Deterministic source grammar
 was strengthened after the bakeoff so literal source phrases outrank model
 labels, but that does not erase Luna's observed instability.
 
-The implementation is ready for the next engineering phase, not deployment:
-the compiler is effect-free and is not connected to active idea publication,
-the exact-package feed, the planner, or orders.
+The implementation now connects the effect-free compiler to the existing idea
+and exact-package seams. It does not add an execution path: the existing Sheet
+policy, optimizer, lifecycle manager, and broker gates remain authoritative.
 
 ## Frozen-corpus results
 
@@ -47,7 +49,7 @@ The compiler also now:
   source batch; and
 - allows one repair pass, then fails the source closed and records the failure.
 
-## Remaining gates
+## Remaining proof gates
 
 The 29-case workbook-derived corpus does not contain the original public images
 for every image-dependent case. Therefore the required 100% exact-leg agreement
@@ -55,15 +57,14 @@ gate has **not** been tested. The Birdclaw repair is intended to make future
 cached-media replay possible, but a green unit test is not evidence that oldmac
 has captured those images naturally.
 
-Before activation:
+Before any exact-package promotion beyond the current shadow ceiling:
 
-1. deploy and naturally verify Birdclaw's public-media repair;
+1. naturally verify Birdclaw's public-media repair on oldmac;
 2. add a held-out replay containing actual cached public images and thread
    context;
-3. finish the projection adapters into the existing idea, exact-package, and
-   residual routes with opportunity-group mutual exclusion; and
-4. rerun the complete effect-free replay before any Sheet or planner
-   activation.
+3. rerun the complete effect-free replay against the deployed compiler; and
+4. verify natural scheduled projection and downstream consumption receipts.
 
-No Google Sheet change, planner publication, broker call, order, or deployment
-was performed by this evaluation.
+The deployment does not change the four operator-owned `trade_sources` rows.
+Missing media, missing history, unsupported structures, and ambiguity continue
+to park without a broker effect.
