@@ -123,7 +123,8 @@ The compiler uses the following stages for every profile:
    quote relationships; it is not an unbounded search.
 4. **Agent interpretation.** Ask for atomic events, not one label for the whole
    post. The agent may use both text and images but must cite its evidence
-   locators.
+   locators. A large acquisition packet is divided into bounded batches of at
+   most 20 new records; each record is still interpreted exactly once.
 5. **Deterministic validation and linkage.** Validate event shape and exact
    legs, then link closes, rolls, and adjustments to prior source events. An
    update with no defensible link parks; it cannot become a new opening.

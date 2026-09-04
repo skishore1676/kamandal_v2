@@ -266,6 +266,7 @@ def load_correspondent_profile(path: str | Path) -> tuple[dict[str, Any], str]:
         allowed_episode_keys = {
             "version",
             "max_history_episodes",
+            "max_records_per_turn",
             "open_confirmation_regex",
             "symbol_aliases",
             "structure_aliases",
@@ -279,6 +280,9 @@ def load_correspondent_profile(path: str | Path) -> tuple[dict[str, Any], str]:
         limit = episode.get("max_history_episodes", 12)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 40:
             raise ValueError("episode_interpreter.max_history_episodes must be 0..40")
+        turn_limit = episode.get("max_records_per_turn", 20)
+        if isinstance(turn_limit, bool) or not isinstance(turn_limit, int) or not 1 <= turn_limit <= 30:
+            raise ValueError("episode_interpreter.max_records_per_turn must be 1..30")
         confirmation = str(episode.get("open_confirmation_regex") or "")
         if confirmation:
             try:

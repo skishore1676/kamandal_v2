@@ -105,7 +105,6 @@ def compile_source_episode_packet(
     }
     reused: dict[str, dict[str, Any]] = {}
     model_records: list[Mapping[str, Any]] = []
-    image_paths: list[str] = []
     image_map: dict[str, list[int]] = {}
     for record in records:
         if not isinstance(record, Mapping):
@@ -120,31 +119,45 @@ def compile_source_episode_packet(
             deterministic[signal_id] = result
             continue
         model_records.append(record)
-        indexes: list[int] = []
-        for path in _verified_public_images(record):
-            image_paths.append(path)
-            indexes.append(len(image_paths))
-        image_map[signal_id] = indexes
 
     history_context = _bounded_history(history, profile)
     system_prompt = _system_prompt(profile)
-    user_prompt = _user_prompt(model_records, image_map=image_map, history=history_context)
-    prompt_sha256 = _sha256(f"{system_prompt}\n\n{user_prompt}")
+    prompt_material: list[str] = []
     model_receipts: list[dict[str, Any]] = []
     interpreted: dict[str, dict[str, Any]] = {}
-    if model_records:
+    batch_size = max(
+        1,
+        min(30, int(((profile.get("episode_interpreter") or {}).get("max_records_per_turn") or 20))),
+    )
+    for start in range(0, len(model_records), batch_size):
         if client is None:
             raise RuntimeError("source episode interpreter client is unavailable")
-        raw = client.chat_json(system_prompt, user_prompt, images=tuple(image_paths))
-        model_receipts.append(_client_receipt(client, pass_name="interpret"))
-        expected_ids = {str(item["signal_id"]) for item in model_records}
+        chunk = model_records[start : start + batch_size]
+        chunk_images: list[str] = []
+        chunk_image_map: dict[str, list[int]] = {}
+        for record in chunk:
+            signal_id = str(record["signal_id"])
+            indexes: list[int] = []
+            for path in _verified_public_images(record):
+                chunk_images.append(path)
+                indexes.append(len(chunk_images))
+            chunk_image_map[signal_id] = indexes
+            image_map[signal_id] = indexes
+        user_prompt = _user_prompt(chunk, image_map=chunk_image_map, history=history_context)
+        prompt_material.append(user_prompt)
+        raw = client.chat_json(system_prompt, user_prompt, images=tuple(chunk_images))
+        suffix = "" if len(model_records) <= batch_size else f":{start // batch_size + 1}"
+        model_receipts.append(_client_receipt(client, pass_name=f"interpret{suffix}"))
+        expected_ids = {str(item["signal_id"]) for item in chunk}
         try:
-            interpreted = _normalize_response(raw, expected_ids=expected_ids)
+            normalized = _normalize_response(raw, expected_ids=expected_ids)
         except ValueError as exc:
             repair_prompt = _repair_prompt(user_prompt, raw=raw, error=str(exc))
-            raw = client.chat_json(system_prompt, repair_prompt, images=tuple(image_paths))
-            model_receipts.append(_client_receipt(client, pass_name="repair"))
-            interpreted = _normalize_response(raw, expected_ids=expected_ids)
+            raw = client.chat_json(system_prompt, repair_prompt, images=tuple(chunk_images))
+            model_receipts.append(_client_receipt(client, pass_name=f"repair{suffix}"))
+            normalized = _normalize_response(raw, expected_ids=expected_ids)
+        interpreted.update(normalized)
+    prompt_sha256 = _sha256("\n\n".join([system_prompt, *prompt_material]))
 
     by_signal = {**deterministic, **interpreted}
     ordered_records = sorted(

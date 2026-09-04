@@ -7,6 +7,7 @@ interpretation_posture: explicit_only
 episode_interpreter:
   version: "1"
   max_history_episodes: 30
+  max_records_per_turn: 20
   structure_aliases:
     strangle: short_strangle
     calendar: call_calendar
