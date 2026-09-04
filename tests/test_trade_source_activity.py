@@ -18,6 +18,11 @@ def test_activity_projection_joins_output_to_planner_disposition(tmp_path) -> No
             "acquisition_status": "complete",
             "classification": "idea",
             "normalized_output": {"underlying": "META"},
+            "action": "open",
+            "symbol": "META",
+            "structure": "call_diagonal",
+            "link_state": "not_needed",
+            "evidence_status": "complete",
             "capability_support": "supported",
             "planner_disposition": "published",
             "effective_mode": "shadow",
@@ -40,6 +45,11 @@ def test_activity_projection_joins_output_to_planner_disposition(tmp_path) -> No
     projected = dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, rows[0], strict=True))
     assert projected["source_id"] == "mike_butler"
     assert projected["classification"] == "idea"
+    assert projected["action"] == "open"
+    assert projected["symbol"] == "META"
+    assert projected["structure"] == "call_diagonal"
+    assert projected["link_status"] == "not_needed"
+    assert projected["evidence_status"] == "complete"
     assert projected["planner_disposition"] == "eligible_not_selected"
     assert projected["reason"] == "portfolio_optimizer"
     assert projected["effective_mode"] == "shadow"
