@@ -1,7 +1,7 @@
 # Short Strangle Experiment: Current State and Target
 
-Updated: 2026-09-02 after the natural close
-Status: shadow evidence collection; conditionally authorized for one pilot on 2026-09-08
+Updated: 2026-09-04 after the natural close
+Status: `FRIDAY_NO_GO`; remain shadow on 2026-09-08
 
 ## Stable picture
 
@@ -139,6 +139,65 @@ available as descriptive research context but is no longer an admission gate.
   explained account-level obligation before Friday can be `GO`. Two close actions
   deferred after the product cutoff have a defined next-session self-healing path.
 
+### Friday, 2026-09-04
+
+- The natural 15:25 daily report completed. The strangle row remained
+  `mode=shadow`, `csa_stage=shadow`, one contract, `tasty_primary`, full enabled
+  universe expansion, a `$2,500` maximum per-order BPR, and
+  `range_gate_required=FALSE` in the 08:50 policy snapshot.
+- The final natural shadow planner evaluated 92 in-universe ideas and built zero
+  candidates. All 92 failed before construction because no idea matched every
+  current playbook gate; the market-scan diagnostics were dominated by
+  `iv_rank_below_min`. There was no Cartographer range rejection, low-OI veto, or
+  preflight failure. This is a truthful strategy-driven zero-candidate receipt.
+- The two Monday shadow strangles remain open on `$3,271.14` recorded BPR. Friday's
+  validated marks show `$27.50` combined unrealized P&L. This is working mark-path
+  evidence, not a realized result or an alpha claim.
+- Public-backed live portfolio health recovered from Thursday's RED snapshot to
+  YELLOW: `$2,822` BPR on `$12,082.98` account value (`23.36%`), below the `55%`
+  hard cap. Reconciliation has zero blockers. Three closes deferred after the
+  cutoff and one working resting-profit order have defined next-session handling.
+- Two Public quote reads timed out during lifecycle observation. Both are retained
+  as recovered run errors, active runtime status is GREEN, and the final planner
+  completed; this is degraded day evidence rather than an unexplained active
+  failure.
+- The full local suite at deployed commit `bf4e96a` passed all 834 tests, including
+  the one-canary reservation test inherited from `0a874c8`.
+
+## Friday promotion decision
+
+Decision: **`FRIDAY_NO_GO`**
+
+Failed gates:
+
+1. `production_tastytrade_capacity_not_safely_proven` — the latest retained
+   Tastytrade readback shows `$10,200` option buying power but only `$200` net
+   liquidating/account value. The current venue-level BPR guard uses account value
+   as its utilization denominator, so a normal strangle would fail the Tastytrade
+   venue cap even when raw buying power appears sufficient. No new Friday candidate
+   existed to produce a fresh exact-leg production dry-run and resolve this
+   inconsistency.
+2. `venue_scoped_entry_health_not_implemented` — broker routing and preflight are
+   venue-specific, but the executor's entry-health gate is still one global result.
+   A future Public RED state would therefore block a Tastytrade entry. This does not
+   match the agreed target of venue-specific broker health plus a separately
+   explicit Kamandal-wide risk ceiling.
+
+Evidence paths on oldmac:
+
+- `data/run/strategy_policy/strategy_policy_2026-09-04.json`
+- `data/audit/unified/shadow/latest_plan_run.json`
+- `data/reports/kamandal_daily_report_2026-09-04.json`
+- `data/reports/csa1/csa1_experiment_status_2026-09-04.json`
+- `data/run/live_reconciliation/latest.json`
+- `data/logs/launchd/com.kamandal.v2.unified_planning.out.log`
+- `data/logs/launchd/com.kamandal.v2.live_health_report.out.log`
+
+The known action for `FRIDAY_NO_GO` is to leave the Sheet unchanged and remain in
+shadow on Tuesday, 2026-09-08. No Obsidian decision packet is required. A later
+pilot needs a new explicit plan after the two failed gates are repaired and proven
+against current broker/account evidence.
+
 ## Target before pilot live
 
 1. Shadow and live classify low-OI packages identically; shadow freezes the
@@ -162,9 +221,7 @@ available as descriptive research context but is no longer an admission gate.
 
 ## Promotion decision
 
-Keep the row shadow through the evidence week. Suman has authorized promotion on
-Tuesday, 2026-09-08 only if the Friday, 2026-09-04 checklist recommendation is `GO`
-and Tuesday's final account and safety readback remains green. That promotion permits
-the normal planner and executor to submit one qualifying one-contract Tastytrade
-canary; otherwise the row remains shadow. The authoritative checklist and state
-machine are in [STRANGLE_PILOT_RUNBOOK.md](STRANGLE_PILOT_RUNBOOK.md).
+The Friday decision is `FRIDAY_NO_GO`. Keep the row shadow on Tuesday, 2026-09-08;
+the conditional authority to promote was not activated and no Tastytrade canary may
+be submitted under this dated plan. The authoritative checklist and state machine
+are in [STRANGLE_PILOT_RUNBOOK.md](STRANGLE_PILOT_RUNBOOK.md).
