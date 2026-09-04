@@ -2,8 +2,8 @@
 # Actor -> named brain; the brain's models live centrally in
 # ~/.agent-broker/brains.yaml. Kamandal previously ran on codex ALONE, which is
 # why the 2026-07-01 codex outage killed its extraction. Both actors now use the
-# `balanced` brain (sonnet -> haiku -> codex): a capable primary with real
-# failover, and codex retained as the last tier. Extraction/review of trading
+# `balanced` brain: the fleet currently resolves it to Terra with governed
+# fallbacks. Extraction/review of trading
 # ideas is routine synthesis, not frontier judgment -> balanced, not default.
 # (thesis_extractor could move to `bulk` for free-first once you sign off; kept
 # conservative here — no free model on a trading path without review.)
@@ -18,4 +18,5 @@ lanes:
     actors:
       thesis_extractor: {brain: balanced}
       observed_package_extractor: {brain: balanced}
+      source_episode_interpreter: {brain: balanced}
       rejection_reviewer: {brain: balanced}

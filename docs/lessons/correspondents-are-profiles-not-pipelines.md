@@ -2,9 +2,9 @@
 title: Correspondents are profiles, not pipelines
 type: decision
 area: source-intelligence
-date: 2026-08-01
-tags: [correspondents, birdclaw, cartographer, planner, provenance]
-refs: [docs/CORRESPONDENT_SIGNAL_PIPELINE.md, src/kamandal_v2/intelligence/market_questions.py, src/kamandal_v2/intelligence/correspondent_signals.py, src/kamandal_v2/planner/candidate_builder.py]
+date: 2026-09-04
+tags: [correspondents, birdclaw, source-episodes, agent-broker, planner, provenance]
+refs: [docs/SOURCE_EPISODE_COMPILER.md, docs/CORRESPONDENT_SIGNAL_PIPELINE.md, tests/fixtures/trade_source_interpretation/gold-v0.jsonl, src/kamandal_v2/intelligence/correspondent_signals.py]
 ---
 
 # Correspondents are profiles, not pipelines
@@ -16,6 +16,11 @@ Birdclaw and Kamandal profiles. Do not clone capture, translation, or planner co
 each person. Capture every sanitized post first; make missing data, unknown meaning,
 unsupported structure, lifecycle action, recency, and universe membership explicit
 admission blockers.
+
+The profiles may have genuinely different deterministic grammar, prompts, examples,
+and history recipes. Reuse the bounded orchestration, not one person's semantics. A
+post is an evidence envelope that may contain several atomic events; it is not one
+exclusive action label.
 
 ## Context and Evidence
 
@@ -43,11 +48,18 @@ observation time back to the exact request.
 second `sample_person` family reach the same code path. The planner receives only
 eligible records and enforces `Idea.allowed_structures`; it never parses source prose.
 
+The 2026-09-03 operator review exposed the limit of the original one-result prompt:
+Mike's mixed SNOW/NDX/MSFT post contains a scale-out, a hold, and a roll, while the
+current interpreter copies one action over symbols. The same corpus also showed that
+close and expiry posts must be ignored for new entry but retained as source-lifecycle
+evidence. `docs/SOURCE_EPISODE_COMPILER.md` defines the bounded correction.
+
 ## When It Applies
 
-Use a new profile when another source fits `chart_watch`, `numbered_template`,
-`trade_journal`, or `ignore`. Add code only when the new source requires a genuinely
-new reusable semantic mode or literal extractor.
+Use a new profile for every new source. Add shared code only when the source needs a
+genuinely reusable compiler capability, such as multimodal event decomposition or
+history linkage. Do not force a new source into another person's grammar merely
+because both eventually emit `idea` or `exact_package`.
 
 ## Apply It Next Time
 
@@ -57,6 +69,11 @@ matching, and all-false protected effects. Preserve existing Cartographer contra
 adding a versioned question type rather than changing another consumer's signal. If an
 author-specific branch appears in `live`, `planner`, or broker code, stop and move the
 meaning back into the profile/translation boundary.
+
+When one atomic opportunity yields both an idea and an exact package, give both the
+same opportunity-group identity and allow the portfolio planner to select at most one.
+Otherwise better extraction can silently double exposure. Missing required media or
+history must park regardless of model confidence.
 
 ## Dead Ends
 

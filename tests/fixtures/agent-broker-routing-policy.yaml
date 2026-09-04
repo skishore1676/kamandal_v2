@@ -1,0 +1,8 @@
+schema: agent_broker.routing.v1
+active_profile: policy
+profiles:
+  policy:
+    description: Preserve the explicit binding supplied by an effect-free model evaluation.
+    binding: null
+    health_providers: [codex]
+routes: {}

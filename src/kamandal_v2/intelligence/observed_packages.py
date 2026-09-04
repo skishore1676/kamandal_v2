@@ -99,6 +99,8 @@ class ObservedPackageEvidence:
     image_sha256: str
     prompt_sha256: str
     output_sha256: str
+    opportunity_group_id: str | None = None
+    prompt_version: str = PROMPT_VERSION
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,11 +123,12 @@ class ObservedPackageEvidence:
             "legs": [leg.to_dict() for leg in self.legs],
             "package_signature": self.package_signature,
             "evidence_revision_id": self.evidence_revision_id,
+            "opportunity_group_id": self.opportunity_group_id,
             "provenance": {
                 "image_sha256": self.image_sha256,
                 "prompt_sha256": self.prompt_sha256,
                 "output_sha256": self.output_sha256,
-                "prompt_version": PROMPT_VERSION,
+                "prompt_version": self.prompt_version,
             },
         }
 
@@ -321,6 +324,8 @@ def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageB
             image_sha256=_required_text(provenance.get("image_sha256"), f"packages[{index}].provenance.image_sha256"),
             prompt_sha256=_required_text(provenance.get("prompt_sha256"), f"packages[{index}].provenance.prompt_sha256"),
             output_sha256=_required_text(provenance.get("output_sha256"), f"packages[{index}].provenance.output_sha256"),
+            opportunity_group_id=_optional_text(item.get("opportunity_group_id")),
+            prompt_version=_optional_text(provenance.get("prompt_version")) or PROMPT_VERSION,
         )
         if package.action not in _PACKAGE_ACTIONS or package.media_index <= 0 or package.package_position <= 0:
             raise ObservedPackageValidationError(f"batch package {index} has invalid identity fields")

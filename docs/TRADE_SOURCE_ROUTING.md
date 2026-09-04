@@ -1,7 +1,7 @@
 # Trade Source Routing
 
-Date: 2026-09-03
-Status: deployed and Sheet-migrated; next natural scheduled-run proof pending
+Date: 2026-09-04
+Status: routing deployed and Sheet-migrated; richer source-episode interpretation implemented locally, deployment pending
 
 ## Implementation status
 
@@ -46,6 +46,18 @@ planner or execution lane.
 One post may produce multiple outputs and may mix output kinds. The parent post
 therefore owns an `outputs[]` collection; the system must not force the entire
 post into one exclusive classification.
+
+The current deployed interpreter does not yet satisfy that semantic contract
+for mixed posts: it asks for one result per post and mechanically expands that
+result over symbols and templates. The approved correction is the source-episode
+compiler in [Source Episode Compiler](SOURCE_EPISODE_COMPILER.md), now implemented
+locally and awaiting deployment. It gives each
+source an independent semantic profile while reusing one bounded orchestration
+and every existing downstream control.
+
+If one atomic source opportunity projects as both an `idea` and an
+`exact_package`, the children share an `opportunity_group_id`; the planner may
+select at most one. Mixed output must never mean duplicate capital allocation.
 
 ## Stable ownership
 
@@ -98,6 +110,11 @@ one shadow/live adapter and one frozen-policy lifecycle manager
 No correspondent gets a dedicated scheduler, planner, manager, database, or
 broker path. The existing shared Birdclaw refresh and Kamandal activation jobs
 remain the only schedule.
+
+Source-specific deterministic rules, prompts, examples, and bounded history
+recipes are profiles inside Kamandal. They are not source-specific trading
+pipelines. Agent Broker executes the selected model turn; it does not define
+those semantics.
 
 ## Google Sheet contract
 
@@ -220,6 +237,12 @@ output_id
 acquisition_status
 classification
 normalized_output
+action
+symbol
+structure
+link_status
+evidence_status
+interpretation_confidence
 capability_support
 planner_disposition
 effective_mode
@@ -303,6 +326,10 @@ This is one bounded, prospective migration:
 Implementation is incomplete until tests and deployed readback prove:
 
 - one post may emit zero, one, or multiple mixed outputs;
+- mixed idea/exact projections from one opportunity are mutually exclusive in
+  portfolio selection;
+- close, roll, adjustment, hold, and expiry language cannot become a new entry;
+- incomplete required media or history parks rather than being inferred;
 - every output has stable replay identity and becomes executable input or an
   explicit residual;
 - exact evidence is durable before admission and unsupported packages park;

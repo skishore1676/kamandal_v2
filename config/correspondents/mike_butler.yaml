@@ -4,11 +4,29 @@ version: "1"
 source_profile_id: mike_butler
 interpretation_posture: explicit_only
 
-# Exact option screenshots are handled by the exact_package route. These
-# families stay ignored by the Idea translator so one post cannot become both a
-# reconstructed Kamandal idea and an exact-package opportunity by accident.
+episode_interpreter:
+  version: "1"
+  max_history_episodes: 30
+  structure_aliases:
+    strangle: short_strangle
+    calendar: call_calendar
+    butterfly: butterfly
+    crab: call_crab
+  source_guidance: |
+    Mike often puts exact option legs in attached screenshots and combines
+    several actions in one post. Treat each symbol/action/package as a separate
+    event. Read cached public images together with the text. Opens may produce
+    both a thesis idea and an exact package, sharing one opportunity. Closes,
+    partial closes, rolls, adjustments, and holds must link to prior source
+    events and never become new entries. If an image or prior event is missing,
+    park with needs_media or needs_history. Do not coerce butterflies, crabs,
+    futures options, or other unsupported shapes into a calendar or diagonal.
+
+# The deployed narrow translator still uses these family modes. The source
+# episode compiler supersedes the old one-post/one-route assumption and groups
+# idea/exact projections so they cannot create duplicate exposure.
 families:
-  observed_package_open: {mode: ignore}
+  observed_package_open: {mode: ignore, max_age_hours: 24}
   observed_package_close: {mode: ignore}
   observed_package_roll: {mode: ignore}
   observed_package_adjust: {mode: ignore}
@@ -37,10 +55,12 @@ families:
   market_commentary: {mode: ignore}
 
 strategy_rules:
-  - {id: call_calendar, regex: "\\bcall calendar\\b|\\bcalendar call\\b", strategy_family: call_calendar, direction: bullish, allowed_structures: [call_calendar]}
-  - {id: put_calendar, regex: "\\bput calendar\\b|\\bcalendar put\\b", strategy_family: put_calendar, direction: bearish, allowed_structures: [put_calendar]}
-  - {id: call_diagonal, regex: "\\bcall diagonal\\b|\\bdiagonal call\\b", strategy_family: call_diagonal, direction: bullish, allowed_structures: [call_diagonal]}
-  - {id: put_diagonal, regex: "\\bput diagonal\\b|\\bdiagonal put\\b", strategy_family: put_diagonal, direction: bearish, allowed_structures: [put_diagonal]}
+  - {id: call_crab, regex: "\\bcall crab\\b|\\bcrab trade\\b", strategy_family: call_crab, direction: bullish, allowed_structures: []}
+  - {id: butterfly, regex: "\\bbutterfl(?:y|ies)\\b", strategy_family: butterfly, direction: neutral, allowed_structures: []}
+  - {id: call_calendar, regex: "\\bcall calendars?\\b|\\bcalendar calls?\\b", strategy_family: call_calendar, direction: bullish, allowed_structures: [call_calendar]}
+  - {id: put_calendar, regex: "\\bput calendars?\\b|\\bcalendar puts?\\b", strategy_family: put_calendar, direction: bearish, allowed_structures: [put_calendar]}
+  - {id: call_diagonal, regex: "\\bcall diagonals?\\b|\\bdiagonal calls?\\b", strategy_family: call_diagonal, direction: bullish, allowed_structures: [call_diagonal]}
+  - {id: put_diagonal, regex: "\\bput diagonals?\\b|\\bdiagonal puts?\\b", strategy_family: put_diagonal, direction: bearish, allowed_structures: [put_diagonal]}
   - id: call_spread
     regex: "\\bcall (?:vertical|spread)\\b"
     strategy_family: call_spread

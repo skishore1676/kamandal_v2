@@ -43,11 +43,13 @@ class BrokerJsonClient:
         actor: str = "agent",
         timeout_seconds: int = 300,
         fallback: JsonLlmClient | None = None,
+        binding: Any | None = None,
     ) -> None:
         self.actor = actor
         self.timeout_seconds = timeout_seconds
         self.policy_path = resolve_path(PROJECT_ROOT) / ".agent-broker.yaml"
         self._fallback = fallback
+        self._binding = binding
         self._last_receipt_summary: dict[str, Any] | None = None
 
     @property
@@ -100,13 +102,15 @@ class BrokerJsonClient:
             allowed_outcomes=(),
             timeout_seconds=self.timeout_seconds,
         )
-        receipt = broker.run(spec, task).receipt
+        receipt = broker.run(spec, task, binding=self._binding).receipt
         self._last_receipt_summary = {
+            "receipt_id": receipt.receipt_id,
             "status": receipt.status,
             "provider_id": receipt.provider_id,
             "provider_layer": receipt.provider_layer,
             "provider_chain": list(receipt.provider_chain),
             "degraded": receipt.degraded,
+            "usage": dict(receipt.usage),
             "created_at": receipt.created_at,
         }
         text = (receipt.output_text or "").strip()

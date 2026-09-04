@@ -1,12 +1,18 @@
 # Trade-source signal pipeline
 
-Date: 2026-09-03
-Status: source-neutral routing implemented locally; Sheet migration and oldmac deployment pending
+Date: 2026-09-04
+Status: source-neutral routing deployed; source-episode interpreter implemented locally, deployment pending
 
 Kamandal translates Birdclaw correspondent batches through declarative profiles.
 Greg Harmon and Mike Butler are profiles, not dedicated subsystems. The approved
 target routing and migration contract lives in
 [Trade Source Routing](TRADE_SOURCE_ROUTING.md).
+
+The source-specific semantics, atomic-event contract, bounded context/agent
+loop, and validation gates now live in
+[Source Episode Compiler](SOURCE_EPISODE_COMPILER.md). This file remains the
+operational command and scheduling reference; it must not define a second
+interpretation architecture.
 
 ## Approved target
 
@@ -29,9 +35,9 @@ The machine-owned `trade_source_activity` tab projects the complete post ->
 output -> capability -> planner -> effect funnel from canonical receipts. It is
 an observation surface, not policy or a second source of truth.
 
-The remaining sections describe the pre-migration deployed behavior and the
-stable normalization semantics retained by the new implementation. Runtime
-behavior changes only after the protected Sheet migration and oldmac deployment.
+The remaining sections describe the deployed operational seams retained by the
+new compiler. Once deployed, one bounded episode interpretation replaces the
+separate intent and image-package interpretations.
 
 ```text
 configured read-only Birdclaw acquisition

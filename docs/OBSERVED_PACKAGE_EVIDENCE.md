@@ -1,7 +1,7 @@
 # Observed Package Evidence
 
-Date: 2026-09-03
-Status: evidence path deployed; source-neutral Sheet routing approved and pending migration
+Date: 2026-09-04
+Status: exact-evidence path deployed; source-episode integration implemented locally, deployment pending
 
 ## Purpose
 
@@ -47,8 +47,10 @@ migration, that admission remains shadow-only.
 
 An accepted package records only observable facts: source profile and post,
 stable media/package locator, action, displayed timestamp and price, product,
-and exact legs. The model is not asked for confidence, portfolio fit, risk,
-expected return, or a recommendation.
+exact legs, and field provenance. The exact-package transcription model is not
+asked for confidence, portfolio fit, risk, expected return, or a recommendation.
+The surrounding source-episode interpreter may report one informational
+semantic-confidence value; it cannot change package completeness.
 
 Three identities stay separate:
 
@@ -65,6 +67,19 @@ Incomplete or ambiguous evidence is parked. It never falls back to an
 arbitrary multileg structure. Follow-up posts are recorded as exact, ambiguous,
 or unlinked benchmarks; they cannot create a new opening merely because they
 mention a close or roll.
+
+Exact-package evidence is one projection of the source episode defined in
+[Source Episode Compiler](SOURCE_EPISODE_COMPILER.md). Text, images, and a
+declared source grammar may jointly establish observable package facts. A
+standard named structure may normalize an unambiguous smallest-integer leg
+ratio, but the compiler never invents the source's account quantity, missing
+strike, expiration, option type, or side.
+
+A follow-up must link to prior source evidence before it can be described as a
+close, roll, or adjustment of that episode. Missing history parks as
+`needs_history`; it does not silently become a new opening. During the current
+release, even a linked source-directed management event remains passive
+benchmark evidence and does not control a Kamandal lifecycle.
 
 ## Supported source structures
 
@@ -129,6 +144,10 @@ The shared X job requires the current canonical Birdclaw digest and never falls
 back to retired bookmark snapshots. If Birdclaw is unavailable, Kamandal marks
 the X input lane degraded for that cycle; it does not claim that live trading is
 blocked, and the other idea lanes, planner, and portfolio manager continue.
+
+The richer compiler may retrieve a bounded thread and source-history packet,
+but Kamandal owns that retrieval recipe and the final validation. Agent Broker
+does not gain direct database, Sheet, planner, or broker authority.
 
 ## Current proof and stop line
 

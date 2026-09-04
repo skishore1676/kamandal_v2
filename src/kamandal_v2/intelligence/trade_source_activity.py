@@ -69,6 +69,16 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
             "acquisition_status": item.get("acquisition_status") or "missing",
             "classification": item.get("classification") or "residual",
             "normalized_output": normalized,
+            "action": item.get("action") or "",
+            "symbol": item.get("symbol") or "",
+            "structure": item.get("structure") or "",
+            "link_status": item.get("link_state") or item.get("link_status") or "",
+            "evidence_status": item.get("evidence_status") or "",
+            "interpretation_confidence": (
+                (item.get("normalized_output") or {}).get("semantic_confidence", "")
+                if isinstance(item.get("normalized_output"), dict)
+                else ""
+            ),
             "capability_support": item.get("capability_support") or "unknown",
             "planner_disposition": item.get("planner_disposition") or "observed",
             "effective_mode": item.get("effective_mode") or "observe",

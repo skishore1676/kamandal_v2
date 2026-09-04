@@ -16,17 +16,20 @@ import yaml
 
 from kamandal_v2.intelligence.chart_seeds import SOURCE_SCHEMA as CHART_EVALUATION_SCHEMA
 from kamandal_v2.intelligence.correspondent_signals import (
-    import_correspondent_signals,
     load_correspondent_profile,
     validate_correspondent_packet,
 )
 from kamandal_v2.intelligence.llm_client import JsonLlmClient
 from kamandal_v2.intelligence.market_questions import run_market_question_exchange
-from kamandal_v2.intelligence.observed_packages import (
-    PROMPT_VERSION as OBSERVED_PACKAGE_PROMPT_VERSION,
-    ObservedPackageBatch,
-    extract_observed_packages_from_correspondent_signal,
-    observed_package_batch_from_dict,
+from kamandal_v2.intelligence.observed_packages import ObservedPackageBatch
+from kamandal_v2.intelligence.source_episode_compiler import (
+    compile_source_episode_packet,
+    load_episode_history,
+    write_episode_compilation,
+)
+from kamandal_v2.intelligence.source_episode_projection import (
+    SourceEpisodeProjection,
+    project_source_episode_compilation,
 )
 from kamandal_v2.intelligence.trade_sources import (
     TradeSourceMode,
@@ -81,6 +84,7 @@ def activate_correspondent_sources(
     store: LocalStore | None = None,
     intent_client: JsonLlmClient | None = None,
     observed_package_client: JsonLlmClient | None = None,
+    source_episode_client: JsonLlmClient | None = None,
     trade_source_rows: Iterable[dict[str, Any]] | None = None,
 ) -> CorrespondentActivationResult:
     """Translate configured Birdclaw correspondents and publish eligible ideas.
@@ -109,6 +113,7 @@ def activate_correspondent_sources(
     discovery_store = store or LocalStore()
     universe = {str(symbol).strip().upper() for symbol in universe_symbols if str(symbol).strip()}
     chart_evaluation_paths = _chart_evaluation_paths(settings)
+    episode_root = output_root / "source_episodes"
     market_question_settings = settings.get("market_questions") or {}
     activated_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -164,66 +169,79 @@ def activate_correspondent_sources(
 
             idea_policy = source_policy_by_key.get((profile["profile_id"], TradeSourceOutputKind.IDEA))
             exact_policy = source_policy_by_key.get((profile["profile_id"], TradeSourceOutputKind.EXACT_PACKAGE))
-            profile_batches: list[ObservedPackageBatch] = []
-            profile_observed_failures: list[dict[str, str]] = []
-
-            if exact_policy is not None and exact_policy.inference_enabled:
-                profile_batches, profile_observed_failures = _extract_observed_package_batches(
-                    packet,
-                    output_root=output_root,
-                    client=observed_package_client,
-                )
-
             planner_text = _empty_planner_payload(profile["profile_id"], status="source_idea_off")
             planner_idea_count = 0
             normalized_idea_count = 0
             translation_path = ""
             market_questions_payload: dict[str, Any] = {"status": "not_applicable", "reason": "source_idea_off"}
             batch_id = packet_sha
-            if idea_policy is not None and idea_policy.inference_enabled:
+            profile_batches: list[ObservedPackageBatch] = []
+            profile_observed_failures: list[dict[str, str]] = []
+            inference_enabled = bool(
+                (idea_policy is not None and idea_policy.inference_enabled)
+                or (exact_policy is not None and exact_policy.inference_enabled)
+            )
+            if inference_enabled:
                 if not profile["profile_path"]:
-                    raise ValueError(f"{profile['profile_id']}: idea inference requires profile_path")
+                    raise ValueError(f"{profile['profile_id']}: source inference requires profile_path")
                 profile_payload, _profile_text = load_correspondent_profile(profile["profile_path"])
-                market_questions = run_market_question_exchange(
+                current_chart_paths = list(chart_evaluation_paths)
+                if idea_policy is not None and idea_policy.inference_enabled:
+                    market_questions = run_market_question_exchange(
+                        packet,
+                        profile_payload,
+                        market_question_settings if isinstance(market_question_settings, dict) else {},
+                        command_runner=market_command_runner,
+                    )
+                    if market_questions.response_path is not None:
+                        current_chart_paths.append(market_questions.response_path)
+                    market_questions_payload = market_questions.to_dict()
+                compiler_client = source_episode_client or intent_client or observed_package_client
+                compilation = compile_source_episode_packet(
                     packet,
                     profile_payload,
-                    market_question_settings if isinstance(market_question_settings, dict) else {},
-                    command_runner=market_command_runner,
+                    compiler_client,
+                    # Load enough persisted episodes for idempotent reuse; the
+                    # compiler independently bounds what the model can see.
+                    history=load_episode_history(episode_root, profile["profile_id"], limit=500),
                 )
-                current_chart_paths = list(chart_evaluation_paths)
-                if market_questions.response_path is not None:
-                    current_chart_paths.append(market_questions.response_path)
-                imported = import_correspondent_signals(
-                    packet_path,
-                    profile_path=profile["profile_path"],
+                compilation_path = write_episode_compilation(compilation, episode_root)
+                projected = project_source_episode_compilation(
+                    compilation,
+                    packet,
+                    profile_payload,
                     universe_symbols=universe,
                     chart_evaluation_paths=current_chart_paths,
-                    output_dir=output_root,
-                    store=discovery_store,
-                    intent_client=intent_client,
                 )
-                translated_text = imported.planner_ideas_path.read_text(encoding="utf-8")
-                planner_payload = yaml.safe_load(translated_text) or {}
-                ideas = planner_payload.get("ideas") or []
-                if not isinstance(ideas, list) or len(ideas) != imported.planner_idea_count:
-                    raise ValueError(f"planner idea artifact is invalid for {profile['profile_id']}")
-                normalized_idea_count = imported.planner_idea_count
-                batch_id = imported.batch_id
-                translation_path = str(imported.translation_path)
-                market_questions_payload = market_questions.to_dict()
-                _record_idea_outputs(
-                    discovery_store,
-                    imported.translation_path,
-                    planner_ideas=ideas,
-                    source_id=profile["profile_id"],
-                    source_mode=idea_policy.mode,
-                    acquisition=packet.get("acquisition") or {"status": "missing"},
-                )
-                if idea_policy.planner_enabled:
-                    planner_text = translated_text
-                    planner_idea_count = imported.planner_idea_count
-                else:
-                    planner_text = _empty_planner_payload(profile["profile_id"], status="observed_only")
+                translation_path = str(compilation_path)
+                batch_id = compilation_path.stem
+                normalized_idea_count = len(projected.planner_ideas)
+                if idea_policy is not None and idea_policy.inference_enabled:
+                    _record_episode_outputs(
+                        discovery_store,
+                        projected,
+                        source_id=profile["profile_id"],
+                        idea_mode=idea_policy.mode,
+                        exact_mode=exact_policy.mode if exact_policy is not None else TradeSourceMode.OFF,
+                        acquisition=packet.get("acquisition") or {"status": "missing"},
+                    )
+                    if idea_policy.planner_enabled:
+                        planner_text = _planner_payload(profile["profile_id"], projected.planner_ideas)
+                        planner_idea_count = len(projected.planner_ideas)
+                    else:
+                        planner_text = _empty_planner_payload(profile["profile_id"], status="observed_only")
+                if exact_policy is not None and exact_policy.inference_enabled:
+                    profile_batches = list(projected.observed_batches)
+                    profile_observed_failures = list(projected.failures)
+                elif idea_policy is None or not idea_policy.inference_enabled:
+                    _record_episode_outputs(
+                        discovery_store,
+                        projected,
+                        source_id=profile["profile_id"],
+                        idea_mode=TradeSourceMode.OFF,
+                        exact_mode=exact_policy.mode if exact_policy is not None else TradeSourceMode.OFF,
+                        acquisition=packet.get("acquisition") or {"status": "missing"},
+                    )
 
             _record_exact_outputs(
                 discovery_store,
@@ -395,53 +413,65 @@ def _source_policy_map(
     return policies
 
 
-def _record_idea_outputs(
+def _record_episode_outputs(
     store: LocalStore,
-    translation_path: Path,
+    projection: SourceEpisodeProjection,
     *,
-    planner_ideas: list[dict[str, Any]],
     source_id: str,
-    source_mode: TradeSourceMode,
+    idea_mode: TradeSourceMode,
+    exact_mode: TradeSourceMode,
     acquisition: dict[str, Any],
 ) -> None:
-    payload = json.loads(translation_path.read_text(encoding="utf-8"))
     acquisition_status = str(acquisition.get("status") or "missing")
-    idea_by_record_id: dict[str, dict[str, Any]] = {}
-    for idea in planner_ideas:
-        notes = str(idea.get("extraction_notes") or "")
-        marker = "record_id="
-        record_id = notes.split(marker, 1)[1].split()[0].strip(";,.") if marker in notes else ""
-        if record_id:
-            idea_by_record_id[record_id] = idea
-    for record in payload.get("records") or []:
-        if not isinstance(record, dict):
-            continue
-        planner_eligible = bool(record.get("planner_eligible"))
-        record_id = str(record.get("record_id") or "")
-        planner_idea = idea_by_record_id.get(record_id)
-        blockers = [str(item) for item in (record.get("planner_blockers") or [])]
+    idea_ids = {str(item.get("idea_id") or "") for item in projection.planner_ideas}
+    for observed in projection.observations:
+        classification = str(observed.get("classification") or "residual")
+        is_idea = "idea" in classification.split(",")
+        effective_mode = idea_mode if is_idea else exact_mode if "exact_package" in classification else TradeSourceMode.OFF
+        opportunity_id = "corr_opp_" + hashlib.sha256(
+            str(observed.get("opportunity_group_id") or "missing").encode()
+        ).hexdigest()[:16]
         store.event(
             "trade_source_output_observed",
             {
-                "observed_at": str(record.get("observed_at") or payload.get("as_of") or ""),
+                "observed_at": "",
                 "source_id": source_id,
-                "post_ref": str(record.get("signal_id") or ""),
-                "output_id": record_id,
-                "planner_idea_id": str((planner_idea or {}).get("idea_id") or ""),
+                "post_ref": str(observed.get("post_ref") or ""),
+                "output_id": str(observed.get("event_id") or ""),
+                "planner_idea_id": opportunity_id if opportunity_id in idea_ids else "",
+                "opportunity_group_id": str(observed.get("opportunity_group_id") or ""),
                 "acquisition_status": acquisition_status,
-                "classification": "idea" if planner_eligible else "residual",
-                "normalized_output": {"record": record, "planner_idea": planner_idea},
-                "capability_support": "supported" if record.get("allowed_structures") else "unsupported",
+                "classification": classification,
+                "normalized_output": observed.get("normalized_output") or {},
+                "capability_support": "supported" if not observed.get("reason") else "review",
                 "planner_disposition": (
-                    "published" if planner_eligible and source_mode in {TradeSourceMode.SHADOW, TradeSourceMode.LIVE}
-                    else "observed_only" if planner_eligible
+                    "published"
+                    if opportunity_id in idea_ids and idea_mode in {TradeSourceMode.SHADOW, TradeSourceMode.LIVE}
+                    else "observed_only"
+                    if opportunity_id in idea_ids
                     else "parked"
                 ),
-                "effective_mode": source_mode.value,
-                "reason": ",".join(blockers),
+                "effective_mode": effective_mode.value,
+                "reason": str(observed.get("reason") or ""),
+                "action": str(observed.get("action") or ""),
+                "symbol": str(observed.get("symbol") or ""),
+                "structure": str(observed.get("structure") or ""),
+                "evidence_status": str(observed.get("evidence_status") or ""),
+                "link_state": str(observed.get("link_state") or ""),
                 "broker_effects": False,
             },
         )
+        if "outside_configured_universe" in str(observed.get("reason") or ""):
+            symbol = str(observed.get("symbol") or "").strip().upper()
+            if symbol:
+                store.record_discovery_evidence(
+                    symbol=symbol,
+                    source_profile=source_id,
+                    source_record_id=str(observed.get("event_id") or ""),
+                    exclusion_reason="outside_enabled_universe",
+                    evidence_ref=f"source_episode:{source_id}:{observed.get('event_id')}",
+                    observed_at="",
+                )
 
 
 def _record_exact_outputs(
@@ -491,58 +521,6 @@ def _record_exact_outputs(
                 "broker_effects": False,
             },
         )
-
-
-def _extract_observed_package_batches(
-    packet: dict[str, Any],
-    *,
-    output_root: Path,
-    client: JsonLlmClient | None,
-) -> tuple[list[ObservedPackageBatch], list[dict[str, str]]]:
-    """Extract/cache source-exact packages without turning them into ideas."""
-
-    cache_root = output_root / "observed_packages" / "cache"
-    cache_root.mkdir(parents=True, exist_ok=True)
-    batches: list[ObservedPackageBatch] = []
-    failures: list[dict[str, str]] = []
-    for signal in packet.get("records") or []:
-        if not isinstance(signal, dict):
-            continue
-        classification = signal.get("classification") or {}
-        classification_type = str(classification.get("type") or "") if isinstance(classification, dict) else ""
-        if not classification_type.startswith("observed_package_"):
-            continue
-        source = signal.get("source") or {}
-        source_id = str(source.get("source_id") or signal.get("signal_id") or "unknown") if isinstance(source, dict) else "unknown"
-        media = source.get("media") if isinstance(source, dict) else None
-        if not isinstance(media, list) or not media:
-            failures.append({"source_id": source_id, "status": "not_extracted", "reason": "no_public_media"})
-            continue
-        cache_material = json.dumps(
-            {"prompt_version": OBSERVED_PACKAGE_PROMPT_VERSION, "signal": signal},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        cache_path = cache_root / f"{hashlib.sha256(cache_material.encode()).hexdigest()}.json"
-        try:
-            if cache_path.is_file():
-                cached = json.loads(cache_path.read_text(encoding="utf-8"))
-                batch = observed_package_batch_from_dict(cached)
-            else:
-                if client is None:
-                    raise RuntimeError("observed package extractor client is unavailable")
-                batch = extract_observed_packages_from_correspondent_signal(client, signal)
-                _atomic_write(cache_path, json.dumps(batch.to_dict(), indent=2, sort_keys=True) + "\n")
-            batches.append(batch)
-        except Exception as exc:  # noqa: BLE001 - one source record must not erase sibling evidence.
-            failures.append(
-                {
-                    "source_id": source_id,
-                    "status": "extraction_failed",
-                    "reason": f"{type(exc).__name__}: {exc}",
-                }
-            )
-    return batches, failures
 
 
 def _write_observed_package_feed(
@@ -634,6 +612,18 @@ def _empty_planner_payload(profile_id: str, *, status: str) -> str:
             "profile_id": profile_id,
             "activation_status": status,
             "ideas": [],
+        },
+        sort_keys=False,
+    )
+
+
+def _planner_payload(profile_id: str, ideas: Iterable[dict[str, Any]]) -> str:
+    return yaml.safe_dump(
+        {
+            "schema": "kamandal.correspondent_planner_ideas.v1",
+            "profile_id": profile_id,
+            "activation_status": "active",
+            "ideas": [dict(item) for item in ideas],
         },
         sort_keys=False,
     )

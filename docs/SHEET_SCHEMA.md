@@ -1,7 +1,7 @@
 # Kamandal V2 Sheet Schema
 
-Date: 2026-09-03
-Status: Current contract plus approved trade-source additions pending implementation
+Date: 2026-09-04
+Status: trade-source controls deployed; richer source-episode activity projection implemented locally, deployment pending
 
 The currently deployed policy uses these tabs:
 
@@ -305,6 +305,12 @@ output_id
 acquisition_status
 classification
 normalized_output
+action
+symbol
+structure
+link_status
+evidence_status
+interpretation_confidence
 capability_support
 planner_disposition
 effective_mode
@@ -314,6 +320,11 @@ reason
 Every normalized output receives one row, including residual, unsupported, and
 ambiguous results. A projection outage retries from canonical receipts and must
 not block planning, existing lifecycle management, exits, or reconciliation.
+
+The additional interpretation columns are machine-written observations, not
+operator controls. Confidence is informational and cannot bypass missing
+evidence, exact-package validation, source mode, playbook mode, portfolio gates,
+or broker safety. The only source controls remain the two `trade_sources` rows.
 
 ## `daily_plan`
 

@@ -36,14 +36,14 @@ def _packet(*, actionable: bool) -> dict:
                     "observation_sources": ["correspondent:greg_harmon:harmongreg"],
                 },
                 "classification": {
-                    "type": "earnings_idea",
+                    "type": "earnings_bundle",
                     "rule_id": "test_earnings",
                     "interpretation_status": "deterministic_profile",
                 },
                 "literal": {
-                    "text": "Took $TSLA Trade Idea 4",
+                    "text": "4 Trade Ideas for Tesla $TSLA",
                     "symbols": [{"symbol": "TSLA", "origin": "literal_cashtag"}],
-                    "idea_number": 4,
+                    "idea_number": None,
                 },
             }
         )
@@ -180,6 +180,7 @@ def test_one_source_failure_does_not_clear_a_healthy_sibling(tmp_path: Path) -> 
         {
             "profile_id": "mike_butler",
             "source_profile_id": "mike_butler",
+            "profile_path": str(Path("config/correspondents/mike_butler.yaml").resolve()),
             "enabled": True,
         }
     )
@@ -227,13 +228,14 @@ def test_observed_package_profile_publishes_typed_feed_and_reuses_cache(tmp_path
         {
             "profile_id": "mike_butler",
             "source_profile_id": "mike_butler",
+            "profile_path": str(Path("config/correspondents/mike_butler.yaml").resolve()),
             "source_mode": "observed_package",
             "enabled": True,
         }
     ]
     packet = {
         "schema": "birdclaw.correspondent_signals.v1",
-        "generated_at": AS_OF,
+        "generated_at": fixture["published_at"],
         "profile": {"profile_id": "mike_butler"},
         "records": [
             {
@@ -282,7 +284,32 @@ def test_observed_package_profile_publishes_typed_feed_and_reuses_cache(tmp_path
         def chat_json(self, _system: str, _user: str, *, images: tuple[str, ...] = ()) -> dict:
             self.calls += 1
             assert images == (str(image_path),)
-            return fixture["expected_extraction"]
+            package = fixture["expected_extraction"]["packages"][0]
+            return {
+                "schema": "kamandal.source_episode_interpretation.v1",
+                "episodes": [{
+                    "signal_id": f"x-post:{fixture['post_id']}",
+                    "events": [{
+                        "action": "open",
+                        "symbol": "ADSK",
+                        "direction": "bullish",
+                        "structure_hint": "call_calendar",
+                        "thesis": "New ADSK call calendar for earnings",
+                        "semantic_confidence": 0.99,
+                        "evidence_status": "complete",
+                        "projections": ["idea", "exact_package"],
+                        "exact_packages": [{
+                            "complete": True,
+                            "blocker": None,
+                            "displayed_price": package["displayed_price"],
+                            "legs": package["legs"],
+                            "field_provenance": ["image:1"],
+                        }],
+                        "blockers": [],
+                        "template_number": None,
+                    }],
+                }],
+            }
 
     client = FakeClient()
     runner = lambda _args, _cwd: json.dumps(packet)
@@ -291,14 +318,14 @@ def test_observed_package_profile_publishes_typed_feed_and_reuses_cache(tmp_path
         universe_symbols=set(),
         command_runner=runner,
         store=LocalStore(tmp_path / "kamandal.db"),
-        observed_package_client=client,
+        source_episode_client=client,
     )
     second = activate_correspondent_sources(
         settings,
         universe_symbols=set(),
         command_runner=runner,
         store=LocalStore(tmp_path / "kamandal.db"),
-        observed_package_client=client,
+        source_episode_client=client,
     )
 
     assert result.planner_idea_count == 0
@@ -413,12 +440,36 @@ def test_activation_asks_current_packet_then_publishes_bearish_diagonal(tmp_path
         )
         return "{}"
 
+    class EpisodeClient:
+        def chat_json(self, _system: str, _user: str, *, images: tuple[str, ...] = ()) -> dict:
+            assert not images
+            return {
+                "schema": "kamandal.source_episode_interpretation.v1",
+                "episodes": [{
+                    "signal_id": "x-post:weekly-current",
+                    "events": [{
+                        "action": "open",
+                        "symbol": "SPY",
+                        "direction": "bullish",
+                        "structure_hint": "call_diagonal",
+                        "thesis": "Directional SPY setup",
+                        "semantic_confidence": 0.9,
+                        "evidence_status": "complete",
+                        "projections": ["idea"],
+                        "exact_packages": [],
+                        "blockers": [],
+                        "template_number": None,
+                    }],
+                }],
+            }
+
     result = activate_correspondent_sources(
         settings,
         universe_symbols={"SPY"},
         command_runner=lambda _args, _cwd: json.dumps(packet),
         market_command_runner=market_runner,
         store=LocalStore(tmp_path / "kamandal.db"),
+        source_episode_client=EpisodeClient(),
     )
 
     ideas = load_ideas([result.active_idea_paths[0]])

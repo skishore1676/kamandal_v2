@@ -1,7 +1,7 @@
 # Kamandal V2 Architecture
 
-Date: 2026-09-03
-Status: One-engine architecture deployed; trade-source routing design approved, implementation pending
+Date: 2026-09-04
+Status: one-engine and source routing deployed; source-episode interpretation implemented locally, deployment pending
 
 ## Purpose
 
@@ -242,6 +242,18 @@ one identity while every output receives a stable child identity. Birdclaw
 preserves the sanitized public post and media; Agent Broker may perform bounded
 model labor; Kamandal owns the questions, schemas, deterministic validation,
 classification, and trading meaning.
+
+Source semantics are independent profiles inside one shared **Source Episode
+Compiler**. Each profile owns its deterministic grammar, examples, agent
+instructions, and bounded history recipe; the common compiler owns capture
+checks, context assembly, atomic-event decomposition, deterministic validation,
+linkage, and projection. This preserves different source languages without
+creating separate schedulers or money paths. See
+[Source Episode Compiler](SOURCE_EPISODE_COMPILER.md).
+
+If the same atomic opportunity yields both an idea and an exact package, the
+two projections share one opportunity group and are mutually exclusive in plan
+selection. Richer extraction must not cause duplicate exposure.
 
 An `idea` enters the ordinary Idea adapter and compatible Sheet playbooks, so a
 Mike call-calendar thesis is constructed and managed by the same Kamandal

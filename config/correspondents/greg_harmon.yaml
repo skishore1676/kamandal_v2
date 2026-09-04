@@ -4,6 +4,55 @@ version: "1"
 source_profile_id: greg_harmon
 interpretation_posture: inference_allowed
 
+episode_interpreter:
+  version: "1"
+  max_history_episodes: 20
+  scale_in_creates_idea: true
+  open_confirmation_regex: "\\btook\\b.*\\btrade idea\\s*#?\\s*\\d+"
+  symbol_aliases:
+    Broadcom: AVGO
+    Dell: DELL
+    DocuSign: DOCU
+    lululemon: LULU
+    Palo Alto Networks: PANW
+  structure_aliases:
+    strangle: short_strangle
+    call_spread_short_put: bull_call_spread_with_short_put
+    call_calendar_short_put: call_calendar_with_short_put
+    call_diagonal_short_put: call_diagonal_with_short_put
+    call_diagonal_plus_short_put: call_diagonal_with_short_put
+    call_spread_with_short_put: bull_call_spread_with_short_put
+    call_spread_plus_short_put: bull_call_spread_with_short_put
+    call_calendar_plus_short_put: call_calendar_with_short_put
+  action_overrides:
+    - {id: bought_to_close, regex: "\\bbought to close\\b", action: close}
+    - {id: expires_then_close, regex: "\\bputs? expire\\b.*\\b(?:buy|sell) to close\\b", action: adjust}
+    - {id: looks_to_expire, regex: "\\blook(?:s)? to expire\\b", action: hold}
+    - {id: added, regex: "\\b(?:also )?added\\b", action: scale_in}
+  composite_structure_rules:
+    - id: call_diagonal_with_short_put
+      regex: "\\bcall diagonals?\\b.*\\b(?:sell|selling|short)\\b.*\\bput\\b"
+      component_structures: [call_diagonal, short_put]
+      structure_hint: call_diagonal_with_short_put
+    - id: call_calendar_with_short_put
+      regex: "\\bcall calendar\\b.*\\b(?:sell|selling|short)\\b.*\\bput\\b"
+      component_structures: [call_calendar, short_put]
+      structure_hint: call_calendar_with_short_put
+    - id: bull_call_spread_with_short_put
+      regex: "\\bcall spread\\b.*\\b(?:sell|selling|short)\\b.*\\bput\\b"
+      component_structures: [call_spread, short_put]
+      structure_hint: bull_call_spread_with_short_put
+  source_guidance: |
+    Greg publishes recurring earnings templates, directional theses, and terse
+    trade-journal shorthand. Premium Earnings announcements deterministically
+    expand to Ideas 1 through 4 for every named symbol; they are ideas, not exact
+    packages. A later "took idea" post confirms a prior source opportunity and
+    must link to it rather than create a duplicate. "Looks to expire", close,
+    trim, roll, and management language are follow-ups, never fresh entries.
+    Standard shorthand such as call-spread risk reversal and broken-wing call
+    fly may supply normalized leg ratios when every strike and expiration is
+    explicit. Do not fetch or invent inaccessible article terms or bonus ideas.
+
 families:
   weekly_ideas:
     mode: chart_watch
@@ -65,11 +114,14 @@ families:
 
 strategy_rules:
   - {id: iron_condor, regex: "\\biron condor\\b", strategy_family: iron_condor, direction: neutral, allowed_structures: [iron_condor]}
-  - {id: call_calendar, regex: "\\bcall calendar\\b|\\bcalendar call\\b", strategy_family: call_calendar, direction: bullish, allowed_structures: [call_calendar]}
-  - {id: put_calendar, regex: "\\bput calendar\\b|\\bcalendar put\\b", strategy_family: put_calendar, direction: bearish, allowed_structures: [put_calendar]}
-  - {id: call_diagonal, regex: "\\bcall diagonal\\b|\\bdiagonal call\\b", strategy_family: call_diagonal, direction: bullish, allowed_structures: [call_diagonal]}
-  - {id: put_diagonal, regex: "\\bput diagonal\\b|\\bdiagonal put\\b", strategy_family: put_diagonal, direction: bearish, allowed_structures: [put_diagonal]}
+  - {id: call_calendar, regex: "\\bcall calendars?\\b|\\bcalendar calls?\\b", strategy_family: call_calendar, direction: bullish, allowed_structures: [call_calendar]}
+  - {id: put_calendar, regex: "\\bput calendars?\\b|\\bcalendar puts?\\b", strategy_family: put_calendar, direction: bearish, allowed_structures: [put_calendar]}
+  - {id: call_diagonal, regex: "\\bcall diagonals?\\b|\\bdiagonal calls?\\b", strategy_family: call_diagonal, direction: bullish, allowed_structures: [call_diagonal]}
+  - {id: put_diagonal, regex: "\\bput diagonals?\\b|\\bdiagonal puts?\\b", strategy_family: put_diagonal, direction: bearish, allowed_structures: [put_diagonal]}
   - {id: short_strangle, regex: "\\bstrangle\\b", strategy_family: short_strangle, direction: neutral, allowed_structures: [short_strangle]}
+  - {id: short_put, regex: "\\b(?:sell|selling|short)\\b.*\\bput\\b", strategy_family: short_put, direction: bullish, allowed_structures: []}
+  - {id: call_spread_risk_reversal, regex: "\\bcall spread risk reversals?\\b", strategy_family: call_spread_risk_reversal, direction: bullish, allowed_structures: []}
+  - {id: broken_wing_call_fly, regex: "\\b(?:bw|broken[- ]wing) call fl(?:y|ys|ies)\\b", strategy_family: broken_wing_call_fly, direction: bullish, allowed_structures: []}
   - id: call_spread
     regex: "\\bcall (?:vertical|spread)\\b"
     strategy_family: call_spread

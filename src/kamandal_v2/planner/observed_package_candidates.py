@@ -269,7 +269,7 @@ def _candidate(
     metrics = candidate_liquidity_metrics({"legs": legs, "net_credit": net_credit})
     liquidity_score = max(0.0, min(1.0, 1.0 - float(metrics["avg_bid_ask_pct"])))
     bpr = _estimate_bpr(playbook.structure, legs, net_credit)
-    opportunity_id = f"observed:{package.source_event_id}"
+    opportunity_id = package.opportunity_group_id or f"observed:{package.source_event_id}"
     identity = [opportunity_id, playbook.playbook_id, package.package_signature]
     candidate = Candidate(
         candidate_id="candidate_observed_" + hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()[:20],

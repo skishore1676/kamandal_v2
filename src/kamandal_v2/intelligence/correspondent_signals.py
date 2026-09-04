@@ -259,6 +259,71 @@ def load_correspondent_profile(path: str | Path) -> tuple[dict[str, Any], str]:
     posture = str(payload.get("interpretation_posture") or "").strip()
     if posture not in SOURCE_INTENT_POSTURES:
         raise ValueError("interpretation_posture must be explicit_only or inference_allowed")
+    episode = payload.get("episode_interpreter")
+    if episode is not None:
+        if not isinstance(episode, dict):
+            raise ValueError("episode_interpreter must be an object")
+        allowed_episode_keys = {
+            "version",
+            "max_history_episodes",
+            "open_confirmation_regex",
+            "symbol_aliases",
+            "structure_aliases",
+            "action_overrides",
+            "composite_structure_rules",
+            "scale_in_creates_idea",
+            "source_guidance",
+        }
+        if not set(episode).issubset(allowed_episode_keys):
+            raise ValueError("episode_interpreter contains unsupported fields")
+        limit = episode.get("max_history_episodes", 12)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 40:
+            raise ValueError("episode_interpreter.max_history_episodes must be 0..40")
+        confirmation = str(episode.get("open_confirmation_regex") or "")
+        if confirmation:
+            try:
+                re.compile(confirmation)
+            except re.error as exc:
+                raise ValueError("episode_interpreter.open_confirmation_regex is invalid") from exc
+        aliases = episode.get("symbol_aliases") or {}
+        if not isinstance(aliases, dict) or any(
+            not str(name).strip() or not _SYMBOL.fullmatch(str(symbol).strip().upper())
+            for name, symbol in aliases.items()
+        ):
+            raise ValueError("episode_interpreter.symbol_aliases is invalid")
+        if not str(episode.get("source_guidance") or "").strip():
+            raise ValueError("episode_interpreter.source_guidance is required")
+        if not isinstance(episode.get("scale_in_creates_idea", False), bool):
+            raise ValueError("episode_interpreter.scale_in_creates_idea must be boolean")
+        structure_aliases = episode.get("structure_aliases") or {}
+        if not isinstance(structure_aliases, dict) or any(
+            not _ID.fullmatch(str(name)) or not _ID.fullmatch(str(target))
+            for name, target in structure_aliases.items()
+        ):
+            raise ValueError("episode_interpreter.structure_aliases is invalid")
+        for rule in episode.get("action_overrides") or []:
+            _validate_regex_rule(rule, "episode action override")
+            if rule.get("action") not in {
+                "open",
+                "scale_in",
+                "close",
+                "scale_out",
+                "roll",
+                "adjust",
+                "hold",
+                "commentary",
+                "discovery",
+            }:
+                raise ValueError("episode action override action is invalid")
+        for rule in episode.get("composite_structure_rules") or []:
+            _validate_regex_rule(rule, "episode composite structure")
+            if not _ID.fullmatch(str(rule.get("structure_hint") or "")):
+                raise ValueError("episode composite structure_hint is invalid")
+            components = rule.get("component_structures") or []
+            if not isinstance(components, list) or not components or any(
+                not _ID.fullmatch(str(item)) for item in components
+            ):
+                raise ValueError("episode component_structures is invalid")
     return payload, text
 
 
