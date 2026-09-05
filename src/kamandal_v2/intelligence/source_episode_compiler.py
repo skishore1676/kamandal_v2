@@ -596,13 +596,23 @@ def _localize_package_image_refs(package: Mapping[str, Any], image_numbers: list
     localized = dict(package)
     global_to_local = {number: index for index, number in enumerate(image_numbers, start=1)}
     provenance: list[str] = []
+    invalid_image_reference = False
     for item in package.get("field_provenance") or []:
         text = str(item)
         match = re.fullmatch(r"image:(\d+)", text.strip().lower())
-        if match and int(match.group(1)) in global_to_local:
-            text = f"image:{global_to_local[int(match.group(1))]}"
+        if match:
+            global_number = int(match.group(1))
+            if global_number in global_to_local:
+                text = f"image:{global_to_local[global_number]}"
+            else:
+                invalid_image_reference = True
         provenance.append(text)
     localized["field_provenance"] = provenance
+    if invalid_image_reference:
+        # Prompt image numbers are shared by the whole model batch. Never let a
+        # locator from another post be reinterpreted as this post's local image.
+        localized["complete"] = False
+        localized["blocker"] = "image_reference_outside_source_post"
     return localized
 
 

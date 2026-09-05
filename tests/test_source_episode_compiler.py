@@ -13,6 +13,9 @@ from kamandal_v2.intelligence.source_episode_compiler import (
     load_episode_history,
     write_episode_compilation,
 )
+from kamandal_v2.intelligence.source_episode_projection import (
+    project_source_episode_compilation,
+)
 
 
 class FakeClient:
@@ -321,6 +324,102 @@ def test_verified_media_is_hashed_and_history_round_trips(tmp_path: Path) -> Non
     assert json.loads(run_path.read_text(encoding="utf-8"))["effects"]["broker_effects"] is False
 
 
+def test_cross_post_image_reference_cannot_project_an_exact_package(tmp_path: Path) -> None:
+    records = []
+    for ordinal, symbol in enumerate(("SNOW", "LULU"), start=1):
+        image = tmp_path / f"post-{ordinal}.jpg"
+        image.write_bytes(f"public image fixture {ordinal}".encode())
+        records.append(
+            _record(
+                f"media-{ordinal}",
+                f"New ${symbol} call calendar",
+                [symbol],
+                media=[
+                    {
+                        "media_index": 1,
+                        "type": "photo",
+                        "cache_status": "cached",
+                        "artifact_path": str(image),
+                        "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+                    }
+                ],
+            )
+        )
+
+    def package(image_number: int) -> dict:
+        return {
+            "complete": True,
+            "blocker": None,
+            "displayed_price": {"amount": "2.00", "effect": "debit"},
+            "legs": [
+                {
+                    "quantity": 1,
+                    "expiration": "Sep 18",
+                    "strike": "150",
+                    "option_type": "call",
+                    "order_code": "STO",
+                },
+                {
+                    "quantity": 1,
+                    "expiration": "Oct 16",
+                    "strike": "150",
+                    "option_type": "call",
+                    "order_code": "BTO",
+                },
+            ],
+            "field_provenance": [f"image:{image_number}"],
+        }
+
+    response = {
+        "schema": PROMPT_SCHEMA,
+        "episodes": [
+            {
+                "signal_id": records[0]["signal_id"],
+                "events": [
+                    _event(
+                        symbol="SNOW",
+                        structure_hint="call_calendar",
+                        projections=["exact_package"],
+                        exact_packages=[package(1)],
+                    )
+                ],
+            },
+            {
+                "signal_id": records[1]["signal_id"],
+                "events": [
+                    _event(
+                        symbol="LULU",
+                        structure_hint="call_calendar",
+                        projections=["exact_package"],
+                        # Image 1 belongs to the first post. This post's image is
+                        # prompt-global image 2, even though it is locally media 1.
+                        exact_packages=[package(1)],
+                    )
+                ],
+            },
+        ],
+    }
+    packet = _packet(records)
+    profile = _profile("mike_butler")
+    compilation = compile_source_episode_packet(packet, profile, FakeClient(response))
+
+    valid_event = compilation.episodes[0]["events"][0]
+    invalid_event = compilation.episodes[1]["events"][0]
+    assert valid_event["exact_packages"][0]["complete"] is True
+    assert invalid_event["exact_packages"][0]["complete"] is False
+    assert invalid_event["exact_packages"][0]["blocker"] == "image_reference_outside_source_post"
+    assert invalid_event["planner_new_entry"] is False
+
+    projection = project_source_episode_compilation(
+        compilation,
+        packet,
+        profile,
+        universe_symbols=("SNOW", "LULU"),
+    )
+    assert len(projection.observed_batches) == 1
+    assert [item.symbol for item in projection.observed_batches[0].packages] == ["SNOW"]
+
+
 def test_same_thesis_package_variants_share_one_idea_event() -> None:
     record = _record(
         "variants",
@@ -349,7 +448,7 @@ def test_same_thesis_package_variants_share_one_idea_event() -> None:
                     "order_code": "BTO",
                 },
             ],
-            "field_provenance": ["image:1"],
+            "field_provenance": ["text"],
         }
 
     response = {

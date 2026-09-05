@@ -117,10 +117,10 @@ The compiler uses the following stages for every profile:
    is an evidence blocker, not an invitation to infer.
 2. **Deterministic preparse.** Apply only the active profile's exact grammar and
    obvious noise rules. This can finish a simple case without a model.
-3. **Context assembly.** Build a bounded packet from the current post and media,
-   its thread, relevant recent source posts, and candidate source lifecycles.
-   Retrieval is based on source, symbol, action language, and explicit reply or
-   quote relationships; it is not an unbounded search.
+3. **Context assembly.** Build a bounded packet from the current post and media
+   plus the source's most recent compiled episodes. The deployed first version
+   uses recency-bounded context; targeted thread, symbol, and explicit reply or
+   quote retrieval is a later accuracy improvement, not current behavior.
 4. **Agent interpretation.** Ask for atomic events, not one label for the whole
    post. The agent may use both text and images but must cite its evidence
    locators. A large acquisition packet is divided into bounded batches of at
@@ -128,8 +128,10 @@ The compiler uses the following stages for every profile:
 5. **Deterministic validation and linkage.** Validate event shape and exact
    legs, then link closes, rolls, and adjustments to prior source events. An
    update with no defensible link parks; it cannot become a new opening.
-6. **One bounded critique pass.** Only mixed, ambiguous, or unlinked results get
-   a second pass with the failed checks. There is no open-ended agent loop.
+6. **One bounded repair pass.** A model response that fails deterministic schema
+   validation gets one repair turn with the failed check. Semantically ambiguous
+   or unlinked results park; the deployed first version does not run a separate
+   semantic critique turn. There is no open-ended agent loop.
 7. **Projection.** Emit `idea`, `exact_package`, or `residual` children and then
    apply the existing Sheet source ceiling and downstream gates.
 

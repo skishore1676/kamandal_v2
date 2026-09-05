@@ -47,11 +47,9 @@ One post may produce multiple outputs and may mix output kinds. The parent post
 therefore owns an `outputs[]` collection; the system must not force the entire
 post into one exclusive classification.
 
-The current deployed interpreter does not yet satisfy that semantic contract
-for mixed posts: it asks for one result per post and mechanically expands that
-result over symbols and templates. The approved correction is the source-episode
-compiler in [Source Episode Compiler](SOURCE_EPISODE_COMPILER.md), now implemented
-locally and awaiting deployment. It gives each
+The source-episode compiler in
+[Source Episode Compiler](SOURCE_EPISODE_COMPILER.md) is deployed and satisfies
+the atomic mixed-post contract. It gives each
 source an independent semantic profile while reusing one bounded orchestration
 and every existing downstream control.
 
