@@ -250,6 +250,20 @@ def load_correspondent_profile(path: str | Path) -> tuple[dict[str, Any], str]:
                 raise ValueError("bundle_idea_numbers must exist in idea_number_map")
             if not isinstance(config.get("bundle_implies_enter", False), bool):
                 raise ValueError("bundle_implies_enter must be boolean")
+    reexpressions = payload.get("idea_reexpressions") or {}
+    if not isinstance(reexpressions, dict):
+        raise ValueError("idea_reexpressions must be an object")
+    source_structures = {str(rule.get("strategy_family") or "") for rule in payload.get("strategy_rules") or []}
+    for structure, expression in reexpressions.items():
+        if structure not in source_structures or not isinstance(expression, dict):
+            raise ValueError("idea reexpression requires a declared source structure")
+        if expression.get("direction") not in SOURCE_INTENT_DIRECTIONS:
+            raise ValueError("idea reexpression requires an explicit direction")
+        allowed = expression.get("allowed_structures")
+        if not isinstance(allowed, list) or not allowed or any(not isinstance(v, str) or not _ID.fullmatch(v) for v in allowed):
+            raise ValueError("idea reexpression requires named allowed structures")
+        if not str(expression.get("reason") or "").strip():
+            raise ValueError("idea reexpression requires a reason")
     for rule in payload.get("strategy_rules") or []:
         _validate_regex_rule(rule, "strategy")
         for direction_rule in rule.get("direction_rules") or []:

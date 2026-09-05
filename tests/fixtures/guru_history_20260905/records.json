@@ -1,0 +1,1369 @@
+[
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091158962854871349",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091158962854871349",
+      "source_url": "https://x.com/harmongreg/status/2091158962854871349",
+      "published_at": "2026-08-22T13:42:03.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/spy-trends-and-influencers-august-22-2026/",
+        "https://x.com/harmongreg/status/2091158962854871349/photo/1"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "unknown",
+      "rule_id": "profile_relevance_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "What to expect from the stock market this week $SPY $IWM $QQQ $GLD $TLT and more https://t.co/q9fVtCPVzv https://t.co/gqbTE2vB6s",
+      "symbols": [
+        {
+          "symbol": "SPY",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "IWM",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "QQQ",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "GLD",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "TLT",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091217869740605616",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091217869740605616",
+      "source_url": "https://x.com/harmongreg/status/2091217869740605616",
+      "published_at": "2026-08-22T17:36:07.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/top-trade-ideas-for-the-week-of-august-24-2026-the-best/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "weekly_ideas",
+      "rule_id": "weekly_trade_ideas",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Premium Users - Top Trade Ideas for the Week of August 24, 2026: The Best, on the blog and here https://t.co/TItbBYeP4n",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091222103290737128",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091222103290737128",
+      "source_url": "https://x.com/harmongreg/status/2091222103290737128",
+      "published_at": "2026-08-22T17:52:57.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "@jposhaughnessy @CliffordAsness 4th Eye Blind",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091228536711311758",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091228536711311758",
+      "source_url": "https://x.com/harmongreg/status/2091228536711311758",
+      "published_at": "2026-08-22T18:18:30.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/top-trade-ideas-for-the-week-of-august-24-2026-the-rest-premium/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "weekly_ideas",
+      "rule_id": "weekly_trade_ideas",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Premium Users - Top Trade Ideas for the Week of August 24, 2026: The Rest Premium, on the blog and here https://t.co/lbH2gudgkK",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091536139828040173",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091536139828040173",
+      "source_url": "https://x.com/harmongreg/status/2091536139828040173",
+      "published_at": "2026-08-23T14:40:49.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/5-trade-ideas-for-monday-cf-industries-fastly-lear-mastercard-and-manitowoc/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "weekly_ideas",
+      "rule_id": "weekly_trade_ideas",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "5 Trade Ideas for Monday: CF Industries, Fastly, Lear, Mastercard and Manitowoc $CF $FSLY $LEA $MA $MTW https://t.co/3h16YBtU7y",
+      "symbols": [
+        {
+          "symbol": "CF",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "FSLY",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "LEA",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "MA",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "MTW",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091867460530061341",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091867460530061341",
+      "source_url": "https://x.com/harmongreg/status/2091867460530061341",
+      "published_at": "2026-08-24T12:37:22.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/4-trade-ideas-for-abbvie-bonus-idea-8/",
+        "https://x.com/harmongreg/status/2091867460530061341/photo/1"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_bundle",
+      "rule_id": "earnings_trade_idea_bundle",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "4 Trade Ideas for AbbVie: Bonus Idea $ABBV https://t.co/G2U63zD4dl https://t.co/F8E98xcfgP",
+      "symbols": [
+        {
+          "symbol": "ABBV",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091893286898143287",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091893286898143287",
+      "source_url": "https://x.com/harmongreg/status/2091893286898143287",
+      "published_at": "2026-08-24T14:19:59.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "trade_journal",
+      "rule_id": "explicit_trade_journal",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "added some $MOS Sep 25.50 calls",
+      "symbols": [
+        {
+          "symbol": "MOS",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091925376230473927",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091925376230473927",
+      "source_url": "https://x.com/harmongreg/status/2091925376230473927",
+      "published_at": "2026-08-24T16:27:30.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "@JC_ParetsX Filet",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2091957286755357000",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2091957286755357000",
+      "source_url": "https://x.com/harmongreg/status/2091957286755357000",
+      "published_at": "2026-08-24T18:34:18.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "trade_journal",
+      "rule_id": "explicit_trade_journal",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "added $CELH Sep 35 calls",
+      "symbols": [
+        {
+          "symbol": "CELH",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2092259462014779587",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2092259462014779587",
+      "source_url": "https://x.com/harmongreg/status/2092259462014779587",
+      "published_at": "2026-08-25T14:35:02.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://twitter.com/DeItaone/status/2092258835389984822"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Vix 15.84 #timestamp https://t.co/TmnZNMTGz8",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2092263310729048556",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2092263310729048556",
+      "source_url": "https://x.com/harmongreg/status/2092263310729048556",
+      "published_at": "2026-08-25T14:50:20.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/premium-earnings-8-25-26-zoom/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_bundle",
+      "rule_id": "earnings_trade_idea_bundle",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Premium Earnings 8-25-26: Zoom, on the blog and here https://t.co/H1EHkCzCfp $ZM",
+      "symbols": [
+        {
+          "symbol": "ZM",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2092592584954700109",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2092592584954700109",
+      "source_url": "https://x.com/harmongreg/status/2092592584954700109",
+      "published_at": "2026-08-26T12:38:45.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/premium-earnings-8-26-26-crowdstrike-and-nvidia/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg",
+        "timeline"
+      ]
+    },
+    "classification": {
+      "type": "earnings_bundle",
+      "rule_id": "earnings_trade_idea_bundle",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Premium Earnings 8-26-26: CrowdStrike and NVIDIA, on the blog and here https://t.co/PBC3EMJfeY $CRWD $NVDA",
+      "symbols": [
+        {
+          "symbol": "CRWD",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "NVDA",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093043903087645136",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093043903087645136",
+      "source_url": "https://x.com/harmongreg/status/2093043903087645136",
+      "published_at": "2026-08-27T18:32:08.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/premium-earnings-8-27-26-affirm-and-marvell/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg",
+        "timeline"
+      ]
+    },
+    "classification": {
+      "type": "earnings_bundle",
+      "rule_id": "earnings_trade_idea_bundle",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Premium Earnings 8-27-26: Affirm and Marvell, on the blog and here https://t.co/uopgWROjIP $AFRM $MEVL",
+      "symbols": [
+        {
+          "symbol": "AFRM",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "MEVL",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093326620169781679",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093326620169781679",
+      "source_url": "https://x.com/harmongreg/status/2093326620169781679",
+      "published_at": "2026-08-28T13:15:33.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_idea",
+      "rule_id": "numbered_earnings_idea",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "$MRVL \"Trade Idea 2: Buy the August 28 Expiry 245/250 Call Spread ($2.50) and sell the August 28 Expiry 217.50 Put for free.\" a bust, looks to expire",
+      "symbols": [
+        {
+          "symbol": "MRVL",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": 2
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093326997816586393",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093326997816586393",
+      "source_url": "https://x.com/harmongreg/status/2093326997816586393",
+      "published_at": "2026-08-28T13:17:03.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_idea",
+      "rule_id": "numbered_earnings_idea",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "$MRVL \"Trade Idea 4: Sell the August 28 Expiry 215/280 Strangle for a $4.50 credit.\" looks to expire, let IV fall then can buy to close or watch",
+      "symbols": [
+        {
+          "symbol": "MRVL",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": 4
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093327319754490316",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093327319754490316",
+      "source_url": "https://x.com/harmongreg/status/2093327319754490316",
+      "published_at": "2026-08-28T13:18:19.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_idea",
+      "rule_id": "numbered_earnings_idea",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "$AFRM \"Trade Idea 2: Buy the August 28 Expiry 77/78 Call Spread (70 cents) and sell the August 28 Expiry 67 Put for free.\" sell to close call spread near 1 dollar or max out at end of day. Puts expire.",
+      "symbols": [
+        {
+          "symbol": "AFRM",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": 2
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093327550890086867",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093327550890086867",
+      "source_url": "https://x.com/harmongreg/status/2093327550890086867",
+      "published_at": "2026-08-28T13:19:14.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_idea",
+      "rule_id": "numbered_earnings_idea",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "$AFRM \"Trade Idea 4: Sell the August 28 Expiry 67/86 Strangle for a $1.75 credit.\" puts expire, may need to roll calls up and out as it is at the edge.",
+      "symbols": [
+        {
+          "symbol": "AFRM",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": 4
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093430350269534222",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093430350269534222",
+      "source_url": "https://x.com/harmongreg/status/2093430350269534222",
+      "published_at": "2026-08-28T20:07:44.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/how-this-weeks-premium-top-10-performed-august-28-2026/",
+        "https://x.com/harmongreg/status/2093430350269534222/photo/1"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Dragonfly Capital Premium Top 10 Equal Weighted lost 81.8bp on the week using 70% of capital. YTD +36.59% https://t.co/i3aM3gCm6k https://t.co/9esds6oOD9",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093432609116246368",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093432609116246368",
+      "source_url": "https://x.com/harmongreg/status/2093432609116246368",
+      "published_at": "2026-08-28T20:16:42.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/macro-week-in-review-preview-august-28-2026/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Premium Users - Macro Week in Review/Preview August 28, 2026, on the blog and here https://t.co/N4sRLdblb6",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093706745629516222",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093706745629516222",
+      "source_url": "https://x.com/harmongreg/status/2093706745629516222",
+      "published_at": "2026-08-29T14:26:02.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/spy-trends-and-influencers-august-29-2026/",
+        "https://x.com/harmongreg/status/2093706745629516222/photo/1"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "unknown",
+      "rule_id": "profile_relevance_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "What to expect from the stock market this week https://t.co/dBHm7Ap3mH $SPY $IWM $QQQ $TLT $GLD and more https://t.co/RjvJlsLw1p",
+      "symbols": [
+        {
+          "symbol": "SPY",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "IWM",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "QQQ",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "TLT",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "GLD",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093772405126668509",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093772405126668509",
+      "source_url": "https://x.com/harmongreg/status/2093772405126668509",
+      "published_at": "2026-08-29T18:46:56.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/top-trade-ideas-for-the-week-of-august-31-2026-the-best/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "weekly_ideas",
+      "rule_id": "weekly_trade_ideas",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Premium Users - Top Trade Ideas for the Week of August 31, 2026: The Best, on the bog and here https://t.co/nLnEKuE2qV",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093778370471383409",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093778370471383409",
+      "source_url": "https://x.com/harmongreg/status/2093778370471383409",
+      "published_at": "2026-08-29T19:10:38.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/top-trade-ideas-for-the-week-of-august-31-2026-the-rest-premium/"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "weekly_ideas",
+      "rule_id": "weekly_trade_ideas",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Premium Users - Top Trade Ideas for the Week of August 31, 2026: The Rest Premium, on the blog and here https://t.co/1SfaOMQuRi",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2094054319595163878",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2094054319595163878",
+      "source_url": "https://x.com/harmongreg/status/2094054319595163878",
+      "published_at": "2026-08-30T13:27:10.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/5-trade-ideas-for-monday-airbnb-amazon-haliburton-voya-and-wells-fargo/",
+        "https://x.com/harmongreg/status/2094054319595163878/photo/1"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "weekly_ideas",
+      "rule_id": "weekly_trade_ideas",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "5 Trade Ideas for Monday: Airbnb, Amazon, Haliburton, Voya and Wells Fargo $ABNB $AMZN $HAL $VOYA $WFC https://t.co/iVZRg8LRPU https://t.co/pzT361gOMr",
+      "symbols": [
+        {
+          "symbol": "ABNB",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "AMZN",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "HAL",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "VOYA",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "WFC",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2094218206814581206",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2094218206814581206",
+      "source_url": "https://x.com/harmongreg/status/2094218206814581206",
+      "published_at": "2026-08-31T00:18:23.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "John Bogle must be rolling in his grave with these Vanguard commercials in the US Open promoting Managed Bond Funds.",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2094406461669482908",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2094406461669482908",
+      "source_url": "https://x.com/harmongreg/status/2094406461669482908",
+      "published_at": "2026-08-31T12:46:27.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://dragonflycap.com/4-trade-ideas-for-kraft-heinz-bonus-idea-3/",
+        "https://x.com/harmongreg/status/2094406461669482908/photo/1"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg",
+        "timeline"
+      ]
+    },
+    "classification": {
+      "type": "earnings_bundle",
+      "rule_id": "earnings_trade_idea_bundle",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "4 Trade Ideas for Kraft Heinz: Bonus Idea $KHC https://t.co/8YUiT0JGX6 https://t.co/0lUkAkT2Hc",
+      "symbols": [
+        {
+          "symbol": "KHC",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2094489224154116230",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2094489224154116230",
+      "source_url": "https://x.com/harmongreg/status/2094489224154116230",
+      "published_at": "2026-08-31T18:15:19.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [
+        "https://twitter.com/ppearlman/status/2094488965789155370"
+      ],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg",
+        "timeline"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Can confirm https://t.co/AXKEXAhsMX",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2095863229234688451",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2095863229234688451",
+      "source_url": "https://x.com/harmongreg/status/2095863229234688451",
+      "published_at": "2026-09-04T13:15:07.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_idea",
+      "rule_id": "numbered_earnings_idea",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "$DOCU \"Trade Idea 2: Buy the September 4 Expiry 69/70 Call Spread (90 cents) and sell the September 4 Expiry 60 Put for 15 cents.\" looks to expire.",
+      "symbols": [
+        {
+          "symbol": "DOCU",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": 2
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2095863475549438266",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2095863475549438266",
+      "source_url": "https://x.com/harmongreg/status/2095863475549438266",
+      "published_at": "2026-09-04T13:16:06.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_idea",
+      "rule_id": "numbered_earnings_idea",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "$DOCU \"Trade Idea 4: Sell the September 4 Expiry 58/80 Strangle for a $2.00 credit.\" looks to expire. Let IV fall then can buy to close or watch",
+      "symbols": [
+        {
+          "symbol": "DOCU",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": 4
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2095863974994538865",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2095863974994538865",
+      "source_url": "https://x.com/harmongreg/status/2095863974994538865",
+      "published_at": "2026-09-04T13:18:05.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "earnings_idea",
+      "rule_id": "numbered_earnings_idea",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "$LULU \"Trade Idea 4: Sell the September 4 Expiry 103/135 Strangle for a $1.35 credit.\" calls expire, will need to roll puts down and out.",
+      "symbols": [
+        {
+          "symbol": "LULU",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": 4
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2095943106533163338",
+    "profile_id": "greg_harmon",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2095943106533163338",
+      "source_url": "https://x.com/harmongreg/status/2095943106533163338",
+      "published_at": "2026-09-04T18:32:31.000Z",
+      "author_handle": "harmongreg",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:greg_harmon:harmongreg"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "have a great weekend everyone. Off to a Guardians game instead of watching this paint dry.",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093358842306248707",
+    "profile_id": "mike_butler",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093358842306248707",
+      "source_url": "https://x.com/TraderMikeyB/status/2093358842306248707",
+      "published_at": "2026-08-28T15:23:35.000Z",
+      "author_handle": "tradermikeyb",
+      "expanded_urls": [
+        "https://x.com/TraderMikeyB/status/2093358842306248707/photo/1"
+      ],
+      "media": [
+        {
+          "media_index": 1,
+          "type": "photo",
+          "cache_status": "cached",
+          "sha256": "f31d8a147f8254ed0dc14e0dff37a083c80e115957b0e0f8eafe28651125fa52",
+          "artifact_path": "images/2093358842306248707.jpg",
+          "source_url": "https://pbs.twimg.com/media/HQ0avLGW8AA3HAG?format=jpg&name=medium"
+        }
+      ],
+      "observation_sources": [
+        "correspondent:mike_butler:tradermikeyb"
+      ]
+    },
+    "classification": {
+      "type": "observed_package_followup",
+      "rule_id": "explicit_close_roll_adjust",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Closed $200 winner in $WDC and $AAPL New call diagonal in $PYPL https://t.co/EZUauvhQLz",
+      "symbols": [
+        {
+          "symbol": "WDC",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "AAPL",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "PYPL",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2093378940647645278",
+    "profile_id": "mike_butler",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2093378940647645278",
+      "source_url": "https://x.com/TraderMikeyB/status/2093378940647645278",
+      "published_at": "2026-08-28T16:43:27.000Z",
+      "author_handle": "tradermikeyb",
+      "expanded_urls": [
+        "https://x.com/TraderMikeyB/status/2093378940647645278/photo/1"
+      ],
+      "media": [
+        {
+          "media_index": 1,
+          "type": "photo",
+          "cache_status": "cached",
+          "sha256": "e1f37cb52416cdf8d7f0c01fccc6f910c6c151412ce6b949cf048500cbfd61ac",
+          "artifact_path": "images/2093378940647645278.jpg",
+          "source_url": "https://pbs.twimg.com/media/HQ0s3B9XAAAK16A?format=jpg&name=large"
+        }
+      ],
+      "observation_sources": [
+        "correspondent:mike_butler:tradermikeyb"
+      ]
+    },
+    "classification": {
+      "type": "observed_package_open",
+      "rule_id": "explicit_new_package",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "call calendar in $DELL https://t.co/tFtcufYPXr",
+      "symbols": [
+        {
+          "symbol": "DELL",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2094422329195479307",
+    "profile_id": "mike_butler",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2094422329195479307",
+      "source_url": "https://x.com/TraderMikeyB/status/2094422329195479307",
+      "published_at": "2026-08-31T13:49:30.000Z",
+      "author_handle": "tradermikeyb",
+      "expanded_urls": [
+        "https://x.com/TraderMikeyB/status/2094422329195479307/photo/1"
+      ],
+      "media": [
+        {
+          "media_index": 1,
+          "type": "photo",
+          "cache_status": "cached",
+          "sha256": "f5769c6a504bdd263035e94c0393359b8c6e8e4f3c5cc68c69c8c7eac56a1a29",
+          "artifact_path": "images/2094422329195479307.jpg",
+          "source_url": "https://pbs.twimg.com/media/HRDiAFrWYAACtJR?format=jpg&name=medium"
+        }
+      ],
+      "observation_sources": [
+        "correspondent:mike_butler:tradermikeyb",
+        "timeline"
+      ]
+    },
+    "classification": {
+      "type": "observed_package_open",
+      "rule_id": "explicit_new_package",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "New solana:J3NKxxXZcnNiMjKw9hYb2K4LUxgwB6t1FtPtQVsv3KFr super bull 1DTE https://t.co/CGFjI4SCLo",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2094448446627250605",
+    "profile_id": "mike_butler",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2094448446627250605",
+      "source_url": "https://x.com/TraderMikeyB/status/2094448446627250605",
+      "published_at": "2026-08-31T15:33:17.000Z",
+      "author_handle": "tradermikeyb",
+      "expanded_urls": [
+        "https://x.com/TraderMikeyB/status/2094448446627250605/photo/1"
+      ],
+      "media": [
+        {
+          "media_index": 1,
+          "type": "photo",
+          "cache_status": "cached",
+          "sha256": "c419804d8b5e323d67e98866768c7cb7827a955356511cb815a66cdf4d05129a",
+          "artifact_path": "images/2094448446627250605.jpg",
+          "source_url": "https://pbs.twimg.com/media/HRD5wjkXUAAJa43?format=jpg&name=medium"
+        }
+      ],
+      "observation_sources": [
+        "correspondent:mike_butler:tradermikeyb",
+        "timeline"
+      ]
+    },
+    "classification": {
+      "type": "observed_package_open",
+      "rule_id": "explicit_new_package",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "New call calendar spreads in $PANW &amp; $SNOW for earnings: https://t.co/XIl4NqS94e",
+      "symbols": [
+        {
+          "symbol": "PANW",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "SNOW",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2094464531137221078",
+    "profile_id": "mike_butler",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2094464531137221078",
+      "source_url": "https://x.com/TraderMikeyB/status/2094464531137221078",
+      "published_at": "2026-08-31T16:37:12.000Z",
+      "author_handle": "tradermikeyb",
+      "expanded_urls": [
+        "https://x.com/TraderMikeyB/status/2094464531137221078/photo/1"
+      ],
+      "media": [
+        {
+          "media_index": 1,
+          "type": "photo",
+          "cache_status": "cached",
+          "sha256": "25a7917a7c6628edeab7ca2e31d1ac2b0e39fa4cab3fb06f53a3bbc1ace95c28",
+          "artifact_path": "images/2094464531137221078.jpg",
+          "source_url": "https://pbs.twimg.com/media/HREIYYOXgAE35h8?format=jpg&name=large"
+        }
+      ],
+      "observation_sources": [
+        "correspondent:mike_butler:tradermikeyb"
+      ]
+    },
+    "classification": {
+      "type": "unknown",
+      "rule_id": "profile_relevance_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Call CRAB trade in $GOOGL: https://t.co/bRHwQfTWBz",
+      "symbols": [
+        {
+          "symbol": "GOOGL",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2094477774584987758",
+    "profile_id": "mike_butler",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2094477774584987758",
+      "source_url": "https://x.com/TraderMikeyB/status/2094477774584987758",
+      "published_at": "2026-08-31T17:29:49.000Z",
+      "author_handle": "tradermikeyb",
+      "expanded_urls": [],
+      "media": [],
+      "observation_sources": [
+        "correspondent:mike_butler:tradermikeyb"
+      ]
+    },
+    "classification": {
+      "type": "irrelevant",
+      "rule_id": "profile_irrelevant_fallback",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "@1toyyot1 Thank you sir! Glad it's helpful!",
+      "symbols": [],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2095869224153477369",
+    "profile_id": "mike_butler",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2095869224153477369",
+      "source_url": "https://x.com/TraderMikeyB/status/2095869224153477369",
+      "published_at": "2026-09-04T13:38:57.000Z",
+      "author_handle": "tradermikeyb",
+      "expanded_urls": [
+        "https://x.com/TraderMikeyB/status/2095869224153477369/photo/1"
+      ],
+      "media": [
+        {
+          "media_index": 1,
+          "media_key": "3_2095869174820032517",
+          "type": "unknown",
+          "source_url": "",
+          "width": null,
+          "height": null,
+          "cache_status": "unsupported",
+          "sha256": null,
+          "content_type": null,
+          "byte_count": null,
+          "artifact_path": null
+        }
+      ],
+      "observation_sources": [
+        "correspondent:mike_butler:tradermikeyb"
+      ]
+    },
+    "classification": {
+      "type": "observed_package_followup",
+      "rule_id": "explicit_close_roll_adjust",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Closed $235 winner in $LULU and $155 winner in $WMT! https://t.co/71dxIYalF7",
+      "symbols": [
+        {
+          "symbol": "LULU",
+          "origin": "literal_cashtag"
+        },
+        {
+          "symbol": "WMT",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  },
+  {
+    "schema": "birdclaw.correspondent_signal.v1",
+    "signal_id": "x-post:2095874693777506559",
+    "profile_id": "mike_butler",
+    "source": {
+      "kind": "public_x_post",
+      "source_id": "x-post:2095874693777506559",
+      "source_url": "https://x.com/TraderMikeyB/status/2095874693777506559",
+      "published_at": "2026-09-04T14:00:41.000Z",
+      "author_handle": "tradermikeyb",
+      "expanded_urls": [
+        "https://x.com/TraderMikeyB/status/2095874693777506559/photo/1"
+      ],
+      "media": [
+        {
+          "media_index": 1,
+          "media_key": "3_2095874624055894017",
+          "type": "unknown",
+          "source_url": "",
+          "width": null,
+          "height": null,
+          "cache_status": "unsupported",
+          "sha256": null,
+          "content_type": null,
+          "byte_count": null,
+          "artifact_path": null
+        }
+      ],
+      "observation_sources": [
+        "correspondent:mike_butler:tradermikeyb"
+      ]
+    },
+    "classification": {
+      "type": "observed_package_followup",
+      "rule_id": "explicit_close_roll_adjust",
+      "interpretation_status": "deterministic_profile"
+    },
+    "literal": {
+      "text": "Closed the final tranche of the $SNOW calendar spreads for a $125 profit: Overall profit on all 4 calendars is $440 https://t.co/7fDhg1t8t4",
+      "symbols": [
+        {
+          "symbol": "SNOW",
+          "origin": "literal_cashtag"
+        }
+      ],
+      "idea_number": null
+    }
+  }
+]

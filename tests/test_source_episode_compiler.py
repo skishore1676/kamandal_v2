@@ -704,3 +704,45 @@ def test_greg_quoted_entry_inside_management_post_cannot_reopen_trade() -> None:
         for event in events
         for disposition in event["projection_dispositions"]
     )
+
+
+def test_opaque_provider_identifier_cannot_be_guessed_without_independent_evidence():
+    record = _record('opaque', 'New solana:J3NKxxXZcnNiMjKw9hYb2K4LUxgwB6t1FtPtQVsv3KFr super bull 1DTE', [])
+    record['source']['expanded_urls'] = ['https://x.com/example/status/123/photo/1']
+    response = {'schema': PROMPT_SCHEMA, 'episodes': [{'signal_id': record['signal_id'], 'events': [
+        _event(symbol='SPX', action='open', direction='bullish', structure_hint='super_bull', projections=['idea'])]}]}
+    client = FakeClient(response)
+    result = compile_source_episode_packet(_packet([record]), _profile('mike_butler'), client)
+    event = result.episodes[0]['events'][0]
+    assert event['planner_new_entry'] is False
+    assert 'source_identifier_unresolved' in event['blockers']
+    prompt = json.loads(client.calls[0]['user_prompt'])
+    assert prompt['posts'][0]['media_expected_but_unavailable'] is True
+    assert prompt['posts'][0]['opaque_identifier_requires_independent_symbol_evidence'] is True
+
+
+def test_super_bull_is_not_relabelled_as_one_component_spread():
+    record = _record('super-bull', 'New $SPX super bull 1DTE', ['SPX'])
+    response = {'schema': PROMPT_SCHEMA, 'episodes': [{'signal_id': record['signal_id'], 'events': [
+        _event(symbol='SPX', action='open', direction='bullish', structure_hint='super_bull',
+               thesis='Super bull combining a short put spread and long call spread', projections=['idea'])]}]}
+    result = compile_source_episode_packet(_packet([record]), _profile('mike_butler'), FakeClient(response))
+    assert result.episodes[0]['events'][0]['structure_hint'] == 'super_bull'
+
+
+def test_crab_thesis_enters_existing_idea_path_with_original_shape_retained():
+    record = _record('crab', 'Call CRAB trade in $GOOGL', ['GOOGL'], classification='observed_package_open')
+    profile = _profile('mike_butler')
+    response = {'schema': PROMPT_SCHEMA, 'episodes': [{'signal_id': record['signal_id'], 'events': [
+        _event(symbol='GOOGL', action='open', direction='bullish', structure_hint='call_crab', projections=['idea'])]}]}
+    packet = _packet([record])
+    result = compile_source_episode_packet(packet, profile, FakeClient(response))
+    projection = project_source_episode_compilation(result, packet, profile, universe_symbols=('GOOGL',))
+    assert len(projection.planner_ideas) == 1
+    idea = projection.planner_ideas[0]
+    assert idea['allowed_structures'] == ['call_diagonal']
+    assert 'source_structure=call_crab' in idea['notes']
+    assert 'idea_reexpression=true' in idea['notes']
+    assert projection.observed_batches == ()
+    from kamandal_v2.intelligence.source_episode_projection import _allowed_structures
+    assert _allowed_structures('call_crab', 'bearish', profile) == []

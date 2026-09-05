@@ -1,0 +1,391 @@
+[
+  {
+    "post_ref": "x-post:2091158962854871349",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2091217869740605616",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2091222103290737128",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2091228536711311758",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2091536139828040173",
+    "source_id": "greg_harmon",
+    "category": "watchlist_needs_thesis",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2091867460530061341",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2091893286898143287",
+    "source_id": "greg_harmon",
+    "category": "directional_entry",
+    "expected_ideas": [
+      {
+        "symbol": "MOS",
+        "direction": "bullish",
+        "structure_hint": "long_call"
+      }
+    ],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2091925376230473927",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2091957286755357000",
+    "source_id": "greg_harmon",
+    "category": "directional_entry",
+    "expected_ideas": [
+      {
+        "symbol": "CELH",
+        "direction": "bullish",
+        "structure_hint": "long_call"
+      }
+    ],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2092259462014779587",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2092263310729048556",
+    "source_id": "greg_harmon",
+    "category": "deterministic_template",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2092592584954700109",
+    "source_id": "greg_harmon",
+    "category": "deterministic_template",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093043903087645136",
+    "source_id": "greg_harmon",
+    "category": "deterministic_template",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093326620169781679",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093326997816586393",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093327319754490316",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093327550890086867",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093430350269534222",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093432609116246368",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093706745629516222",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093772405126668509",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093778370471383409",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2094054319595163878",
+    "source_id": "greg_harmon",
+    "category": "watchlist_needs_thesis",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2094218206814581206",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2094406461669482908",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2094489224154116230",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2095863229234688451",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2095863475549438266",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2095863974994538865",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2095943106533163338",
+    "source_id": "greg_harmon",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093358842306248707",
+    "source_id": "mike_butler",
+    "category": "directional_entry",
+    "expected_ideas": [
+      {
+        "symbol": "PYPL",
+        "direction": "bullish",
+        "structure_hint": "call_diagonal"
+      }
+    ],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": true,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2093378940647645278",
+    "source_id": "mike_butler",
+    "category": "directional_entry",
+    "expected_ideas": [
+      {
+        "symbol": "DELL",
+        "direction": "bullish",
+        "structure_hint": "call_calendar"
+      }
+    ],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": true,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2094422329195479307",
+    "source_id": "mike_butler",
+    "category": "directional_entry",
+    "expected_ideas": [
+      {
+        "symbol": "SPX",
+        "direction": "bullish",
+        "structure_hint": "super_bull"
+      }
+    ],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": true,
+    "capture_issue": "provider smarttag replaced visible SPX cashtag; leave original input intact and require image evidence"
+  },
+  {
+    "post_ref": "x-post:2094448446627250605",
+    "source_id": "mike_butler",
+    "category": "directional_entry",
+    "expected_ideas": [
+      {
+        "symbol": "PANW",
+        "direction": "bullish",
+        "structure_hint": "call_calendar"
+      },
+      {
+        "symbol": "SNOW",
+        "direction": "bullish",
+        "structure_hint": "call_calendar"
+      }
+    ],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": true,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2094464531137221078",
+    "source_id": "mike_butler",
+    "category": "directional_entry",
+    "expected_ideas": [
+      {
+        "symbol": "GOOGL",
+        "direction": "bullish",
+        "structure_hint": "call_crab"
+      }
+    ],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": true,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2094477774584987758",
+    "source_id": "mike_butler",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2095869224153477369",
+    "source_id": "mike_butler",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  },
+  {
+    "post_ref": "x-post:2095874693777506559",
+    "source_id": "mike_butler",
+    "category": "no_new_directional_idea",
+    "expected_ideas": [],
+    "basis": "source text and existing operator source conventions; browser-verified image where provided",
+    "browser_verified": false,
+    "capture_issue": null
+  }
+]

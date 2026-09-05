@@ -1,6 +1,6 @@
 schema: kamandal.correspondent_profile.v1
 profile_id: greg_harmon
-version: "2"
+version: "3"
 source_profile_id: greg_harmon
 interpretation_posture: inference_allowed
 

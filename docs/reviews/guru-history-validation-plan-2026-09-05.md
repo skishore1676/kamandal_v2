@@ -1,5 +1,7 @@
 # Bounded historical validation and strategy coverage
 
+Completed bounded result: [September 5 evidence and rollout](guru-history-results-2026-09-05.md). The original proposal below is retained for its acceptance criteria; the result documents the smaller available sample and deviations.
+
 Decision: perform one source-grounded, two-week validation before another model sweep. This is a proposed research plan, not an activated job or permission to add live strategies.
 
 ## Why it is worth doing

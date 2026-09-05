@@ -233,16 +233,21 @@ def _idea_projection(
             "quote_evidence": str(literal.get("text") or "")[:2000],
             "extraction_notes": (
                 f"Source episode {event.get('event_id')}; opportunity_group_id={group}; "
-                f"evidence_status={event.get('evidence_status')}"
+                f"evidence_status={event.get('evidence_status')}; source_structure={structure}; "
+                f"idea_reexpression={str(structure not in allowed).lower()}"
             ),
             "operator_status": "pending",
-            "notes": f"post_ref={record['signal_id']}; action={event.get('action')}; source_episode=true",
+            "notes": (f"post_ref={record['signal_id']}; action={event.get('action')}; source_episode=true; "
+                      f"source_structure={structure}; idea_reexpression={str(structure not in allowed).lower()}"),
         },
         "",
     )
 
 
 def _allowed_structures(structure: str, direction: str, profile: Mapping[str, Any]) -> list[str]:
+    reexpression = (profile.get("idea_reexpressions") or {}).get(structure) or {}
+    if reexpression.get("direction") == direction:
+        return [str(value) for value in reexpression.get("allowed_structures") or [] if str(value)]
     for rule in profile.get("strategy_rules") or []:
         if str(rule.get("strategy_family") or "") != structure:
             continue

@@ -102,3 +102,9 @@ Codex token totals do not establish subscription-credit usage or API cost.
 - Running enrichment before current activation necessarily read the previous
   translation; moving the same shell block earlier or later could not repair that
   ownership error.
+
+## September 5 historical validation
+
+Interpretation failures can come from acquisition or model routing even when the prompt is sound. A public photo URL in post text does not prove an actual cached image, and an actor requesting Astra does not prove Astra executed: verify the Birdclaw public media hash/path and Agent Broker winner receipt. Keep provider identifier corruption visible and require independent source evidence before promoting a symbol.
+
+Retire a tuned holdout into regression material. Replaying saved model answers is useful for validator/projection fixes and costs no model tokens, but it is not a new accuracy measurement. Preserve a guru's original structure when explicitly reexpressing its thesis through an existing Kamandal playbook. Read the [bounded result](../reviews/guru-history-results-2026-09-05.md) for the sample, missing coverage, and exact scope.

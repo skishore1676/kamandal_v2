@@ -1,0 +1,17 @@
+{
+  "window_start": "2026-08-22",
+  "window_end_exclusive": "2026-09-05",
+  "selection": "all retained posts in window excluding every prior text and image evaluation post; no fresh collection implied",
+  "coverage": "incomplete provider capture; not a complete timeline",
+  "posts": 38,
+  "directional_ideas": 8,
+  "image_posts": 5,
+  "held_out_before_model_run": true,
+  "label_author": "Codex source inspection, not operator-approved new annotations",
+  "limits": "Only image-backed new-entry posts browser verified so far; other labels source text from canonical Birdclaw export. Existing operator corpus remains development set.",
+  "sha256": {
+    "labels.json": "91210dc1b540a30e2afee65a11affd83aec553f6e58e2a46863a480540ef8e09",
+    "records.json": "74c7ba4133077b959d8e1fe8cb14fdb183cd59c9dd3f50ecddd2b735fecf1e1d",
+    "opening-packages.json": "643b1e887ae85fdd602023947d854bf63b52c549c32313252878d721a97eb03a"
+  }
+}

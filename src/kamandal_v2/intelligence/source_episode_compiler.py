@@ -508,6 +508,20 @@ def _finalize_episode(
         if "exact_package" in projections and not complete_packages:
             projections = [item for item in projections if item != "exact_package"]
             blockers.append("exact_package_missing")
+        # Some provider responses replace a visible equity cashtag with a
+        # blockchain smarttag. Never turn that opaque identifier into a guessed
+        # security unless this post supplies independent literal/image evidence.
+        literal_symbols = {str(item.get("symbol") or "").upper()
+                           for item in (record.get("literal") or {}).get("symbols", [])}
+        image_symbol_evidence = media_available and any(
+            any(str(ref).startswith("image:") for ref in package.get("field_provenance", []))
+            for package in complete_packages
+        )
+        if (_has_opaque_identifier(record) and symbol not in literal_symbols
+                and not image_symbol_evidence and action in _ENTRY_ACTIONS):
+            blockers.append("source_identifier_unresolved")
+            event["evidence_status"] = "ambiguous"
+
         confirmation_requires_prior = "source_open_confirmation_requires_prior_opportunity" in blockers
         if action in _FOLLOW_UP_ACTIONS or confirmation_requires_prior:
             projections = [item for item in projections if item != "idea"]
@@ -797,6 +811,10 @@ mark only exact_package incomplete with its blocker. One event may contain
 several exact_packages when the post shows variants of the same action, symbol,
 direction, and structure; do not repeat the idea projection for each variant.
 
+Opaque blockchain identifiers in provider text are not equity symbols. Do not
+infer their ticker from familiarity. Resolve a security only from independent
+literal evidence or this post's attached trade image; otherwise mark ambiguous.
+
 Return JSON only:
 {{"schema":"{PROMPT_SCHEMA}","episodes":[{{"signal_id":"x-post:1","events":[{{"action":"open|scale_in|close|scale_out|roll|adjust|hold|commentary|discovery","symbol":"AAPL or null","direction":"bullish|bearish|neutral|unknown","structure_hint":"call_diagonal or null","thesis":"short literal thesis","semantic_confidence":0.0,"evidence_status":"complete|needs_media|needs_history|ambiguous|unsupported","projections":["idea|exact_package|residual"],"exact_packages":[],"blockers":[],"template_number":null}}]}}]}}
 
@@ -804,6 +822,11 @@ Each item in exact_packages has:
 {{"complete":true,"blocker":null,"displayed_price":{{"amount":"2.95","effect":"debit"}},"legs":[{{"quantity":1,"expiration":"Sep 18 2026","strike":"115","option_type":"put","order_code":"BTO"}}],"field_provenance":["text","image:1"]}}
 Return exactly one episode for every signal_id. Do not add fields outside this schema.
 """
+
+
+def _has_opaque_identifier(record: Mapping[str, Any]) -> bool:
+    text = str((record.get("literal") or {}).get("text") or "")
+    return bool(re.search(r"\b(?:solana|ethereum|base):[A-Za-z0-9]{20,}\b", text, re.IGNORECASE))
 
 
 def _user_prompt(
@@ -826,7 +849,10 @@ def _user_prompt(
                 "text": str(literal.get("text") or "")[:2000],
                 "literal_symbols": literal.get("symbols") or [],
                 "attached_image_numbers": image_map.get(signal_id, []),
-                "media_expected_but_unavailable": bool(media) and not bool(image_map.get(signal_id)),
+                "media_expected_but_unavailable": (bool(media) or any(
+                    re.search(r"/photo/\d+", str(url)) for url in source.get("expanded_urls", [])
+                )) and not bool(image_map.get(signal_id)),
+                "opaque_identifier_requires_independent_symbol_evidence": _has_opaque_identifier(record),
             }
         )
     context = [

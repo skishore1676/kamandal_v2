@@ -1,6 +1,6 @@
 schema: kamandal.correspondent_profile.v1
 profile_id: mike_butler
-version: "2"
+version: "3"
 source_profile_id: mike_butler
 interpretation_posture: explicit_only
 
@@ -65,7 +65,16 @@ families:
       horizon_days: 30
   market_commentary: {mode: ignore}
 
+# Preserve the source structure; this expresses its bullish thesis through an
+# existing Kamandal family. It does not copy the crab legs or add exact support.
+idea_reexpressions:
+  call_crab:
+    direction: bullish
+    allowed_structures: [call_diagonal]
+    reason: Guru bullish longer-dated thesis under Kamandal construction and management.
+
 strategy_rules:
+  - {id: super_bull, regex: "\\bsuper[ -]?bull\\b", strategy_family: super_bull, direction: bullish, allowed_structures: []}
   - {id: call_crab, regex: "\\bcall crab\\b|\\bcrab trade\\b", strategy_family: call_crab, direction: bullish, allowed_structures: []}
   - {id: butterfly, regex: "\\bbutterfl(?:y|ies)\\b", strategy_family: butterfly, direction: neutral, allowed_structures: []}
   - {id: call_calendar, regex: "\\bcall calendars?\\b|\\bcalendar calls?\\b", strategy_family: call_calendar, direction: bullish, allowed_structures: [call_calendar]}

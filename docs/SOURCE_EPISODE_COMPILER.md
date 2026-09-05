@@ -3,6 +3,8 @@
 Date: 2026-09-04
 Status: September 5 interpretation fixes deployed on oldmac; post-update natural scheduled execution pending
 
+The later [historical validation and Astra routing rollout](reviews/guru-history-results-2026-09-05.md) supersedes the earlier model-assignment decision.
+
 See the [September 5 deployment receipt](reviews/guru-interpretation-deployment-2026-09-05.md) for CLI, tests, unchanged policy, and model-assignment readback.
 
 ## Decision

@@ -1,26 +1,29 @@
-# Kamandal's brain assignment — the only agent-broker config this repo carries.
-# Actor -> named brain; the brain's models live centrally in
-# ~/.agent-broker/brains.yaml. Kamandal previously ran on codex ALONE, which is
-# why the 2026-07-01 codex outage killed its extraction. Both actors now use the
-# `balanced` brain: the fleet currently resolves it to Terra with governed
-# fallbacks. Extraction/review of trading
-# ideas is routine synthesis, not frontier judgment -> balanced, not default.
-# (thesis_extractor could move to `bulk` for free-first once you sign off; kept
-# conservative here — no free model on a trading path without review.)
-#
-# ACTIVATION: config/control.yaml now sets `llm.provider: agent_broker`, so
-# extraction/review use this broker policy first and fall back to the legacy
-# Codex CLI client on broker failure. Rollback = set `llm.provider: codex_cli`
-# or KAMANDAL_LLM_PROVIDER=codex_cli.
+# Agent Broker owns execution and metering. This repository assigns actors.
+# Source interpretation uses the bounded multimodal profile validated on the
+# operator corpus and historical holdout. Other actors keep the balanced brain.
+# Host-wide routing may override repository assignments: deploy the exact
+# kamandal/source_episode_interpreter route with configure_source_interpreter.py.
 schema: agent_broker.policy.v1
+profiles:
+  source_interpreter:
+    provider: codex
+    options:
+      model: gpt-6-astra
+      reasoning_effort: low
+      verbosity: low
+      sandbox: read-only
+      approval_policy: never
+      ignore_user_config: true
+      ephemeral: true
+    allowed_tools: []
 lanes:
   kamandal:
     actors:
       thesis_extractor: {brain: balanced}
       observed_package_extractor: {brain: balanced}
-      source_episode_interpreter: {brain: balanced}
+      source_episode_interpreter: {profile: source_interpreter}
       rejection_reviewer: {brain: balanced}
 
   kamandal_evaluation:
     actors:
-      source_episode_interpreter: {brain: balanced}
+      source_episode_interpreter: {profile: source_interpreter}

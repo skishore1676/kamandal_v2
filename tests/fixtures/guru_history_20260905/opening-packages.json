@@ -1,0 +1,213 @@
+[
+  {
+    "post_id": "2093358842306248707",
+    "published_at": "2026-08-28T15:23:35.000Z",
+    "expected_extraction": {
+      "packages": [
+        {
+          "symbol": "PYPL",
+          "action": "open",
+          "complete": true,
+          "displayed_price": {
+            "amount": "3.35",
+            "effect": "debit"
+          },
+          "legs": [
+            {
+              "expiration": "2026-12-18",
+              "strike": "55",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1
+            },
+            {
+              "expiration": "2026-10-16",
+              "strike": "60",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "post_id": "2093378940647645278",
+    "published_at": "2026-08-28T16:43:27.000Z",
+    "expected_extraction": {
+      "packages": [
+        {
+          "symbol": "DELL",
+          "action": "open",
+          "complete": true,
+          "displayed_price": {
+            "amount": "7.00",
+            "effect": "debit"
+          },
+          "legs": [
+            {
+              "expiration": "2026-09-18",
+              "strike": "500",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1
+            },
+            {
+              "expiration": "2026-09-04",
+              "strike": "500",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "post_id": "2094422329195479307",
+    "published_at": "2026-08-31T13:49:30.000Z",
+    "expected_extraction": {
+      "packages": [
+        {
+          "symbol": "SPX",
+          "action": "open",
+          "complete": true,
+          "displayed_price": {
+            "amount": "0.40",
+            "effect": "credit"
+          },
+          "legs": [
+            {
+              "expiration": "2026-09-01",
+              "strike": "7640",
+              "option_type": "put",
+              "order_code": "BTO",
+              "quantity": 1
+            },
+            {
+              "expiration": "2026-09-01",
+              "strike": "7750",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1
+            },
+            {
+              "expiration": "2026-09-01",
+              "strike": "7760",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 1
+            },
+            {
+              "expiration": "2026-09-01",
+              "strike": "7645",
+              "option_type": "put",
+              "order_code": "STO",
+              "quantity": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "post_id": "2094448446627250605",
+    "published_at": "2026-08-31T15:33:17.000Z",
+    "expected_extraction": {
+      "packages": [
+        {
+          "symbol": "PANW",
+          "action": "open",
+          "complete": true,
+          "displayed_price": {
+            "amount": "2.35",
+            "effect": "debit"
+          },
+          "legs": [
+            {
+              "expiration": "2026-09-04",
+              "strike": "400",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 1
+            },
+            {
+              "expiration": "2026-09-11",
+              "strike": "400",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1
+            }
+          ]
+        },
+        {
+          "symbol": "SNOW",
+          "action": "open",
+          "complete": true,
+          "displayed_price": {
+            "amount": "1.35",
+            "effect": "debit"
+          },
+          "legs": [
+            {
+              "expiration": "2026-09-04",
+              "strike": "350",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 1
+            },
+            {
+              "expiration": "2026-09-11",
+              "strike": "350",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "post_id": "2094464531137221078",
+    "published_at": "2026-08-31T16:37:12.000Z",
+    "expected_extraction": {
+      "packages": [
+        {
+          "symbol": "GOOGL",
+          "action": "open",
+          "complete": true,
+          "displayed_price": {
+            "amount": "10.65",
+            "effect": "debit"
+          },
+          "legs": [
+            {
+              "expiration": "2026-10-16",
+              "strike": "370",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 2
+            },
+            {
+              "expiration": "2026-10-16",
+              "strike": "390",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1
+            },
+            {
+              "expiration": "2026-11-20",
+              "strike": "350",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1
+            }
+          ]
+        }
+      ]
+    }
+  }
+]
