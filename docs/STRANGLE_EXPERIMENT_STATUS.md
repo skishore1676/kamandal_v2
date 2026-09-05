@@ -1,7 +1,7 @@
 # Short Strangle Experiment: Current State and Target
 
 Updated: 2026-09-05 after bounded blocker repair
-Status: dated `FRIDAY_NO_GO` remains authoritative; repair is ready for a new pilot gate
+Status: dated `FRIDAY_NO_GO` remains authoritative; a new bounded Tuesday pilot is authorized pending fresh gates
 
 ## Stable picture
 
@@ -214,9 +214,30 @@ Both Friday code blockers have bounded repairs while the operator row remains
    reconciliation and the shared portfolio/risk-manager controls remain global.
 
 The dated Friday decision is intentionally not rewritten after the fact. Before
-any new pilot plan, re-run the current policy, reconciliation, overlap, account,
-exact-leg dry-run BPR, and health gates. No code repair changes the Sheet or
-submits an order.
+the newly authorized Tuesday pilot, re-run the current policy, reconciliation,
+overlap, account, exact-leg dry-run BPR, quote, execution-window, and health
+gates. The Sheet remains shadow until those fresh checks pass. No code repair by
+itself changes the Sheet or submits an order.
+
+## New bounded pilot authorization — 2026-09-05
+
+Suman authorized a new one-contract Tastytrade canary for Tuesday, 2026-09-08,
+conditional on all fresh premarket/current policy, account, reconciliation,
+overlap, health, quote, BPR, and broker preflight gates passing. The transition is
+deliberately staged:
+
+1. Keep `short_strangle_high_iv` at `mode=shadow`, `csa_stage=shadow` through the
+   holiday and the first Tuesday natural shadow-planning run.
+2. Require that natural run to produce a reviewable exact-leg candidate with a
+   fresh production Tastytrade dry-run. Do not manufacture a candidate or trigger
+   a planner/executor cycle by hand.
+3. If every current gate passes, change only the operator cells to `mode=live`,
+   `csa_stage=pilot_live` before the next natural planner. All other Sheet policy,
+   one-contract sizing, the `$2,500` per-order cap, concentration controls, and
+   broker protections remain unchanged.
+4. Let the normal planner and executor reserve and work at most one lifecycle.
+   If no candidate qualifies or any gate fails, keep the Sheet shadow. If no
+   canary is reserved by the final entry window, return both cells to shadow.
 
 ## Target before pilot live
 
@@ -241,7 +262,7 @@ submits an order.
 
 ## Promotion decision
 
-The Friday decision is `FRIDAY_NO_GO`. Keep the row shadow on Tuesday, 2026-09-08;
-the conditional authority to promote was not activated and no Tastytrade canary may
-be submitted under this dated plan. The authoritative checklist and state machine
-are in [STRANGLE_PILOT_RUNBOOK.md](STRANGLE_PILOT_RUNBOOK.md).
+The Friday decision remains `FRIDAY_NO_GO`; no canary may be submitted under that
+dated plan. The separately authorized 2026-09-05 plan may promote the row on
+Tuesday only after the fresh gates above pass. The authoritative checklist and
+state machine are in [STRANGLE_PILOT_RUNBOOK.md](STRANGLE_PILOT_RUNBOOK.md).

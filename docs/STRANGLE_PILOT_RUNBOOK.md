@@ -1,18 +1,23 @@
 # Short-Strangle Pilot Runbook
 
-Updated: 2026-08-30  
+Updated: 2026-09-05
 Pilot date: Tuesday, 2026-09-08  
-Current state: `SHADOW_COLLECTING`
+Current state: `REPAIR_VERIFIED_AWAITING_TUESDAY_GATES`
 
 ## Authorized outcome
 
-Suman has authorized a conditional one-contract Tastytrade pilot. If the
-shadow-week checklist passes and the Friday, 2026-09-04 recommendation is `GO`,
-the operator row may be changed on Tuesday, 2026-09-08 from `mode=shadow`,
-`csa_stage=shadow` to `mode=live`, `csa_stage=pilot_live`. The normal planner and
-executor may then submit one qualifying short-strangle lifecycle. If either the
-Friday decision or Tuesday final checks fail, the row stays in shadow and no
-broker order is submitted.
+On 2026-09-05 Suman authorized a new conditional one-contract Tastytrade pilot
+for Tuesday, 2026-09-08 after the two blockers behind the dated Friday `NO_GO`
+were repaired. The Friday result remains historical truth; this is a new pilot
+plan, not a retroactive change to that decision.
+
+The operator row must stay `mode=shadow`, `csa_stage=shadow` until a fresh
+Tuesday natural shadow-planning run has produced a reviewable exact-leg candidate
+and Tastytrade dry-run, and every Tuesday gate below is green. Only then may the
+two operator cells change to `mode=live`, `csa_stage=pilot_live`. The next natural
+planner and executor may reserve and work at most one qualifying short-strangle
+lifecycle. If there is no qualifying candidate or any gate fails, the row stays
+shadow and no broker order is submitted.
 
 This authorization does not permit discretionary orders, more than one canary
 lifecycle, a quantity above one contract per leg, another strategy promotion,
@@ -26,6 +31,7 @@ earnings, or execution-window gate.
 | `SHADOW_COLLECTING` | Row remains shadow while natural jobs produce evidence. | Friday checklist may set `FRIDAY_GO` or `FRIDAY_NO_GO`. |
 | `FRIDAY_GO` | Machinery passed; this is permission to perform Tuesday final checks, not permission to submit early. | Tuesday final checks may set `PILOT_ARMED`; any failed check returns to shadow. |
 | `FRIDAY_NO_GO` | At least one required gate failed. | Stay shadow. A later pilot needs a new explicit plan. |
+| `REPAIR_VERIFIED_AWAITING_TUESDAY_GATES` | The two Friday code blockers are repaired and the operator has authorized a new bounded attempt. The Sheet is still shadow. | A fresh Tuesday natural shadow plan plus all current gates may set `PILOT_ARMED`; otherwise stay shadow. |
 | `PILOT_ARMED` | On September 8 only, the row is `mode=live`, `csa_stage=pilot_live`. | The normal planner may reserve one qualifying lifecycle. |
 | `CANARY_RESERVED` | The unified engine has created the one pilot lifecycle. | Normal executor may work that lifecycle; no second lifecycle is allowed for the same pilot policy. |
 | `PILOT_OBSERVING` | Order is working, filled, managed, closed, rejected, or expired. | Retain receipts and recommend continue, modify, or return to shadow. No automatic expansion. |
@@ -68,9 +74,11 @@ one shadow week proves positive strategy expectancy.
 - Friday, September 4 after the natural report: record one explicit `GO` or
   `NO_GO` with failed gate names and evidence paths. `NO_GO` means stay shadow.
 - Monday, September 7: US market holiday; do not promote or submit.
-- Tuesday, September 8 before the first planner window: independently re-run all
-  current-account, policy, health, quote, BPR, overlap, and reconciliation gates.
-  Promote only if Friday was `GO` and every Tuesday gate is still green.
+- Tuesday, September 8: let the 08:50 CT unified planner run naturally in shadow.
+  After it finishes, require a fresh reviewable exact-leg candidate and
+  Tastytrade dry-run, then independently re-run current-account, policy, health,
+  quote, BPR, overlap, reconciliation, execution-window, and deployed-version
+  gates. Promote only before the next natural planner if every gate is green.
 - After promotion: let the normal planner and executor own selection and
   submission. Observe the resulting lifecycle through normal reporting. The
   canary reservation prevents a second lifecycle for that pilot policy.
@@ -81,7 +89,7 @@ one shadow week proves positive strategy expectancy.
 ## Exception and rollback policy
 
 Known outcomes have known actions: a failed gate, no qualifying candidate,
-insufficient capacity, a provider outage, or `NO_GO` leaves the row in shadow and
+insufficient capacity, a provider outage, or an unresolved health condition leaves the row in shadow and
 does not create an Obsidian request. Publish a decision packet to the Northstar
 coding-agent drawer through Lathi Bus only when an unresolved judgment is required
 and this runbook does not say what to do.
