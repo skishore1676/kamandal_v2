@@ -77,6 +77,25 @@ history must park regardless of model confidence.
 
 ## Dead Ends
 
+### Model comparisons must separate interpretation from adapters
+
+The September 5 comparison retained raw answers before compiler normalization.
+It exposed three non-model problems: `call_vertical` was graded as a false new
+entry instead of a call-spread synonym; the first matching calendar regex
+overwrote a literal, correctly identified resulting diagonal; and the episode
+prompt's `Aug 28 2026` date format was rejected by the exact-leg adapter, which
+accepted only ISO dates or yearless `Aug 28`. Explicit years must be preserved,
+including on historical evidence, rather than rolled into a later year.
+
+Use `scripts/evaluate_source_episode_models.py` for raw answers, reported usage
+and separate non-template idea recovery. Use
+`scripts/evaluate_source_episode_vision.py` for the actual seven-image corpus.
+Keep legacy scores alongside semantic scores; do not inflate accuracy with the
+twenty deterministic earnings-template ideas or claim missing-image tests prove
+vision quality. Rescore saved answers after adapter fixes without another model
+call. A stronger model can use fewer tokens if it avoids repairs; reported
+Codex token totals do not establish subscription-credit usage or API cost.
+
 - A bullish-only seeded evaluator could not express bearish put-diagonal watches.
 - A Kamandal request shaped as `source: string` plus `symbols: []` did not satisfy
   Cartographer's provenance-rich seed schema (`seed request source must be an object`).

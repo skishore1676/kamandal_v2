@@ -1,6 +1,6 @@
 schema: kamandal.correspondent_profile.v1
 profile_id: mike_butler
-version: "1"
+version: "2"
 source_profile_id: mike_butler
 interpretation_posture: explicit_only
 
@@ -9,6 +9,9 @@ episode_interpreter:
   max_history_episodes: 30
   max_records_per_turn: 20
   structure_aliases:
+    call_vertical: call_spread
+    bull_call_spread: call_spread
+    put_vertical: put_spread
     strangle: short_strangle
     calendar: call_calendar
     butterfly: butterfly
@@ -22,6 +25,13 @@ episode_interpreter:
     events and never become new entries. If an image or prior event is missing,
     park with needs_media or needs_history. Do not coerce butterflies, crabs,
     futures options, or other unsupported shapes into a calendar or diagonal.
+    Recognition and execution capability are separate. Mike's call CRAB
+    convention expresses a bullish call-side thesis. An independently clear
+    thesis can produce an idea with its literal structure even when its exact
+    shape is unsupported or image legs are unavailable. Kamandal's downstream
+    adapter decides whether a compatible playbook exists; you do not reject an
+    understood idea solely because its exact structure is unsupported. Missing
+    evidence about the thesis itself still requires parking.
 
 # The deployed narrow translator still uses these family modes. The source
 # episode compiler supersedes the old one-post/one-route assumption and groups

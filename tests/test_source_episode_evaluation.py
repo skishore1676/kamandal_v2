@@ -88,3 +88,37 @@ def test_model_evaluation_uses_separate_metering_lane(monkeypatch):
     assert captured["lane_id"] == "kamandal_evaluation"
     from kamandal_v2.intelligence.llm_client import BrokerJsonClient
     assert BrokerJsonClient().lane_id == "kamandal"
+
+
+def test_interpretation_score_separates_wrong_direction_from_false_openings():
+    wanted = {"action": "open", "symbol": "ABC", "direction": "bullish", "structure_hint": "call_spread",
+              "projections": ["idea"], "planner_new_entry": True}
+    cases = [{"post_ref": "x-post:1", "expected_events": [wanted]}]
+    episodes = [{"post_ref": "x-post:1", "events": [{**wanted, "direction": "bearish"}]}]
+    score = MODULE._interpretation_score(cases, episodes)
+    assert score["core_recall"] == 0
+    assert score["core_precision"] == 0
+    assert score["false_opening_count"] == 0
+    episodes[0]["events"].append({**wanted, "symbol": "XYZ"})
+    assert MODULE._interpretation_score(cases, episodes)["false_opening_count"] == 1
+
+
+def test_unsupported_idea_is_understood_even_when_not_planner_ready():
+    wanted = {"action": "open", "symbol": "ABC", "direction": "bullish", "structure_hint": "butterfly",
+              "projections": ["idea"], "planner_new_entry": False}
+    cases = [{"post_ref": "x-post:1", "expected_events": [wanted]}]
+    score = MODULE._interpretation_score(cases, [{"post_ref": "x-post:1", "events": [wanted]}])
+    assert score["core_recall"] == 1
+    assert score["full_structure_recall"] == 1
+    assert score["legacy_actionable_expected"] == 0
+
+
+def test_usage_retains_missing_attempts_and_counts_all_receipts():
+    result = MODULE._usage_summary([
+        {"duration_seconds": 2, "receipt": {"usage": {"total_tokens": 100}}},
+        {"duration_seconds": 3, "error": "timeout", "receipt": None},
+    ])
+    assert result["attempts"] == 2
+    assert result["attempts_with_reported_tokens"] == 1
+    assert result["reported_total_tokens"] == 100
+    assert result["duration_seconds"] == 5

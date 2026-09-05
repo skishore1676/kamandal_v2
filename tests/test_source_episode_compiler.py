@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from kamandal_v2.intelligence.source_episode_compiler import (
@@ -39,6 +40,31 @@ class FakeClient:
             }
         )
         return self.responses.pop(0)
+
+
+def test_roll_retains_literal_resulting_diagonal_instead_of_old_calendar():
+    record = _record("roll-shape", "Rolled $MSFT short call in calendar up and out to create a call diagonal.", ["MSFT"])
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(action="roll", symbol="MSFT", direction="bullish", structure_hint="call_diagonal",
+               thesis="Rolled MSFT call calendar into a call diagonal", projections=["residual"])
+    ]}]}
+    compilation = compile_source_episode_packet(_packet([record]), _profile("mike_butler"), FakeClient(response))
+    event = compilation.episodes[0]["events"][0]
+    assert event["structure_hint"] == "call_diagonal"
+    assert event["planner_new_entry"] is False
+
+
+@pytest.mark.parametrize("synonym", ["call_vertical", "bull_call_spread"])
+def test_greg_call_vertical_synonym_preserves_source_idea(synonym):
+    record = _record("vertical-synonym", "added $HAL Sep 38 calls and $COP Sep 138/144 call spreads", ["HAL", "COP"])
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(action="scale_in", symbol="COP", direction="bullish", structure_hint=synonym,
+               thesis="Added September 138/144 calls", projections=["idea"])
+    ]}]}
+    compilation = compile_source_episode_packet(_packet([record]), _profile("greg_harmon"), FakeClient(response))
+    event = compilation.episodes[0]["events"][0]
+    assert event["structure_hint"] == "call_spread"
+    assert event["planner_new_entry"] is True
 
 
 def _profile(name: str) -> dict:

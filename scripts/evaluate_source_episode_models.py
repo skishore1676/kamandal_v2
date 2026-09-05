@@ -13,6 +13,9 @@ import json
 import os
 import re
 import statistics
+import hashlib
+import tempfile
+import time
 from collections import defaultdict
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -53,6 +56,7 @@ def _args() -> argparse.Namespace:
     )
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--reasoning-effort", default="medium")
+    parser.add_argument("--codex-binary", default="", help="Evaluation-only native CLI override.")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -279,6 +283,7 @@ def _run_model(
     cases: list[dict[str, Any]],
     *,
     reasoning_effort: str,
+    codex_binary: str = "",
 ) -> dict[str, Any]:
     binding = ProviderBinding(
         "codex",
@@ -290,14 +295,16 @@ def _run_model(
             "approval_policy": "never",
             "ignore_user_config": True,
             "ephemeral": True,
+            **({"binary": codex_binary} if codex_binary else {}),
         },
     )
-    client = BrokerJsonClient(
+    broker_client = BrokerJsonClient(
         actor="source_episode_interpreter",
         lane_id="kamandal_evaluation",
         timeout_seconds=600,
         binding=binding,
     )
+    client = _RecordingClient(broker_client)
     packets = _build_packets(cases)
     episodes: list[dict[str, Any]] = []
     receipts: list[dict[str, Any]] = []
@@ -305,13 +312,19 @@ def _run_model(
     for source_id, packet in packets.items():
         profile = yaml.safe_load(PROFILES[source_id].read_text(encoding="utf-8"))
         try:
-            compilation = compile_source_episode_packet(packet, profile, client)
+            with tempfile.TemporaryDirectory(prefix="kamandal-evaluation-input-only-") as isolated:
+                prior_directory = Path.cwd()
+                try:
+                    os.chdir(isolated)
+                    compilation = compile_source_episode_packet(packet, profile, client)
+                finally:
+                    os.chdir(prior_directory)
         except Exception as exc:  # noqa: BLE001 - a failed model run is evaluation evidence.
             compiler_failures.append(
                 {
                     "source_id": source_id,
                     "error_type": type(exc).__name__,
-                    "error": str(exc)[:500],
+                    "error": str(exc)[-1500:],
                 }
             )
             continue
@@ -319,6 +332,7 @@ def _run_model(
             episodes.extend(compilation.episodes)
             receipts.extend(compilation.model_receipts)
     score = _score(cases, episodes)
+    interpretation_score = _interpretation_score(cases, episodes)
     score["compiler_failure_count"] = len(compiler_failures)
     score["hard_gate_pass"] = bool(score["hard_gate_pass"] and not compiler_failures)
     return {
@@ -326,10 +340,135 @@ def _run_model(
         "repetition": repetition,
         "reasoning_effort": reasoning_effort,
         "score": score,
+        "interpretation_score": interpretation_score,
         "compiler_failures": compiler_failures,
         "receipts": receipts,
         "episodes": episodes,
+        "model_turns": client.turns,
+        "usage": _usage_summary(client.turns),
+        "codex_binary": codex_binary or "provider_default",
+        "corpus_sha256": hashlib.sha256(json.dumps(cases, sort_keys=True).encode()).hexdigest(),
         "effects": {key: False for key in sorted(EFFECT_KEYS)},
+    }
+
+
+class _RecordingClient:
+    """Keep pre-validator answers and every attempt, including failed turns.
+
+    Labels never enter model prompts. There is no planner, Sheet or execution
+    client in this harness. The ordinary broker meter retains model usage.
+    """
+
+    def __init__(self, client: BrokerJsonClient) -> None:
+        self.client = client
+        self.turns: list[dict[str, Any]] = []
+
+    @property
+    def last_receipt_summary(self) -> dict[str, Any] | None:
+        return self.client.last_receipt_summary
+
+    def chat_json(self, system_prompt: str, user_prompt: str, *, images: tuple[str, ...] = ()) -> dict[str, Any]:
+        started = time.monotonic()
+        before = self.client.last_receipt_summary
+        system_prompt = "Use only the supplied evidence. Do not use tools, browse, or read local files.\n" + system_prompt
+        turn: dict[str, Any] = {
+            "prompt_sha256": hashlib.sha256((system_prompt + "\n" + user_prompt).encode()).hexdigest(),
+            "image_count": len(images),
+        }
+        try:
+            response = self.client.chat_json(
+                system_prompt,
+                user_prompt,
+                images=images,
+            )
+            turn["response"] = response
+            return response
+        except Exception as exc:
+            turn["error"] = str(exc)[-1500:]
+            raise
+        finally:
+            receipt = self.client.last_receipt_summary
+            turn["receipt"] = receipt if receipt != before else None
+            turn["duration_seconds"] = round(time.monotonic() - started, 3)
+            self.turns.append(turn)
+
+
+def _usage_summary(turns: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    turns = list(turns)
+    usages = [(turn.get("receipt") or {}).get("usage") or {} for turn in turns]
+    return {
+        "attempts": len(turns),
+        "reported_total_tokens": sum(int(usage.get("total_tokens") or 0) for usage in usages),
+        "attempts_with_reported_tokens": sum(bool(usage.get("total_tokens")) for usage in usages),
+        "duration_seconds": round(sum(float(turn.get("duration_seconds") or 0) for turn in turns), 3),
+        "token_breakdown": "native_codex_total_only; not an API invoice or subscription-credit estimate",
+    }
+
+
+def _interpretation_score(cases: Iterable[Mapping[str, Any]], episodes: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Score meaning before portfolio capability gates, alongside legacy scores.
+
+    Open/scale-in are equivalent only for recovering a new source opportunity.
+    Structure and template fidelity remain a separate, stricter measure.
+    No label, gold correction or desired field is given to the model.
+    """
+    by_ref = {str(item["post_ref"]): item for item in episodes}
+    expected_count = core_count = full_count = emitted_count = matched_emitted = 0
+    actionable_count = actionable_matched = 0
+    false_openings: list[str] = []
+    rows = []
+    for case in cases:
+        actual = list((by_ref.get(str(case["post_ref"])) or {}).get("events") or [])
+        expected = [event for event in case.get("expected_events") or []
+                    if event.get("action") in {"open", "scale_in"} and "idea" in event.get("projections", [])]
+        emitted = [event for event in actual if event.get("action") in {"open", "scale_in"}
+                   and ("idea" in event.get("projections", []) or event.get("planner_new_entry"))]
+        expected_count += len(expected)
+        emitted_count += len(emitted)
+        used: set[int] = set()
+        for wanted in expected:
+            actionable_count += int(bool(wanted.get("planner_new_entry")))
+            matches = [i for i, got in enumerate(emitted) if i not in used
+                       and got.get("symbol") == wanted.get("symbol")
+                       and got.get("direction") == wanted.get("direction")
+                       and got.get("template_number") == wanted.get("template_number")]
+            index = next((i for i in matches if emitted[i].get("structure_hint") == wanted.get("structure_hint")),
+                         matches[0] if matches else None)
+            full = False
+            if index is not None:
+                used.add(index)
+                core_count += 1
+                matched_emitted += 1
+                full = emitted[index].get("structure_hint") == wanted.get("structure_hint")
+                full_count += int(full)
+                actionable_matched += int(bool(wanted.get("planner_new_entry")))
+            rows.append({"post_ref": case["post_ref"], "source_id": case.get("source_id"),
+                         "template_number": wanted.get("template_number"), "symbol": wanted.get("symbol"),
+                         "expected_structure": wanted.get("structure_hint"), "core_match": index is not None,
+                         "full_match": full, "emitted": emitted[index] if index is not None else None})
+        # Wrong direction is a precision failure, not a management-to-entry error.
+        for got in emitted:
+            if not any(wanted.get("symbol") == got.get("symbol") for wanted in expected):
+                false_openings.append(f"{case['post_ref']}:{got.get('symbol')}")
+    freeform = [row for row in rows if row["template_number"] is None]
+    return {
+        "expected_idea_opportunities": expected_count,
+        "recovered_core": core_count,
+        "recovered_full_structure": full_count,
+        "core_recall": round(core_count / expected_count, 4) if expected_count else None,
+        "full_structure_recall": round(full_count / expected_count, 4) if expected_count else None,
+        "emitted_idea_opportunities": emitted_count,
+        "core_precision": round(matched_emitted / emitted_count, 4) if emitted_count else None,
+        "legacy_actionable_expected": actionable_count,
+        "legacy_actionable_core_recovered": actionable_matched,
+        "false_opening_count": len(false_openings),
+        "false_openings": false_openings,
+        "non_template_ideas": len(freeform),
+        "non_template_core_recovered": sum(row["core_match"] for row in freeform),
+        "non_template_full_recovered": sum(row["full_match"] for row in freeform),
+        "non_template_core_recall": round(sum(row["core_match"] for row in freeform) / len(freeform), 4) if freeform else None,
+        "rows": rows,
+        "limits": "Core checks action category, symbol, direction and template. Full adds structure. Exact legs need a separate image/text field check.",
     }
 
 
@@ -413,6 +552,7 @@ def main() -> int:
                         repetition,
                         cases,
                         reasoning_effort=args.reasoning_effort,
+                        codex_binary=args.codex_binary,
                     )
                 )
     payload = {

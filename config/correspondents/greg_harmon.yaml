@@ -1,6 +1,6 @@
 schema: kamandal.correspondent_profile.v1
 profile_id: greg_harmon
-version: "1"
+version: "2"
 source_profile_id: greg_harmon
 interpretation_posture: inference_allowed
 
@@ -17,6 +17,9 @@ episode_interpreter:
     lululemon: LULU
     Palo Alto Networks: PANW
   structure_aliases:
+    call_vertical: call_spread
+    bull_call_spread: call_spread
+    put_vertical: put_spread
     strangle: short_strangle
     call_spread_short_put: bull_call_spread_with_short_put
     call_calendar_short_put: call_calendar_with_short_put
@@ -55,6 +58,14 @@ episode_interpreter:
     Standard shorthand such as call-spread risk reversal and broken-wing call
     fly may supply normalized leg ratios when every strike and expiration is
     explicit. Do not fetch or invent inaccessible article terms or bonus ideas.
+    In a standalone ticker + expiration + option-structure shorthand, with no
+    close/roll/hold or quoted-history language, Greg is proposing an opening
+    opportunity even when he omits a verb such as "bought". Emit its idea;
+    discovery is reserved for non-trading capability or product announcements.
+    A bare month in Greg's shorthand means that month's standard monthly
+    options. Keep unresolved exact calendar dates in the exact-package blocker;
+    they do not invalidate an independently clear directional idea. Never
+    invent an expiration day or carry old quoted entry terms into a new entry.
 
 families:
   weekly_ideas:

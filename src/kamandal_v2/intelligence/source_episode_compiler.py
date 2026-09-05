@@ -684,12 +684,21 @@ def _canonicalize_event(
     evidence_text = str(result.get("thesis") or "")
     if len(literal_symbols) <= 1:
         evidence_text = f"{evidence_text} {text}"
-    for rule in profile.get("strategy_rules") or []:
-        if re.search(str(rule["regex"]), evidence_text, flags=re.IGNORECASE):
-            structure = str(rule.get("strategy_family") or "")
-            if result.get("direction") == "unknown" and rule.get("direction"):
-                result["direction"] = str(rule["direction"])
-            break
+    matching_rules = [
+        rule for rule in profile.get("strategy_rules") or []
+        if re.search(str(rule["regex"]), evidence_text, flags=re.IGNORECASE)
+    ]
+    if matching_rules:
+        # A roll can mention both the old calendar and the resulting diagonal.
+        # Preserve the model's structure when it is itself supported by literal
+        # evidence; profile list order must not change it back to the old shape.
+        rule = next(
+            (rule for rule in matching_rules if rule.get("strategy_family") == structure),
+            matching_rules[0],
+        )
+        structure = str(rule.get("strategy_family") or "")
+        if result.get("direction") == "unknown" and rule.get("direction"):
+            result["direction"] = str(rule["direction"])
     for rule in config.get("composite_structure_rules") or []:
         components = {str(item) for item in rule.get("component_structures") or []}
         if structure in components and re.search(

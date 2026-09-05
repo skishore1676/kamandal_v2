@@ -558,11 +558,15 @@ def _normalize_expiration(value: str, publication_date: date) -> str:
         return date.fromisoformat(text).isoformat()
     except ValueError:
         pass
-    match = re.fullmatch(r"([A-Za-z]{3})\s+(\d{1,2})", text)
+    match = re.fullmatch(r"([A-Za-z]{3})\s+(\d{1,2})(?:,?\s+(\d{4}))?", text)
     if not match or match.group(1).lower() not in _MONTHS:
         raise ObservedPackageValidationError(f"invalid expiration: {value!r}")
     month = _MONTHS[match.group(1).lower()]
     day = int(match.group(2))
+    # The episode prompt explicitly permits "Sep 18 2026". Honor its year;
+    # only yearless display shorthand uses the legacy next-occurrence rule.
+    if match.group(3) is not None:
+        return date(int(match.group(3)), month, day).isoformat()
     year = publication_date.year
     candidate = date(year, month, day)
     if candidate < publication_date:

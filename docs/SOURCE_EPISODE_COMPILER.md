@@ -204,6 +204,10 @@ media or history; they test correct parking until that evidence exists.
 
 ## Validation and model choice
 
+Before changing model tiers, read the
+[model-versus-adapter evaluation lesson](lessons/correspondents-are-profiles-not-pipelines.md#model-comparisons-must-separate-interpretation-from-adapters).
+Raw interpretation, normalized events and planner admission need separate scores.
+
 The first gate is the 29-post operator-reviewed corpus. A broader historical
 holdout follows only after those cases are represented faithfully. The same
 input packet, profile, prompt, and schema must be replayed against candidate

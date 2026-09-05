@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 from copy import deepcopy
 from pathlib import Path
 
@@ -13,10 +14,22 @@ from kamandal_v2.intelligence.observed_packages import (
     extract_observed_packages_from_correspondent_signal,
     load_observed_package_feed,
     normalize_observed_package_output,
+    _normalize_expiration,
 )
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mike_observed_packages"
 GROUND_TRUTH = FIXTURE_ROOT / "ground-truth.json"
+
+
+@pytest.mark.parametrize("value", ["Aug 28 2026", "Aug 28, 2026", "2026-08-28"])
+def test_explicit_expiration_year_is_preserved_even_for_historical_package(value):
+    assert _normalize_expiration(value, date(2026, 9, 5)) == "2026-08-28"
+
+
+def test_yearless_expiration_keeps_existing_rollover_and_incomplete_date_rejects():
+    assert _normalize_expiration("Jan 15", date(2026, 12, 5)) == "2027-01-15"
+    with pytest.raises(ValueError):
+        _normalize_expiration("Sep 2026", date(2026, 9, 5))
 
 
 def _manifest() -> dict:
