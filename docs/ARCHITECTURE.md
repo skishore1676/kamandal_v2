@@ -647,6 +647,13 @@ Order reconciliation follows the frozen venue independently for every ticket;
 an unavailable venue is reported and never replaced with the process-default
 broker.
 
+Entry health follows the same boundary. Reconciliation ambiguity, aggregate
+portfolio/risk-manager breakers, concentration limits, and other shared safety
+controls remain global. A broker-local order, exit, or quote failure blocks new
+entries routed to that same venue, but does not by itself block a healthy second
+venue. The overall health report still shows every venue's problem; the money
+gate additionally records the target venue and its venue-scoped entry status.
+
 The short-strangle lane is currently `shadow`, even though its future venue is
 `tasty_primary`. Promotion to live remains a separate money gate and requires
 broker-native canary proof; this deployment does not submit an order.

@@ -83,6 +83,21 @@ REASON_ORDER = [
     "exit_pipeline_pending",
     "pending_entry_approvals",
 ]
+VENUE_SCOPED_HEALTH_REASONS = {
+    "failed_close_order",
+    "failed_preflight_close",
+    "exit_pipeline_stalled",
+    "mandatory_exit_quote_stalled",
+    "mandatory_exit_waiting_quote",
+    "urgent_close_order_stale",
+    "loss_watch",
+    "close_order_stale",
+    "stale_failed_close_order",
+    "deferred_close_order",
+    "position_target_reached",
+    "working_close_order",
+    "exit_pipeline_pending",
+}
 
 
 def run_live_health(
@@ -108,6 +123,11 @@ def run_live_health(
 
     open_groups = store.open_live_position_groups()
     open_group_ids = {str(group.get("group_id") or "") for group in open_groups}
+    group_venues = {
+        str(group.get("group_id") or ""): _payload_execution_venue(group)
+        for group in open_groups
+        if str(group.get("group_id") or "")
+    }
     reconciliation_blockers = [
         issue
         for issue in store.open_live_reconciliation_issues()
@@ -193,6 +213,11 @@ def run_live_health(
                 "issue_id": str(issue.get("issue_id") or ""),
                 "status": str(issue.get("status") or "open"),
                 "observed_count": int(issue.get("observed_count") or 1),
+                "execution_venue": str(
+                    issue.get("execution_venue")
+                    or group_venues.get(str(issue.get("group_id") or ""))
+                    or ""
+                ),
                 "operator_state": "operator_needed",
                 "attention_surface": "external_review",
             },
@@ -355,6 +380,11 @@ def run_live_health(
             },
         )
 
+    for event in events:
+        group_id = str(event.get("group_id") or "")
+        if group_id and not event.get("execution_venue"):
+            event["execution_venue"] = group_venues.get(group_id, "")
+
     status = _coerce_status(events)
     return {
         "checked_at": checked_at.isoformat(),
@@ -394,7 +424,12 @@ def run_live_health(
     }
 
 
-def entry_health_gate(store: LocalStore, config: dict[str, Any] | None = None) -> dict[str, Any]:
+def entry_health_gate(
+    store: LocalStore,
+    config: dict[str, Any] | None = None,
+    *,
+    execution_venue: str | None = None,
+) -> dict[str, Any]:
     """Decide whether new live entries are allowed given current book health."""
     config = config or {}
     block_on_red = _bool_value(
@@ -402,18 +437,47 @@ def entry_health_gate(store: LocalStore, config: dict[str, Any] | None = None) -
         default=True,
     )
     report = run_live_health(store, config)
+    target_venue = str(execution_venue or "").strip().lower()
+    applicable_events = [
+        event
+        for event in report["events"]
+        if _event_applies_to_entry_venue(event, target_venue)
+    ]
+    excluded_events = [event for event in report["events"] if event not in applicable_events]
+    entry_overall = _coerce_status(applicable_events)
     risk_manager = report.get("risk_manager") or {}
     risk_blocked = bool(risk_manager.get("enabled")) and bool(risk_manager.get("blocked"))
-    blocked = (block_on_red and report["overall"] == "RED") or risk_blocked
+    blocked = (block_on_red and entry_overall == "RED") or risk_blocked
     return {
         "blocked": blocked,
         "block_entries_on_red": block_on_red,
         "overall": report["overall"],
-        "reasons": report["reasons"],
+        "entry_overall": entry_overall,
+        "execution_venue": target_venue,
+        "reasons": _ordered_reason_codes(applicable_events),
+        "excluded_other_venue_reasons": _ordered_reason_codes(excluded_events),
         "counts": report["counts"],
         "risk_manager": risk_manager,
         "events": report["events"],
     }
+
+
+def _event_applies_to_entry_venue(event: dict[str, Any], target_venue: str) -> bool:
+    if not target_venue or str(event.get("reason") or "") not in VENUE_SCOPED_HEALTH_REASONS:
+        return True
+    event_venue = str(event.get("execution_venue") or "").strip().lower()
+    return not event_venue or event_venue == target_venue
+
+
+def _payload_execution_venue(payload: dict[str, Any]) -> str:
+    candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    return str(
+        payload.get("execution_venue")
+        or candidate.get("execution_venue")
+        or metadata.get("execution_venue")
+        or "public_primary"
+    ).strip().lower()
 
 
 def format_live_health(report: dict[str, Any]) -> str:

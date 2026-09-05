@@ -1,7 +1,7 @@
 # Short Strangle Experiment: Current State and Target
 
-Updated: 2026-09-04 after the natural close
-Status: `FRIDAY_NO_GO`; remain shadow on 2026-09-08
+Updated: 2026-09-05 after bounded blocker repair
+Status: dated `FRIDAY_NO_GO` remains authoritative; repair is ready for a new pilot gate
 
 ## Stable picture
 
@@ -197,6 +197,26 @@ The known action for `FRIDAY_NO_GO` is to leave the Sheet unchanged and remain i
 shadow on Tuesday, 2026-09-08. No Obsidian decision packet is required. A later
 pilot needs a new explicit plan after the two failed gates are repaired and proven
 against current broker/account evidence.
+
+## Post-decision repair — 2026-09-05
+
+Both Friday code blockers have bounded repairs while the operator row remains
+`mode=shadow`, `csa_stage=shadow`:
+
+1. Tastytrade account parsing now uses `derivative-buying-power` for option
+   capacity and `used-derivative-buying-power` (with maintenance requirement as
+   fallback) for current usage. It no longer mistakes `margin-equity` for margin
+   consumption or silently skips a legitimate zero. The current production
+   readback is `$15,200` net liquidation, `$15,200` derivative buying power,
+   zero used derivative buying power, zero positions, and no pending cash.
+2. Every live entry health decision now receives the ticket's frozen execution
+   venue. Venue-local order/exit/quote failures block that venue only; unresolved
+   reconciliation and the shared portfolio/risk-manager controls remain global.
+
+The dated Friday decision is intentionally not rewritten after the fact. Before
+any new pilot plan, re-run the current policy, reconciliation, overlap, account,
+exact-leg dry-run BPR, and health gates. No code repair changes the Sheet or
+submits an order.
 
 ## Target before pilot live
 

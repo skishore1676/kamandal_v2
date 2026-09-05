@@ -186,16 +186,33 @@ class TastytradeAdapter:
             ("net-liquidating-value", "net_liquidating_value", "account-value", "accountValue"),
             default=0.0,
         )
-        buying_power = _find_number(
+        buying_power_value = _find_optional_number(
             balance,
-            ("option-buying-power", "option_buying_power", "equity-buying-power", "cash-available-to-withdraw", "cash-balance"),
-            default=account_size,
+            (
+                "derivative-buying-power",
+                "option-buying-power",
+                "option_buying_power",
+                "sma-equity-option-buying-power",
+                "equity-buying-power",
+                "cash-available-to-withdraw",
+                "cash-balance",
+            ),
         )
-        margin_used = _find_number(
+        buying_power = account_size if buying_power_value is None else max(buying_power_value, 0.0)
+        used_derivative_buying_power = _find_optional_number(
             balance,
-            ("maintenance-requirement", "maintenance_requirement", "margin-equity", "margin_requirement"),
-            default=max(account_size - buying_power, 0.0),
+            ("used-derivative-buying-power", "used_derivative_buying_power"),
         )
+        maintenance_requirement = _find_optional_number(
+            balance,
+            ("maintenance-requirement", "maintenance_requirement", "margin-requirement", "margin_requirement"),
+        )
+        if used_derivative_buying_power is not None:
+            margin_used = used_derivative_buying_power
+        elif maintenance_requirement is not None:
+            margin_used = maintenance_requirement
+        else:
+            margin_used = max(account_size - buying_power, 0.0)
         return PortfolioState(
             account_size=account_size or buying_power,
             buying_power=buying_power or account_size,

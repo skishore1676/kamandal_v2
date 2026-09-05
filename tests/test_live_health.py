@@ -26,6 +26,7 @@ def _make_open_group_with_mark(
     trigger_progress: float = 100.0,
     pnl_mid: float | None = None,
     pnl_natural: float = 0.0,
+    execution_venue: str = "public_primary",
 ) -> None:
     store.save_live_position_group(
         group_id,
@@ -34,11 +35,13 @@ def _make_open_group_with_mark(
             "underlying": "AAPL",
             "playbook_id": "call_spread_test",
             "structure": "call_spread",
+            "execution_venue": execution_venue,
             "candidate": {
                 "candidate_id": "cand_1",
                 "idea_id": "idea_1",
                 "playbook_id": "call_spread_test",
                 "underlying": "AAPL",
+                "execution_venue": execution_venue,
             },
         },
     )
@@ -765,7 +768,13 @@ def test_entry_health_gate_allows_green_book(tmp_path: Path) -> None:
     assert gate["blocked"] is False
 
 
-def _failed_close_intent(store: LocalStore, group_id: str, ticket_hash: str) -> None:
+def _failed_close_intent(
+    store: LocalStore,
+    group_id: str,
+    ticket_hash: str,
+    *,
+    execution_venue: str = "public_primary",
+) -> None:
     store.save_live_order_intent(
         {
             "ticket_hash": ticket_hash,
@@ -776,6 +785,7 @@ def _failed_close_intent(store: LocalStore, group_id: str, ticket_hash: str) -> 
             "group_id": group_id,
             "intent_type": "close",
             "underlying": "AAPL",
+            "execution_venue": execution_venue,
         },
         status="blocked_preflight_failed",
     )
@@ -817,6 +827,50 @@ def test_failed_close_stays_red_without_newer_no_exit_decision(tmp_path: Path) -
     assert report["overall"] == "RED"
     assert report["counts"]["failed_close_orders"] == 1
     assert entry_health_gate(store, {})["blocked"] is True
+
+
+def test_public_failed_close_does_not_block_tasty_entry_but_shared_reconciliation_does(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal_v2.db")
+    _make_open_group_with_mark(
+        store,
+        "group_public",
+        target_progress=20.0,
+        trigger_progress=100.0,
+        execution_venue="public_primary",
+    )
+    store.record_live_management_decision(
+        "group_public",
+        "close",
+        "max_loss",
+        {"group_id": "group_public", "action": "close", "reason": "max_loss"},
+    )
+    _failed_close_intent(store, "group_public", "public-failed-close")
+
+    public_gate = entry_health_gate(store, {}, execution_venue="public_primary")
+    tasty_gate = entry_health_gate(store, {}, execution_venue="tasty_primary")
+
+    assert public_gate["blocked"] is True
+    assert public_gate["entry_overall"] == "RED"
+    assert tasty_gate["blocked"] is False
+    assert tasty_gate["entry_overall"] == "GREEN"
+    assert tasty_gate["overall"] == "RED"
+    assert tasty_gate["excluded_other_venue_reasons"] == ["failed_preflight_close"]
+
+    store.save_live_reconciliation_issue(
+        {
+            "issue_id": "shared-reconciliation-blocker",
+            "issue_type": "broker_qty_mismatch",
+            "group_id": "group_public",
+            "underlying": "AAPL",
+            "execution_venue": "public_primary",
+            "status": "open",
+        },
+    )
+
+    tasty_gate = entry_health_gate(store, {}, execution_venue="tasty_primary")
+    assert tasty_gate["blocked"] is True
+    assert tasty_gate["entry_overall"] == "RED"
+    assert tasty_gate["reasons"] == ["reconciliation_blocker"]
 
 
 def test_superseded_failed_close_ignored_when_newer_close_ticket_exists(tmp_path: Path) -> None:

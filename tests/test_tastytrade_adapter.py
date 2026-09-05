@@ -29,6 +29,11 @@ class _Response:
 class _FakeSession:
     def __init__(self) -> None:
         self.requests: list[dict] = []
+        self.balance_payload = {
+            "net-liquidating-value": "25000",
+            "option-buying-power": "18000",
+            "maintenance-requirement": "7000",
+        }
 
     def post(self, url: str, **kwargs) -> _Response:
         self.requests.append({"method": "POST", "url": url, **kwargs})
@@ -39,7 +44,7 @@ class _FakeSession:
         if url.endswith("/customers/me/accounts"):
             return _Response({"data": {"items": [{"account": {"account-number": "5WT00000"}}]}})
         if url.endswith("/accounts/5WT00000/balances"):
-            return _Response({"data": {"net-liquidating-value": "25000", "option-buying-power": "18000", "maintenance-requirement": "7000"}})
+            return _Response({"data": self.balance_payload})
         if url.endswith("/accounts/5WT00000/positions"):
             return _Response({"data": {"items": [{"symbol": "SPY"}]}})
         if url.endswith("/accounts/5WT00000/orders/dry-run"):
@@ -129,6 +134,25 @@ def test_tastytrade_account_state_fetches_oauth_and_account(tmp_path) -> None:
     assert token_request["headers"]["User-Agent"] == "kamandal-v2/0.1"
     assert "Accept-Version" not in token_request["headers"]
     assert stat.S_IMODE((tmp_path / "session.json").stat().st_mode) == 0o600
+
+
+def test_tastytrade_account_state_uses_derivative_capacity_and_preserves_zero_usage(tmp_path) -> None:
+    adapter = _adapter(tmp_path)
+    adapter._session.balance_payload = {
+        "net-liquidating-value": "15200",
+        "derivative-buying-power": "15200",
+        "equity-buying-power": "30400",
+        "used-derivative-buying-power": "0.0",
+        "maintenance-requirement": "0.0",
+        "margin-equity": "15200",
+    }
+
+    account = adapter.account_state()
+
+    assert account.account_size == 15200.0
+    assert account.buying_power == 15200.0
+    assert account.bpr_used == 0.0
+    assert account.positions_count == 1
 
 
 def test_tastytrade_preflight_builds_open_option_order(tmp_path) -> None:

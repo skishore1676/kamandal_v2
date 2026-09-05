@@ -104,6 +104,38 @@ def _broker_for_ticket(config: dict[str, Any], ticket: dict[str, Any], default: 
     return broker_adapter(config, execution_venue=venue)
 
 
+def _entry_health_gate_for_tickets(
+    config: dict[str, Any],
+    store: LocalStore,
+    tickets: list[dict[str, Any]],
+) -> dict[str, Any]:
+    venues = sorted({ticket_execution_venue(config, ticket) for ticket in tickets})
+    if not venues:
+        return entry_health_gate(store, config)
+    gates = [entry_health_gate(store, config, execution_venue=venue) for venue in venues]
+    blocked_gates = [gate for gate in gates if gate.get("blocked")]
+    selected = dict(blocked_gates[0] if blocked_gates else gates[0])
+    selected["blocked"] = bool(blocked_gates)
+    selected["execution_venues"] = venues
+    selected["venue_gates"] = {
+        str(gate.get("execution_venue") or ""): {
+            "blocked": bool(gate.get("blocked")),
+            "entry_overall": str(gate.get("entry_overall") or gate.get("overall") or ""),
+            "reasons": list(gate.get("reasons") or []),
+        }
+        for gate in gates
+    }
+    if blocked_gates:
+        selected["reasons"] = list(
+            dict.fromkeys(
+                reason
+                for gate in blocked_gates
+                for reason in gate.get("reasons") or []
+            )
+        )
+    return selected
+
+
 def execute_live_approved(
     config: dict[str, Any],
     *,
@@ -207,7 +239,11 @@ def execute_live_approved(
                     "source": "stage_authorized_ledger",
                 }
             _assert_submit_allowed(config, submit=submit)
-            gate = entry_health_gate(store, config)
+            gate = entry_health_gate(
+                store,
+                config,
+                execution_venue=ticket_execution_venue(config, ticket),
+            )
             if submit and gate["blocked"]:
                 return {
                     "action": action,
@@ -254,7 +290,12 @@ def execute_live_approved(
     cluster_capped: dict[str, str] = {}
     underlying_capped: dict[str, int] = {}
     if submit and not close:
-        gate = entry_health_gate(store, config)
+        gate_tickets = [
+            ticket
+            for row in rows[:1]
+            for ticket in _tickets_from_row(row, close=False)
+        ]
+        gate = _entry_health_gate_for_tickets(config, store, gate_tickets)
         risk_manager = gate.get("risk_manager") or {}
         if bool(risk_manager.get("enabled")):
             store.event("risk_manager_entry_gate_decision", {"gate": gate, "risk_manager": risk_manager})
@@ -859,11 +900,6 @@ def _advance_plan_fallbacks(config: dict[str, Any], store: LocalStore) -> list[d
             if not _fallback_basket_cap_allows(config, store, campaign_id, decision.plan_id):
                 decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, "max_live_baskets_per_day_reached"))
                 continue
-            gate = entry_health_gate(store, config)
-            if gate.get("blocked"):
-                reason = "blocked_live_health_red:" + ",".join(gate.get("reasons") or [])
-                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, reason))
-                continue
             tickets = [
                 ticket
                 for ticket_hash in decision.ticket_hashes
@@ -871,6 +907,11 @@ def _advance_plan_fallbacks(config: dict[str, Any], store: LocalStore) -> list[d
             ]
             if len(tickets) != len(decision.ticket_hashes):
                 decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, "blocked_fallback_tickets_missing"))
+                continue
+            gate = _entry_health_gate_for_tickets(config, store, tickets)
+            if gate.get("blocked"):
+                reason = "blocked_live_health_red:" + ",".join(gate.get("reasons") or [])
+                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, reason))
                 continue
             submission_gate = _fallback_submission_gate(config, tickets, gate=gate)
             if submission_gate:
