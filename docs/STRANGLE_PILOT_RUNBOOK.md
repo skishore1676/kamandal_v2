@@ -73,6 +73,11 @@ one shadow week proves positive strategy expectancy.
 
 ## Calendar and wakeups
 
+The finite heartbeat `arm-tuesday-strangle-pilot` has exactly two scheduled
+wakeups on 2026-09-08: 07:45 CT for the conditional pre-snapshot Sheet gate and
+14:45 CT for readback and return-to-shadow. It may edit only the two stage/mode
+cells described here and must never trigger a trading job or broker action.
+
 - Monday, August 31 through Thursday, September 3: inspect each natural day's
   policy snapshot, planner funnel, fill campaign, BPR source, health, and broker
   effects. Keep the row shadow.
