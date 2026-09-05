@@ -820,6 +820,8 @@ Return JSON only:
 
 Each item in exact_packages has:
 {{"complete":true,"blocker":null,"displayed_price":{{"amount":"2.95","effect":"debit"}},"legs":[{{"quantity":1,"expiration":"Sep 18 2026","strike":"115","option_type":"put","order_code":"BTO"}}],"field_provenance":["text","image:1"]}}
+quantity is always a positive integer magnitude, never a signed position count.
+Encode buy/sell and open/close only in order_code (BTO, STO, BTC, STC).
 Return exactly one episode for every signal_id. Do not add fields outside this schema.
 """
 
