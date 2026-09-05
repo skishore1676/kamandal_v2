@@ -11,6 +11,8 @@ The signed-in X browser is available. On September 5, direct browser inspection 
 - [Greg's September 2 HAL/COP post](https://x.com/harmongreg/status/2095239465744716107) says he added September 38 HAL calls and September 138/144 COP call spreads. These are two source opportunities.
 - [Mike's September 2 mixed post](https://x.com/TraderMikeyB/status/2095183216424419546) separates a DELL calendar close, new SNOW calendars, and a new GLD call crab, with two attached images. Text-only capture cannot prove all exact legs.
 
+The first image of Mike's post was also visually inspected in the browser. Its GLD package shows short two October 16 430 calls, long one October 16 450 call, and long one November 20 410 call, with an 8.58 debit and the explicit comment "long-term bullish with CRAB setup." This directly supports the bullish interpretation. It also illustrates why adding a named strategy is more than adding a label: this package spans two expirations and unequal ratios. The displayed dates omit the year; the source post is dated September 2, 2026.
+
 These are spot checks of familiar examples, not a fresh benchmark. Browser verification should ground labels and resolve missing context; it should not become another production collector alongside Birdclaw.
 
 ## Proposed finite experiment

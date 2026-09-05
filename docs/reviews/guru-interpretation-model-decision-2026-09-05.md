@@ -1,6 +1,6 @@
 # Greg and Mike interpretation: model and machinery decision
 
-September 5, 2026. Local evaluation and proposed changes; not deployed.
+September 5, 2026. Historical evaluation report. The fixes were subsequently deployed with operator approval; see the [deployment receipt](guru-interpretation-deployment-2026-09-05.md). The experiment below describes the pre-deployment evaluation.
 
 **Use Astra at low reasoning as the next candidate for the shared source interpreter.** The strongest improvement came from supplying source conventions, keeping images available, and fixing the adapters around the model. There is no evidence from this experiment that a multi-agent workflow or high/extra-high reasoning is necessary.
 
