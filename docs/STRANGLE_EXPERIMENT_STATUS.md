@@ -227,17 +227,23 @@ overlap, health, quote, BPR, and broker preflight gates passing. The transition 
 deliberately staged:
 
 1. Keep `short_strangle_high_iv` at `mode=shadow`, `csa_stage=shadow` through the
-   holiday and the first Tuesday natural shadow-planning run.
-2. Require that natural run to produce a reviewable exact-leg candidate with a
-   fresh production Tastytrade dry-run. Do not manufacture a candidate or trigger
-   a planner/executor cycle by hand.
-3. If every current gate passes, change only the operator cells to `mode=live`,
-   `csa_stage=pilot_live` before the next natural planner. All other Sheet policy,
-   one-contract sizing, the `$2,500` per-order cap, concentration controls, and
-   broker protections remain unchanged.
+   Monday market holiday.
+2. Before Tuesday's immutable daily policy snapshot, verify the deployed version,
+   current Sheet policy, Tastytrade account/capacity, reconciliation, overlap, and
+   current health. If every static gate passes, change only the operator cells to
+   `mode=live`, `csa_stage=pilot_live`. All other Sheet policy, one-contract
+   sizing, the `$2,500` per-order cap, concentration controls, and broker
+   protections remain unchanged.
+3. Let the normal 08:50 CT and later planners obtain fresh quotes, build a
+   qualifying candidate, and obtain exact-leg production Tastytrade dry-run BPR.
+   The normal executor must then pass every dynamic broker, BPR, portfolio,
+   concentration, earnings, health, and execution-window gate. Do not manufacture
+   a candidate or trigger a planner/executor cycle by hand.
 4. Let the normal planner and executor reserve and work at most one lifecycle.
-   If no candidate qualifies or any gate fails, keep the Sheet shadow. If no
-   canary is reserved by the final entry window, return both cells to shadow.
+   If no candidate qualifies or any gate fails, no order is submitted. After the
+   final entry window, return both Sheet cells to shadow so the authorization does
+   not roll into another trading day; frozen lifecycle management remains owned by
+   Kamandal.
 
 ## Target before pilot live
 

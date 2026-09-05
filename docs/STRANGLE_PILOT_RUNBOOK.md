@@ -11,13 +11,20 @@ for Tuesday, 2026-09-08 after the two blockers behind the dated Friday `NO_GO`
 were repaired. The Friday result remains historical truth; this is a new pilot
 plan, not a retroactive change to that decision.
 
-The operator row must stay `mode=shadow`, `csa_stage=shadow` until a fresh
-Tuesday natural shadow-planning run has produced a reviewable exact-leg candidate
-and Tastytrade dry-run, and every Tuesday gate below is green. Only then may the
-two operator cells change to `mode=live`, `csa_stage=pilot_live`. The next natural
-planner and executor may reserve and work at most one qualifying short-strangle
-lifecycle. If there is no qualifying candidate or any gate fails, the row stays
-shadow and no broker order is submitted.
+The operator row must stay `mode=shadow`, `csa_stage=shadow` through the Monday
+market holiday. Before Tuesday's immutable daily policy snapshot, the current
+deployed-version, Sheet-policy, account, reconciliation, overlap, and health gates
+must be green. Only then may the two operator cells change to `mode=live`,
+`csa_stage=pilot_live`. Fresh quote, candidate, exact-leg Tastytrade dry-run BPR,
+concentration, portfolio, earnings, and execution-window gates remain owned by the
+normal planner and executor. They must all pass before any broker submission.
+
+This ordering is deliberate: Kamandal freezes Sheet policy once per trading day,
+so an edit after the first planner would not take effect until the next trading
+day. Sheet arming authorizes Tuesday's natural engine to consider the canary; it
+does not assert that a candidate exists or bypass the dynamic execution gates. If
+there is no qualifying candidate or any dynamic gate fails, no broker order is
+submitted.
 
 This authorization does not permit discretionary orders, more than one canary
 lifecycle, a quantity above one contract per leg, another strategy promotion,
@@ -31,7 +38,7 @@ earnings, or execution-window gate.
 | `SHADOW_COLLECTING` | Row remains shadow while natural jobs produce evidence. | Friday checklist may set `FRIDAY_GO` or `FRIDAY_NO_GO`. |
 | `FRIDAY_GO` | Machinery passed; this is permission to perform Tuesday final checks, not permission to submit early. | Tuesday final checks may set `PILOT_ARMED`; any failed check returns to shadow. |
 | `FRIDAY_NO_GO` | At least one required gate failed. | Stay shadow. A later pilot needs a new explicit plan. |
-| `REPAIR_VERIFIED_AWAITING_TUESDAY_GATES` | The two Friday code blockers are repaired and the operator has authorized a new bounded attempt. The Sheet is still shadow. | A fresh Tuesday natural shadow plan plus all current gates may set `PILOT_ARMED`; otherwise stay shadow. |
+| `REPAIR_VERIFIED_AWAITING_TUESDAY_GATES` | The two Friday code blockers are repaired and the operator has authorized a new bounded attempt. The Sheet is still shadow. | Fresh Tuesday pre-snapshot static gates may set `PILOT_ARMED`; otherwise stay shadow. |
 | `PILOT_ARMED` | On September 8 only, the row is `mode=live`, `csa_stage=pilot_live`. | The normal planner may reserve one qualifying lifecycle. |
 | `CANARY_RESERVED` | The unified engine has created the one pilot lifecycle. | Normal executor may work that lifecycle; no second lifecycle is allowed for the same pilot policy. |
 | `PILOT_OBSERVING` | Order is working, filled, managed, closed, rejected, or expired. | Retain receipts and recommend continue, modify, or return to shadow. No automatic expansion. |
@@ -74,11 +81,14 @@ one shadow week proves positive strategy expectancy.
 - Friday, September 4 after the natural report: record one explicit `GO` or
   `NO_GO` with failed gate names and evidence paths. `NO_GO` means stay shadow.
 - Monday, September 7: US market holiday; do not promote or submit.
-- Tuesday, September 8: let the 08:50 CT unified planner run naturally in shadow.
-  After it finishes, require a fresh reviewable exact-leg candidate and
-  Tastytrade dry-run, then independently re-run current-account, policy, health,
-  quote, BPR, overlap, reconciliation, execution-window, and deployed-version
-  gates. Promote only before the next natural planner if every gate is green.
+- Tuesday, September 8 before the daily policy snapshot: independently re-run
+  deployed-version, current-account, Sheet-policy, health, overlap, and
+  reconciliation gates. Promote only if every static gate is green. Do not
+  trigger a planner, executor, report, or broker cycle by hand.
+- At 08:50 CT and later natural windows: require the normal engine to obtain fresh
+  quotes, construct a qualifying candidate, obtain usable exact-leg Tastytrade
+  dry-run BPR, and pass every remaining portfolio, concentration, earnings,
+  broker, health, and execution-window gate before submission.
 - After promotion: let the normal planner and executor own selection and
   submission. Observe the resulting lifecycle through normal reporting. The
   canary reservation prevents a second lifecycle for that pilot policy.
