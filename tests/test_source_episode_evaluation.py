@@ -72,3 +72,19 @@ def test_score_fails_hard_gate_for_false_entry_and_invented_media_package() -> N
     assert score["false_new_entry_count"] == 1
     assert score["invented_media_package_count"] == 1
     assert score["hard_gate_pass"] is False
+
+
+def test_model_evaluation_uses_separate_metering_lane(monkeypatch):
+    import pytest
+    captured = {}
+    class StopBeforeModel(Exception):
+        pass
+    def client(**kwargs):
+        captured.update(kwargs)
+        raise StopBeforeModel
+    monkeypatch.setattr(MODULE, "BrokerJsonClient", client)
+    with pytest.raises(StopBeforeModel):
+        MODULE._run_model("gpt-5.6-terra", 1, [], reasoning_effort="medium")
+    assert captured["lane_id"] == "kamandal_evaluation"
+    from kamandal_v2.intelligence.llm_client import BrokerJsonClient
+    assert BrokerJsonClient().lane_id == "kamandal"

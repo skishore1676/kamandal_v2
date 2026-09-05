@@ -44,7 +44,9 @@ class BrokerJsonClient:
         timeout_seconds: int = 300,
         fallback: JsonLlmClient | None = None,
         binding: Any | None = None,
+        lane_id: str = "kamandal",
     ) -> None:
+        self.lane_id = lane_id
         self.actor = actor
         self.timeout_seconds = timeout_seconds
         self.policy_path = resolve_path(PROJECT_ROOT) / ".agent-broker.yaml"
@@ -93,7 +95,7 @@ class BrokerJsonClient:
         )
 
         broker = AgentBroker(load_policy(self.policy_path))
-        spec = AgentSpec(lane_id="kamandal", actor=self.actor, role=self.actor)
+        spec = AgentSpec(lane_id=self.lane_id, actor=self.actor, role=self.actor)
         task = AgentTask(
             task_id=f"kamandal-{self.actor}-{uuid.uuid4().hex[:8]}",
             objective=f"{self.actor}: produce the requested JSON.",

@@ -294,6 +294,7 @@ def _run_model(
     )
     client = BrokerJsonClient(
         actor="source_episode_interpreter",
+        lane_id="kamandal_evaluation",
         timeout_seconds=600,
         binding=binding,
     )

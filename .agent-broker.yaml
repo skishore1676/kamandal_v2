@@ -20,3 +20,7 @@ lanes:
       observed_package_extractor: {brain: balanced}
       source_episode_interpreter: {brain: balanced}
       rejection_reviewer: {brain: balanced}
+
+  kamandal_evaluation:
+    actors:
+      source_episode_interpreter: {brain: balanced}
