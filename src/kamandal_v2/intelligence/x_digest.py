@@ -53,6 +53,7 @@ class XDigestImportResult:
     symbol_hits: dict[str, int]
     source_contract: str
     freshness: dict[str, Any]
+    skipped_dedicated_source_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,6 +69,7 @@ class XDigestImportResult:
             "symbol_hits": dict(self.symbol_hits),
             "source_contract": self.source_contract,
             "freshness": dict(self.freshness),
+            "skipped_dedicated_source_count": self.skipped_dedicated_source_count,
         }
 
 
@@ -85,6 +87,7 @@ def import_x_digest(
     since_hours: int = 96,
     include_resurfaced: bool = False,
     birdclawctl: str | Path | None = None,
+    excluded_authors: Iterable[str] = (),
 ) -> XDigestImportResult:
     """Read Birdclaw's canonical X digest export and emit LLM source docs.
 
@@ -122,6 +125,13 @@ def import_x_digest(
         records, skipped_resurfaced, resolved_db, freshness = export
         source_contract = "birdclawctl.export.digest.v1"
 
+    excluded = {str(author).lower().lstrip("@") for author in excluded_authors}
+    dedicated = [record for record in records if record.author.lower().lstrip("@") in excluded
+                 or any(record.url.lower().startswith(f"https://{host}/{author}/")
+                        for author in excluded for host in ("x.com", "twitter.com"))]
+    excluded_ids = {record.source_id for record in dedicated}
+    records = [record for record in records if record.source_id not in excluded_ids]
+
     today = run_date or date.today()
     output_root = resolve_path(output_dir) / today.isoformat()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -131,9 +141,13 @@ def import_x_digest(
     grouped = _group_by_source(records, normalized_sources)
     source_doc_paths: list[Path] = []
     for source, source_records in grouped.items():
-        if not source_records:
-            continue
         path = output_root / f"x_{_safe_name(source)}.txt"
+        if not source_records:
+            # This generated source file is replaced on each import. Do not
+            # leave yesterday's/earlier-run guru text for generic extraction.
+            if path.exists():
+                path.write_text("", encoding="utf-8")
+            continue
         path.write_text(_source_doc_text(resolved_db, state_path, source, source_records), encoding="utf-8")
         source_doc_paths.append(path)
 
@@ -158,6 +172,7 @@ def import_x_digest(
         symbol_hits=symbol_hits,
         source_contract=source_contract,
         freshness=freshness,
+        skipped_dedicated_source_count=len(dedicated),
     )
 
 
@@ -508,3 +523,20 @@ def _format_counts(counts: dict[str, int]) -> str:
 def _safe_name(raw: str) -> str:
     safe = "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in raw.strip().lower())
     return safe or "x"
+
+
+def correspondent_author_handles(config: dict[str, Any]) -> set[str]:
+    """Configured source ownership survives observe/off settings; no generic bypass."""
+    from kamandal_v2.intelligence.correspondent_signals import load_correspondent_profile
+    handles: set[str] = set()
+    settings = (config.get("source_intelligence") or {}).get("correspondents") or {}
+    for item in settings.get("profiles") or []:
+        if not item.get("profile_path"):
+            continue
+        profile, _ = load_correspondent_profile(item["profile_path"])
+        for handle in profile.get("source_author_handles") or []:
+            handle = str(handle).lower().lstrip("@")
+            if not re.fullmatch(r"[a-z0-9_]{1,15}", handle):
+                raise ValueError("invalid source_author_handles entry")
+            handles.add(handle)
+    return handles

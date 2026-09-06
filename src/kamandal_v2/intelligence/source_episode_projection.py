@@ -113,7 +113,7 @@ def project_source_episode_compilation(
                         compilation=compilation,
                     )
                 exact_packages.extend(projected)
-                failures.extend(exact_failures)
+                failures.extend({**failure, "post_ref": post_ref} for failure in exact_failures)
                 event_reasons.extend(item["reason"] for item in exact_failures)
 
             observations.append(

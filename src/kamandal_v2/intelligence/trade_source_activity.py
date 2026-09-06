@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Any
 
 from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER
@@ -56,8 +57,22 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
         key=lambda item: (str(item.get("observed_at") or item.get("_created_at") or ""), str(item.get("output_id") or "")),
         reverse=True,
     )[: max(int(limit), 1)]
+    lifecycles = store.source_activity_lifecycles(
+        idea_ids={str(item.get("planner_idea_id") or "") for item in records},
+        revision_ids={str(item.get("output_id") or "") for item in records if item.get("classification") == "exact_package"},
+    )
     rows: list[list[Any]] = []
     for item in records:
+        raw = item.get("normalized_output") or {}
+        raw = raw if isinstance(raw, dict) else {}
+        matched = []
+        for lifecycle in lifecycles:
+            identity = (lifecycle.get("metadata") or {}).get("source_identity") or {}
+            if ((item.get("planner_idea_id") and identity.get("idea_id") == item["planner_idea_id"])
+                or (item.get("classification") == "exact_package" and identity.get("evidence_revision_id") == item.get("output_id"))):
+                matched.append(lifecycle)
+        matched.sort(key=lambda value: (str(value.get("updated_at") or ""), str(value.get("lifecycle_id") or "")))
+        post_id = str(item.get("post_ref") or "").removeprefix("x-post:")
         normalized = item.get("normalized_output")
         if not isinstance(normalized, str):
             normalized = json.dumps(normalized, sort_keys=True, separators=(",", ":"), default=str)
@@ -69,9 +84,9 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
             "acquisition_status": item.get("acquisition_status") or "missing",
             "classification": item.get("classification") or "residual",
             "normalized_output": normalized,
-            "action": item.get("action") or "",
-            "symbol": item.get("symbol") or "",
-            "structure": item.get("structure") or "",
+            "action": item.get("action") or raw.get("action") or "",
+            "symbol": item.get("symbol") or raw.get("symbol") or raw.get("underlying") or "",
+            "structure": item.get("structure") or raw.get("structure") or raw.get("structure_hint") or "",
             "link_status": item.get("link_state") or item.get("link_status") or "",
             "evidence_status": item.get("evidence_status") or "",
             "interpretation_confidence": (
@@ -83,6 +98,14 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
             "planner_disposition": item.get("planner_disposition") or "observed",
             "effective_mode": item.get("effective_mode") or "observe",
             "reason": item.get("reason") or "",
+            "source_url": f"https://x.com/i/status/{post_id}" if post_id.isdigit() else "",
+            "interpretation": _interpretation(raw),
+            "lifecycle_status": "; ".join(
+                f"{(life.get('metadata') or {}).get('execution_mode', 'unknown')}:{life.get('status', 'unknown')}"
+                for life in matched
+            ) or "no_linked_lifecycle",
+            "lifecycle_ids": "; ".join(str(life.get("lifecycle_id") or "") for life in matched),
+            "last_update": max([str(item.get("_created_at") or ""), *[str(life.get("updated_at") or "") for life in matched]], key=_timestamp),
         }
         rows.append([row[column] for column in TRADE_SOURCE_ACTIVITY_HEADER])
     return rows
@@ -99,3 +122,22 @@ def project_trade_source_activity(
         activity_rows(store, limit=limit),
         TRADE_SOURCE_ACTIVITY_HEADER,
     )
+
+
+def _interpretation(raw: dict[str, Any]) -> str:
+    thesis = str(raw.get("thesis") or raw.get("summary") or raw.get("reason") or "")
+    legs = raw.get("legs") or []
+    if legs:
+        terms = []
+        for leg in legs:
+            code = leg.get("order_code") or f"{leg.get('side', '')} {leg.get('effect', '')}".strip()
+            terms.append(f"{code} {leg.get('quantity', '')} {leg.get('expiration', '')} {leg.get('strike', '')} {leg.get('option_type', '')}".strip())
+        return "; ".join(filter(None, [thesis, *terms]))
+    return thesis
+
+
+def _timestamp(value: str) -> datetime:
+    if not value:
+        return datetime.min.replace(tzinfo=UTC)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)

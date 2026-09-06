@@ -509,8 +509,10 @@ def _record_exact_outputs(
             {
                 "observed_at": "",
                 "source_id": source_id,
-                "post_ref": str(failure.get("source_id") or ""),
-                "output_id": str(failure.get("source_id") or ""),
+                "post_ref": str(failure.get("post_ref") or failure.get("source_id") or ""),
+                "output_id": "exact_residual_" + hashlib.sha256(
+                    f"{failure.get('source_id')}|{failure.get('reason')}".encode()
+                ).hexdigest()[:24],
                 "acquisition_status": acquisition_status,
                 "classification": "residual",
                 "normalized_output": failure,

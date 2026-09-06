@@ -141,6 +141,11 @@ TRADE_SOURCE_ACTIVITY_HEADER = [
     "planner_disposition",
     "effective_mode",
     "reason",
+    "source_url",
+    "interpretation",
+    "lifecycle_status",
+    "lifecycle_ids",
+    "last_update",
 ]
 
 DAILY_PLAN_HEADER = [

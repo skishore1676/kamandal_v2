@@ -309,7 +309,18 @@ def write_trade_source_activity(
     client = GoogleSheetClient.from_config(config)
     tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
     title = str(tab_names.get("trade_source_activity") or "trade_source_activity")
-    return client.replace_tab(title, header=header, rows=rows)
+    # One RAW values write avoids a transient empty dashboard and keeps source
+    # text from becoming executable Sheet formulas. Preserve formatting and
+    # columns outside this machine-owned projection.
+    worksheet = client._worksheet(title, rows=max(len(rows) + 10, 100), cols=max(len(header), 26))
+    values = [list(header), *[list(row) for row in rows]]
+    values.extend([[""] * len(header) for _ in range(worksheet.row_count - len(values))])
+    client._retry(
+        lambda: worksheet.update(range_name=f"A1:{_col_letter(len(header))}{len(values)}",
+                                 values=values, value_input_option="RAW"),
+        operation="replace trade source activity",
+    )
+    return len(rows)
 
 
 def write_daily_plan(

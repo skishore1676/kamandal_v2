@@ -228,6 +228,13 @@ def daily_report_job(args: argparse.Namespace) -> int:
     store_path = resolve_path("data/kamandal_v2.db")
     output_dir = resolve_path("data/reports")
     result = write_daily_report(store_path, output_dir=output_dir, config=config)
+    # Reuse the existing passive daily report schedule to read back management
+    # outcomes. A projection failure must not block any report or money path.
+    try:
+        from kamandal_v2.intelligence.trade_source_activity import project_trade_source_activity
+        activity = {"status": "succeeded", "rows": project_trade_source_activity(config, LocalStore(store_path, read_only=True))}
+    except Exception as exc:  # noqa: BLE001 - independently retryable observation.
+        activity = {"status": "failed_non_blocking", "error": f"{type(exc).__name__}: {exc}"}
     level = "info" if result.report.get("status", {}).get("level") in ("GREEN", "YELLOW") else "error"
     # Reports are passive evidence, not operator attention. The JSON/Markdown
     # artifacts remain available to TradeLab and operator surfaces; Telegram is
@@ -242,6 +249,7 @@ def daily_report_job(args: argparse.Namespace) -> int:
             "markdown_path": str(result.markdown_path),
             "ryg_path": str(result.ryg_markdown_path),
             "strategy_evidence_paths": result.report.get("strategy_evidence_artifacts"),
+            "trade_source_activity": activity,
             "alert": None,
             "delivery_status": "local_artifact_only",
             "level": level,

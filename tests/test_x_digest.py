@@ -241,3 +241,28 @@ def test_import_x_digest_rejects_stale_birdclawctl_export(tmp_path) -> None:
             digest_dir=tmp_path / "digest",
             sources=["bookmarks"],
         )
+
+
+def test_dedicated_author_cannot_enter_generic_digest_or_leave_stale_source_doc(tmp_path):
+    db_path = tmp_path / 'digest.db'
+    db = _create_digest_db(db_path)
+    _insert_post(db, source_id='1', text='Guru trade', source='timeline', run_id='run')
+    db.execute("UPDATE x_digest_posts SET author='TraderMikeyB',url='https://x.com/TraderMikeyB/status/1'")
+    db.commit(); db.close()
+    kwargs = dict(db_path=db_path, latest_state='', trial_root=tmp_path/'no-birdclaw', output_dir=tmp_path/'source', digest_dir=tmp_path/'digest')
+    initial = import_x_digest(**kwargs)
+    assert initial.record_count == 1
+    source_path = initial.source_doc_paths[0]
+    filtered = import_x_digest(**kwargs, excluded_authors={'@tradermikeyb'})
+    assert filtered.record_count == 0
+    assert filtered.skipped_dedicated_source_count == 1
+    assert source_path.read_text() == ''
+
+
+def test_configured_source_author_ownership_is_not_bypassed_when_disabled():
+    from kamandal_v2.intelligence.x_digest import correspondent_author_handles
+    config = {'source_intelligence': {'correspondents': {'enabled': False, 'profiles': [
+        {'profile_path': 'config/correspondents/greg_harmon.yaml', 'enabled': False},
+        {'profile_path': 'config/correspondents/mike_butler.yaml'},
+    ]}}}
+    assert correspondent_author_handles(config) == {'harmongreg', 'tradermikeyb'}

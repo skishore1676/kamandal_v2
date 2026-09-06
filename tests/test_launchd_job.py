@@ -344,12 +344,23 @@ def test_daily_report_stays_passive_without_telegram(monkeypatch, capsys, tmp_pa
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("daily report must stay off Telegram")),
     )
 
+    from kamandal_v2.intelligence import trade_source_activity
+    reads = []
+    monkeypatch.setattr(trade_source_activity, "project_trade_source_activity", lambda config, store: reads.append(store.read_only) or 12)
     assert launchd_job.daily_report_job(args) == 0
 
     payload = json.loads(capsys.readouterr().out.split("=", 1)[1])
     assert payload["status"] == "ok"
     assert payload["alert"] is None
     assert payload["delivery_status"] == "local_artifact_only"
+    assert reads == [True]
+    assert payload["trade_source_activity"] == {"status": "succeeded", "rows": 12}
+    def fail_projection(*args):
+        raise RuntimeError("Sheet unavailable")
+    monkeypatch.setattr(trade_source_activity, "project_trade_source_activity", fail_projection)
+    assert launchd_job.daily_report_job(args) == 0
+    failed = json.loads(capsys.readouterr().out.split("=", 1)[1])
+    assert failed["trade_source_activity"]["status"] == "failed_non_blocking"
 
 
 def test_health_attention_leaves_external_review_to_lathi() -> None:

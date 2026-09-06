@@ -1907,6 +1907,25 @@ class LocalStore:
         payload = json.loads(str(row["payload"]))
         return {**payload, "_created_at": str(row["created_at"])}
 
+    def source_activity_lifecycles(self, *, idea_ids: set[str], revision_ids: set[str]) -> list[dict[str, Any]]:
+        """Read current/closed lifecycle evidence for only the displayed source outputs."""
+        found: dict[str, dict[str, Any]] = {}
+        with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='csa_lifecycles'").fetchone() is None:
+                return []
+            for field, identifiers in (("idea_id", idea_ids), ("evidence_revision_id", revision_ids)):
+                ids = sorted(identifier for identifier in identifiers if identifier)
+                for start in range(0, len(ids), 400):
+                    chunk = ids[start:start + 400]
+                    marks = ",".join("?" for _ in chunk)
+                    rows = conn.execute(
+                        f"SELECT id, payload FROM csa_lifecycles WHERE "
+                        f"json_extract(payload, '$.metadata.source_identity.{field}') IN ({marks})", chunk,
+                    ).fetchall()
+                    for row in rows:
+                        found[str(row["id"])] = json.loads(row["payload"])
+        return list(found.values())
+
     def recent_events(self, event_types: tuple[str, ...], *, limit: int = 2000) -> list[dict[str, Any]]:
         if not event_types:
             return []

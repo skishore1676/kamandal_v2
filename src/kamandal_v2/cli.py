@@ -303,6 +303,10 @@ def main() -> None:
         help="Use profile rules instead of an LLM; fixture and historical replay only",
     )
 
+    activity_parser = subparsers.add_parser("project-trade-source-activity", help="Refresh only the observation Sheet from read-only retained evidence")
+    activity_parser.add_argument("--db", default="data/kamandal_v2.db")
+    activity_parser.add_argument("--limit", type=int, default=500)
+
     activate_correspondent_parser = subparsers.add_parser(
         "activate-correspondent-signals",
         help="Publish configured correspondent signals into the active planner idea lane",
@@ -489,6 +493,13 @@ def main() -> None:
             ),
         )
         print(json.dumps(result.to_dict(), indent=2))
+        return
+
+    if args.command == "project-trade-source-activity":
+        from kamandal_v2.intelligence.trade_source_activity import project_trade_source_activity
+        rows = project_trade_source_activity(load_control(), LocalStore(args.db, read_only=True), limit=args.limit)
+        print(json.dumps({"status": "succeeded", "rows": rows, "database_read_only": True,
+                          "model_calls": 0, "planner_run": False, "broker_effects": False}))
         return
 
     if args.command == "activate-correspondent-signals":
@@ -967,6 +978,7 @@ def main() -> None:
         print(json.dumps(result.to_dict(), indent=2))
         return
     if args.command == "import-x-digest":
+        from kamandal_v2.intelligence.x_digest import correspondent_author_handles
         x_config = ((config.get("source_intelligence") or {}).get("x_digest") or {})
         result = import_x_digest(
             db_path=args.db_path or x_config.get("db_path") or None,
@@ -980,6 +992,7 @@ def main() -> None:
             include_resurfaced=args.include_resurfaced,
             allowed_symbols=_universe_symbols(config, args.config_source) if args.filter_universe else None,
             birdclawctl=args.birdclawctl or x_config.get("birdclawctl") or None,
+            excluded_authors=correspondent_author_handles(config),
         )
         print(json.dumps(result.to_dict(), indent=2))
         return

@@ -1,5 +1,6 @@
 schema: kamandal.correspondent_profile.v1
 profile_id: mike_butler
+source_author_handles: [tradermikeyb]
 version: "3"
 source_profile_id: mike_butler
 interpretation_posture: explicit_only

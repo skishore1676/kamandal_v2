@@ -364,3 +364,7 @@ Implementation is incomplete until tests and deployed readback prove:
 
 The sentence to remember is: **two Sheet controls per source, reusable strategy
 capabilities, one Kamandal money path, and every output visible.**
+
+## Activated Tuesday contract (September 5 approval)
+
+The initial modes above are historical rollout defaults. The current operator-approved Sheet settings are **Greg ideas live, Greg exact shadow, Mike ideas live, Mike exact shadow**. See [Tuesday operating contract](reviews/guru-tuesday-readiness-2026-09-08.md) for daily tracking, source ownership, and verification. The Sheet remains authoritative; seeded defaults do not override it.
