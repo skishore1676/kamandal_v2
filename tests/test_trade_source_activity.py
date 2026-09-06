@@ -112,3 +112,12 @@ def test_exact_failure_retains_separate_idea_row_and_correct_post(tmp_path):
     assert len(rows) == 2
     assert {row['classification'] for row in rows} == {'idea', 'residual'}
     assert all(row['post_ref'] == 'x-post:123' for row in rows)
+
+
+def test_retained_legacy_receipt_has_readable_interpretation_without_reclassification(tmp_path):
+    store = LocalStore(tmp_path / "state.db")
+    store.event("trade_source_output_observed", {"output_id": "legacy", "classification": "residual", "effective_mode": "observe", "normalized_output": {"record": {"symbol": "GOOGL", "source_intent": {"reason": "Reports a bullish call crab."}}}})
+    row = dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, activity_rows(store)[0]))
+    assert row["interpretation"] == "Reports a bullish call crab."
+    assert row["symbol"] == "GOOGL"
+    assert row["classification"] == "residual" and row["effective_mode"] == "observe"

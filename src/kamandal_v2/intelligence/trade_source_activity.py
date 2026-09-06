@@ -65,6 +65,10 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
     for item in records:
         raw = item.get("normalized_output") or {}
         raw = raw if isinstance(raw, dict) else {}
+        # Retained pre-episode receipts nested the interpretation under record.
+        # Render that evidence faithfully without reinterpreting old decisions.
+        if isinstance(raw.get("record"), dict):
+            raw = raw["record"]
         matched = []
         for lifecycle in lifecycles:
             identity = (lifecycle.get("metadata") or {}).get("source_identity") or {}
@@ -86,7 +90,7 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
             "normalized_output": normalized,
             "action": item.get("action") or raw.get("action") or "",
             "symbol": item.get("symbol") or raw.get("symbol") or raw.get("underlying") or "",
-            "structure": item.get("structure") or raw.get("structure") or raw.get("structure_hint") or "",
+            "structure": item.get("structure") or raw.get("structure") or raw.get("structure_hint") or raw.get("strategy_family") or "",
             "link_status": item.get("link_state") or item.get("link_status") or "",
             "evidence_status": item.get("evidence_status") or "",
             "interpretation_confidence": (
@@ -125,7 +129,7 @@ def project_trade_source_activity(
 
 
 def _interpretation(raw: dict[str, Any]) -> str:
-    thesis = str(raw.get("thesis") or raw.get("summary") or raw.get("reason") or "")
+    thesis = str(raw.get("thesis") or raw.get("summary") or raw.get("reason") or (raw.get("source_intent") or {}).get("reason") or raw.get("source_text") or "")
     legs = raw.get("legs") or []
     if legs:
         terms = []
