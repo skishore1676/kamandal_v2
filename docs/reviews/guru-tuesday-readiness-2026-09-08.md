@@ -35,3 +35,11 @@ A standalone `kamandal project-trade-source-activity` command refreshes only the
 ## Verification boundary
 
 Source settings were changed only in `trade_sources!C3:D4`, then validated through the canonical oldmac Sheet policy compiler. Playbook, universe, risk, approval, and execution settings were untouched. Reprojection populates the Sheet from actual retained records; it does not relabel old records with today's permissions or imply a fresh interpretation. Tuesday's naturally captured posts and portfolio outcomes remain future observations, not preclaimed results.
+
+## Completed readback
+
+Functional code deployed on oldmac at `4562101`; the full runtime suite passed **862 tests**, followed by **43 focused tests** after the legacy-record rendering refinement. The canonical Sheet policy compiles successfully with hash `f57aa2be77dfffd076bdd11c87dfab291c3128ecb9fed3800d5977f90386f28c`. Two pre-existing diagonal-overlap warnings remain unchanged.
+
+The observation-only command successfully projected **473 retained outputs** (351 Greg, 122 Mike), verified row-for-row by output ID against the live Sheet. These existing records are residuals from the earlier pipeline, with their historical dates, meanings, and modes preserved. They are not fresh Astra outputs or evidence of new admissions. The view was checked in signed-in Chrome and formatted with frozen source columns, filters, readable interpretation/treatment columns, and raw evidence to the right. Current source permissions were independently read back as idea/live and exact/shadow for both gurus.
+
+Private verification files are in `outputs/guru-tuesday-readiness-20260905/`: `runtime-receipt.json`, `sheet-policy-enabled.json`, `deploy-tests.txt`, `final-readback.txt`, and `activity-refresh.json`. No model tokens or trading jobs were needed for this readiness activation and observation backfill.
