@@ -7,7 +7,7 @@ import pytest
 
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg
 from kamandal_v2.market.broker import broker_adapter
-from kamandal_v2.market.tastytrade import TastytradeAdapter, parse_tasty_option_symbol, tasty_option_symbol
+from kamandal_v2.market.tastytrade import TastytradeAdapter, parse_tasty_option_symbol, tasty_option_symbol, _order_response
 
 
 class _Response:
@@ -351,6 +351,18 @@ def test_tastytrade_atomic_replace_dry_runs_then_patches_with_pinned_order_versi
     assert order_requests[1]["url"].endswith("/accounts/5WT00000/orders/123")
     assert all(request["headers"]["Accept-Version"] == "20260427" for request in order_requests)
     assert order_requests[1]["json"]["external-identifier"] == "client-replacement"
+    assert "legs" not in order_requests[1]["json"]
+
+
+def test_tastytrade_replacement_stops_on_http_success_with_preflight_errors(tmp_path, monkeypatch) -> None:
+    adapter = _adapter(tmp_path)
+    monkeypatch.setattr(adapter, "_post", lambda *_args: {"data": {"errors": [{"code": "margin-check-failed"}]}})
+    writes = []
+    monkeypatch.setattr(adapter, "_patch", lambda *args: writes.append(args))
+    ticket = {"order_id": "replacement", "underlying": "QQQ", "intent_type": "open", "limit_price": "-1.25", "legs": [_leg().to_dict()]}
+    with pytest.raises(RuntimeError, match="replacement dry-run rejected"):
+        adapter.replace_order("123", ticket)
+    assert writes == []
 
 
 def test_tastytrade_order_response_normalizes_partial_fill_fields(tmp_path) -> None:
@@ -380,6 +392,47 @@ def test_tastytrade_order_response_normalizes_partial_fill_fields(tmp_path) -> N
         "averagePrice": "2.45",
         "updatedAt": "2026-08-23T15:00:00Z",
     }
+
+
+def test_tastytrade_fill_waits_for_all_legs_and_uses_actual_execution_prices():
+    def leg(symbol, action, price):
+        return {"symbol": symbol, "quantity": "1", "remaining-quantity": "0", "action": action,
+                "fills": [{"fill-price": str(price), "quantity": "1", "filled-at": "2026-09-08T14:10:00Z"}]}
+    order = {"id": 321, "status": "Filled", "price": "1.80", "legs": [
+        leg("XYZ   261016P00090000", "Sell to Open", .95),
+        leg("XYZ   261016C00110000", "Sell to Open", 1.10),
+    ]}
+    complete = _order_response({"data": order})
+    assert complete["status"] == "FILLED"
+    assert complete["averagePrice"] == 2.05
+    assert complete["filledQuantity"] == 1
+    order["legs"][1]["fills"] = []
+    pending = _order_response({"data": order})
+    assert pending["status"] == "FILL_PENDING_DETAILS"
+    assert "averagePrice" not in pending
+    order["legs"] = []
+    assert _order_response({"data": order})["status"] == "FILL_PENDING_DETAILS"
+
+
+def test_tastytrade_mixed_adjustment_fill_is_net_credit_not_sum_of_premiums():
+    order = {"id": 322, "status": "Filled", "legs": [
+        {"quantity": 1, "action": "Buy to Close", "fills": [{"fill-price": .5, "quantity": 1, "filled-at": "2026-09-08T14:10:00Z"}]},
+        {"quantity": 1, "action": "Sell to Open", "fills": [{"fill-price": .8, "quantity": 1, "filled-at": "2026-09-08T14:10:00Z"}]},
+    ]}
+    assert _order_response({"data": order})["averagePrice"] == .3
+
+
+def test_tastytrade_recovers_client_identity_without_posting(tmp_path, monkeypatch):
+    adapter = _adapter(tmp_path)
+    reads = []
+    def get(endpoint, *, params):
+        reads.append((endpoint, params))
+        return {"data": {"items": [{"id": 345, "status": "Live", "external-identifier": "client-1"}]}}
+    monkeypatch.setattr(adapter, "_get", get)
+    recovered = adapter.find_order_by_client_id("client-1", created_at="2026-09-08T14:00:00Z")
+    assert recovered["orderId"] == "345"
+    assert len(reads) == 1
+    assert adapter._session.requests == []
 
 
 def test_tastytrade_live_order_fails_closed_without_explicit_account(tmp_path) -> None:

@@ -41,7 +41,7 @@ def _seed_playbook(playbook_id: str) -> dict[str, object]:
     raise AssertionError(f"seed playbook missing: {playbook_id}")
 
 
-def test_trade_source_policy_requires_one_pair_and_blocks_exact_live() -> None:
+def test_trade_source_policy_requires_one_pair_and_scopes_exact_live() -> None:
     valid = compile_trade_source_policies(_source_rows(), required_source_ids=("greg_harmon", "mike_butler"))
     assert valid.ok
     assert valid.by_key()[("mike_butler", TradeSourceOutputKind.EXACT_PACKAGE)].mode is TradeSourceMode.SHADOW
@@ -52,7 +52,13 @@ def test_trade_source_policy_requires_one_pair_and_blocks_exact_live() -> None:
     exact_live = _source_rows()
     exact_live[-1] = {**exact_live[-1], "mode": "live"}
     rejected = compile_trade_source_policies(exact_live)
-    assert any("cannot be live" in error for error in rejected.errors)
+    assert any("requires explicit live_structures" in error for error in rejected.errors)
+    exact_live[-1]["live_structures"] = "short_strangle"
+    scoped = compile_trade_source_policies(exact_live)
+    assert scoped.ok
+    policy = scoped.by_key()[("mike_butler", TradeSourceOutputKind.EXACT_PACKAGE)]
+    assert policy.mode_for_structure("short_strangle") is TradeSourceMode.LIVE
+    assert policy.mode_for_structure("call_diagonal") is TradeSourceMode.SHADOW
 
 
 def test_source_mode_is_a_ceiling_over_existing_playbook_mode() -> None:

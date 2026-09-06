@@ -108,6 +108,7 @@ TRADE_SOURCES_HEADER = [
     "output_kind",
     "mode",
     "notes",
+    "live_structures",
 ]
 
 TRADE_SOURCE_ACTIVITY_HEADER = [

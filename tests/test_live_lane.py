@@ -1274,7 +1274,7 @@ def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_p
     assert written == {}
 
 
-def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypatch) -> None:
+def test_live_execute_retains_uncertain_submission_without_reposting(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
     store = LocalStore(tmp_path / "kamandal.db")
     result = run_live_advisory_plan(
@@ -1297,7 +1297,8 @@ def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypa
             return PreflightResult(ok=True, bpr=50.0, message="ok")
 
         def place_order_ticket(self, _ticket):
-            raise RuntimeError("broker rejected payload")
+            assert store.live_order_intent(_ticket["ticket_hash"])["_ledger_status"] == "submit_uncertain"
+            raise TimeoutError("broker response was lost")
 
     live_control = _live_control()
     live_control["runtime"]["mode"] = "live"
@@ -1309,10 +1310,9 @@ def test_live_execute_records_submit_failure_without_crashing(tmp_path, monkeypa
     executed = execute_live_approved(live_control, submit=True, store=store)
 
     assert executed["processed"] == 1
-    assert executed["results"][0]["status"] == "submit_failed"
+    assert executed["results"][0]["status"] == "submit_uncertain"
     retried = execute_live_approved(live_control, submit=True, store=store)
-    assert retried["processed"] == 1
-    assert retried["results"][0]["reason"] == "basket_ticket_failed:submit_failed"
+    assert retried["results"][0]["status"] == "blocked"
     with sqlite3.connect(store.sqlite_path) as conn:
         assert conn.execute("SELECT count(*) FROM live_order_attempts WHERE ok = 0").fetchone()[0] == 1
 
@@ -3327,3 +3327,43 @@ def test_close_ticket_seed_salt_changes_order_identity() -> None:
     assert salted["ticket_hash"] == salted_again["ticket_hash"]
     assert salted["order_id"] != plain["order_id"]
     assert next_retry["order_id"] != salted["order_id"]
+
+
+def test_sync_recovers_uncertain_submission_without_reposting(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = _replacement_entry_ticket("uncertain-ticket", order_id="client-identity")
+    store.save_live_order_intent(ticket, status="submit_uncertain")
+    lookups = []
+
+    class RecoveryBroker:
+        def find_order_by_client_id(self, identifier, *, created_at):
+            lookups.append((identifier, created_at))
+            return {"orderId": "native-123", "status": "WORKING"}
+
+        def get_order(self, identifier):
+            assert identifier == "native-123"
+            return {"orderId": identifier, "status": "WORKING"}
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: RecoveryBroker())
+    sync_live_orders(_live_control(), store=store, manage_entries=False)
+    recovered = store.live_order_intent(ticket["ticket_hash"])
+    assert recovered["_ledger_status"] == "submitted"
+    assert recovered["broker_order_id"] == "native-123"
+    assert recovered["order_id"] == "client-identity"
+    sync_live_orders(_live_control(), store=store, manage_entries=False)
+    assert len(lookups) == 1
+
+
+def test_sync_keeps_unmatched_uncertain_submission_blocked(tmp_path, monkeypatch) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    ticket = _replacement_entry_ticket("uncertain-ticket", order_id="client-identity")
+    store.save_live_order_intent(ticket, status="submit_uncertain")
+
+    class RecoveryBroker:
+        def find_order_by_client_id(self, identifier, *, created_at):
+            return None
+
+    monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: RecoveryBroker())
+    result = sync_live_orders(_live_control(), store=store, manage_entries=False)
+    assert result["orders"][0]["needs_broker_status_review"] is True
+    assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "submit_uncertain"

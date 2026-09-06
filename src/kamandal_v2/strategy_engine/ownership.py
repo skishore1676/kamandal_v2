@@ -16,6 +16,7 @@ ACTIVE_OPEN_INTENT_STATUSES = {
     "stage_approved_pending_submit",
     "waiting_entry_window",
     "submitted",
+    "submit_uncertain",
     "working",
     "repriced",
     "partially_filled",

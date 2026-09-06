@@ -29,6 +29,13 @@ class TradeSourcePolicy:
     output_kind: TradeSourceOutputKind
     mode: TradeSourceMode
     notes: str = ""
+    live_structures: tuple[str, ...] = ()
+
+    def mode_for_structure(self, structure: str) -> TradeSourceMode:
+        """Exact-trade live authority is scoped; other packages stay shadow."""
+        if self.output_kind is TradeSourceOutputKind.EXACT_PACKAGE and self.mode is TradeSourceMode.LIVE:
+            return self.mode if structure in self.live_structures else TradeSourceMode.SHADOW
+        return self.mode
 
     @property
     def inference_enabled(self) -> bool:
@@ -84,8 +91,14 @@ def compile_trade_source_policies(
             errors.append(f"trade_sources: duplicate source/output row {source_id}/{output_kind.value}")
             continue
         seen.add(key)
-        if output_kind is TradeSourceOutputKind.EXACT_PACKAGE and mode is TradeSourceMode.LIVE:
-            errors.append(f"trade_sources: {source_id}/exact_package cannot be live in the first release")
+        live_structures = tuple(dict.fromkeys(
+            item.strip().lower() for item in str(row.get("live_structures") or "").split(",") if item.strip()
+        ))
+        if live_structures and (output_kind is not TradeSourceOutputKind.EXACT_PACKAGE or set(live_structures) - {"short_strangle"}):
+            errors.append(f"trade_sources: {source_id} live_structures supports only exact short_strangle")
+            continue
+        if output_kind is TradeSourceOutputKind.EXACT_PACKAGE and mode is TradeSourceMode.LIVE and not live_structures:
+            errors.append(f"trade_sources: {source_id}/exact_package live requires explicit live_structures")
             continue
         policies.append(
             TradeSourcePolicy(
@@ -93,6 +106,7 @@ def compile_trade_source_policies(
                 output_kind=output_kind,
                 mode=mode,
                 notes=str(row.get("notes") or "").strip(),
+                live_structures=live_structures,
             )
         )
 

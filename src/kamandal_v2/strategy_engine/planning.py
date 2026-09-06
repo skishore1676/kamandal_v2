@@ -173,6 +173,7 @@ def run_unified_books(
         exclude_candidate_ids=exclude_candidate_ids,
         exclude_contract_keys=exclude_contract_keys,
         register_plan_attempt=register_plan_attempt,
+        observed_packages=observed_packages,
         trade_source_policies=source_policies,
     )
     if include_shadow:
@@ -230,6 +231,7 @@ def _run_book(
         output_kind.value
         for (_source_id, output_kind), source_policy in (trade_source_policies or {}).items()
         if source_policy.mode is TradeSourceMode.SHADOW
+        or (output_kind is TradeSourceOutputKind.EXACT_PACKAGE and source_policy.mode is TradeSourceMode.LIVE)
     }
     selected = tuple(
         policy
@@ -308,7 +310,7 @@ def _run_book(
             venues=venues,
             provider=provider,
         )
-    elif mode is ExecutionMode.SHADOW and observed_packages and market_override is None:
+    elif observed_packages and market_override is None:
         # Exact packages need current quotes even when there are no thesis
         # ideas.  This remains the configured read-only market provider; no
         # broker preflight or account authorization is introduced here.
@@ -357,9 +359,11 @@ def _run_book(
                     store=current_store,
                     config=mode_config,
                     trade_source_policies=trade_source_policies,
+                    universe=universe,
+                    mode=mode.value,
                 )
             )
-            if mode is ExecutionMode.SHADOW and observed_packages
+            if observed_packages
             else None,
             market_override=market_override,
             portfolio_override=_configured_shadow_portfolio(mode_config) if mode is ExecutionMode.SHADOW else None,
@@ -655,7 +659,12 @@ def _bind_selected_live_lifecycle(
                     "entry_policy_hash": compiled.policy_hash,
                     "pilot_live": pilot_live,
                     "pilot_policy_hash": policy.policy_hash if pilot_live else None,
-                    "source_identity": {"idea_id": candidate.idea_id, "plan_run_id": result.plan_run_id},
+                    "source_identity": {
+                        "idea_id": candidate.idea_id, "plan_run_id": result.plan_run_id,
+                        **{key: candidate.metadata[key] for key in (
+                            "source_profile", "source_event_id", "canonical_post_id", "package_signature", "evidence_revision_id",
+                        ) if key in candidate.metadata},
+                    },
                 },
             ),
             compiled_policy=compiled.to_dict(),

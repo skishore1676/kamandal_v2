@@ -16,8 +16,11 @@ the rest of its lifecycle.
 4. Shadow uses the existing broker-inert lifecycle simulator. A future live
    ticket uses the adapter mapped to its frozen venue for preflight, submit,
    replace, status, adjustment, and close.
-5. Profit, 21-DTE, half-time, pre-event, challenged-side, duration-roll, and 3x
-   loss rules manage the whole strategy package from the frozen entry policy.
+5. Profit, 21-DTE, half-time, pre-event, tested-side adjustment, and 3x
+   buyback-cost loss rules manage the package from the frozen entry policy.
+   Duration extension and inversion are unsupported and rejected by compilation.
+6. Exact Mike/Greg strangles can join this same path with unchanged contracts,
+   explicit source structure scope, fresh source evidence, and all entry gates.
 
 Market Cartographer's deterministic `range_regime` answer remains descriptive
 chart context, not a strangle admission rule. A current horizontal range does not
@@ -34,13 +37,16 @@ submit real orders.
 
 The broker contract is now explicit:
 
-- `order_id`/`client_order_id` is Kamandal's deterministic idempotency and
+- `order_id`/`client_order_id` is Kamandal's deterministic correlation and
   lineage identity. `broker_order_id` is the id assigned by the routed broker.
   Poll, cancel, and replace always use the latter; broker assignment never
-  rewrites the former.
+  rewrites the former. Tastytrade external identifiers do not deduplicate POSTs.
+  A write-ahead `submit_uncertain` ledger state prevents blind retry; recovery
+  queries the broker and binds a unique matching order before proceeding.
 - Tastytrade order calls pin the Orders API version separately from unrelated
   API surfaces. Atomic replacement first calls the replacement dry-run and only
-  then PATCHes the current broker order.
+  then PATCHes price/type/time-in-force on the current broker order, without legs.
+  A tested-side roll instead creates a new atomic two-leg close/open order.
 - Tastytrade live account, position, preflight, submit, status, cancel, and
   replace operations fail closed unless the target account number is explicitly
   configured. Automatic "first account" discovery is not live authority.
@@ -49,8 +55,9 @@ The broker contract is now explicit:
   identical option held at Public and Tastytrade cannot offset or hide a
   discrepancy at the other broker. If a required venue inventory is
   unavailable, repair is suspended and the venue is reported as unavailable.
-- Tastytrade responses normalize working, partial-fill, fill-price, remaining
-  quantity, and fill-time fields into the existing shared lifecycle contract.
+- A Tastytrade Filled status alone is insufficient: all returned legs need
+  complete fills. Actual fill cashflows determine package price; delayed details
+  remain pending and are polled again. Limit prices are not fill evidence.
 
 Market data and execution remain deliberately separate. Public/shared quotes
 may build and manage the strategy; Tastytrade supplies native dry-runs, order
@@ -64,3 +71,9 @@ quality or strategy economics.
 
 See [TASTYTRADE_LIVE_HANDOFF.md](TASTYTRADE_LIVE_HANDOFF.md) for the secure
 credential placement and staged broker-validation procedure.
+
+See [September 6 readiness review](reviews/strangle-tuesday-readiness-2026-09-06.md)
+for current proof, exact-source policy changes, and official API findings.
+
+For submission recovery and fill adoption changes, read the
+[order identity lesson](lessons/order-ticket-version-is-not-position-identity.md).

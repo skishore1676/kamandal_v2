@@ -197,9 +197,12 @@ def test_exact_package_enters_existing_planner_and_shadow_handoff(tmp_path: Path
     assert lifecycle.metadata["broker_effects"] is False
 
 
+@pytest.mark.parametrize("exact_mode,live_structures", [("shadow", ""), ("live", "short_strangle")])
 def test_mike_exact_package_uses_existing_playbook_under_source_shadow_ceiling(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    exact_mode: str,
+    live_structures: str,
 ) -> None:
     from kamandal_v2.strategy_engine import planning
 
@@ -218,7 +221,7 @@ def test_mike_exact_package_uses_existing_playbook_under_source_shadow_ceiling(
         {"source_id": "greg_harmon", "output_kind": "idea", "mode": "live"},
         {"source_id": "greg_harmon", "output_kind": "exact_package", "mode": "observe"},
         {"source_id": "mike_butler", "output_kind": "idea", "mode": "observe"},
-        {"source_id": "mike_butler", "output_kind": "exact_package", "mode": "shadow"},
+        {"source_id": "mike_butler", "output_kind": "exact_package", "mode": exact_mode, "live_structures": live_structures},
     ]
     store = _migrated_store(tmp_path)
     monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: _Market())
@@ -430,6 +433,7 @@ def test_economic_rejection_keeps_first_actionable_source_mark(tmp_path: Path) -
     policy = SimpleNamespace(
         playbook_id=playbook.playbook_id,
         source_mode="observed_package",
+        mode=SimpleNamespace(value="shadow"),
         structure="call_diagonal",
         fields={"source_profiles": "mike_butler"},
     )

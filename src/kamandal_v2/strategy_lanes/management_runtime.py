@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timezone
+import math
 from typing import Any
 
 from kamandal_v2.domain.models import OptionLeg, utc_now
@@ -544,12 +545,13 @@ def _management_context(
             breached_strike=breached_strike,
             required_confirmations=int(_resolved_or_lifecycle(policy, "tested_side_confirmations", "tested_side_confirmation")),
             rearm_inside_confirmations=int(_resolved_or_default(policy, "rearm_inside_confirmations", 2)),
-        )
+            observation_key=str(snapshot.captured_at),
+        ) if observation.quote_actionable else replace(lifecycle, metadata=metadata)
         metadata = dict(observed.metadata)
         episode = dict(metadata.get("strangle_test_episode") or {})
         confirmations = int(episode.get("confirmations") or 0)
         metadata["tested_side_confirmations"] = confirmations
-        roll_plan, _inversion_plan = _strangle_roll_plans(tested, put, call, snapshot, policy)
+        roll_plan = _strangle_credit_roll_plan(tested, put, call, snapshot, policy)
         plans["roll"] = roll_plan
         context = {
             **common,
@@ -679,16 +681,17 @@ def _pre_event_exit_state(
     }
 
 
-def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot: Any, policy: CsaPolicy):
+def _strangle_credit_roll_plan(tested: str, put: OptionLeg, call: OptionLeg, snapshot: Any, policy: CsaPolicy):
     if not tested:
-        return None, None
+        return None
     old = call if tested == "put" else put
     eligible = [
         q
         for q in snapshot.quotes
         if q.option_type == old.option_type
         and q.expiration == old.expiration
-        and abs(q.delta) <= _resolved_or_default(policy, "management_delta_max", 0.40)
+        and math.isfinite(q.delta)
+        and 0 < abs(q.delta) <= _resolved_or_default(policy, "management_delta_max", 0.40)
         and q.mid > 0
         and q.ask >= q.bid >= 0
         and q.spread_pct <= float(policy.resolved_fields["max_bid_ask_pct"])
@@ -712,7 +715,7 @@ def _strangle_roll_plans(tested: str, put: OptionLeg, call: OptionLeg, snapshot:
             "natural_credit": new.bid - old.ask,
         }
 
-    return plan(ordinary), None
+    return plan(ordinary)
 
 
 def _resolved_or_default(policy: CsaPolicy, field: str, default: float) -> float:

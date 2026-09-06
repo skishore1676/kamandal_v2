@@ -8,7 +8,7 @@ from kamandal_v2.market.fixture import FixtureMarketDataProvider, FixturePreflig
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.migrations import migrate_csa_database
 from kamandal_v2.strategy_lanes.management_runtime import run_csa_live_management, run_csa_shadow_management
-from kamandal_v2.strategy_lanes.management_runtime import _cooldown_elapsed, _strangle_roll_plans
+from kamandal_v2.strategy_lanes.management_runtime import _cooldown_elapsed, _strangle_credit_roll_plan
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, PreflightResult
 from kamandal_v2.strategy_lanes.reports import (
     build_csa_scorecard,
@@ -1096,11 +1096,10 @@ def test_strangle_adjustment_moves_untested_side_inward_without_inversion() -> N
     put = OptionLeg.from_quote(quotes[0], role="short_put", side="sell")
     call = OptionLeg.from_quote(quotes[1], role="short_call", side="sell")
 
-    ordinary, inversion = _strangle_roll_plans("put", put, call, snapshot, policy)
+    ordinary = _strangle_credit_roll_plan("put", put, call, snapshot, policy)
 
     assert ordinary["new"].strike == 100
     assert put.strike < ordinary["new"].strike < call.strike
-    assert inversion is None
 
 
 def test_strangle_cooldown_uses_sheet_minutes_and_last_fill_timestamp() -> None:

@@ -62,7 +62,7 @@ PENDING_TICKET_STATUSES = {
     WAITING_ENTRY_WINDOW,
     "dry_run",
 }
-ACTIVE_TICKET_STATUSES = {"submitted", "repriced", "partially_filled"}
+ACTIVE_TICKET_STATUSES = {"submitted", "repriced", "partially_filled", "submit_uncertain"}
 REPLACE_CANCEL_PENDING = "replace_cancel_pending"
 REPLACE_WAITING_CANCEL = "replace_waiting_cancel"
 CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired", REPLACE_CANCEL_PENDING}
@@ -507,7 +507,7 @@ def _execute_ticket(
         if not _ticket_fresh(config, ticket):
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_preflight_stale")
             return _failure(ticket, "ticket_preflight_stale", failure_code="ticket_preflight_stale")
-        fresh_preflight = adapter.preflight_ticket(ticket)
+        fresh_preflight = _preflight_ticket_with_entry_risk(adapter, ticket)
         if not fresh_preflight.ok:
             store.record_live_order_attempt(
                 ticket,
@@ -526,16 +526,19 @@ def _execute_ticket(
         window = submission_window(config, ticket, close=close)
         if not window["allowed"]:
             return _defer_ticket_for_window(store, ticket, window)
+        # Write intent before crossing the broker boundary. A timeout or a
+        # process crash must not make this order eligible for another POST.
+        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "submit_uncertain")
         try:
             response = adapter.place_order_ticket(ticket)
             ok = bool(response.get("orderId"))
-            status = "submitted" if ok else "submit_failed"
+            status = "submitted" if ok else "submit_uncertain"
             if ok:
                 persist_broker_identity(ticket, response)
         except Exception as exc:  # noqa: BLE001
             response = {"error": _safe_broker_error(exc)}
             ok = False
-            status = "submit_failed"
+            status = "submit_uncertain"
     else:
         response = {"dry_run": True, "orderId": ticket.get("order_id"), "request": request_payload}
         ok = True
@@ -576,9 +579,40 @@ def _execute_ticket(
         "execution_venue": ticket_execution_venue(config, ticket),
         "response": response,
     }
-    if status == "submit_failed":
-        result["failure_code"] = "submit_failed"
+    if status in {"submit_failed", "submit_uncertain"}:
+        result["failure_code"] = status
     return result
+
+
+def _preflight_ticket_with_entry_risk(adapter: Any, ticket: dict[str, Any]) -> Any:
+    preflight = adapter.preflight_ticket(ticket)
+    blocker = _fresh_entry_preflight_blocker(ticket, preflight)
+    return replace(preflight, ok=False, message=blocker) if blocker else preflight
+
+
+def _fresh_entry_preflight_blocker(ticket: dict[str, Any], preflight: Any) -> str:
+    if ticket.get("intent_type") != "open" or ticket.get("structure") not in {"short_strangle", "strangle"}:
+        return ""
+    if not preflight.ok:
+        return ""
+    source_until = str(ticket.get("source_valid_until") or "")
+    if source_until:
+        try:
+            if datetime.now(UTC) > datetime.fromisoformat(source_until.replace("Z", "+00:00")):
+                return "exact_source_expired_before_submission"
+        except (TypeError, ValueError):
+            return "exact_source_freshness_invalid"
+    raw = preflight.raw or {}
+    response = raw.get("response") or {}
+    provided = raw.get("broker_bpr_provided") is True or any(
+        response.get(key) not in (None, "") for key in ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower")
+    )
+    budget = float(ticket.get("entry_risk_budget") or 0)
+    if not provided or not (0 < float(preflight.bpr) < float("inf")):
+        return "live_preflight_bpr_incomplete"
+    if budget <= 0 or float(preflight.bpr) > budget + 0.01:
+        return "fresh_preflight_exceeds_approved_risk_budget"
+    return ""
 
 
 def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None, manage_entries: bool = True) -> dict[str, Any]:
@@ -602,7 +636,7 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
 def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manage_entries: bool) -> dict[str, Any]:
     default_adapter = broker_adapter(config)
     tickets = store.live_order_intents_by_status(
-        {"submitted", "partially_filled", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
+        {"submitted", "submit_uncertain", "partially_filled", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
     )
     known_hashes = {str(ticket.get("ticket_hash") or "") for ticket in tickets}
     for child in store.live_order_intents_by_status({REPLACE_WAITING_CANCEL}):
@@ -628,7 +662,22 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
         )
         ledger_status = str(ticket.get("_ledger_status") or "submitted")
         try:
-            response = adapter.get_order(broker_order_id(ticket))
+            if ledger_status == "submit_uncertain":
+                finder = getattr(adapter, "find_order_by_client_id", None)
+                response = (
+                    finder(client_order_id(ticket), created_at=str(ticket.get("created_at") or ""))
+                    if finder is not None else adapter.get_order(client_order_id(ticket))
+                )
+                if not response or not response.get("orderId"):
+                    results.append({"ticket_hash": ticket["ticket_hash"], "status": "SUBMIT_UNCERTAIN", "needs_broker_status_review": True})
+                    continue
+                persist_broker_identity(ticket, response)
+                store.update_live_order_intent_status_with_payload(str(ticket["ticket_hash"]), "submitted", {
+                    "broker_order_id": broker_order_id(ticket), "client_order_id": client_order_id(ticket),
+                })
+                ledger_status = "submitted"
+            else:
+                response = adapter.get_order(broker_order_id(ticket))
         except Exception as exc:  # noqa: BLE001
             error = _safe_broker_error(exc)
             if ledger_status == "expired" and _broker_error_is_404(error):
@@ -1300,7 +1349,7 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
                 broker_status=broker_status,
                 close=True,
             )
-        fresh_preflight = adapter.preflight_ticket(new_ticket)
+        fresh_preflight = _preflight_ticket_with_entry_risk(adapter, new_ticket)
         if not fresh_preflight.ok:
             store.record_live_order_attempt(
                 new_ticket,
@@ -1400,7 +1449,7 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
         new_ticket = _repriced_open_ticket(ticket, config)
         campaign_metadata = (((new_ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {}).get("campaign") or {}
         if campaign_metadata.get("enabled"):
-            fresh_preflight = adapter.preflight_ticket(new_ticket)
+            fresh_preflight = _preflight_ticket_with_entry_risk(adapter, new_ticket)
             if not fresh_preflight.ok:
                 store.record_live_order_attempt(
                     new_ticket,
@@ -1434,7 +1483,7 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
                 broker_status=broker_status,
                 close=False,
             )
-        fresh_preflight = adapter.preflight_ticket(new_ticket)
+        fresh_preflight = _preflight_ticket_with_entry_risk(adapter, new_ticket)
         if not fresh_preflight.ok:
             store.record_live_order_attempt(
                 new_ticket,
@@ -1756,7 +1805,7 @@ def _advance_staged_replacement(
             "position_evidence": position_evidence,
         }
 
-    fresh_preflight = adapter.preflight_ticket(replacement)
+    fresh_preflight = _preflight_ticket_with_entry_risk(adapter, replacement)
     if not fresh_preflight.ok:
         return {
             "reprice_status": "waiting_cancel",

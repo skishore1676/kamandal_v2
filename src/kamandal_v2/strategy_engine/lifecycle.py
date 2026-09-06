@@ -42,6 +42,7 @@ def observe_strangle_episode(
     breached_strike: float | None,
     required_confirmations: int,
     rearm_inside_confirmations: int = 2,
+    observation_key: str = "",
 ) -> LifecycleState:
     """Persist the same-side test episode before action arbitration.
 
@@ -58,6 +59,10 @@ def observe_strangle_episode(
     if side not in {"", "put", "call"}:
         raise ValueError("tested_side must be put, call, or empty")
     metadata = dict(lifecycle.metadata)
+    if observation_key and metadata.get("strangle_episode_observation_key") == observation_key:
+        return lifecycle
+    if observation_key:
+        metadata["strangle_episode_observation_key"] = observation_key
     episode = dict(metadata.get("strangle_test_episode") or {})
     if not side:
         inside = int(episode.get("inside_observations") or 0) + 1
@@ -80,6 +85,9 @@ def observe_strangle_episode(
             "inside_observations": 0,
             "consumed": False,
         }
+    # Rearming requires consecutive inside observations. A renewed breach
+    # interrupts that run even when it is the same consumed episode.
+    episode["inside_observations"] = 0
     episode["required_confirmations"] = required_confirmations
     metadata["strangle_test_episode"] = episode
     return replace(lifecycle, metadata=metadata)

@@ -50,7 +50,7 @@ def _reconciliation_venues(
 ) -> set[str]:
     venues = {_payload_execution_venue(config, group) for group in local_groups}
     venues.add(default_execution_venue(config))
-    broker_statuses = {"submitted", "repriced", "partially_filled", "replace_cancel_pending"}
+    broker_statuses = {"submitted", "submit_uncertain", "repriced", "partially_filled", "replace_cancel_pending"}
     for ticket in store.live_order_intents_by_status(broker_statuses):
         venues.add(ticket_execution_venue(config, ticket))
     return {venue for venue in venues if venue}

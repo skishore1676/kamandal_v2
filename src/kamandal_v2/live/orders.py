@@ -179,6 +179,9 @@ def ticket_hash(ticket: dict[str, Any]) -> str:
             "preflight",
         )
     }
+    for key in ("entry_risk_budget", "source_valid_until"):
+        if key in ticket:
+            stable[key] = ticket[key]
     return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:24]
 
 
@@ -226,6 +229,10 @@ def _build_ticket(
         "created_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "preflight": preflight,
         "execution_quality": _execution_quality(candidate),
+        **({
+            "entry_risk_budget": float(candidate.estimated_bpr),
+            "source_valid_until": str((getattr(candidate, "metadata", {}) or {}).get("source_valid_until") or ""),
+        } if intent_type == "open" else {}),
         "legs": [leg.to_dict() for leg in legs],
         "submit_payload": submit_payload,
     }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -360,6 +361,24 @@ class TastytradeAdapter:
         self.require_live_ready()
         return _order_response(self._get(f"/accounts/{self._account_number()}/orders/{order_id}"))
 
+    def find_order_by_client_id(self, identifier: str, *, created_at: str) -> dict[str, Any] | None:
+        """Recover an uncertain submission by readback; never resubmit it."""
+        self.require_live_ready()
+        if not identifier or not created_at:
+            raise ValueError("order recovery requires a client id and creation time")
+        matches = []
+        for page in range(20):
+            response = self._get(f"/accounts/{self._account_number()}/orders", params={
+                "start-date": created_at[:10], "per-page": 250, "page-offset": page,
+            })
+            items = _items(response)
+            matches.extend(item for item in items if str(item.get("external-identifier") or "") == identifier)
+            if len(items) < 250:
+                if len(matches) > 1:
+                    raise RuntimeError("multiple broker orders match the same client identity")
+                return _order_response({"data": matches[0]}) if matches else None
+        raise RuntimeError("order recovery pagination incomplete")
+
     def cancel_order(self, order_id: str) -> dict[str, Any]:
         self.require_live_ready()
         return _order_response(self._delete(f"/accounts/{self._account_number()}/orders/{order_id}"))
@@ -371,8 +390,14 @@ class TastytradeAdapter:
         self.require_live_ready()
         payload = self._order_payload_from_ticket(replacement_ticket)
         account = self._account_number()
-        self._post(f"/accounts/{account}/orders/{order_id}/dry-run", payload)
-        return _order_response(self._patch(f"/accounts/{account}/orders/{order_id}", payload))
+        response = self._post(f"/accounts/{account}/orders/{order_id}/dry-run", payload)
+        preflight = _preflight_result(payload, response, default_bpr=0.0)
+        if not preflight.ok:
+            raise RuntimeError("tastytrade replacement dry-run rejected; order was not changed")
+        # PATCH edits execution properties of the existing order. Legs belong
+        # on submit/full replacement, not the price-edit wire contract.
+        edit_payload = {key: value for key, value in payload.items() if key != "legs"}
+        return _order_response(self._patch(f"/accounts/{account}/orders/{order_id}", edit_payload))
 
     def _order_payload_from_ticket(self, ticket: dict[str, Any]) -> dict[str, Any]:
         public_limit = float(ticket.get("limit_price") or 0.0)
@@ -567,7 +592,7 @@ def _preflight_result(payload: dict[str, Any], response: dict[str, Any], *, defa
         "broker_bpr_provided": broker_bpr_provided,
         "bpr_source": "tastytrade_dry_run" if broker_bpr_provided else "local_fallback",
     }
-    if errors:
+    if errors or response.get("error") or not isinstance(_data(response), dict) or not _data(response):
         return PreflightResult(ok=False, bpr=abs(bpr), message="tastytrade preflight returned errors", raw=raw)
     return PreflightResult(ok=True, bpr=round(abs(bpr), 2), message="tastytrade preflight ok", raw=raw)
 
@@ -609,7 +634,54 @@ def _order_response(response: dict[str, Any]) -> dict[str, Any]:
             value = next((order.get(alias) for alias in aliases if order.get(alias) is not None), None)
         if value is not None:
             normalized[normalized_name] = value
+    if normalized_status == "FILLED":
+        details = _complete_package_fill(order)
+        if details is None:
+            # A broker status can arrive before leg fills. Keep polling this
+            # ticket; never adopt it at its requested limit as a guessed fill.
+            normalized["status"] = "FILL_PENDING_DETAILS"
+            normalized["fill_details_complete"] = False
+        else:
+            normalized.update(details)
+            normalized["fill_details_complete"] = True
     return normalized
+
+
+def _complete_package_fill(order: dict[str, Any]) -> dict[str, Any] | None:
+    legs = order.get("legs")
+    if not isinstance(legs, list) or not legs:
+        return None
+    try:
+        quantities = [float(leg["quantity"]) for leg in legs]
+        if any(not math.isfinite(q) or q <= 0 or not q.is_integer() for q in quantities):
+            return None
+        package_quantity = math.gcd(*(int(q) for q in quantities))
+        net_cost = 0.0
+        fill_times = []
+        for leg, expected in zip(legs, quantities, strict=True):
+            action = str(leg.get("action") or "")
+            if action not in {"Buy to Open", "Buy to Close", "Sell to Open", "Sell to Close"}:
+                return None
+            fills = leg.get("fills")
+            if not isinstance(fills, list) or not fills:
+                return None
+            filled_quantity = 0.0
+            for fill in fills:
+                quantity, price = float(fill["quantity"]), float(fill["fill-price"])
+                if not all(math.isfinite(v) for v in (quantity, price)) or quantity <= 0 or price < 0:
+                    return None
+                filled_quantity += quantity
+                net_cost += quantity * price * (1 if action.startswith("Buy") else -1)
+                if fill.get("filled-at"):
+                    fill_times.append(str(fill["filled-at"]))
+            if abs(filled_quantity - expected) > 1e-8 or float(leg.get("remaining-quantity") or 0) != 0:
+                return None
+        if not fill_times:
+            return None
+        return {"filledQuantity": package_quantity, "remainingQuantity": 0,
+                "averagePrice": round(abs(net_cost) / package_quantity, 6), "filledAt": max(fill_times)}
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _data(payload: dict[str, Any]) -> Any:

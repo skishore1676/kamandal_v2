@@ -101,6 +101,8 @@ class ObservedPackageEvidence:
     output_sha256: str
     opportunity_group_id: str | None = None
     prompt_version: str = PROMPT_VERSION
+    source_published_at: str | None = None
+    source_valid_until: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -124,6 +126,8 @@ class ObservedPackageEvidence:
             "package_signature": self.package_signature,
             "evidence_revision_id": self.evidence_revision_id,
             "opportunity_group_id": self.opportunity_group_id,
+            "source_published_at": self.source_published_at,
+            "source_valid_until": self.source_valid_until,
             "provenance": {
                 "image_sha256": self.image_sha256,
                 "prompt_sha256": self.prompt_sha256,
@@ -326,6 +330,8 @@ def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageB
             output_sha256=_required_text(provenance.get("output_sha256"), f"packages[{index}].provenance.output_sha256"),
             opportunity_group_id=_optional_text(item.get("opportunity_group_id")),
             prompt_version=_optional_text(provenance.get("prompt_version")) or PROMPT_VERSION,
+            source_published_at=_optional_text(item.get("source_published_at")),
+            source_valid_until=_optional_text(item.get("source_valid_until")),
         )
         if package.action not in _PACKAGE_ACTIONS or package.media_index <= 0 or package.package_position <= 0:
             raise ObservedPackageValidationError(f"batch package {index} has invalid identity fields")

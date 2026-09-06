@@ -117,7 +117,9 @@ def validate_sheet_policy(
 
     if policy_tables["trade_sources"]:
         observed_headers = set(policy_tables["trade_sources"][0])
-        missing_source_headers = sorted(set(TRADE_SOURCES_HEADER) - observed_headers)
+        # Existing shadow-only sources do not need a migration to keep working.
+        # The compiler requires an explicit scope before exact live is allowed.
+        missing_source_headers = sorted(set(TRADE_SOURCES_HEADER) - {"live_structures"} - observed_headers)
         if missing_source_headers:
             model_errors.append(
                 "trade_sources_header_missing:" + ",".join(missing_source_headers)

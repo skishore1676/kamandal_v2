@@ -11,10 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, date
 from typing import Any
 
-from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PreflightResult, utc_now
+from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PreflightResult, UniverseEntry, utc_now
 from kamandal_v2.intelligence.observed_packages import ObservedPackageBatch, ObservedPackageEvidence
 from kamandal_v2.intelligence.trade_sources import (
     TradeSourceMode,
@@ -29,6 +29,9 @@ from kamandal_v2.planner.candidate_builder import (  # shared deterministic econ
     _estimate_bpr,
     _filter_rejections,
     _risk_width,
+    _market_match_rejections,
+    _apply_preflight_bpr,
+    _low_oi_price_through_enabled,
 )
 from kamandal_v2.planner.shape_validators import validate_structure
 from kamandal_v2.stores.sqlite import LocalStore
@@ -81,6 +84,8 @@ def build_observed_package_candidates(
     store: LocalStore,
     config: dict[str, Any] | None = None,
     trade_source_policies: dict[tuple[str, TradeSourceOutputKind], TradeSourcePolicy] | None = None,
+    universe: list[UniverseEntry] | None = None,
+    mode: str = "shadow",
 ) -> list[Candidate]:
     """Hydrate source-exact legs and return ordinary optimizer candidates."""
 
@@ -105,8 +110,11 @@ def build_observed_package_candidates(
         if trade_source_policies is not None and (
             source_policy is None or source_policy.mode not in {TradeSourceMode.SHADOW, TradeSourceMode.LIVE}
         ):
-            mode = source_policy.mode.value if source_policy is not None else "missing"
-            _receipt(store, package, status="observed", blocker=f"source_mode_{mode}")
+            source_mode = source_policy.mode.value if source_policy is not None else "missing"
+            _receipt(store, package, status="observed", blocker=f"source_mode_{source_mode}")
+            continue
+        if mode == "live" and source_policy is None:
+            _receipt(store, package, status="not_authorized", blocker="live_exact_source_policy_required")
             continue
         matching = [
             policy
@@ -122,6 +130,18 @@ def build_observed_package_candidates(
         if len(matching) > 1:
             _receipt(store, package, status="parked", blocker="ambiguous_playbook_match")
             continue
+        effective_mode = matching[0].mode.value
+        if source_policy is not None and source_policy.mode_for_structure(str(package.structure)) is TradeSourceMode.SHADOW:
+            effective_mode = "shadow"
+        if effective_mode != mode:
+            continue
+        if mode == "live":
+            if package.structure != "short_strangle":
+                _receipt(store, package, status="parked", blocker="unsupported_live_exact_structure")
+                continue
+            if blocker := _live_source_freshness_blocker(package, config):
+                _receipt(store, package, status="parked", blocker=blocker)
+                continue
 
         if package.symbol not in chain_cache:
             try:
@@ -152,6 +172,23 @@ def build_observed_package_candidates(
                 continue
             candidate = _candidate(package, playbook, legs, chain_snapshot=chain)
             rejections = _filter_rejections(candidate, playbook, config)
+            if package.structure == "short_strangle":
+                entry = next((entry for entry in (universe or []) if entry.symbol == package.symbol and entry.enabled), None)
+                if entry is None:
+                    rejections.append("universe_symbol_not_enabled")
+                else:
+                    rejections.extend(_market_match_rejections(
+                        entry, playbook, market.iv_percentile(package.symbol), market.iv_rank(package.symbol),
+                        market.iv_abs(package.symbol), market.event_status(package.symbol), underlying_price=chain.underlying_price,
+                    ))
+                rejections.extend(_exact_strangle_contract_rejections(candidate, playbook, config))
+                hard_rejections = []
+                for reason in rejections:
+                    if _low_oi_price_through_enabled(reason, config):
+                        candidate.reasons.extend([f"filter_warning={reason}", "low_oi_price_through=true"])
+                    else:
+                        hard_rejections.append(reason)
+                rejections = hard_rejections
             package_spread = float(candidate_liquidity_metrics(candidate)["aggregate_spread_to_mid_pct"])
             if playbook.max_bid_ask_pct is not None and package_spread > playbook.max_bid_ask_pct:
                 rejections.append(
@@ -174,6 +211,16 @@ def build_observed_package_candidates(
                 _apply_first_mark(candidate, first_mark)
             if rejections:
                 candidate.rejection_reason = rejections[0]
+            if mode == "live":
+                # No synthetic preflight can enter the money path. The routed
+                # adapter must validate these exact legs and provide BPR.
+                candidate.preflight = None
+                if not rejections:
+                    candidate.preflight = market.preflight(candidate)
+                    if not candidate.preflight.ok:
+                        candidate.rejection_reason = candidate.preflight.message or "preflight_failed"
+                    else:
+                        _apply_preflight_bpr(candidate, candidate.preflight)
             candidate.score = _candidate_score(candidate, thesis_fit=0.0)
             candidates.append(candidate)
             _receipt(
@@ -206,6 +253,39 @@ def _evidence_blocker(package: ObservedPackageEvidence) -> str:
     return ""
 
 
+def _live_source_freshness_blocker(package: ObservedPackageEvidence, config: dict[str, Any] | None) -> str:
+    try:
+        published = datetime.fromisoformat(str(package.source_published_at or "").replace("Z", "+00:00"))
+        valid_until = datetime.fromisoformat(str(package.source_valid_until or "").replace("Z", "+00:00"))
+        now = datetime.fromisoformat(str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now()).replace("Z", "+00:00"))
+        if any(value.tzinfo is None for value in (published, valid_until, now)):
+            return "live_exact_source_freshness_missing"
+        if published > now or valid_until <= published or now > valid_until:
+            return "live_exact_source_expired_or_future"
+    except (TypeError, ValueError):
+        return "live_exact_source_freshness_missing"
+    return ""
+
+
+def _exact_strangle_contract_rejections(candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None) -> list[str]:
+    """Validate reported contracts; never move strikes, expiry, or quantity."""
+    observed = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
+    today = datetime.fromisoformat(observed.replace("Z", "+00:00")).date()
+    reasons: list[str] = []
+    for leg in candidate.legs:
+        dte = (date.fromisoformat(leg.expiration) - today).days
+        if dte < playbook.dte_min or dte > playbook.dte_max:
+            reasons.append("exact_strangle_dte_outside_policy")
+        low, high = playbook.short_delta_min, playbook.short_delta_max
+        if not low <= abs(leg.delta) <= high:
+            reasons.append("exact_strangle_delta_outside_policy")
+        if leg.quantity > playbook.max_contracts:
+            reasons.append("exact_strangle_quantity_above_policy")
+    if candidate.net_credit <= 0:
+        reasons.append("exact_strangle_requires_positive_credit")
+    return reasons
+
+
 def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> list[OptionLeg]:
     roles = _canonical_roles(package)
     legs: list[OptionLeg] = []
@@ -236,6 +316,16 @@ def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> 
 def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
     """Assign manager roles without changing a source-observed contract."""
 
+    if package.structure == "short_strangle":
+        if len(package.legs) != 2 or {leg.option_type for leg in package.legs} != {"put", "call"}:
+            raise ValueError("exact_strangle_requires_one_put_and_one_call")
+        if any(leg.side != "sell" or leg.effect != "open" for leg in package.legs):
+            raise ValueError("exact_strangle_requires_two_short_open_legs")
+        put = next(leg for leg in package.legs if leg.option_type == "put")
+        call = next(leg for leg in package.legs if leg.option_type == "call")
+        if put.expiration != call.expiration or put.quantity != call.quantity or float(put.strike) >= float(call.strike):
+            raise ValueError("exact_strangle_requires_equal_quantity_same_expiry_non_crossing_shorts")
+        return [f"short_{leg.option_type}" for leg in package.legs]
     if package.structure not in {"call_calendar", "put_calendar", "call_diagonal", "put_diagonal"}:
         raise ValueError(f"unsupported_exact_structure:{package.structure}")
     if len(package.legs) != 2:
@@ -301,6 +391,7 @@ def _candidate(
             f"current_package_midpoint={net_credit}",
             f"chain_snapshot_id={chain_snapshot.chain_snapshot_id}",
             f"aggregate_spread_to_mid_pct={metrics['aggregate_spread_to_mid_pct']}",
+            *([f"live_max_bpr_per_order={playbook.live_max_bpr_per_order}"] if playbook.live_max_bpr_per_order is not None else []),
         ],
         metadata={
             "source_mode": "observed_package",
@@ -317,6 +408,8 @@ def _candidate(
             "chain_snapshot_id": chain_snapshot.chain_snapshot_id,
             "chain_captured_at": chain_snapshot.captured_at,
             "broker_effects": False,
+            "source_published_at": package.source_published_at,
+            "source_valid_until": package.source_valid_until,
         },
     )
     width = _risk_width(candidate)

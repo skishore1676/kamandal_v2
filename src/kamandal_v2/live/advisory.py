@@ -322,6 +322,8 @@ def _preflight_bpr_incomplete(candidate: Candidate) -> bool:
     raw = candidate.preflight.raw or {}
     if raw.get("source") == "fixture":
         return False
+    if raw.get("broker_bpr_provided") is True and raw.get("bpr_source") == "tastytrade_dry_run":
+        return not (0 < float(candidate.preflight.bpr) < float("inf"))
     response = raw.get("response") or {}
     return not any(response.get(key) not in (None, "") for key in ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"))
 

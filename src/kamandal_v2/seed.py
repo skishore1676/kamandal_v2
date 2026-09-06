@@ -182,10 +182,10 @@ def build_seed_tables(control: dict[str, Any]) -> dict[str, list[list[Any]]]:
         "playbooks": playbooks,
         "daily_plan": [],
         "trade_sources": [
-            ["greg_harmon", "idea", "live", "Existing inferred idea source"],
-            ["greg_harmon", "exact_package", "observe", "Passive exact-package evidence only"],
-            ["mike_butler", "idea", "observe", "Calibration and operator review"],
-            ["mike_butler", "exact_package", "shadow", "Broker-inert exact-package experiment"],
+            ["greg_harmon", "idea", "live", "Existing inferred idea source", ""],
+            ["greg_harmon", "exact_package", "observe", "Passive exact-package evidence only", ""],
+            ["mike_butler", "idea", "observe", "Calibration and operator review", ""],
+            ["mike_butler", "exact_package", "shadow", "Broker-inert exact-package experiment", ""],
         ],
         "trade_source_activity": [],
     }

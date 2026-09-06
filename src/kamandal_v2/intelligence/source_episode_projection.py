@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -112,6 +112,14 @@ def project_source_episode_compilation(
                         record,
                         compilation=compilation,
                     )
+                    classification = str((record.get("classification") or {}).get("type") or "")
+                    maximum_age = ((profile.get("families") or {}).get(classification) or {}).get("max_age_hours")
+                    published_at = str((record.get("source") or {}).get("published_at") or "")
+                    valid_until = (
+                        (datetime.fromisoformat(published_at.replace("Z", "+00:00")) + timedelta(hours=float(maximum_age))).isoformat()
+                        if published_at and maximum_age is not None else None
+                    )
+                    projected = [replace(item, source_published_at=published_at, source_valid_until=valid_until) for item in projected]
                 exact_packages.extend(projected)
                 failures.extend({**failure, "post_ref": post_ref} for failure in exact_failures)
                 event_reasons.extend(item["reason"] for item in exact_failures)

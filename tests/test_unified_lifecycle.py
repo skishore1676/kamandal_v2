@@ -95,6 +95,31 @@ def test_strangle_episode_requires_rearm_or_distinct_side_and_filled_limit() -> 
         validate_strangle_replacement(limited, _replacement_ticket().legs, tested_side="put", net_credit=0.2)
 
 
+def test_repeated_quote_cannot_confirm_the_same_test_twice() -> None:
+    lifecycle = _strangle()
+    for _ in range(2):
+        lifecycle = observe_strangle_episode(lifecycle, tested_side="put", breached_strike=90, required_confirmations=2, observation_key=NOW)
+    assert not strangle_adjustment_eligible(lifecycle)
+    assert lifecycle.metadata["strangle_test_episode"]["confirmations"] == 1
+    lifecycle = observe_strangle_episode(lifecycle, tested_side="put", breached_strike=90, required_confirmations=2, observation_key="2026-08-14T15:15:00Z")
+    assert strangle_adjustment_eligible(lifecycle)
+
+
+def test_consumed_episode_requires_consecutive_inside_observations_to_rearm() -> None:
+    lifecycle = _strangle()
+    for _ in range(2):
+        lifecycle = observe_strangle_episode(lifecycle, tested_side="put", breached_strike=90.0, required_confirmations=2)
+    episode = {**lifecycle.metadata["strangle_test_episode"], "consumed": True}
+    lifecycle = replace(lifecycle, metadata={**lifecycle.metadata, "strangle_test_episode": episode})
+    lifecycle = observe_strangle_episode(lifecycle, tested_side="", breached_strike=None, required_confirmations=2)
+    lifecycle = observe_strangle_episode(lifecycle, tested_side="put", breached_strike=90.0, required_confirmations=2)
+    lifecycle = observe_strangle_episode(lifecycle, tested_side="", breached_strike=None, required_confirmations=2)
+    assert lifecycle.metadata["strangle_test_episode"]["consumed"] is True
+    lifecycle = observe_strangle_episode(lifecycle, tested_side="", breached_strike=None, required_confirmations=2)
+    assert lifecycle.metadata["strangle_test_episode"]["consumed"] is False
+    assert not strangle_adjustment_eligible(lifecycle)
+
+
 def test_strangle_replacement_rejects_crossing_and_legacy_adoption_is_precise() -> None:
     lifecycle = _strangle()
     crossing = _replacement_ticket()

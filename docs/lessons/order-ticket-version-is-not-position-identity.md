@@ -32,7 +32,7 @@ historical duplicate repair, and post-fill position-endpoint lag.
 The multi-broker route added a second collision domain. Public can echo a
 client UUID while Tastytrade assigns a numeric order ID, and the same OCC
 contract can exist in both accounts. The safe keys are therefore distinct:
-client order ID for idempotency and lineage, broker order ID for GET/cancel/
+client order ID for correlation and lineage, broker order ID for GET/cancel/
 replace, and `(execution_venue, OCC symbol)` for position reconciliation.
 
 ## When It Applies
@@ -49,3 +49,21 @@ and which root lineage owns the position. If those collapse to one identifier,
 the design will either double count an atomic replacement or lose a staged
 partial fill. Also ask which venue owns each broker ID and position; never let
 the same OCC symbol at two brokers aggregate before reconciliation.
+
+
+## Tastytrade uncertainty and delayed fills (September 6)
+
+A deterministic client ID is not broker-side deduplication. Tastytrade's
+`external-identifier` is correlation only. In `live/execution.py`, persist
+`submit_uncertain` before POST. On a lost acknowledgement, retain the reservation,
+block retry/fallback, and bind only a unique broker lookup result. Tests in
+`tests/test_live_lane.py` verify both recovery without another POST and an absent
+match remaining blocked.
+
+A Filled status can arrive before per-leg fills. In `market/tastytrade.py`, wait
+for complete returned-leg quantities and calculate package price from signed
+actual fill cashflows. Do not adopt the limit price as an execution receipt.
+`tests/test_tastytrade_adapter.py` covers entry and mixed close/open roll prices.
+
+See the [official retry contract](https://developer.tastytrade.com/docs/guides/idempotency-and-retries/)
+and [order lifecycle](https://developer.tastytrade.com/docs/concepts/order-lifecycle/).

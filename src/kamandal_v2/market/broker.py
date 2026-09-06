@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from kamandal_v2.market.public import PublicAdapter
@@ -20,8 +19,12 @@ def execution_venue_registry(config: dict[str, Any]) -> dict[str, str]:
     registry = dict(DEFAULT_EXECUTION_VENUES)
     if isinstance(configured, dict):
         for alias, payload in configured.items():
+            alias = str(alias).strip().lower()
             value = payload.get("broker") if isinstance(payload, dict) else payload
             normalized = str(value or "").strip().lower()
+            normalized = "tastytrade" if normalized == "tasty" else normalized
+            if alias in DEFAULT_EXECUTION_VENUES and normalized != DEFAULT_EXECUTION_VENUES[alias]:
+                raise RuntimeError(f"execution venue {alias} cannot be remapped to another broker")
             if normalized:
                 registry[str(alias).strip().lower()] = normalized
     return registry
@@ -33,6 +36,8 @@ def default_execution_venue(config: dict[str, Any]) -> str:
     if explicit:
         return explicit
     active = str(broker.get("active") or "public").strip().lower()
+    if active not in {"public", "tasty", "tastytrade"}:
+        raise RuntimeError(f"Unsupported broker.active={active!r}")
     return "tasty_primary" if active in {"tasty", "tastytrade"} else "public_primary"
 
 
@@ -49,15 +54,11 @@ def ticket_execution_venue(config: dict[str, Any], ticket: dict[str, Any]) -> st
 
 
 def broker_adapter(config: dict[str, Any], *, execution_venue: str | None = None) -> Any:
-    worker_venue = str(os.environ.get("KAMANDAL_EXECUTION_VENUE") or "").strip().lower()
-    venue = str(execution_venue or worker_venue or "").strip().lower()
-    if venue:
-        registry = execution_venue_registry(config)
-        if venue not in registry:
-            raise RuntimeError(f"Unsupported execution_venue={venue!r}")
-        active = registry[venue]
-    else:
-        active = str((config.get("broker") or {}).get("active") or "public").strip().lower()
+    venue = str(execution_venue or default_execution_venue(config)).strip().lower()
+    registry = execution_venue_registry(config)
+    if venue not in registry:
+        raise RuntimeError(f"Unsupported execution_venue={venue!r}")
+    active = registry[venue]
     if active == "public":
         return PublicAdapter(config)
     if active in {"tastytrade", "tasty"}:

@@ -247,20 +247,16 @@ def _compile_strangle_management(
     cooldown = lifecycle.get("cooldown") or {}
     inversion = lifecycle.get("inversion") or {}
     dte_action = str(row.get("dte_action") or "close").strip().lower() or "close"
-    if dte_action not in {"close", "duration_roll"}:
-        raise PolicyError(f"{playbook_id}: dte_action must be close or duration_roll")
+    if dte_action != "close":
+        raise PolicyError(f"{playbook_id}: strangle duration rolls are not implemented; dte_action must be close")
     duration_roll_limit = _integer(row.get("duration_roll_limit"), default=0, field="duration_roll_limit", playbook_id=playbook_id)
     if dte_action == "close" and duration_roll_limit != 0:
         raise PolicyError(f"{playbook_id}: dte_action=close requires duration_roll_limit=0")
-    if dte_action == "duration_roll" and duration_roll_limit < 1:
-        raise PolicyError(f"{playbook_id}: dte_action=duration_roll requires a positive duration_roll_limit")
     inversion_enabled = _as_bool(row.get("inversion_enabled"), default=False)
     if _as_bool(inversion.get("allowed")) and not inversion_enabled:
         compatibility["legacy_inversion_ignored"] = True
     if inversion_enabled:
-        for field in ("inversion_max_width", "inversion_min_credit", "inversion_remaining_profit", "inversion_adjusted_profit_target"):
-            if _optional_number(row.get(field)) is None:
-                raise PolicyError(f"{playbook_id}: {field} is required when inversion is enabled")
+        raise PolicyError(f"{playbook_id}: strangle inversion is not implemented; inversion_enabled must be FALSE")
     loss_close_multiple = _optional_number(row.get("loss_close_multiple"))
     if loss_close_multiple is None:
         loss_stages = lifecycle.get("loss_stages") or {}

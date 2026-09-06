@@ -60,6 +60,7 @@ PREFLIGHT_FAIL_CLOSE_STATUSES = {
     "reprice_submit_failed",
 }
 REASON_ORDER = [
+    "order_submission_uncertain",
     "risk_account_snapshot_stale",
     "risk_daily_drawdown_breaker",
     "risk_weekly_drawdown_breaker",
@@ -84,6 +85,7 @@ REASON_ORDER = [
     "pending_entry_approvals",
 ]
 VENUE_SCOPED_HEALTH_REASONS = {
+    "order_submission_uncertain",
     "failed_close_order",
     "failed_preflight_close",
     "exit_pipeline_stalled",
@@ -158,6 +160,14 @@ def run_live_health(
     risk = _risk_overview(store, config)
 
     events: list[dict[str, Any]] = []
+    for ticket in store.live_order_intents_by_status({"submit_uncertain"}):
+        events.append({
+            "severity": "red", "reason": "order_submission_uncertain",
+            "detail": "Broker acceptance must be resolved before another entry",
+            "ticket_hash": str(ticket.get("ticket_hash") or ""),
+            "execution_venue": _payload_execution_venue(ticket),
+            "operator_state": "operator_needed",
+        })
     group_marks: list[dict[str, Any]] = []
     for group in open_groups:
         group_id = str(group.get("group_id") or "")
@@ -447,7 +457,9 @@ def entry_health_gate(
     entry_overall = _coerce_status(applicable_events)
     risk_manager = report.get("risk_manager") or {}
     risk_blocked = bool(risk_manager.get("enabled")) and bool(risk_manager.get("blocked"))
-    blocked = (block_on_red and entry_overall == "RED") or risk_blocked
+    blocked = (block_on_red and entry_overall == "RED") or risk_blocked or any(
+        event.get("reason") == "order_submission_uncertain" for event in applicable_events
+    )
     return {
         "blocked": blocked,
         "block_entries_on_red": block_on_red,

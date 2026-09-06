@@ -355,9 +355,6 @@ def _match_rejections(
         allowed = set().union(*(_strategy_aliases(value) for value in idea.allowed_structures))
         if not allowed.intersection({playbook.playbook_id, playbook.structure, playbook.strategy_family}):
             reasons.append("idea_structure_not_allowed")
-    if playbook.universe_expansion_enabled and playbook.structure == "short_strangle":
-        if not _strangle_expansion_allows(entry, playbook, iv_rank, underlying_price):
-            reasons.append("strangle_entry_outside_configured_ranges")
     if idea.strategy_hint and not _strategy_aliases(idea.strategy_hint).intersection({playbook.playbook_id, playbook.structure, playbook.strategy_family}):
         reasons.append(f"strategy_hint_mismatch:{idea.strategy_hint}")
     if playbook.applicable_direction and idea.direction not in playbook.applicable_direction:
@@ -382,6 +379,25 @@ def _match_rejections(
         reasons.append(f"horizon_below_min:{match_horizon}<{playbook.applicable_horizon_min}")
     if playbook.applicable_horizon_max is not None and match_horizon > playbook.applicable_horizon_max:
         reasons.append(f"horizon_above_max:{match_horizon}>{playbook.applicable_horizon_max}")
+    reasons.extend(_market_match_rejections(entry, playbook, iv_pct, iv_rank, iv_abs, event_status, underlying_price=underlying_price))
+    return reasons
+
+
+def _market_match_rejections(
+    entry: UniverseEntry,
+    playbook: Playbook,
+    iv_pct: float | None,
+    iv_rank: float | None,
+    iv_abs: float | None,
+    event_status: str,
+    *,
+    underlying_price: float | None = None,
+) -> list[str]:
+    """Shared market admission for constructed and source-exact contracts."""
+    reasons: list[str] = []
+    if playbook.universe_expansion_enabled and playbook.structure == "short_strangle":
+        if not _strangle_expansion_allows(entry, playbook, iv_rank, underlying_price):
+            reasons.append("strangle_entry_outside_configured_ranges")
     if playbook.requires_iv_percentile and iv_pct is None:
         reasons.append("iv_percentile_missing")
     if iv_pct is not None:

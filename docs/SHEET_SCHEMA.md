@@ -183,8 +183,9 @@ Notes:
   `portfolio_hedge`, and `exact_package`. Migration begins from each row's
   current `source_mode`, so existing non-idea lanes do not change. A blank
   historical `source_mode` resolves to `idea`, but every enabled row in the new
-  Sheet must be explicit. Initially, exactly one enabled call calendar, put
-  calendar, call diagonal, and put diagonal playbook may accept exact packages.
+  Sheet must be explicit. The initial contract allowed exactly one enabled call calendar, put
+  calendar, call diagonal, and put diagonal playbook to accept exact packages.
+  The strangle extension also supports one enabled short-strangle receiver.
   An exact package keeps every observed contract term, receives canonical leg
   roles, and uses that existing playbook's eligibility, portfolio, effect, and
   lifecycle policy. Zero matching managers park as `unsupported`; multiple
@@ -283,6 +284,7 @@ source_id
 output_kind
 mode
 notes
+live_structures
 ```
 
 Notes:
@@ -292,8 +294,14 @@ Notes:
 - The source mode is a ceiling, not execution permission. The effective mode is
   the safer of source mode and matched playbook mode, followed by all existing
   portfolio and safety gates.
-- `exact_package=live` is invalid in the first release. Exact packages remain
-  broker-inert shadow even if a broader source or playbook mode says `live`.
+- `exact_package=live` requires an explicit `live_structures` scope. The only
+  supported live exact structure is `short_strangle`; other structures remain
+  shadow. Missing scope makes live exact authorization invalid. The column is
+  optional for existing shadow-only source rows.
+- Live exact strangles preserve source contracts and quantities, require fresh
+  dated source evidence, and pass the receiving playbook, market, portfolio,
+  native broker BPR, and submission-time risk checks. Source LIVE alone does
+  not arm a shadow receiving playbook.
 - Missing, duplicate, or invalid rows fail only that source activation closed.
   They do not block management or exits for existing positions.
 
