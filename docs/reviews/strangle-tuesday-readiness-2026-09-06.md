@@ -147,3 +147,36 @@ reservation, native order acknowledgement, complete fills, tested-side managemen
 and reconciliation. Fresh Tuesday account capacity and usable quotes cannot be
 certified on Sunday. Never manually manufacture a candidate or invoke a trading
 job to obtain those receipts.
+
+
+## Deployment receipt — September 6, 2026
+
+The operator approved deployment and Sheet migration in this task. Repair commit
+`91ca53162c11be42471d847de9d9fa653e2d2983` was pushed to main and fast-forwarded
+onto oldmac while all Kamandal jobs were idle. The runtime checkout remained
+tracked-clean; unrelated untracked runtime files were preserved. All 125 focused
+deployment tests passed on oldmac. No trading job was invoked manually.
+
+The canonical Sheet was read immediately before writing. Changes were limited to
+`trade_sources!E1`, `C3:E3`, `C5:E5`, and `playbooks!BC10`, `CA10`. Mike/Greg exact
+rows now have `mode=live`, `live_structures=short_strangle`, and explanatory notes.
+The strangle accepts `market_scan,exact_package`; its obsolete nested inversion
+flag is FALSE. The incorrect numeric validation on CA10 was replaced with the
+three supported text choices for this receiver. Existing cell formats were
+preserved; source notes/scope column widths were adjusted for legibility.
+
+Readback verified mode=shadow, csa_stage=shadow, execution_venue=tasty_primary,
+max_contracts=1, and live_max_bpr_per_order=2500. The actual Sheet-policy gate on
+oldmac passed at 18:45:18 UTC: 100 universe rows, 19 playbooks, 15 enabled, four
+source rows, zero errors, and the same two existing overlap warnings. Policy hash:
+`ac8e86c8b6d9b67eed9303488bdc7b3ad6efd279d1c88e6c54b579e180417369`.
+
+The existing Tuesday automation was updated and read back. It requires repair
+commit 91ca531 or a reviewed descendant plus the scoped source settings. Its
+07:45/14:45 CT September 8 wakeups, finite one-canary authority, same target task,
+and afternoon return to shadow are preserved. Fresh usable quotes remain required
+even when Public-specific order incidents do not block the Tastytrade venue.
+
+This closes deployment and policy migration. Natural exact-source acceptance,
+live entry/fill, tested-side adjustment, and reconciliation remain distinct proof
+steps for the scheduled pilot; none is claimed by this deployment receipt.
