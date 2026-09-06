@@ -41,6 +41,39 @@ def test_proposer_reads_plan_diagnostics_dedupes_sheet_and_records_evidence(tmp_
     assert [proposal["symbol"] for proposal in proposals] == ["GOOD"]
     assert "verified price=75.00" in proposals[0]["notes"]
     assert proposals[0]["enabled"] == "FALSE"
+    assert proposals[0]["profile"] == "mid_stocks"
+    assert proposals[0]["max_positions"] == "1"
+    assert proposals[0]["earnings_sensitive"] == "TRUE"
+    assert proposals[0]["allowed_playbooks"]
+
+
+def test_proposal_repair_preserves_operator_values_and_is_idempotent() -> None:
+    from kamandal_v2.tools.universe_proposer import complete_universe_proposal
+
+    original = dict(symbol="NEW", enabled="FALSE", tier="proposed",
+                    proposal_source="durable_discovery", profile="satellite",
+                    notes="original evidence", max_positions="2")
+    repaired = complete_universe_proposal(original)
+    assert repaired["profile"] == "mid_stocks"
+    assert "market cap unavailable" in repaired["notes"]
+    assert repaired["notes"].startswith("original evidence;")
+    assert repaired["max_positions"] == "2"
+    assert complete_universe_proposal(repaired) == repaired
+    assert original["profile"] == "satellite"
+    for overrides in ({"enabled": "TRUE"}, {"enabled": ""}, {"tier": "held"},
+                      {"tier": "rejected"}, {"proposal_source": "operator"}):
+        protected = original | overrides
+        assert complete_universe_proposal(protected) == protected
+    assert complete_universe_proposal(original, market_cap=10_000_000_000)["profile"] == "large_stocks"
+
+
+def test_proposal_serialization_cannot_arm_a_symbol() -> None:
+    from kamandal_v2.tools.universe_proposer import proposals_to_universe_rows
+
+    for supplied in ({}, {"enabled": "TRUE", "tier": "primary"}, {"enabled": ""}):
+        row = proposals_to_universe_rows([{"symbol": "NEW"} | supplied])[0]
+        assert row["enabled"] == "FALSE"
+        assert row["tier"] == "proposed"
 
 
 def test_proposer_prefers_replay_safe_durable_discovery_over_overwriteable_audit(tmp_path) -> None:

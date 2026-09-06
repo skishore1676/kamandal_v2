@@ -402,7 +402,9 @@ def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, s
     written = client.append_tab_rows(title, header=header, rows=rows)
     readback = {str(row.get("symbol") or "").upper(): row for row in client.read_tab(title)}
     mismatches: list[str] = []
-    machine_owned = {"symbol", "enabled", "tier", "proposal_source", "proposal_reason", "proposal_date"}
+    # Verify every published setting; checking only provenance can silently
+    # commit a review whose profile/risk cells were lost during publication.
+    machine_owned = set(UNIVERSE_HEADER)
     for proposal in appendable:
         symbol = str(proposal.get("symbol") or "").upper()
         observed = readback.get(symbol)

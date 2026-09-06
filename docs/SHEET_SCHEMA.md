@@ -49,17 +49,51 @@ event_avoid_days_before
 event_avoid_days_after
 allowed_playbooks
 notes
+tier
+proposal_source
+proposal_reason
+proposal_date
 ```
 
 Notes:
 
 - `enabled`: true/false.
-- `profile`: for grouping, such as `index_etf`, `liquid_single_name`,
+- `profile`: for grouping, such as `index_etf`, `large_stocks`, `mid_stocks`,
   `bond_etf`, `commodity_etf`.
 - `tradable_iv_percentile_min/max`: the IV percentile range where the symbol is
   eligible for new entries.
 - `allowed_playbooks`: optional comma-separated allowlist. Blank means use all
   enabled playbooks compatible with the profile.
+
+### Weekly proposals and approval
+
+The Friday 10:00 CT review appends at most five previously unseen symbols,
+disabled (`enabled=FALSE`, `tier=proposed`). Proposal policy v1 fills IV
+percentiles 0–100, max positions 1, earnings sensitive TRUE, avoidance 7 days
+before/1 after, and the explicit allowlist `put_spread, call_spread,
+put_diagonal, call_diagonal, short_strangle`. These remain subject to enabled
+playbooks, profile compatibility, market/event checks, and portfolio selection.
+An allowlist does not activate a disabled playbook or select live/shadow mode.
+
+Verified market cap >=10B selects `large_stocks`; otherwise `mid_stocks` is
+used. When market cap is unavailable, notes explicitly identify a routing
+fallback, not a verified size classification. The old `satellite` placeholder
+did not match normal playbook profiles. Original discovery dates/evidence are
+retained during the September 2026 backfill; it is not a fresh market-data scan.
+
+Review the completed row, then change **only `enabled` to TRUE** to admit the
+symbol for consideration at the next normal plan. This is eligibility, not an
+immediate order. Universe `tier` is provenance metadata, not a second approval
+switch; it may stay `proposed` after approval. To defer or reject, retain FALSE
+and record the reason in `notes`; keeping the row prevents repeated proposals.
+Deleting it can allow later re-proposal. Do not leave `enabled` blank.
+
+The universe fields `max_bpr_pct`, `max_positions`, `earnings_sensitive`, and
+`event_avoid_days_before/after` expose legacy parsed defaults; they are **not
+currently enforced as per-symbol limits** by the planner. Portfolio/risk-manager
+position and BPR limits, playbook sizing, and playbook event checks remain the
+operative controls. Do not interpret these universe columns as additional
+enforced safety limits. This proposal completion changes no live risk gates.
 
 ## `playbooks`
 

@@ -30,6 +30,46 @@ DEFAULT_BOOTSTRAP_COMPLETED_SESSIONS = 5
 DEFAULT_MIN_PRICE = 10.0
 DEFAULT_MIN_AVG_DOLLAR_VOLUME = 20_000_000.0
 DEFAULT_MIN_MARKET_CAP = 2_000_000_000.0
+LARGE_STOCK_MARKET_CAP = 10_000_000_000.0
+# Explicit proposal policy, not a change to existing operator-owned rows.
+PROPOSAL_SETTINGS = {
+    "tradable_iv_percentile_min": "0",
+    "tradable_iv_percentile_max": "100",
+    "max_bpr_pct": "25",
+    "max_positions": "1",
+    "earnings_sensitive": "TRUE",
+    "event_avoid_days_before": "7",
+    "event_avoid_days_after": "1",
+    "allowed_playbooks": "put_spread, call_spread, put_diagonal, call_diagonal, short_strangle",
+}
+
+
+def complete_universe_proposal(
+    proposal: dict[str, Any], *, market_cap: float | None = None,
+) -> dict[str, Any]:
+    """Complete a disabled machine proposal without overwriting operator settings.
+
+    Unknown capitalization uses the narrower mid_stocks routing template, not
+    an assertion of market-cap classification. Enabled/held/rejected rows are
+    outside this repair contract. The caller owns publication and readback.
+    """
+    row = dict(proposal)
+    if str(row.get("enabled", "")).strip().lower() not in {"false", "0"}:
+        return row
+    if str(row.get("tier", "")).strip().lower() != "proposed":
+        return row
+    if row.get("proposal_source") not in {"durable_discovery", "recent_plans"}:
+        return row
+    if str(row.get("profile") or "").strip() in {"", "satellite"}:
+        cap = _positive_float(market_cap)
+        row["profile"] = "large_stocks" if cap is not None and cap >= LARGE_STOCK_MARKET_CAP else "mid_stocks"
+        basis = "market cap unavailable; mid_stocks routing fallback" if cap is None else f"market cap={cap:.0f}; 10B profile boundary"
+        note = f"proposal policy v1: {basis}; review settings, then enabled=TRUE to approve; retain FALSE to defer/reject"
+        row["notes"] = "; ".join(filter(None, [str(row.get("notes") or ""), note]))
+    for key, value in PROPOSAL_SETTINGS.items():
+        if row.get(key) is None or str(row[key]).strip() == "":
+            row[key] = value
+    return row
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,11 +224,10 @@ def collect_out_of_universe_symbols(
             continue
         if not micro_stock_guard(symbol, market_facts=market_facts):
             continue
-        results.append(
+        results.append(complete_universe_proposal(
             {
                 "symbol": symbol,
                 "enabled": "FALSE",
-                "profile": "satellite",
                 "tier": "proposed",
                 "proposal_source": "durable_discovery" if symbol in discovery_by_symbol else "recent_plans",
                 "proposal_reason": (
@@ -201,8 +240,8 @@ def collect_out_of_universe_symbols(
                     f"avg_dollar_volume={market_facts['avg_dollar_volume']:.0f}, "
                     f"market_cap={market_facts.get('market_cap') or 'unavailable'}"
                 ),
-            }
-        )
+            }, market_cap=market_facts.get("market_cap")
+        ))
         if len(results) >= limit:
             break
     return results
@@ -239,8 +278,9 @@ def proposals_to_universe_rows(proposals: list[dict[str, Any]]) -> list[dict[str
             if key in row:
                 row[key] = str(value)
         # defaults for required sheet columns
-        row.setdefault("enabled", "FALSE")
-        row.setdefault("tier", "proposed")
+        # Proposals may never arrive armed, even if a caller supplies TRUE.
+        row["enabled"] = "FALSE"
+        row["tier"] = "proposed"
         rows.append(row)
     return rows
 

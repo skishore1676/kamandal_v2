@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from kamandal_v2.schemas import UNIVERSE_HEADER
 from kamandal_v2 import sheets
 
@@ -37,7 +39,8 @@ def test_universe_proposals_append_only_and_preserve_existing_rows(monkeypatch) 
     assert calls[0]["rows"][0][UNIVERSE_HEADER.index("symbol")] == "NEW"
 
 
-def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch) -> None:  # noqa: ANN001
+@pytest.mark.parametrize("field", ["tier", "profile", "max_positions", "allowed_playbooks"])
+def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch, field) -> None:  # noqa: ANN001
     existing = [{key: "" for key in UNIVERSE_HEADER}]
 
     class Client:
@@ -49,7 +52,7 @@ def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch) ->
 
         def append_tab_rows(self, _title, *, header, rows):  # noqa: ANN001
             appended = dict(zip(header, rows[0], strict=True))
-            appended["tier"] = "held"
+            appended[field] = "unexpected"
             existing.append(appended)
             return 1
 
@@ -58,7 +61,7 @@ def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch) ->
     try:
         sheets.write_universe_proposals({}, [{"symbol": "NEW", "enabled": "FALSE", "tier": "proposed"}])
     except RuntimeError as exc:
-        assert "tier" in str(exc)
+        assert field in str(exc)
     else:
         raise AssertionError("proposal write must reject an inexact readback")
 
