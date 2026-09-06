@@ -271,8 +271,8 @@ def main() -> None:
         help="Propose up to 5 universe rows from the committed weekly discovery window",
     )
     propose_parser.add_argument("--limit", type=int, default=5, help="Max proposals per day (cap 5)")
-    propose_parser.add_argument("--lookback-days", type=int, default=None, help="Compatibility override; default is the committed weekly review window")
-    propose_parser.add_argument("--write-sheet", action="store_true", help="Append proposals to the universe sheet (enabled=FALSE, tier=proposed)")
+    propose_parser.add_argument("--lookback-days", type=int, default=None, help="Preview-only override; publication uses the committed weekly review window")
+    propose_parser.add_argument("--write-sheet", action="store_true", help="Append disabled proposals; provenance stays in the review ledger")
     propose_parser.add_argument("--config-source", choices=["sheet", "seed"], default="sheet")
     propose_parser.add_argument("--dry-run", action="store_true", help="Print proposals without writing sheet")
 
@@ -427,7 +427,20 @@ def main() -> None:
         store = LocalStore()
         existing = []
         if args.write_sheet and not args.dry_run:
-            existing = pull_sheet_tables(load_control()).get("universe") or []
+            from datetime import UTC, datetime
+            from kamandal_v2.sheets import write_universe_proposals
+            from kamandal_v2.tools.universe_proposer import run_weekly_universe_review
+
+            config = load_control()
+            existing = pull_sheet_tables(config).get("universe") or []
+            result = run_weekly_universe_review(
+                store, universe_rows=existing, cutoff=datetime.now(UTC), limit=args.limit,
+                publish=lambda rows: write_universe_proposals(config, rows),
+            )
+            print(json.dumps({"written": result.published_count, "committed": result.committed,
+                              "review_id": result.review_id}, indent=2))
+            return
+
         existing_symbols = {str(row.get("symbol") or "").upper() for row in existing}
         proposals = collect_out_of_universe_symbols(
             store,
@@ -437,19 +450,6 @@ def main() -> None:
         )
         rows = proposals_to_universe_rows(proposals)
         print(json.dumps({"proposals": proposals, "rows": rows, "count": len(rows), "write_sheet": bool(args.write_sheet and not args.dry_run)}, indent=2))
-        if args.write_sheet and not args.dry_run and rows:
-            from kamandal_v2.sheets import write_universe_proposals
-
-            # Guard: do not exceed 5/day — check today's existing proposed tier
-            today = __import__("datetime").datetime.now(__import__("datetime").UTC).date().isoformat()
-            proposed_today = sum(1 for row in existing if str(row.get("proposal_date") or "").strip() == today and str(row.get("tier") or "").strip().lower() == "proposed")
-            remaining = max(0, 5 - proposed_today)
-            if remaining <= 0:
-                print(json.dumps({"status": "skipped", "reason": "daily_proposal_cap_reached", "proposed_today": proposed_today}, indent=2))
-                return
-            trimmed = rows[:remaining]
-            written = write_universe_proposals(load_control(), trimmed)
-            print(json.dumps({"status": "written", "written": written, "remaining": remaining}, indent=2))
         return
 
     if args.command == "review-universe":

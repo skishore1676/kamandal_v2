@@ -61,9 +61,10 @@ fields on the relevant Google Sheet `playbooks` row:
   broker preflight evidence, portfolio ownership, health, ranking,
   approval, session, and execution gates all pass.
 
-Existing explicit strangle permissions remain valid even outside this range. The
-overlay removes only universe-profile and per-row allowed-playbook mismatches for
-`short_strangle`; it does not relax any other rejection reason.
+Since the 2026-09-06 minimal-universe migration, symbol-level permissions and
+profile mismatches no longer exist. The configured strategy price/IV-rank ranges
+still apply; a missing range does not authorize a candidate. All other strategy,
+liquidity, portfolio and execution checks remain in force.
 
 `min_option_oi` is a liquidity reference threshold, not a hard exclusion, when
 `live.liquidity_policy.low_oi_mode=price_through`. Both shadow and live planning

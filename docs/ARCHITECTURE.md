@@ -378,13 +378,12 @@ proposals per review keeps the operator surface useful. Ranking is transparent:
 recurrence, then source diversity, then recency, then tradability. These are
 discovery facts, not an alpha score.
 
-The existing five-tab Sheet remains the operator surface. Proposed rows use
-`tier=proposed` and `enabled=FALSE`; the operator may change the tier to `held`
-or `rejected`, still disabled. The publisher never recreates held/rejected
-symbols and may update only machine-owned proposal fields, never operator policy
-or notes. Any automatic append must be a bounded row operation that preserves
-headers, formulas, formatting, and validation and then reads back the exact
-rows. It must not clear and rewrite the entire universe tab.
+The `universe` Sheet contains only `symbol`, `enabled`, and `notes`. New rows
+are disabled; retaining a disabled symbol prevents repeated proposals. Full
+proposal provenance lives in the existing discovery/review ledger. The publisher
+only appends previously unseen symbols and never rewrites operator decisions or
+notes. Publication must preserve headers, formatting and validation and verify
+exact readback. Preview or failed publication must not advance the review boundary.
 
 The Friday universe projection is deterministic and failure-isolated from the
 existing LLM rejection review. Both may share the Friday launchd wrapper, but

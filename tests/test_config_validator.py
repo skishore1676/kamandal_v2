@@ -22,7 +22,7 @@ def _playbook(playbook_id: str, **overrides) -> Playbook:
 
 def test_validate_config_errors_for_enabled_unsupported_structure() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='TSLA', enabled=True)],
         [_playbook("unsupported", structure="not_real", strategy_family="not_real")],
     )
 
@@ -41,7 +41,7 @@ def test_validate_config_errors_for_missing_tables() -> None:
 
 def test_validate_config_errors_when_no_playbooks_enabled() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='TSLA', enabled=True)],
         [_playbook("disabled", enabled=False)],
     )
 
@@ -49,9 +49,9 @@ def test_validate_config_errors_when_no_playbooks_enabled() -> None:
     assert "config_missing_enabled_playbooks" in result.errors
 
 
-def test_validate_config_errors_when_enabled_playbook_is_unreachable_from_universe() -> None:
+def test_validate_config_errors_when_no_universe_symbol_enabled() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks", allowed_playbooks=["put_spread"])],
+        [UniverseEntry(symbol='TSLA', enabled=False)],
         [_playbook("short_strangle_high_iv", strategy_family="short_strangle", structure="short_strangle", profiles=["index_etf"])],
     )
 
@@ -61,7 +61,7 @@ def test_validate_config_errors_when_enabled_playbook_is_unreachable_from_univer
 
 def test_validate_config_allows_enabled_playbook_routed_by_structure() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="SPY", enabled=True, profile="index_etf", allowed_playbooks=["short_strangle"])],
+        [UniverseEntry(symbol='SPY', enabled=True)],
         [_playbook("short_strangle_high_iv", strategy_family="short_strangle", structure="short_strangle", profiles=["index_etf"])],
     )
 
@@ -70,7 +70,7 @@ def test_validate_config_allows_enabled_playbook_routed_by_structure() -> None:
 
 def test_validate_config_errors_for_enabled_unknown_thesis_tag() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='TSLA', enabled=True)],
         [_playbook("put_spread_default", applicable_thesis_tags=["support_bounce", "needs_confirmation"])],
     )
 
@@ -80,7 +80,7 @@ def test_validate_config_errors_for_enabled_unknown_thesis_tag() -> None:
 
 def test_validate_config_allows_disabled_unknown_thesis_tag() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='TSLA', enabled=True)],
         [
             _playbook("put_spread_default"),
             _playbook("experimental", enabled=False, applicable_thesis_tags=["needs_confirmation"]),
@@ -93,7 +93,7 @@ def test_validate_config_allows_disabled_unknown_thesis_tag() -> None:
 
 def test_validate_config_warns_on_overlapping_enabled_variants() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='TSLA', enabled=True)],
         [
             _playbook("put_spread_default", iv_percentile_min=30, iv_percentile_max=80),
             _playbook("put_spread_high_ivr", variant="high_ivr", iv_percentile_min=70, iv_percentile_max=100),
@@ -106,7 +106,7 @@ def test_validate_config_warns_on_overlapping_enabled_variants() -> None:
 
 def test_validate_config_warns_when_enabled_playbook_missing_live_bpr_cap() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='TSLA', enabled=True)],
         [_playbook("put_spread_default", live_max_bpr_per_order=None)],
     )
 
@@ -116,7 +116,7 @@ def test_validate_config_warns_when_enabled_playbook_missing_live_bpr_cap() -> N
 
 def test_validate_config_accepts_enabled_playbook_live_bpr_cap() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='TSLA', enabled=True)],
         [_playbook("put_spread_default", live_max_bpr_per_order=500)],
     )
 
@@ -126,7 +126,7 @@ def test_validate_config_accepts_enabled_playbook_live_bpr_cap() -> None:
 
 def test_validate_config_requires_all_sheet_values_for_universe_expansion() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TLT", enabled=True, profile="rates_etf", allowed_playbooks=["put_spread"])],
+        [UniverseEntry(symbol='TLT', enabled=True)],
         [
             _playbook(
                 "short_strangle_sheet",
@@ -144,7 +144,7 @@ def test_validate_config_requires_all_sheet_values_for_universe_expansion() -> N
 
 def test_validate_config_accepts_complete_sheet_owned_universe_expansion() -> None:
     result = validate_config(
-        [UniverseEntry(symbol="TLT", enabled=True, profile="rates_etf", allowed_playbooks=["put_spread"])],
+        [UniverseEntry(symbol='TLT', enabled=True)],
         [
             _playbook(
                 "short_strangle_sheet",

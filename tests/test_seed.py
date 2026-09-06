@@ -1,5 +1,14 @@
 from kamandal_v2.config import load_control
 from kamandal_v2.schemas import DAILY_PLAN_HEADER, PLAYBOOKS_HEADER, UNIVERSE_HEADER
+
+
+def test_seed_preserves_disabled_cached_symbols_and_minimal_columns(monkeypatch):
+    from kamandal_v2 import seed
+    monkeypatch.setattr(seed, "_old_cache_rows", lambda _: [
+        {"symbol": "AAPL", "enabled": "FALSE", "profile": "large_stocks", "notes": "Do not enable"},
+        {"symbol": "MSFT", "enabled": "TRUE", "notes": "Reviewed"},
+    ])
+    assert seed._universe_rows() == [["AAPL", "FALSE", "Do not enable"], ["MSFT", "TRUE", "Reviewed"]]
 from kamandal_v2.seed import build_seed_tables, seed_headers
 
 

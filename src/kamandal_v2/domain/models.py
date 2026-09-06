@@ -135,39 +135,13 @@ class Idea:
 class UniverseEntry:
     symbol: str
     enabled: bool
-    profile: str
-    tradable_iv_percentile_min: float = 0.0
-    tradable_iv_percentile_max: float = 100.0
-    max_bpr_pct: float = 25.0
-    max_positions: int = 1
-    earnings_sensitive: bool = True
-    event_avoid_days_before: int = 7
-    event_avoid_days_after: int = 1
-    allowed_playbooks: list[str] = field(default_factory=list)
-    tier: str = "primary"
-    proposal_source: str = ""
-    proposal_reason: str = ""
-    proposal_date: str = ""
     notes: str = ""
 
     @classmethod
     def from_row(cls, row: dict[str, Any]) -> "UniverseEntry":
         return cls(
             symbol=str(row.get("symbol") or "").upper(),
-            enabled=_as_bool(row.get("enabled"), default=True),
-            profile=str(row.get("profile") or row.get("stock_profile") or ""),
-            tradable_iv_percentile_min=_as_float(row.get("tradable_iv_percentile_min"), 0.0),
-            tradable_iv_percentile_max=_as_float(row.get("tradable_iv_percentile_max"), 100.0),
-            max_bpr_pct=_as_float(row.get("max_bpr_pct"), 25.0),
-            max_positions=int(_as_float(row.get("max_positions"), 1.0)),
-            earnings_sensitive=_as_bool(row.get("earnings_sensitive"), default=True),
-            event_avoid_days_before=int(_as_float(row.get("event_avoid_days_before"), 7.0)),
-            event_avoid_days_after=int(_as_float(row.get("event_avoid_days_after"), 1.0)),
-            allowed_playbooks=_as_list(row.get("allowed_playbooks")),
-            tier=str(row.get("tier") or "primary").strip().lower() or "primary",
-            proposal_source=str(row.get("proposal_source") or "").strip(),
-            proposal_reason=str(row.get("proposal_reason") or "").strip(),
-            proposal_date=str(row.get("proposal_date") or "").strip(),
+            enabled=_as_bool(row.get("enabled"), default=False),
             notes=str(row.get("notes") or ""),
         )
 

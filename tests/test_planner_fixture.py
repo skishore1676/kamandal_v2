@@ -172,7 +172,7 @@ def test_total_position_cap_includes_open_shadow_positions(tmp_path) -> None:
 def test_live_plan_context_includes_open_live_groups(tmp_path) -> None:
     # This is a live-position accounting test, not a migration test against
     # whichever legacy Kamandal seed files happen to exist on the host.
-    universe = [UniverseEntry(symbol="SPY", enabled=True, profile="index_etf", allowed_playbooks=["put_spread_fixture"])]
+    universe = [UniverseEntry(symbol='SPY', enabled=True)]
     playbooks = [
         Playbook(
             playbook_id="put_spread_fixture",

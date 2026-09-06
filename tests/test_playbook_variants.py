@@ -84,7 +84,7 @@ def test_put_diagonal_variant_matches_bearish_overextended_thesis() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -108,7 +108,7 @@ def test_put_diagonal_does_not_widen_sheet_dte_window_for_public_ladder() -> Non
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -130,7 +130,7 @@ def test_matched_playbook_zero_raw_candidates_gets_build_diagnostic() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
     playbook = _playbook(long_dte_min=75, long_dte_max=85)
     config = {"planner": {"expiry": {"diagonal_calendar_dte_fallback": {"enabled": False}}}}
 
@@ -174,7 +174,7 @@ def test_candidate_filter_warn_mode_logs_without_rejecting() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -202,7 +202,7 @@ def test_live_low_oi_price_through_warns_without_rejecting() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -232,7 +232,7 @@ def test_shadow_low_oi_price_through_matches_live_candidate_eligibility() -> Non
     })
     candidates = build_candidates(
         [idea],
-        [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='TSLA', enabled=True)],
         [_playbook(min_option_oi=999_999, max_bid_ask_pct=10.0)],
         FixtureMarketDataProvider(),
         FixturePreflightClient(),
@@ -253,7 +253,7 @@ def test_live_diagonal_package_spread_stays_hard_when_leg_price_through_is_enabl
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -286,7 +286,7 @@ def test_live_absurd_bid_ask_stays_hard_rejected() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -315,7 +315,7 @@ def test_permissive_match_mode_warns_instead_of_blocking_iv_and_horizon() -> Non
         "thesis_tags": ["overextended"],
         "horizon_days": 90,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
     market = _LowAbsoluteIvFixture()
 
     strict = build_candidates(
@@ -352,7 +352,7 @@ def test_variant_with_iv_bounds_skips_when_iv_percentile_missing() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -374,7 +374,7 @@ def test_variant_with_iv_abs_floor_skips_when_absolute_iv_is_too_low() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -396,7 +396,7 @@ def test_variant_with_iv_rank_floor_skips_when_rank_is_too_low() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 21,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -419,12 +419,7 @@ def test_universe_allowed_playbooks_accepts_strategy_family_for_variants() -> No
         "horizon_days": 21,
     })
     universe = [
-        UniverseEntry(
-            symbol="TSLA",
-            enabled=True,
-            profile="large_stocks",
-            allowed_playbooks=["put_diagonal"],
-        )
+        UniverseEntry(symbol='TSLA', enabled=True)
     ]
 
     candidates = build_candidates(
@@ -449,12 +444,7 @@ def test_mentioned_strategy_can_satisfy_tag_gate_without_strategy_hint() -> None
         "horizon_days": 30,
     })
     universe = [
-        UniverseEntry(
-            symbol="GE",
-            enabled=True,
-            profile="large_stocks",
-            allowed_playbooks=["jade_lizard"],
-        )
+        UniverseEntry(symbol='GE', enabled=True)
     ]
     playbook = Playbook(
         playbook_id="jade_lizard_high_iv",
@@ -499,7 +489,7 @@ def test_idea_allowed_structures_constrain_playbook_matching() -> None:
         "thesis_tags": ["breakout"],
         "horizon_days": 30,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
     call_spread = _playbook(
         playbook_id="call_spread_breakout",
         strategy_family="call_spread",
@@ -539,7 +529,7 @@ def test_match_diagnostics_explain_zero_playbook_match() -> None:
         "thesis_tags": ["overextended"],
         "horizon_days": 7,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     diagnostics = diagnose_idea_matches(
         [idea],
@@ -563,7 +553,7 @@ def test_llm_short_catalyst_horizon_uses_playbook_horizon_for_matching() -> None
         "horizon_days": 1,
         "catalyst_horizon_days": 1,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     candidates = build_candidates(
         [idea],
@@ -592,7 +582,7 @@ def test_explicit_trade_horizon_still_controls_matching() -> None:
         "catalyst_horizon_days": 1,
         "trade_horizon_days": 7,
     })
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
 
     diagnostics = diagnose_idea_matches(
         [idea],

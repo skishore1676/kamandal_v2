@@ -5,19 +5,6 @@ from __future__ import annotations
 UNIVERSE_HEADER = [
     "symbol",
     "enabled",
-    "profile",
-    "tradable_iv_percentile_min",
-    "tradable_iv_percentile_max",
-    "max_bpr_pct",
-    "max_positions",
-    "earnings_sensitive",
-    "event_avoid_days_before",
-    "event_avoid_days_after",
-    "allowed_playbooks",
-    "tier",
-    "proposal_source",
-    "proposal_reason",
-    "proposal_date",
     "notes",
 ]
 

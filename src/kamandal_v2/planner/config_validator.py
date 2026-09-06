@@ -38,7 +38,6 @@ def validate_config(universe: list[UniverseEntry], playbooks: list[Playbook]) ->
     _validate_enabled_playbook_reachability(universe, enabled_playbooks, errors)
     _validate_thesis_tags(enabled_playbooks, errors)
     _validate_universe_expansion(enabled_playbooks, errors)
-    _validate_universe_allowlists(universe, playbooks, warnings)
     _validate_variant_overlap(enabled_playbooks, warnings)
     _validate_live_bpr_caps(enabled_playbooks, warnings)
 
@@ -75,13 +74,7 @@ def _validate_enabled_playbook_reachability(universe: list[UniverseEntry], playb
 
 
 def _entry_can_route_playbook(entry: UniverseEntry, playbook: Playbook) -> bool:
-    if playbook.universe_expansion_enabled and playbook.structure == "short_strangle":
-        return True
-    if playbook.profiles and entry.profile not in playbook.profiles:
-        return False
-    if not entry.allowed_playbooks:
-        return True
-    return bool({playbook.playbook_id, playbook.structure, playbook.strategy_family}.intersection(entry.allowed_playbooks))
+    return entry.enabled
 
 
 def _validate_universe_expansion(playbooks: list[Playbook], errors: list[str]) -> None:
@@ -115,20 +108,6 @@ def _validate_thesis_tags(playbooks: list[Playbook], errors: list[str]) -> None:
             errors.append(f"enabled_playbook_unknown_thesis_tag:{playbook.playbook_id}:{tag}")
 
 
-def _validate_universe_allowlists(
-    universe: list[UniverseEntry],
-    playbooks: list[Playbook],
-    warnings: list[str],
-) -> None:
-    known = set()
-    for playbook in playbooks:
-        known.update({playbook.playbook_id, playbook.structure, playbook.strategy_family})
-    for entry in universe:
-        for allowed in entry.allowed_playbooks:
-            if allowed and allowed not in known:
-                warnings.append(f"universe_allowed_playbook_unknown:{entry.symbol}:{allowed}")
-
-
 def _validate_variant_overlap(playbooks: list[Playbook], warnings: list[str]) -> None:
     for left_index, left in enumerate(playbooks):
         for right in playbooks[left_index + 1:]:
@@ -136,8 +115,6 @@ def _validate_variant_overlap(playbooks: list[Playbook], warnings: list[str]) ->
                 continue
             if left.playbook_id == right.playbook_id:
                 warnings.append(f"duplicate_playbook_id:{left.playbook_id}")
-                continue
-            if not _lists_overlap(left.profiles, right.profiles):
                 continue
             if not _lists_overlap(left.applicable_direction, right.applicable_direction):
                 continue

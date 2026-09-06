@@ -1,8 +1,9 @@
 """Propose up to 5 new universe symbols from recent out-of-universe plan rejections.
 
 Phase 2 constraint: proposals come from the last few days of plan diagnostics,
-not random picks, capped at 5/day, written as tier=proposed rows in the existing
+not random picks, capped at 5/day, written as disabled rows in the existing
 universe Sheet (enabled=false requires operator flip to trade).
+Discovery provenance lives in the committed review payload, not Sheet columns.
 
 Micro-stock guard: excludes symbols failing simple liquidity/price heuristics.
 Full market-cap/ADV check can use live yfinance/market provider when available;
@@ -20,7 +21,6 @@ from typing import Any, Callable
 
 from kamandal_v2.domain.models import UniverseEntry
 from kamandal_v2.paths import resolve_path
-from kamandal_v2.schemas import UNIVERSE_HEADER
 from kamandal_v2.stores.sqlite import LocalStore
 
 MICRO_DENYLIST = {"", "USD", "USDT", "BTC", "ETH"}
@@ -30,46 +30,6 @@ DEFAULT_BOOTSTRAP_COMPLETED_SESSIONS = 5
 DEFAULT_MIN_PRICE = 10.0
 DEFAULT_MIN_AVG_DOLLAR_VOLUME = 20_000_000.0
 DEFAULT_MIN_MARKET_CAP = 2_000_000_000.0
-LARGE_STOCK_MARKET_CAP = 10_000_000_000.0
-# Explicit proposal policy, not a change to existing operator-owned rows.
-PROPOSAL_SETTINGS = {
-    "tradable_iv_percentile_min": "0",
-    "tradable_iv_percentile_max": "100",
-    "max_bpr_pct": "25",
-    "max_positions": "1",
-    "earnings_sensitive": "TRUE",
-    "event_avoid_days_before": "7",
-    "event_avoid_days_after": "1",
-    "allowed_playbooks": "put_spread, call_spread, put_diagonal, call_diagonal, short_strangle",
-}
-
-
-def complete_universe_proposal(
-    proposal: dict[str, Any], *, market_cap: float | None = None,
-) -> dict[str, Any]:
-    """Complete a disabled machine proposal without overwriting operator settings.
-
-    Unknown capitalization uses the narrower mid_stocks routing template, not
-    an assertion of market-cap classification. Enabled/held/rejected rows are
-    outside this repair contract. The caller owns publication and readback.
-    """
-    row = dict(proposal)
-    if str(row.get("enabled", "")).strip().lower() not in {"false", "0"}:
-        return row
-    if str(row.get("tier", "")).strip().lower() != "proposed":
-        return row
-    if row.get("proposal_source") not in {"durable_discovery", "recent_plans"}:
-        return row
-    if str(row.get("profile") or "").strip() in {"", "satellite"}:
-        cap = _positive_float(market_cap)
-        row["profile"] = "large_stocks" if cap is not None and cap >= LARGE_STOCK_MARKET_CAP else "mid_stocks"
-        basis = "market cap unavailable; mid_stocks routing fallback" if cap is None else f"market cap={cap:.0f}; 10B profile boundary"
-        note = f"proposal policy v1: {basis}; review settings, then enabled=TRUE to approve; retain FALSE to defer/reject"
-        row["notes"] = "; ".join(filter(None, [str(row.get("notes") or ""), note]))
-    for key, value in PROPOSAL_SETTINGS.items():
-        if row.get(key) is None or str(row[key]).strip() == "":
-            row[key] = value
-    return row
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,10 +57,13 @@ def run_weekly_universe_review(
     same evidence remains eligible for a retry.
     """
     cutoff = _as_utc(cutoff)
+    remaining = DEFAULT_MAX_PROPOSALS_PER_DAY - store.universe_proposals_published_on(cutoff.date().isoformat())
+    if remaining <= 0:
+        return WeeklyUniverseReviewResult(f"universe-review:daily-cap:{cutoff.date()}", cutoff.isoformat(), 0, 0, False)
     existing_symbols = {str(row.get("symbol") or "").upper() for row in universe_rows}
     proposals = collect_out_of_universe_symbols(
         store,
-        limit=limit,
+        limit=min(limit, remaining),
         existing_symbols=existing_symbols,
         market_facts_loader=market_facts_loader,
         cutoff=cutoff,
@@ -114,10 +77,13 @@ def run_weekly_universe_review(
     review_id = "universe-review:" + hashlib.sha256(
         (cutoff.isoformat() + "|" + "|".join(sorted(str(row.get("symbol") or "") for row in rows))).encode("utf-8")
     ).hexdigest()[:24]
+    if publish is None:
+        return WeeklyUniverseReviewResult(review_id, cutoff.isoformat(), len(rows), 0, False)
     store.record_universe_review_commit(
         review_id=review_id,
         committed_at=cutoff.isoformat(),
-        payload={"proposal_count": len(rows), "published_count": published, "symbols": [row["symbol"] for row in rows]},
+        payload={"proposal_count": len(rows), "published_count": published,
+                 "symbols": [row["symbol"] for row in rows], "proposals": proposals},
     )
     return WeeklyUniverseReviewResult(review_id, cutoff.isoformat(), len(rows), published, True)
 
@@ -224,11 +190,10 @@ def collect_out_of_universe_symbols(
             continue
         if not micro_stock_guard(symbol, market_facts=market_facts):
             continue
-        results.append(complete_universe_proposal(
+        results.append(
             {
                 "symbol": symbol,
                 "enabled": "FALSE",
-                "tier": "proposed",
                 "proposal_source": "durable_discovery" if symbol in discovery_by_symbol else "recent_plans",
                 "proposal_reason": (
                     f"out_of_universe {counter[symbol]}x from {window_start.date().isoformat()} "
@@ -240,8 +205,8 @@ def collect_out_of_universe_symbols(
                     f"avg_dollar_volume={market_facts['avg_dollar_volume']:.0f}, "
                     f"market_cap={market_facts.get('market_cap') or 'unavailable'}"
                 ),
-            }, market_cap=market_facts.get("market_cap")
-        ))
+            }
+        )
         if len(results) >= limit:
             break
     return results
@@ -271,18 +236,11 @@ def micro_stock_guard(
 
 def proposals_to_universe_rows(proposals: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Convert proposal dicts to universe Sheet rows (stringified)."""
-    rows: list[dict[str, str]] = []
-    for proposal in proposals:
-        row = {header: "" for header in UNIVERSE_HEADER}
-        for key, value in proposal.items():
-            if key in row:
-                row[key] = str(value)
-        # defaults for required sheet columns
-        # Proposals may never arrive armed, even if a caller supplies TRUE.
-        row["enabled"] = "FALSE"
-        row["tier"] = "proposed"
-        rows.append(row)
-    return rows
+    return [
+        {"symbol": str(proposal["symbol"]).strip().upper(), "enabled": "FALSE",
+         "notes": "Added by weekly discovery."}
+        for proposal in proposals
+    ]
 
 
 def _load_universe_entries(store: LocalStore) -> list[UniverseEntry]:

@@ -57,13 +57,6 @@ def market_scan_opportunities(
             continue
         observation = dict(observations.get(entry.symbol) or {})
         for policy in sorted(scan_policies, key=lambda item: item.playbook_id):
-            expansion_enabled = str(policy.resolved_fields.get("universe_expansion_enabled") or "").strip().lower() in {
-                "1", "true", "yes", "y", "on"
-            }
-            source_allowed = expansion_enabled or not entry.allowed_playbooks or (
-                policy.playbook_id in entry.allowed_playbooks
-                or str(policy.resolved_fields.get("structure") or "") in entry.allowed_playbooks
-            )
             identity = [policy.playbook_id, entry.symbol, observed_at]
             opportunities.append(
                 StrategyOpportunity(
@@ -76,7 +69,7 @@ def market_scan_opportunities(
                     source_id=f"universe:{entry.symbol}",
                     policy_hash=policy.policy_hash,
                     evidence={
-                        "source_approved": source_allowed,
+                        "source_approved": True,
                         "source_fresh": bool(observation.get("source_fresh", False)),
                         "universe": asdict(entry),
                     },

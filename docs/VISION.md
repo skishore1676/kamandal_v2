@@ -250,7 +250,7 @@ external PRD review.
 Loaded configuration is defined by:
 
 - environment/local config for runtime control and secrets
-- `universe` sheet for tradable symbols and per-profile constraints
+- `universe` sheet for symbol enablement and operator notes
 - `playbooks` sheet for strategy knowledge, enabled flags, and management rules
 
 Execution artifacts are local: orders, fills, broker payloads, positions,
@@ -279,8 +279,8 @@ Keep the object model small at first:
 
 Start with only these tabs:
 
-- `universe`: symbol, enabled, profile, tradable IV percentile range, max BPR,
-  max positions, earnings-sensitive flag, and notes.
+- `universe`: symbol, enabled, and notes. Strategy rules and portfolio limits
+  belong to their respective owners.
 - `playbooks`: enabled playbook rules: strategy family, structure, variant, leg
   count, IV/DTE/delta/risk/management rules, and notes.
 - `daily_plan`: ranked candidates and reasons.

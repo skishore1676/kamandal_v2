@@ -47,7 +47,7 @@ def _playbook(structure: str, **overrides) -> Playbook:
 def _candidates(playbook: Playbook, idea: Idea | None = None):
     return build_candidates(
         [idea or _idea()],
-        [UniverseEntry(symbol="NVDA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='NVDA', enabled=True)],
         [playbook],
         FixtureMarketDataProvider(),
         FixturePreflightClient(),
@@ -64,6 +64,24 @@ def test_short_strangle_builder_supports_strangle_alias() -> None:
     assert all(leg.side == "sell" for leg in eligible[0].legs)
 
 
+def test_minimal_universe_ignores_retired_filters_but_preserves_strategy_iv_and_enablement() -> None:
+    # An old snapshot must not silently restore retired symbol-level controls.
+    entry = UniverseEntry.from_row({
+        "symbol": "NVDA", "enabled": "TRUE", "profile": "never_matches",
+        "allowed_playbooks": "unsupported", "tradable_iv_percentile_min": "99",
+        "tradable_iv_percentile_max": "100", "max_positions": "0", "notes": "operator note",
+    })
+    assert entry == UniverseEntry("NVDA", True, "operator note")
+    playbook = _playbook("short_strangle", profiles=["index_etf"])
+    def build(row, policy):
+        return build_candidates([_idea(strategy_hint="strangle")], [row], [policy],
+                                FixtureMarketDataProvider(), FixturePreflightClient())
+    assert any(c.eligible for c in build(entry, playbook))
+    assert not build(UniverseEntry.from_row({"symbol": "NVDA"}), playbook)
+    assert not build(entry, _playbook("short_strangle", iv_percentile_min=99))
+    assert not build(entry, _playbook("short_strangle", enabled=False))
+
+
 def test_short_strangle_uses_broker_preflight_bpr_instead_of_local_formula() -> None:
     class BrokerPreflight:
         def preflight(self, _candidate):  # noqa: ANN001
@@ -76,7 +94,7 @@ def test_short_strangle_uses_broker_preflight_bpr_instead_of_local_formula() -> 
 
     candidates = build_candidates(
         [_idea(strategy_hint="strangle")],
-        [UniverseEntry(symbol="NVDA", enabled=True, profile="large_stocks")],
+        [UniverseEntry(symbol='NVDA', enabled=True)],
         [_playbook("short_strangle")],
         FixtureMarketDataProvider(),
         BrokerPreflight(),
@@ -98,7 +116,7 @@ def test_strangle_price_iv_overlay_expands_only_enabled_sheet_universe() -> None
         iv_rank_min=41,
         iv_rank_max=91,
     )
-    entry = UniverseEntry(symbol="TLT", enabled=True, profile="rates_etf", allowed_playbooks=["put_spread"])
+    entry = UniverseEntry(symbol='TLT', enabled=True)
     idea = _idea(underlying="TLT", strategy_hint="strangle")
 
     candidates = build_candidates(
@@ -112,7 +130,7 @@ def test_strangle_price_iv_overlay_expands_only_enabled_sheet_universe() -> None
     candidate = next(candidate for candidate in candidates if candidate.eligible)
     assert "strangle_eligibility=sheet_playbook_overlay" in candidate.reasons
 
-    disabled = UniverseEntry(symbol="TLT", enabled=False, profile="rates_etf", allowed_playbooks=["put_spread"])
+    disabled = UniverseEntry(symbol='TLT', enabled=False)
     assert build_candidates(
         [idea],
         [disabled],
@@ -124,7 +142,7 @@ def test_strangle_price_iv_overlay_expands_only_enabled_sheet_universe() -> None
 
 def test_strangle_universe_expansion_fails_closed_without_sheet_ranges() -> None:
     playbook = _playbook("short_strangle", profiles=["large_stocks"], universe_expansion_enabled=True)
-    entry = UniverseEntry(symbol="TLT", enabled=True, profile="rates_etf", allowed_playbooks=["put_spread"])
+    entry = UniverseEntry(symbol='TLT', enabled=True)
 
     assert build_candidates(
         [_idea(underlying="TLT", strategy_hint="strangle")],
@@ -212,12 +230,7 @@ def test_per_idea_cap_preserves_structure_diversity() -> None:
 
     candidates = build_candidates(
         [idea],
-        [UniverseEntry(
-            symbol="NVDA",
-            enabled=True,
-            profile="large_stocks",
-            allowed_playbooks=["put_spread", "call_diagonal"],
-        )],
+        [UniverseEntry(symbol='NVDA', enabled=True)],
         playbooks,
         FixtureMarketDataProvider(),
         FixturePreflightClient(),

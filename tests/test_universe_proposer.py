@@ -41,30 +41,6 @@ def test_proposer_reads_plan_diagnostics_dedupes_sheet_and_records_evidence(tmp_
     assert [proposal["symbol"] for proposal in proposals] == ["GOOD"]
     assert "verified price=75.00" in proposals[0]["notes"]
     assert proposals[0]["enabled"] == "FALSE"
-    assert proposals[0]["profile"] == "mid_stocks"
-    assert proposals[0]["max_positions"] == "1"
-    assert proposals[0]["earnings_sensitive"] == "TRUE"
-    assert proposals[0]["allowed_playbooks"]
-
-
-def test_proposal_repair_preserves_operator_values_and_is_idempotent() -> None:
-    from kamandal_v2.tools.universe_proposer import complete_universe_proposal
-
-    original = dict(symbol="NEW", enabled="FALSE", tier="proposed",
-                    proposal_source="durable_discovery", profile="satellite",
-                    notes="original evidence", max_positions="2")
-    repaired = complete_universe_proposal(original)
-    assert repaired["profile"] == "mid_stocks"
-    assert "market cap unavailable" in repaired["notes"]
-    assert repaired["notes"].startswith("original evidence;")
-    assert repaired["max_positions"] == "2"
-    assert complete_universe_proposal(repaired) == repaired
-    assert original["profile"] == "satellite"
-    for overrides in ({"enabled": "TRUE"}, {"enabled": ""}, {"tier": "held"},
-                      {"tier": "rejected"}, {"proposal_source": "operator"}):
-        protected = original | overrides
-        assert complete_universe_proposal(protected) == protected
-    assert complete_universe_proposal(original, market_cap=10_000_000_000)["profile"] == "large_stocks"
 
 
 def test_proposal_serialization_cannot_arm_a_symbol() -> None:
@@ -73,7 +49,7 @@ def test_proposal_serialization_cannot_arm_a_symbol() -> None:
     for supplied in ({}, {"enabled": "TRUE", "tier": "primary"}, {"enabled": ""}):
         row = proposals_to_universe_rows([{"symbol": "NEW"} | supplied])[0]
         assert row["enabled"] == "FALSE"
-        assert row["tier"] == "proposed"
+        assert set(row) == {"symbol", "enabled", "notes"}
 
 
 def test_proposer_prefers_replay_safe_durable_discovery_over_overwriteable_audit(tmp_path) -> None:
@@ -148,6 +124,36 @@ def test_weekly_review_does_not_advance_boundary_when_publication_fails(tmp_path
     else:
         raise AssertionError("inexact proposal publication must fail")
     assert store.latest_universe_review_commit_at() is None
+
+
+def test_review_keeps_provenance_off_sheet_and_daily_cap_in_ledger(tmp_path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    cutoff = datetime(2026, 9, 4, 15, tzinfo=UTC)
+    for symbol in ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF"]:
+        store.record_discovery_evidence(symbol=symbol, source_profile="x", source_record_id=symbol,
+                                       exclusion_reason="outside", evidence_ref=f"x:{symbol}",
+                                       observed_at="2026-09-04T12:00:00Z")
+    published = []
+    def publish(rows):
+        published.extend(rows)
+        return len(rows)
+    kwargs = dict(universe_rows=[], cutoff=cutoff, market_facts_loader=lambda _: {
+        "price": 75, "avg_dollar_volume": 40_000_000, "market_cap": 4_000_000_000,
+    })
+    preview = run_weekly_universe_review(store, publish=None, **kwargs)
+    assert not preview.committed
+    assert store.latest_universe_review_commit_at() is None
+    result = run_weekly_universe_review(store, publish=publish, **kwargs)
+    assert result.published_count == 5
+    assert all(set(row) == {"symbol", "enabled", "notes"} and row["enabled"] == "FALSE" for row in published)
+    with store._connect() as conn:
+        payload = json.loads(conn.execute("SELECT payload FROM universe_review_commits").fetchone()["payload"])
+    assert payload["proposals"][0]["proposal_source"] == "durable_discovery"
+    assert "verified price" in payload["proposals"][0]["notes"]
+    assert store.universe_proposals_published_on("2026-09-04") == 5
+    again = run_weekly_universe_review(store, publish=publish, **kwargs)
+    assert again.published_count == 0
+    assert len(published) == 5
 
 
 def test_review_universe_cli_initializes_config_before_sheet_read(monkeypatch, capsys) -> None:  # noqa: ANN001

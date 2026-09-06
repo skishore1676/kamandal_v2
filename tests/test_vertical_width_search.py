@@ -268,7 +268,7 @@ def test_vertical_width_search_keeps_narrowest_gate_passing_construction() -> No
 
 def test_vertical_width_search_gate_unmet_keeps_best_ratio_and_flags_metric() -> None:
     idea = _idea()
-    universe = [UniverseEntry(symbol="NVDA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='NVDA', enabled=True)]
     playbook = _playbook("put_spread", min_credit_to_width_ratio=0.28)
     quotes = _vertical_quotes(
         option_type="put",
@@ -303,7 +303,7 @@ def test_vertical_width_search_gate_unmet_keeps_best_ratio_and_flags_metric() ->
 
 def test_vertical_gate_unmet_count_ignores_pairs_with_an_eligible_construction() -> None:
     idea = _idea()
-    universe = [UniverseEntry(symbol="NVDA", enabled=True, profile="large_stocks")]
+    universe = [UniverseEntry(symbol='NVDA', enabled=True)]
     playbook = _playbook("put_spread", min_credit_to_width_ratio=0.28)
     quotes = _vertical_quotes(
         option_type="put",

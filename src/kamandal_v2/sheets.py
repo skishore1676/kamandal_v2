@@ -365,10 +365,10 @@ def write_live_book(config: dict[str, Any], header: list[str], rows: list[list[A
 
 
 def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, str]]) -> int:
-    """Append up to 5/day tier=proposed rows to the existing universe tab.
+    """Append disabled universe rows; discovery provenance belongs to the ledger.
 
     Does not clear or rewrite the tab.  Existing rows (including their formulas,
-    formatting, validation, tier, and operator notes) are untouched; this
+    formatting, validation, and operator notes) are untouched; this
     function may append only previously unseen proposed symbols.
     """
     if not proposals:
@@ -381,7 +381,7 @@ def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, s
 
     values = client.read_tab_values(title)
     existing_headers = [str(cell).strip() for cell in (values[0] if values else [])]
-    if len(existing_headers) != len(UNIVERSE_HEADER) or set(existing_headers) != set(UNIVERSE_HEADER):
+    if len(set(existing_headers)) != len(existing_headers) or not set(UNIVERSE_HEADER).issubset(existing_headers):
         missing = sorted(set(UNIVERSE_HEADER) - set(existing_headers))
         unexpected = sorted(set(existing_headers) - set(UNIVERSE_HEADER))
         raise ValueError(
@@ -398,12 +398,13 @@ def write_universe_proposals(config: dict[str, Any], proposals: list[dict[str, s
         for proposal in proposals
         if str(proposal.get("symbol") or "").upper() not in existing_by_symbol
     ]
+    if any(str(proposal.get("enabled") or "").upper() != "FALSE" for proposal in appendable):
+        raise ValueError("new universe proposals must explicitly set enabled=FALSE")
     rows = [[proposal.get(col, "") for col in header] for proposal in appendable]
     written = client.append_tab_rows(title, header=header, rows=rows)
     readback = {str(row.get("symbol") or "").upper(): row for row in client.read_tab(title)}
     mismatches: list[str] = []
-    # Verify every published setting; checking only provenance can silently
-    # commit a review whose profile/risk cells were lost during publication.
+    # Verify all three operator columns before committing review evidence.
     machine_owned = set(UNIVERSE_HEADER)
     for proposal in appendable:
         symbol = str(proposal.get("symbol") or "").upper()

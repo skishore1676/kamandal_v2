@@ -465,6 +465,15 @@ class LocalStore:
             ).fetchone()
         return str(row["committed_at"]) if row is not None else None
 
+    def universe_proposals_published_on(self, day: str) -> int:
+        """Daily publication cap survives removal of provenance Sheet columns."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT payload FROM universe_review_commits WHERE substr(committed_at, 1, 10) = ?",
+                (day,),
+            ).fetchall()
+        return sum(int(json.loads(row["payload"]).get("published_count") or 0) for row in rows)
+
     def _ensure_shadow_fill_columns(self, conn: sqlite3.Connection) -> None:
         existing = {row["name"] for row in conn.execute("PRAGMA table_info(shadow_fills)").fetchall()}
         columns = {

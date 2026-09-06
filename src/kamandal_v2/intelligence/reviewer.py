@@ -101,7 +101,8 @@ Separate observations into:
 Do not put meta-flags like liquidity_constrained, needs_confirmation, direction_ambiguous, short_horizon,
 or poor_evidence into thesis tag suggestions. Those belong in intelligence_improvements or human_review_queue.
 Only use controlled thesis tags provided in the prompt.
-Do not suggest symbol-specific strategy variants. Prefer universe/profile/liquidity filter observations.
+Do not suggest symbol-specific strategy variants or universe strategy restrictions.
+The universe controls symbol enablement only; prefer evidence about strategy criteria and liquidity.
 You must not approve trades, submit orders, or silently mutate execution rules.
 
 Return JSON only:
@@ -131,10 +132,7 @@ def _review_user_prompt(
     universe_summary = [
         {
             "symbol": entry.symbol,
-            "profile": entry.profile,
-            "allowed_playbooks": entry.allowed_playbooks,
-            "tradable_iv_percentile_min": entry.tradable_iv_percentile_min,
-            "tradable_iv_percentile_max": entry.tradable_iv_percentile_max,
+            "notes": entry.notes,
         }
         for entry in universe
         if entry.enabled

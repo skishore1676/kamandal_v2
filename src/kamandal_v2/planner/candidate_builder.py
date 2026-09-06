@@ -48,7 +48,6 @@ PERMISSIVE_MATCH_GATE_PREFIXES = (
     "iv_rank_below_min",
     "iv_rank_missing",
     "playbook_iv_percentile_out_of_range:",
-    "universe_iv_percentile_out_of_range:",
 )
 
 
@@ -352,20 +351,13 @@ def _match_rejections(
         if playbook.structure not in SUPPORTED_STRUCTURES:
             reasons.append(f"unsupported_structure:{playbook.structure}")
         return reasons
-    if playbook.profiles and entry.profile not in playbook.profiles:
-        reasons.append(f"profile_mismatch:{entry.profile}")
-    if entry.allowed_playbooks and not {playbook.playbook_id, playbook.structure, playbook.strategy_family}.intersection(entry.allowed_playbooks):
-        reasons.append("universe_playbook_not_allowed")
-    if _strangle_expansion_allows(entry, playbook, iv_rank, underlying_price):
-        reasons = [
-            reason
-            for reason in reasons
-            if not reason.startswith("profile_mismatch:") and reason != "universe_playbook_not_allowed"
-        ]
     if idea.allowed_structures:
         allowed = set().union(*(_strategy_aliases(value) for value in idea.allowed_structures))
         if not allowed.intersection({playbook.playbook_id, playbook.structure, playbook.strategy_family}):
             reasons.append("idea_structure_not_allowed")
+    if playbook.universe_expansion_enabled and playbook.structure == "short_strangle":
+        if not _strangle_expansion_allows(entry, playbook, iv_rank, underlying_price):
+            reasons.append("strangle_entry_outside_configured_ranges")
     if idea.strategy_hint and not _strategy_aliases(idea.strategy_hint).intersection({playbook.playbook_id, playbook.structure, playbook.strategy_family}):
         reasons.append(f"strategy_hint_mismatch:{idea.strategy_hint}")
     if playbook.applicable_direction and idea.direction not in playbook.applicable_direction:
@@ -393,8 +385,6 @@ def _match_rejections(
     if playbook.requires_iv_percentile and iv_pct is None:
         reasons.append("iv_percentile_missing")
     if iv_pct is not None:
-        if iv_pct < entry.tradable_iv_percentile_min or iv_pct > entry.tradable_iv_percentile_max:
-            reasons.append(f"universe_iv_percentile_out_of_range:{iv_pct}")
         if iv_pct < playbook.iv_percentile_min or iv_pct > playbook.iv_percentile_max:
             reasons.append(f"playbook_iv_percentile_out_of_range:{iv_pct}")
     if playbook.iv_rank_min is not None and (iv_rank is None or iv_rank < playbook.iv_rank_min):

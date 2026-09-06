@@ -43,16 +43,12 @@ but should not be printed or committed.
 Seed from old Kamandal's cached/configured universe.
 
 ```text
-symbol, profile, tradable_iv_percentile_min, tradable_iv_percentile_max,
-max_bpr_pct, max_positions, earnings_sensitive
+symbol, enabled, notes
 ```
 
-Example profiles:
-
-- `index_etf`
-- `liquid_single_name`
-- `bond_etf`
-- `commodity_etf`
+Retired fields in historical source caches are ignored. Strategy eligibility
+comes from playbooks and actual market evidence; portfolio limits come from the
+risk manager. Preserve explicit disabled symbols when importing a cache.
 
 ## 4. Initial Playbooks
 

@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from kamandal_v2.domain.models import UniverseEntry
 from kamandal_v2.paths import OLD_KAMANDAL_ROOT
 from kamandal_v2.schemas import (
     DAILY_PLAN_HEADER,
@@ -153,16 +154,12 @@ FALLBACK_PROFILES = [
         "profile_id": "index_etf",
         "symbols": ["SPY", "QQQ", "IWM"],
         "allowed_structures": ["short_put", "put_spread", "call_spread", "iron_condor", "calendar_spread"],
-        "earnings_sensitive": False,
-        "max_positions": 1,
         "notes": "Built-in fallback profile used when old Kamandal seed files are unavailable.",
     },
     {
         "profile_id": "large_stocks",
         "symbols": ["TSLA", "NVDA"],
         "allowed_structures": ["short_put", "put_spread", "call_spread", "iron_condor", "calendar_spread"],
-        "earnings_sensitive": True,
-        "max_positions": 1,
         "notes": "Built-in fallback profile used when old Kamandal seed files are unavailable.",
     },
 ]
@@ -181,7 +178,7 @@ def build_seed_tables(control: dict[str, Any]) -> dict[str, list[list[Any]]]:
             row[debit_width_index] = 0.75
         row[accepted_inputs_index] = row[source_mode_index] or "idea"
     return {
-        "universe": _universe_rows(control, playbooks),
+        "universe": _universe_rows(),
         "playbooks": playbooks,
         "daily_plan": [],
         "trade_sources": [
@@ -476,7 +473,7 @@ def _narrative_row(
     ]
 
 
-def _universe_rows(control: dict[str, Any], playbooks: list[list[Any]]) -> list[list[Any]]:
+def _universe_rows() -> list[list[Any]]:
     profile_by_id = {
         str(profile.get("profile_id") or ""): profile
         for profile in _profile_rows()
@@ -484,54 +481,19 @@ def _universe_rows(control: dict[str, Any], playbooks: list[list[Any]]) -> list[
     }
     cached_universe = _old_cache_rows("universe.json")
     if cached_universe:
-        symbol_profiles = [
-            (str(row.get("symbol") or "").upper(), str(row.get("stock_profile") or row.get("profile") or ""))
-            for row in cached_universe
-            if row.get("enabled", True)
-        ]
-    else:
-        symbol_profiles = []
-        for profile_id, profile in profile_by_id.items():
-            for symbol in profile.get("symbols") or []:
-                symbol_profiles.append((str(symbol).upper(), profile_id))
+        entries = [UniverseEntry.from_row(row) for row in cached_universe if row.get("symbol")]
+        return [[entry.symbol, _bool_cell(entry.enabled), entry.notes] for entry in entries]
+    symbol_profiles = []
+    for profile_id, profile in profile_by_id.items():
+        for symbol in profile.get("symbols") or []:
+            symbol_profiles.append((str(symbol).upper(), profile_id))
 
-    max_bpr = ((control.get("portfolio") or {}).get("max_bpr_per_underlying_pct") or 25)
-    playbooks_by_profile = _playbooks_by_profile(playbooks)
     rows: list[list[Any]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[str] = set()
     for symbol, profile_id in symbol_profiles:
-        if not symbol or not profile_id or (symbol, profile_id) in seen:
+        if not symbol or symbol in seen:
             continue
-        seen.add((symbol, profile_id))
+        seen.add(symbol)
         profile = profile_by_id.get(profile_id, {})
-        earnings_sensitive = bool(profile.get("earnings_sensitive", True))
-        rows.append(
-            [
-                symbol,
-                "TRUE",
-                profile_id,
-                0,
-                100,
-                max_bpr,
-                profile.get("max_positions") or 1,
-                _bool_cell(earnings_sensitive),
-                7 if earnings_sensitive else 0,
-                1 if earnings_sensitive else 0,
-                _list_cell(playbooks_by_profile.get(profile_id, [])),
-                str(profile.get("notes") or ""),
-            ]
-        )
+        rows.append([symbol, "TRUE", str(profile.get("notes") or "")])
     return rows
-
-
-def _playbooks_by_profile(playbooks: list[list[Any]]) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-    for row in playbooks:
-        enabled = str(row[1]).upper() == "TRUE"
-        if not enabled:
-            continue
-        playbook_id = str(row[0])
-        profiles = [item.strip() for item in str(row[6]).split(",") if item.strip()]
-        for profile in profiles:
-            result.setdefault(profile, []).append(playbook_id)
-    return result

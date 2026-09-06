@@ -138,7 +138,7 @@ def _admission_context(**overrides):  # noqa: ANN003, ANN202
 
 def test_market_scan_source_is_deterministic_and_sheet_driven() -> None:
     policy = _policy()
-    universe = [UniverseEntry(symbol="XYZ", enabled=True, profile="large_cap")]
+    universe = [UniverseEntry(symbol='XYZ', enabled=True)]
     observations = {"XYZ": {"source_fresh": True, "underlying_price": 100, "iv_rank": 55}}
 
     first = market_scan_opportunities(universe, [policy], observations, observed_at="2026-08-08T12:00:00Z")
@@ -153,12 +153,7 @@ def test_market_scan_source_is_deterministic_and_sheet_driven() -> None:
 def test_market_scan_expansion_adds_sheet_ranged_symbol_despite_normal_allowlist() -> None:
     policy = _policy()
     universe = [
-        UniverseEntry(
-            symbol="XYZ",
-            enabled=True,
-            profile="large_cap",
-            allowed_playbooks=["put_spread_only"],
-        )
+        UniverseEntry(symbol='XYZ', enabled=True)
     ]
     opportunity = market_scan_opportunities(
         universe,
@@ -267,7 +262,7 @@ def test_score_fails_when_code_supplies_component_not_defined_by_sheet() -> None
 def test_admission_preserves_all_rejections_and_primary_blocker() -> None:
     policy = _policy()
     opportunity = market_scan_opportunities(
-        [UniverseEntry(symbol="XYZ", enabled=True, profile="large_cap")],
+        [UniverseEntry(symbol='XYZ', enabled=True)],
         [policy],
         {"XYZ": {"source_fresh": False, "underlying_price": 300, "iv_rank": 10}},
         observed_at="2026-08-08T12:00:00Z",
@@ -299,7 +294,7 @@ def test_admission_preserves_all_rejections_and_primary_blocker() -> None:
 def test_shadow_strangle_fallback_is_labeled_but_nonshadow_requires_broker_bpr() -> None:
     shadow_policy = _policy()
     opportunity = market_scan_opportunities(
-        [UniverseEntry(symbol="XYZ", enabled=True, profile="large_cap")],
+        [UniverseEntry(symbol='XYZ', enabled=True)],
         [shadow_policy],
         {"XYZ": {"source_fresh": True, "underlying_price": 100, "iv_rank": 55}},
         observed_at="2026-08-08T12:00:00Z",
@@ -315,7 +310,7 @@ def test_shadow_strangle_fallback_is_labeled_but_nonshadow_requires_broker_bpr()
 
     live_policy = _policy(csa_stage="pilot_live")
     live_opportunity = market_scan_opportunities(
-        [UniverseEntry(symbol="XYZ", enabled=True, profile="large_cap")],
+        [UniverseEntry(symbol='XYZ', enabled=True)],
         [live_policy],
         {"XYZ": {"source_fresh": True, "underlying_price": 100, "iv_rank": 55}},
         observed_at="2026-08-08T12:00:00Z",
@@ -334,7 +329,7 @@ def test_shadow_strangle_fallback_is_labeled_but_nonshadow_requires_broker_bpr()
 def test_admitted_decision_includes_sheet_score_components() -> None:
     policy = _policy()
     opportunity = market_scan_opportunities(
-        [UniverseEntry(symbol="XYZ", enabled=True, profile="large_cap")],
+        [UniverseEntry(symbol='XYZ', enabled=True)],
         [policy],
         {"XYZ": {"source_fresh": True, "underlying_price": 100, "iv_rank": 55}},
         observed_at="2026-08-08T12:00:00Z",
@@ -357,7 +352,7 @@ def test_admitted_decision_includes_sheet_score_components() -> None:
 def test_noncalendar_policy_honors_sheet_event_avoidance() -> None:
     policy = _policy(avoid_earnings="TRUE")
     opportunity = market_scan_opportunities(
-        [UniverseEntry(symbol="XYZ", enabled=True, profile="large_cap")],
+        [UniverseEntry(symbol='XYZ', enabled=True)],
         [policy],
         {
             "XYZ": {

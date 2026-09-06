@@ -80,7 +80,7 @@ ideas:
 
 
 def _patch_live_config(monkeypatch, *, profit_target_pct: float = 50) -> None:
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_cap", allowed_playbooks=["call_spread"])]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
     playbooks = [
         Playbook(
             playbook_id="call_spread",
@@ -350,7 +350,7 @@ def test_live_policy_blocks_same_underlying_at_cap_before_staging(tmp_path) -> N
 
 
 def test_live_can_warn_on_quality_filters_without_permissive_matching(tmp_path, monkeypatch) -> None:
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_cap", allowed_playbooks=["call_spread"])]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
     playbooks = [
         Playbook(
             playbook_id="call_spread",
@@ -1561,7 +1561,7 @@ def test_live_management_suppresses_duplicate_close_when_group_has_working_close
 
 
 def test_live_management_surfaces_loss_watch_without_close_ticket(tmp_path, monkeypatch) -> None:
-    universe = [UniverseEntry(symbol="TSLA", enabled=True, profile="large_cap", allowed_playbooks=["put_spread"])]
+    universe = [UniverseEntry(symbol='TSLA', enabled=True)]
     playbooks = [
         Playbook(
             playbook_id="put_spread",

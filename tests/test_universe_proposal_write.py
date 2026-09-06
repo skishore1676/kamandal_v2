@@ -39,7 +39,7 @@ def test_universe_proposals_append_only_and_preserve_existing_rows(monkeypatch) 
     assert calls[0]["rows"][0][UNIVERSE_HEADER.index("symbol")] == "NEW"
 
 
-@pytest.mark.parametrize("field", ["tier", "profile", "max_positions", "allowed_playbooks"])
+@pytest.mark.parametrize("field", ["symbol", "enabled", "notes"])
 def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch, field) -> None:  # noqa: ANN001
     existing = [{key: "" for key in UNIVERSE_HEADER}]
 
@@ -61,13 +61,13 @@ def test_universe_proposals_require_exact_machine_owned_readback(monkeypatch, fi
     try:
         sheets.write_universe_proposals({}, [{"symbol": "NEW", "enabled": "FALSE", "tier": "proposed"}])
     except RuntimeError as exc:
-        assert field in str(exc)
+        assert ("NEW: missing" if field == "symbol" else field) in str(exc)
     else:
         raise AssertionError("proposal write must reject an inexact readback")
 
 
 def test_universe_proposals_follow_non_destructive_sheet_column_order(monkeypatch) -> None:
-    actual_header = [item for item in UNIVERSE_HEADER if item != "notes"] + ["notes"]
+    actual_header = ["notes", "enabled", "symbol"]
     existing = [{key: "" for key in actual_header}]
     existing[0]["symbol"] = "EXIST"
     calls = []
@@ -93,5 +93,4 @@ def test_universe_proposals_follow_non_destructive_sheet_column_order(monkeypatc
 
     assert written == 1
     assert calls[0][0] == actual_header
-    assert calls[0][1][0][actual_header.index("tier")] == "proposed"
     assert calls[0][1][0][actual_header.index("notes")] == "review me"

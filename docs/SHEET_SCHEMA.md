@@ -32,68 +32,39 @@ KAMANDAL_LLM_MODEL=
 
 ## `universe`
 
-Operator-owned tradable universe and per-symbol/profile constraints.
-
-Suggested columns:
+The operator surface has exactly three columns:
 
 ```text
 symbol
 enabled
-profile
-tradable_iv_percentile_min
-tradable_iv_percentile_max
-max_bpr_pct
-max_positions
-earnings_sensitive
-event_avoid_days_before
-event_avoid_days_after
-allowed_playbooks
 notes
-tier
-proposal_source
-proposal_reason
-proposal_date
 ```
 
-Notes:
+`enabled=TRUE` admits a symbol for consideration. FALSE (including a blank
+cell) prevents new candidates. Keep disabled rows to remember a rejection and
+prevent repeated proposals. Notes are optional operator context.
 
-- `enabled`: true/false.
-- `profile`: for grouping, such as `index_etf`, `large_stocks`, `mid_stocks`,
-  `bond_etf`, `commodity_etf`.
-- `tradable_iv_percentile_min/max`: the IV percentile range where the symbol is
-  eligible for new entries.
-- `allowed_playbooks`: optional comma-separated allowlist. Blank means use all
-  enabled playbooks compatible with the profile.
+No symbol-level profile, strategy allowlist, IV range, BPR/position limit,
+earnings settings, or tier participates in eligibility. Legacy snapshots may
+still contain those fields; they are ignored. Legacy `playbooks.profiles` is
+also ignored, so deleting a universe column cannot leave a hidden profile veto.
+Strategy IV/DTE/delta/event/liquidity rules, source-routing policies, and the
+portfolio/risk manager continue to own their respective decisions.
 
-### Weekly proposals and approval
+The Friday 10:00 CT discovery review appends at most five disabled proposals
+per UTC day. New rows contain only symbol, FALSE, and a short note. Full source,
+reason, date, and market-check evidence live in `universe_review_commits.payload`
+alongside the existing discovery ledger. Exact publication readback precedes
+commit; previews and failed publications do not advance the review boundary.
+The legacy `propose-universe-symbols --write-sheet` uses this same workflow and
+ledger cap. No per-row approval tier or extra operator tab is required.
 
-The Friday 10:00 CT review appends at most five previously unseen symbols,
-disabled (`enabled=FALSE`, `tier=proposed`). Proposal policy v1 fills IV
-percentiles 0–100, max positions 1, earnings sensitive TRUE, avoidance 7 days
-before/1 after, and the explicit allowlist `put_spread, call_spread,
-put_diagonal, call_diagonal, short_strangle`. These remain subject to enabled
-playbooks, profile compatibility, market/event checks, and portfolio selection.
-An allowlist does not activate a disabled playbook or select live/shadow mode.
-
-Verified market cap >=10B selects `large_stocks`; otherwise `mid_stocks` is
-used. When market cap is unavailable, notes explicitly identify a routing
-fallback, not a verified size classification. The old `satellite` placeholder
-did not match normal playbook profiles. Original discovery dates/evidence are
-retained during the September 2026 backfill; it is not a fresh market-data scan.
-
-Review the completed row, then change **only `enabled` to TRUE** to admit the
-symbol for consideration at the next normal plan. This is eligibility, not an
-immediate order. Universe `tier` is provenance metadata, not a second approval
-switch; it may stay `proposed` after approval. To defer or reject, retain FALSE
-and record the reason in `notes`; keeping the row prevents repeated proposals.
-Deleting it can allow later re-proposal. Do not leave `enabled` blank.
-
-The universe fields `max_bpr_pct`, `max_positions`, `earnings_sensitive`, and
-`event_avoid_days_before/after` expose legacy parsed defaults; they are **not
-currently enforced as per-symbol limits** by the planner. Portfolio/risk-manager
-position and BPR limits, playbook sizing, and playbook event checks remain the
-operative controls. Do not interpret these universe columns as additional
-enforced safety limits. This proposal completion changes no live risk gates.
+Migration 2026-09-06: the complete pre-migration Sheet and policy tables are
+archived in `outputs/minimal-universe-20260906/` on development and oldmac.
+This supersedes the September 5 proposal completion template. Existing enabled
+values and operator notes are preserved; obsolete generated policy guidance is
+removed from machine proposal notes. See
+[the migration and risk audit](reviews/minimal-universe-2026-09-06.md).
 
 ## `playbooks`
 

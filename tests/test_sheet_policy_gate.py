@@ -100,7 +100,7 @@ def test_sheet_policy_gate_catches_missing_watch_multiple_before_deploy() -> Non
 
 def test_sheet_policy_gate_catches_missing_universe_operator_columns() -> None:
     tables = _tables()
-    for field in ("tier", "proposal_source", "proposal_reason", "proposal_date"):
+    for field in ("enabled", "notes"):
         tables["universe"][0].pop(field)
 
     result = validate_sheet_policy({}, tables=tables, read_at="2026-08-24T15:00:00Z")
