@@ -103,6 +103,98 @@ def test_launchd_status_outputs_units_without_broker_mutation(monkeypatch, tmp_p
     }
 
 
+def test_launchd_status_projects_open_selected_entry_attention(tmp_path: Path) -> None:
+    db = tmp_path / "kamandal.db"
+    repo = tmp_path / "repo"
+    (repo / "data" / "logs" / "launchd").mkdir(parents=True)
+    store = LocalStore(db)
+    store.event(
+        "live_selected_entry_attention_state",
+        {
+            "status": "open",
+            "fingerprint": "entry-fingerprint",
+            "reason": "broker_rejected",
+            "ticket_hash": "ticket-1",
+            "incident_subject": "plan-1",
+            "underlying": "NVDA",
+            "intent_type": "open",
+            "notification_ok": True,
+            "notification_mode": "live",
+        },
+    )
+
+    payload = launchd_status.build_status(repo_root=repo, db_path=db, config=_config())
+
+    units = {unit["unit_id"]: unit for unit in payload["units"]}
+    attention = units["kamandal:selected-entry-attention"]
+    assert payload["counts"]["units"] == len(payload["units"])
+    assert attention["lifecycle"] == "stuck"
+    assert attention["attention_key"] == "kamandal:selected-entry-attention"
+    assert attention["attention_class"] == "system_attention"
+    assert attention["attention_mover"] == "kamandal"
+    assert attention["findings"] == ["selected_entry_not_placed:broker_rejected"]
+    assert attention["last"]["domain"] == {
+        "ok": False,
+        "status": "operator_needed",
+        "attention_required": True,
+        "failure_code": "broker_rejected",
+    }
+    assert attention["latest_alert"] == {
+        "mode": "live",
+        "status": "delivered",
+        "ok": True,
+    }
+    assert "NVDA" in attention["human_action"]
+
+
+def test_selected_entry_attention_does_not_call_spool_or_off_a_delivered_page(tmp_path: Path) -> None:
+    store = LocalStore(tmp_path / "kamandal.db")
+    for mode, expected in (("spool", "spooled"), ("off", "disabled")):
+        store.event(
+            launchd_status.SELECTED_ENTRY_ATTENTION_STATE_EVENT,
+            {
+                "status": "open",
+                "reason": "broker_rejected",
+                "underlying": "NVDA",
+                "notification_ok": mode == "spool",
+                "notification_mode": mode,
+            },
+        )
+
+        unit = launchd_status._selected_entry_attention_unit(store)
+
+        assert unit is not None
+        assert unit["latest_alert"]["status"] == expected
+        assert unit["latest_alert"].get("ok") is (True if mode == "spool" else None)
+
+
+def test_launchd_status_omits_cleared_selected_entry_attention(tmp_path: Path) -> None:
+    db = tmp_path / "kamandal.db"
+    repo = tmp_path / "repo"
+    (repo / "data" / "logs" / "launchd").mkdir(parents=True)
+    store = LocalStore(db)
+    store.event(
+        "live_selected_entry_attention_state",
+        {
+            "status": "open",
+            "reason": "broker_rejected",
+            "underlying": "NVDA",
+            "intent_type": "open",
+            "notification_ok": True,
+            "notification_mode": "live",
+        },
+    )
+    store.event(
+        "live_selected_entry_attention_state",
+        {"status": "cleared", "reason": "broker_rejected"},
+    )
+
+    payload = launchd_status.build_status(repo_root=repo, db_path=db, config=_config())
+
+    unit_ids = {unit["unit_id"] for unit in payload["units"]}
+    assert "kamandal:selected-entry-attention" not in unit_ids
+
+
 def test_launchd_status_reports_retired_shadow_history_without_reclassifying_it(
     monkeypatch,
     tmp_path: Path,
