@@ -130,11 +130,99 @@ def test_characterize_live_approval_is_rank_one_only(tmp_path) -> None:
         Plan("rank-two", 2, "eligible", [candidate], 1.0, 400, 4, 9_600, before, before),
     ]
     result = type("PlanRunResult", (), {"plans": plans, "metrics": {}})()
-    rows = render_live_plan_rows(result, {"live": {"entry_approval_mode": "auto_top_plan"}}, store=LocalStore(tmp_path / "state.db"))
+    store = LocalStore(tmp_path / "state.db")
+    rows = render_live_plan_rows(result, {"live": {"entry_approval_mode": "auto_top_plan"}}, store=store)
 
     assert len(rows) == 2
     assert dict(zip(DAILY_PLAN_HEADER, rows[0], strict=False))["operator_action"] == APPROVE_LIVE
-    assert dict(zip(DAILY_PLAN_HEADER, rows[1], strict=False))["operator_action"] == ""
+    alternative = dict(zip(DAILY_PLAN_HEADER, rows[1], strict=False))
+    assert alternative["operator_action"] == ""
+    alternative_detail = json.loads(alternative["plan_detail_json"])
+    assert alternative_detail["live_gate_status"] == "advisory_only"
+    assert alternative_detail["live_blockers"] == ["not_selected_rank_one"]
+    assert alternative_detail["basket_execution_json"]["executable"] is False
+    assert {
+        ticket["plan_id"] for ticket in store.live_order_intents_by_type("open")
+    } == {"rank-one"}
+
+
+def test_selected_quote_revision_atomically_supersedes_unsubmitted_ticket(tmp_path) -> None:
+    store = LocalStore(tmp_path / "state.db")
+    first = _fallback_ticket("first-selected-quote")
+    second = {**first, "ticket_hash": "second-selected-quote", "order_id": "second-order", "limit_price": "-0.95"}
+    second["submit_payload"] = {**first["submit_payload"], "orderId": "second-order", "limitPrice": "-0.95"}
+
+    assert store.stage_selected_live_order_intent(first) == []
+    store.update_live_order_intent_status(first["ticket_hash"], "stage_approved_pending_submit")
+    superseded = store.stage_selected_live_order_intent(second)
+
+    assert superseded == [first["ticket_hash"]]
+    retired = store.live_order_intent(first["ticket_hash"])
+    assert retired["_ledger_status"] == "retired_superseded_entry_revision"
+    assert retired["superseded_by_ticket_hash"] == second["ticket_hash"]
+    bindable = store.live_order_intents_by_type(
+        "open",
+        statuses={"pending_approval", "stage_approved_pending_submit", "waiting_entry_window"},
+    )
+    assert [ticket["ticket_hash"] for ticket in bindable] == [second["ticket_hash"]]
+
+
+def test_selected_quote_revision_fails_closed_on_broker_evidence(tmp_path) -> None:
+    store = LocalStore(tmp_path / "state.db")
+    first = _fallback_ticket("first-selected-quote")
+    second = {**first, "ticket_hash": "second-selected-quote", "order_id": "second-order", "limit_price": "-0.95"}
+    store.stage_selected_live_order_intent(first)
+    store.record_live_order_attempt(
+        first,
+        action="submit_open",
+        submit=True,
+        ok=False,
+        request_payload=first["submit_payload"],
+        response_payload={"error": "timeout"},
+    )
+
+    with pytest.raises(RuntimeError, match="has broker evidence"):
+        store.stage_selected_live_order_intent(second)
+
+    assert store.live_order_intent(first["ticket_hash"])["_ledger_status"] == "pending_approval"
+    assert store.live_order_intent(second["ticket_hash"]) is None
+
+
+def test_rank_one_campaign_follows_unsubmitted_selected_quote_revision(tmp_path) -> None:
+    store = LocalStore(tmp_path / "state.db")
+    first = _fallback_ticket("first-selected-quote")
+    second = {**first, "ticket_hash": "second-selected-quote", "order_id": "second-order", "limit_price": "-0.95"}
+    second["submit_payload"] = {**first["submit_payload"], "orderId": "second-order", "limitPrice": "-0.95"}
+    plan = type(
+        "Plan",
+        (),
+        {
+            "plan_id": "rank-one-plan",
+            "plan_rank": 1,
+            "to_dict": lambda self: {"plan_id": self.plan_id, "plan_rank": self.plan_rank},
+        },
+    )()
+    store.stage_selected_live_order_intent(first)
+    initial = register_rank_one_attempt(
+        store,
+        campaign_id="campaign-one",
+        plan=plan,
+        tickets=[first],
+        plan_run_id="run-one",
+    )
+    store.stage_selected_live_order_intent(second)
+    refreshed = register_rank_one_attempt(
+        store,
+        campaign_id="campaign-one",
+        plan=plan,
+        tickets=[second],
+        plan_run_id="run-two",
+    )
+
+    assert initial["ticket_hashes"] == [first["ticket_hash"]]
+    assert refreshed["ticket_hashes"] == [second["ticket_hash"]]
+    assert refreshed["superseded_ticket_hashes"] == [first["ticket_hash"]]
+    assert store.live_order_intent(second["ticket_hash"])["plan_attempt_id"] == "campaign-one"
 
 
 def test_characterize_ticket_hash_is_deterministic() -> None:
@@ -775,11 +863,62 @@ def test_fallback_rejects_unvalidated_second_plan(tmp_path) -> None:
 
 def test_fallback_counts_terminal_rank_one_attempt_against_basket_cap(tmp_path) -> None:
     store, ticket = _registered_fallback(tmp_path)
+    store.record_live_order_attempt(
+        ticket,
+        action="submit_open",
+        submit=True,
+        ok=True,
+        request_payload=ticket["submit_payload"],
+        response_payload={"orderId": ticket["order_id"]},
+    )
     store.update_live_order_intent_status(ticket["ticket_hash"], "cancelled")
     store.record_live_order_status(ticket["order_id"], "CANCELLED", {"status": "CANCELLED"}, ticket_hash=ticket["ticket_hash"])
     config = {"live": {"max_live_baskets_per_day": 1, "plan_fallback": {"enabled": True, "max_attempts": 2}}}
 
     assert _fallback_basket_cap_allows(config, store, "campaign-one", "rank-two-plan") is False
+
+
+def test_fallback_cap_ignores_historical_registrations_and_counts_current_broker_effect(tmp_path) -> None:
+    store = LocalStore(tmp_path / "fallback-cap.db")
+    plan_type = type(
+        "Plan",
+        (),
+        {
+            "plan_rank": 1,
+            "to_dict": lambda self: {"plan_id": self.plan_id, "plan_rank": self.plan_rank},
+        },
+    )
+    for index in range(6):
+        ticket = _fallback_ticket(f"historical-{index}", f"historical-candidate-{index}")
+        ticket["plan_id"] = f"historical-plan-{index}"
+        store.save_live_order_intent(ticket, status="cancelled")
+        plan = plan_type()
+        plan.plan_id = ticket["plan_id"]
+        register_rank_one_attempt(
+            store,
+            campaign_id=f"historical-campaign-{index}",
+            plan=plan,
+            tickets=[ticket],
+            plan_run_id=f"historical-run-{index}",
+        )
+
+    public = _fallback_ticket("current-public", "current-public-candidate")
+    public["plan_id"] = "current-public-plan"
+    public["execution_venue"] = "public_primary"
+    store.save_live_order_intent(public, status="cancelled")
+    store.record_live_order_attempt(
+        public,
+        action="submit_open",
+        submit=True,
+        ok=False,
+        request_payload=public["submit_payload"],
+        response_payload={"error": "broker response uncertain"},
+    )
+
+    config = {"live": {"max_live_baskets_per_day": 3}}
+
+    assert store.live_entry_plan_ids_since("2000-01-01 00:00:00") == {"current-public-plan"}
+    assert _fallback_basket_cap_allows(config, store, "tasty-campaign", "tasty-fallback-plan") is True
 
 
 def test_integrated_credit_replay_reaches_one_fresh_rank_two_attempt(tmp_path) -> None:
