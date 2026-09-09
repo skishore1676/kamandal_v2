@@ -318,6 +318,14 @@ def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> 
     assert result.compilation.ok
     assert any(idea.source == "market_scan" for idea in result.shadow.result.ideas)
     assert any(idea.source == "portfolio_hedge" for idea in result.live.result.ideas)
+    direct_iv = next(
+        candidate
+        for candidate in result.shadow.result.candidates
+        if candidate.structure == "short_strangle" and candidate.eligible
+    )
+    assert direct_iv.metadata["input_kind"] == "market_scan"
+    assert direct_iv.metadata["ranking_source"] == "market_scan"
+    assert direct_iv.metadata["candidate_score_components"]["structure_thesis_fit"] == 18
     assert result.shadow.result.metrics["match_gate_mode"] == result.live.result.metrics["match_gate_mode"] == "strict"
     assert result.shadow.result.metrics["candidate_filter_mode"] == result.live.result.metrics["candidate_filter_mode"] == "strict"
 

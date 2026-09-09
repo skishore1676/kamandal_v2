@@ -25,6 +25,7 @@ from kamandal_v2.liquidity import candidate_liquidity_metrics
 from kamandal_v2.market.interfaces import MarketDataProvider
 from kamandal_v2.planner.candidate_builder import (  # shared deterministic economics; no leg construction
     _candidate_score,
+    _candidate_score_components,
     _entry_economic_bounds,
     _estimate_bpr,
     _filter_rejections,
@@ -221,7 +222,22 @@ def build_observed_package_candidates(
                         candidate.rejection_reason = candidate.preflight.message or "preflight_failed"
                     else:
                         _apply_preflight_bpr(candidate, candidate.preflight)
-            candidate.score = _candidate_score(candidate, thesis_fit=0.0)
+            # An exact short strangle and a neutral market-scan short strangle
+            # start with the same structure-fit baseline. Source preference is
+            # a separate, bounded portfolio-score component.
+            structure_fit = 18.0 if candidate.structure == "short_strangle" else 0.0
+            candidate.metadata.update(
+                {
+                    "input_kind": "exact_package",
+                    "ranking_source": package.source_profile.lower(),
+                    "candidate_score_components": _candidate_score_components(
+                        candidate,
+                        thesis_fit=structure_fit,
+                    ),
+                }
+            )
+            candidate.score = _candidate_score(candidate, thesis_fit=structure_fit)
+            candidate.reasons.append(f"thesis_fit={structure_fit}")
             candidates.append(candidate)
             _receipt(
                 store,

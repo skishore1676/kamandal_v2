@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from kamandal_v2.domain.models import Candidate, Greeks, Plan, PortfolioState
 from kamandal_v2.liquidity import candidate_liquidity_metrics
+from kamandal_v2.planner.source_priority import candidate_source_priority
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +220,7 @@ def _score_components(plan: list[Candidate], portfolio: PortfolioState, control:
     gamma_penalty = _gamma_stress_penalty(greeks.gamma)
     concentration_penalty = _concentration_penalty(plan, portfolio)
     slippage_penalty = _slippage_penalty(plan)
+    source_priority = sum(candidate_source_priority(candidate, control) for candidate in plan) / max(len(plan), 1)
     components = {
         "delta_fit": delta_fit,
         "theta_capture": theta_capture,
@@ -229,6 +231,7 @@ def _score_components(plan: list[Candidate], portfolio: PortfolioState, control:
         "gamma_stress_penalty": -gamma_penalty,
         "concentration_penalty": -concentration_penalty,
         "slippage_penalty": -slippage_penalty,
+        "source_priority": source_priority,
     }
     target_score = _new_bpr_target_score(total_bpr, portfolio, control)
     if target_score is not None:

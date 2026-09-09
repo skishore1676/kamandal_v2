@@ -375,6 +375,13 @@ source_intelligence:
     limit: 50
 
 planner:
+  # A small, explicit preference among otherwise eligible candidates. These
+  # points cannot bypass strategy, portfolio, health, or broker gates.
+  source_priority:
+    short_strangle_high_iv:
+      mike_butler: 2
+      greg_harmon: 1
+      market_scan: 0
   expiry:
     monthly_single_name_bonus: true
     diagonal_calendar_dte_fallback:

@@ -82,6 +82,10 @@ def test_exact_strangle_keeps_contracts_and_uses_native_bpr(tmp_path, source):
     assert [(leg.role, leg.quantity) for leg in candidate.legs] == [("short_put", 1), ("short_call", 1)]
     assert "live_max_bpr_per_order=2500.0" in candidate.reasons
     assert candidate.metadata["source_profile"] == source
+    assert candidate.metadata["input_kind"] == "exact_package"
+    assert candidate.metadata["ranking_source"] == source
+    assert candidate.metadata["candidate_score_components"]["structure_thesis_fit"] == 18
+    assert "thesis_fit=18.0" in candidate.reasons
     assert market.calls == 1
 
 

@@ -25,6 +25,8 @@ from kamandal_v2.intelligence.trade_sources import (
     source_id_from_idea_source,
 )
 from kamandal_v2.planner.engine import PlanRunResult, PlanningSourceGroup, _market_provider, _preflight_client, run_plan
+from kamandal_v2.planner.plan_generator import _score_components
+from kamandal_v2.planner.source_priority import candidate_source_priority, source_lane_label
 from kamandal_v2.planner.observed_package_candidates import (
     build_observed_package_candidates,
     persist_observed_package_batches,
@@ -371,6 +373,7 @@ def _run_book(
     except Exception as exc:  # noqa: BLE001 - report failure-isolated book receipt.
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (f"{type(exc).__name__}: {exc}",))
     _record_trade_source_plan_dispositions(result, store=store, mode=mode)
+    _record_short_strangle_source_comparison(result, store=store, mode=mode, control=mode_config)
     if mode is ExecutionMode.LIVE:
         rows = live_renderer[0](result, mode_config, store=store, mode="live_advisory")
         try:
@@ -450,6 +453,139 @@ def _record_trade_source_plan_dispositions(
                 "broker_effects": False,
             },
         )
+
+
+def _record_short_strangle_source_comparison(
+    result: PlanRunResult,
+    *,
+    store: LocalStore,
+    mode: ExecutionMode,
+    control: dict[str, Any],
+) -> None:
+    """Retain one source-aware, score-decomposed strangle comparison."""
+
+    candidates = [
+        candidate
+        for candidate in result.candidates
+        if candidate.playbook_id == "short_strangle_high_iv" and candidate.structure == "short_strangle"
+    ]
+    if not candidates:
+        return
+    rank_one = result.plans[0] if result.plans else None
+    rank_one_ids = {candidate.candidate_id for candidate in rank_one.candidates} if rank_one else set()
+    rank_by_candidate: dict[str, int] = {}
+    for plan in result.plans:
+        for candidate in plan.candidates:
+            rank_by_candidate[candidate.candidate_id] = min(
+                rank_by_candidate.get(candidate.candidate_id, plan.plan_rank),
+                plan.plan_rank,
+            )
+    portfolio = rank_one.portfolio_before if rank_one is not None else None
+    rows: list[dict[str, Any]] = []
+    for candidate in sorted(candidates, key=lambda item: (item.underlying, source_lane_label(item), item.candidate_id)):
+        priority = candidate_source_priority(candidate, control)
+        singleton_components = (
+            _score_components([candidate], portfolio, control)
+            if portfolio is not None and candidate.eligible
+            else {}
+        )
+        rows.append(
+            {
+                "candidate_id": candidate.candidate_id,
+                "underlying": candidate.underlying,
+                "source": source_lane_label(candidate),
+                "input_kind": str(candidate.metadata.get("input_kind") or ""),
+                "eligible": candidate.eligible,
+                "rejection_reason": candidate.rejection_reason,
+                "candidate_score": candidate.score,
+                "candidate_score_components": dict(candidate.metadata.get("candidate_score_components") or {}),
+                "candidate_score_status": (
+                    "scored" if candidate.metadata.get("candidate_score_components") else "not_scored_due_to_rejection"
+                ),
+                "source_priority": priority,
+                "singleton_plan_score_components": singleton_components,
+                "singleton_plan_score": round(sum(singleton_components.values()), 4) if singleton_components else None,
+                "best_plan_rank": rank_by_candidate.get(candidate.candidate_id),
+                "rank_one_member": candidate.candidate_id in rank_one_ids,
+            }
+        )
+    comparable = [row for row in rows if row["eligible"] and row["singleton_plan_score"] is not None]
+    ordered = sorted(comparable, key=lambda row: (-float(row["singleton_plan_score"]), str(row["candidate_id"])))
+    winner = ordered[0] if ordered else None
+    comparisons: list[dict[str, Any]] = []
+    if winner is not None:
+        for alternative in rows:
+            if alternative["candidate_id"] == winner["candidate_id"]:
+                continue
+            component_deltas: dict[str, float] = {}
+            score_delta: float | None = None
+            if alternative["singleton_plan_score"] is not None:
+                keys = set(winner["singleton_plan_score_components"]) | set(alternative["singleton_plan_score_components"])
+                component_deltas = {
+                    key: round(
+                        float(winner["singleton_plan_score_components"].get(key, 0.0))
+                        - float(alternative["singleton_plan_score_components"].get(key, 0.0)),
+                        4,
+                    )
+                    for key in sorted(keys)
+                }
+                score_delta = round(
+                    float(winner["singleton_plan_score"]) - float(alternative["singleton_plan_score"]),
+                    4,
+                )
+            if not alternative["eligible"]:
+                why = f"alternative_rejected:{alternative['rejection_reason']}"
+            elif score_delta is None:
+                why = "singleton_plan_score_unavailable"
+            elif score_delta > 0:
+                positive = [f"{key}:{value:+.4f}" for key, value in component_deltas.items() if value > 0]
+                why = f"higher_singleton_plan_score:delta={score_delta:+.4f};positive_components={','.join(positive)}"
+            else:
+                why = "singleton_plan_score_tie:candidate_id_tiebreak"
+            comparisons.append(
+                {
+                    "alternative_candidate_id": alternative["candidate_id"],
+                    "alternative_underlying": alternative["underlying"],
+                    "alternative_source": alternative["source"],
+                    "alternative_eligible": alternative["eligible"],
+                    "alternative_rejection_reason": alternative["rejection_reason"],
+                    "alternative_candidate_score_components": alternative["candidate_score_components"],
+                    "alternative_singleton_plan_score_components": alternative["singleton_plan_score_components"],
+                    "score_delta_to_winner": score_delta,
+                    "component_deltas_to_winner": component_deltas,
+                    "why_winner_beat_alternative": why,
+                }
+            )
+    store.event(
+        "short_strangle_source_comparison",
+        {
+            "plan_run_id": result.plan_run_id,
+            "mode": mode.value,
+            "comparison_basis": "eligible_singleton_plan_score",
+            "rank_one_plan_id": rank_one.plan_id if rank_one else "",
+            "rank_one_plan_score": rank_one.score if rank_one else None,
+            "rank_one_score_components": (
+                _score_components(rank_one.candidates, rank_one.portfolio_before, control) if rank_one else {}
+            ),
+            "candidates": rows,
+            "winner": (
+                {
+                    "candidate_id": winner["candidate_id"],
+                    "underlying": winner["underlying"],
+                    "source": winner["source"],
+                    "candidate_score_components": winner["candidate_score_components"],
+                    "singleton_plan_score_components": winner["singleton_plan_score_components"],
+                    "singleton_plan_score": winner["singleton_plan_score"],
+                    "best_plan_rank": winner["best_plan_rank"],
+                    "rank_one_member": winner["rank_one_member"],
+                }
+                if winner is not None
+                else None
+            ),
+            "comparisons": comparisons,
+            "broker_effects": False,
+        },
+    )
 
 
 def _advance_working_shadow_orders(

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, PortfolioState
+from kamandal_v2.planner.engine import PlanRunResult
 from kamandal_v2.planner.plan_generator import generate_plans
+from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.strategy_engine.planning import _record_short_strangle_source_comparison
+from kamandal_v2.strategy_engine.policy import ExecutionMode
 
 
 def _portfolio() -> PortfolioState:
@@ -93,6 +97,106 @@ def _candidate(
         score=score,
         reasons=[f"iv_pct={iv_pct}", f"iv_rank={iv_rank}"],
     )
+
+
+def _source_priority_control() -> dict:
+    control = _control()
+    control["planner"] = {
+        "source_priority": {
+            "short_strangle_high_iv": {
+                "mike_butler": 2,
+                "greg_harmon": 1,
+                "market_scan": 0,
+            }
+        }
+    }
+    return control
+
+
+def _source_strangle(candidate_id: str, *, underlying: str, source: str) -> Candidate:
+    candidate = _candidate(
+        candidate_id,
+        underlying=underlying,
+        structure="short_strangle",
+        bpr=1_800,
+        delta=-0.05,
+        gamma=-0.01,
+        theta=0.08,
+        vega=-0.25,
+        net_credit=2.0,
+        score=50.0,
+        iv_pct=65.0,
+        iv_rank=65.0,
+    )
+    candidate.playbook_id = "short_strangle_high_iv"
+    candidate.metadata.update(
+        {
+            "ranking_source": source,
+            "input_kind": "market_scan" if source == "market_scan" else "exact_package",
+            "candidate_score_components": {"structure_thesis_fit": 18.0},
+        }
+    )
+    return candidate
+
+
+def test_short_strangle_source_priority_orders_same_underlying_mike_greg_direct_iv() -> None:
+    candidates = [
+        _source_strangle("direct", underlying="SPY", source="market_scan"),
+        _source_strangle("greg", underlying="SPY", source="greg_harmon"),
+        _source_strangle("mike", underlying="SPY", source="mike_butler"),
+    ]
+
+    plans = generate_plans(candidates, _portfolio(), _source_priority_control(), max_new_positions=1)
+
+    assert [plan.candidates[0].candidate_id for plan in plans[:3]] == ["mike", "greg", "direct"]
+
+
+def test_short_strangle_source_priority_orders_different_underlyings_mike_greg_direct_iv() -> None:
+    candidates = [
+        _source_strangle("direct", underlying="IWM", source="market_scan"),
+        _source_strangle("greg", underlying="QQQ", source="greg_harmon"),
+        _source_strangle("mike", underlying="SPY", source="mike_butler"),
+    ]
+
+    plans = generate_plans(candidates, _portfolio(), _source_priority_control(), max_new_positions=1)
+
+    assert [plan.candidates[0].candidate_id for plan in plans[:3]] == ["mike", "greg", "direct"]
+    components = next(reason for reason in plans[0].reasons if reason.startswith("score_components="))
+    assert "source_priority:2.00" in components
+
+
+def test_short_strangle_source_comparison_receipt_explains_each_alternative(tmp_path) -> None:
+    blocked = _source_strangle("blocked", underlying="IWM", source="market_scan")
+    blocked.rejection_reason = "event_status_blocked"
+    candidates = [
+        _source_strangle("direct", underlying="SPY", source="market_scan"),
+        _source_strangle("greg", underlying="SPY", source="greg_harmon"),
+        _source_strangle("mike", underlying="SPY", source="mike_butler"),
+        blocked,
+    ]
+    control = _source_priority_control()
+    plans = generate_plans(candidates, _portfolio(), control, max_new_positions=1)
+    result = PlanRunResult("source-comparison", [], candidates, plans, [], {}, [], [])
+    store = LocalStore(tmp_path / "state.db")
+
+    _record_short_strangle_source_comparison(result, store=store, mode=ExecutionMode.LIVE, control=control)
+
+    receipt = store.latest_event("short_strangle_source_comparison")
+    assert receipt["comparison_basis"] == "eligible_singleton_plan_score"
+    assert receipt["winner"]["source"] == "mike_butler"
+    assert receipt["winner"]["singleton_plan_score_components"]["source_priority"] == 2
+    by_id = {item["alternative_candidate_id"]: item for item in receipt["comparisons"]}
+    assert by_id["greg"]["alternative_source"] == "greg_harmon"
+    assert by_id["direct"]["alternative_source"] == "direct_iv"
+    assert by_id["greg"]["score_delta_to_winner"] == 1
+    assert by_id["direct"]["score_delta_to_winner"] == 2
+    assert by_id["greg"]["component_deltas_to_winner"]["source_priority"] == 1
+    assert by_id["direct"]["component_deltas_to_winner"]["source_priority"] == 2
+    assert "positive_components=source_priority" in by_id["greg"]["why_winner_beat_alternative"]
+    assert "positive_components=source_priority" in by_id["direct"]["why_winner_beat_alternative"]
+    assert by_id["blocked"]["alternative_rejection_reason"] == "event_status_blocked"
+    assert by_id["blocked"]["why_winner_beat_alternative"] == "alternative_rejected:event_status_blocked"
+    assert receipt["broker_effects"] is False
 
 
 def test_plan_objective_prefers_theta_and_vol_capture_over_bpr_spend() -> None:

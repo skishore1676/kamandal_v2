@@ -11,6 +11,7 @@ from kamandal_v2.liquidity import bad_quote_reason, candidate_liquidity_metrics
 from kamandal_v2.market.interfaces import MarketDataProvider, PreflightClient
 from kamandal_v2.planner.bpr import structure_bpr_cap
 from kamandal_v2.planner.shape_validators import validate_structure
+from kamandal_v2.planner.source_priority import idea_ranking_source
 
 
 SUPPORTED_STRUCTURES = {
@@ -121,6 +122,12 @@ def build_candidates(
                 continue
             raw_candidates = _build_for_playbook(idea, playbook, chain.underlying_price, chain.quotes, config=config)
             for candidate in raw_candidates:
+                candidate.metadata.update(
+                    {
+                        "input_kind": "market_scan" if idea.source == "market_scan" else "idea",
+                        "ranking_source": idea_ranking_source(idea),
+                    }
+                )
                 match_horizon, match_horizon_source = _match_horizon(idea, playbook)
                 candidate.reasons.append(f"match_horizon_days={match_horizon}")
                 candidate.reasons.append(f"match_horizon_source={match_horizon_source}")
@@ -165,6 +172,10 @@ def build_candidates(
                     candidate.reasons.append("strangle_eligibility=sheet_playbook_overlay")
                     candidate.reasons.append(f"strangle_underlying_price={chain.underlying_price}")
                 thesis_fit = _thesis_fit_score(idea, candidate)
+                candidate.metadata["candidate_score_components"] = _candidate_score_components(
+                    candidate,
+                    thesis_fit=thesis_fit,
+                )
                 candidate.score = _candidate_score(candidate, thesis_fit=thesis_fit)
                 candidate.reasons.append(f"thesis_fit={thesis_fit}")
                 candidate.reasons.append(f"iv_pct={iv_pct}")
@@ -1596,7 +1607,7 @@ def _estimate_bpr(structure: str, legs: list[OptionLeg], net_credit: float) -> f
     return round(max(abs(net_credit) * 100, 1.0), 2)
 
 
-def _candidate_score(candidate: Candidate, *, thesis_fit: float = 0.0) -> float:
+def _candidate_score_components(candidate: Candidate, *, thesis_fit: float = 0.0) -> dict[str, float]:
     credit_yield = max(candidate.net_credit, 0.0) * 100 / max(candidate.estimated_bpr, 1.0)
     theta_dollars_per_day = candidate.greeks.theta * 100.0
     theta_per_1k_bpr = theta_dollars_per_day / max(candidate.estimated_bpr / 1000.0, 0.001)
@@ -1605,14 +1616,17 @@ def _candidate_score(candidate: Candidate, *, thesis_fit: float = 0.0) -> float:
     else:
         theta_score = max(theta_per_1k_bpr * 6.0, -35.0)
     gamma_penalty = min(abs(candidate.greeks.gamma) * 250.0, 20.0)
-    return round(
-        thesis_fit
-        + credit_yield * 20.0
-        + candidate.liquidity_score * 15.0
-        + theta_score
-        - gamma_penalty,
-        4,
-    )
+    return {
+        "structure_thesis_fit": round(thesis_fit, 4),
+        "credit_yield": round(credit_yield * 20.0, 4),
+        "liquidity": round(candidate.liquidity_score * 15.0, 4),
+        "theta_efficiency": round(theta_score, 4),
+        "gamma_penalty": round(-gamma_penalty, 4),
+    }
+
+
+def _candidate_score(candidate: Candidate, *, thesis_fit: float = 0.0) -> float:
+    return round(sum(_candidate_score_components(candidate, thesis_fit=thesis_fit).values()), 4)
 
 
 def _select_diverse_candidates(candidates: list[Candidate], limit: int) -> list[Candidate]:
@@ -1644,6 +1658,10 @@ def _thesis_fit_score(idea: Idea, candidate: Candidate) -> float:
     direction = idea.direction.lower()
     tags = set(idea.thesis_tags)
     structure = candidate.structure
+    # Source-exact and direct-IV short strangles compete on the same structure
+    # baseline. Directional prose must not quietly recreate a source bias.
+    if structure == "short_strangle":
+        return 18.0
     strategy_bonus = 15.0 if _strategy_aliases(idea.mentioned_strategy).intersection({candidate.playbook_id, candidate.structure}) else 0.0
     if direction == "bearish" or "overextended" in tags:
         return strategy_bonus + {
