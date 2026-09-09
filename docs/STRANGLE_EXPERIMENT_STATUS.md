@@ -1,7 +1,15 @@
 # Short Strangle Experiment: Current State and Target
 
-Updated: 2026-09-05 after bounded blocker repair
-Status: dated `FRIDAY_NO_GO` remains authoritative; a new bounded Tuesday pilot is authorized pending fresh gates
+Updated: 2026-09-08 after normal-live activation
+Status: operator set `short_strangle_high_iv` to `mode=live`, `csa_stage=live` for the next natural daily policy snapshot
+
+The dated Friday `NO_GO` and September 8 gated pilot remain historical evidence.
+After the pilot failed closed on a stale morning risk snapshot, Suman separately
+authorized normal live under the existing one-contract and `$2,500` per-order BPR
+caps. The canonical two-cell change, validation receipt, unchanged safety gates,
+and first-live-day proof contract are recorded in
+[the September 8 normal-live activation](reviews/strangle-normal-live-activation-2026-09-08.md).
+No job or broker action was triggered during activation.
 
 ## Stable picture
 

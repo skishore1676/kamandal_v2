@@ -1,8 +1,16 @@
 # Short-Strangle Pilot Runbook
 
-Updated: 2026-09-05
+Updated: 2026-09-08
 Pilot date: Tuesday, 2026-09-08  
-Current state: `REPAIR_VERIFIED_AWAITING_TUESDAY_GATES`
+Current state: `COMPLETED_GATED_NO_LIVE_CANARY`; superseded by separately authorized normal live
+
+The Tuesday gate failed closed because its morning global risk snapshot was
+stale. The row stayed shadow, no pilot lifecycle was reserved, and no Tastytrade
+order was submitted. After the cutoff, Suman separately authorized normal live
+under the unchanged one-contract and `$2,500` per-order BPR limits. See the
+[normal-live activation receipt](reviews/strangle-normal-live-activation-2026-09-08.md).
+This runbook remains the historical contract for the completed finite pilot and
+does not authorize another canary.
 
 ## Authorized outcome
 
