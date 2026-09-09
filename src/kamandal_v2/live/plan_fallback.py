@@ -89,7 +89,14 @@ def register_rank_one_attempt(
 
     existing = store.latest_event(attempt_event_type(campaign_id))
     if existing:
-        return existing
+        return _refresh_unsubmitted_rank_one_registration(
+            store,
+            existing=existing,
+            plan=plan,
+            tickets=tickets,
+            plan_run_id=plan_run_id,
+            lifecycle_handoffs=lifecycle_handoffs,
+        )
     state = {
         "campaign_id": campaign_id,
         "plan_run_id": plan_run_id,
@@ -122,6 +129,71 @@ def register_rank_one_attempt(
             store.update_live_order_intent_status_with_payload(ticket_hash, existing_status, {"plan_attempt_id": campaign_id})
     store.event(attempt_event_type(campaign_id), state)
     return state
+
+
+def _refresh_unsubmitted_rank_one_registration(
+    store: LocalStore,
+    *,
+    existing: dict[str, Any],
+    plan: Any,
+    tickets: list[dict[str, Any]],
+    plan_run_id: str,
+    lifecycle_handoffs: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Move an untouched rank-one campaign to its latest selected quote ticket."""
+
+    if str(existing.get("status") or "") != "rank_one_active":
+        return existing
+    plan_id = str(getattr(plan, "plan_id", "") or "")
+    if str(existing.get("plan_id") or "") != plan_id:
+        raise RuntimeError("rank-one campaign replay changed plan identity")
+    candidate_ids = sorted(
+        str(ticket.get("candidate_id") or "")
+        for ticket in tickets
+        if ticket.get("candidate_id")
+    )
+    if candidate_ids != sorted(str(item) for item in existing.get("candidate_ids") or []):
+        raise RuntimeError("rank-one campaign replay changed candidate identity")
+    current_hashes = sorted(
+        str(ticket.get("ticket_hash") or "")
+        for ticket in tickets
+        if ticket.get("ticket_hash")
+    )
+    prior_hashes = sorted(str(item) for item in existing.get("ticket_hashes") or [] if item)
+    if current_hashes == prior_hashes:
+        return existing
+    removed_hashes = sorted(set(prior_hashes) - set(current_hashes))
+    for ticket_hash in removed_hashes:
+        prior = store.live_order_intent(ticket_hash)
+        if prior is None or str(prior.get("_ledger_status") or "") != "retired_superseded_entry_revision":
+            raise RuntimeError("rank-one campaign replay has unresolved prior ticket")
+        if store.live_order_attempts_for_ticket_hashes({ticket_hash}):
+            raise RuntimeError("rank-one campaign replay prior ticket has order attempts")
+    refreshed = {
+        **existing,
+        "plan_run_id": plan_run_id,
+        "plan_snapshot": plan.to_dict() if hasattr(plan, "to_dict") else {},
+        "ticket_hashes": current_hashes,
+        "attempted_contract_keys": sorted(
+            set(existing.get("attempted_contract_keys") or []) | _ticket_contract_keys(tickets)
+        ),
+        "lifecycle_handoffs": [dict(item) for item in (lifecycle_handoffs or [])],
+        "superseded_ticket_hashes": sorted(
+            set(existing.get("superseded_ticket_hashes") or []) | set(removed_hashes)
+        ),
+    }
+    for ticket in tickets:
+        ticket_hash = str(ticket.get("ticket_hash") or "")
+        if ticket_hash:
+            stored = store.live_order_intent(ticket_hash) or {}
+            stored_status = str(stored.get("_ledger_status") or ticket.get("_ledger_status") or "pending_approval")
+            store.update_live_order_intent_status_with_payload(
+                ticket_hash,
+                stored_status,
+                {"plan_attempt_id": str(existing["campaign_id"])},
+            )
+    store.event(attempt_event_type(str(existing["campaign_id"])), refreshed)
+    return refreshed
 
 
 def registered_campaign_ids(store: LocalStore) -> list[str]:

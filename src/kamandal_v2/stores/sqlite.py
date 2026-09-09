@@ -859,6 +859,124 @@ class LocalStore:
                 ),
             )
 
+    def stage_selected_live_order_intent(
+        self,
+        ticket: dict[str, Any],
+        *,
+        status: str = "pending_approval",
+        replace_statuses: set[str] | None = None,
+        replacement_status: str = "retired_superseded_entry_revision",
+    ) -> list[str]:
+        """Atomically retain one pre-submit ticket for a selected plan candidate.
+
+        Repeated planning ticks may produce a new ticket hash as quotes move while
+        the stable plan/candidate identity remains unchanged.  Only pre-submit
+        revisions with no broker evidence may be retired.  Any contradictory
+        evidence fails closed instead of guessing whether an order exists.
+        """
+
+        replaceable = replace_statuses or {
+            "pending_approval",
+            "stage_approved_pending_submit",
+            "waiting_entry_window",
+        }
+        if str(ticket.get("intent_type") or "") != "open":
+            raise ValueError("selected live entry staging requires intent_type=open")
+        ticket_hash = str(ticket["ticket_hash"])
+        plan_id = str(ticket["plan_id"])
+        candidate_id = str(ticket["candidate_id"])
+        placeholders = ",".join("?" for _ in replaceable)
+        superseded: list[str] = []
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT ticket_hash, order_id, status, created_at, payload
+                FROM live_order_intents
+                WHERE intent_type = 'open'
+                  AND plan_id = ?
+                  AND candidate_id = ?
+                  AND status IN ({placeholders})
+                """,
+                (plan_id, candidate_id, *sorted(replaceable)),
+            ).fetchall()
+            exact = None
+            for row in rows:
+                existing_hash = str(row["ticket_hash"])
+                if existing_hash == ticket_hash:
+                    exact = row
+                    continue
+                payload = json.loads(row["payload"])
+                has_attempt = conn.execute(
+                    "SELECT 1 FROM live_order_attempts WHERE ticket_hash = ? AND submit = 1 LIMIT 1",
+                    (existing_hash,),
+                ).fetchone()
+                has_status = conn.execute(
+                    "SELECT 1 FROM live_order_status WHERE ticket_hash = ? OR order_id = ? LIMIT 1",
+                    (existing_hash, str(row["order_id"])),
+                ).fetchone()
+                has_broker_identity = bool(
+                    payload.get("broker_order_id")
+                    or payload.get("replaces_broker_order_id")
+                )
+                if has_attempt or has_status or has_broker_identity:
+                    raise RuntimeError(
+                        f"selected live entry revision {existing_hash} has broker evidence"
+                    )
+
+            for row in rows:
+                existing_hash = str(row["ticket_hash"])
+                if existing_hash == ticket_hash:
+                    continue
+                payload = json.loads(row["payload"])
+                payload["superseded_by_ticket_hash"] = ticket_hash
+                payload["superseded_reason"] = "selected_plan_quote_revision"
+                conn.execute(
+                    """
+                    UPDATE live_order_intents
+                    SET status = ?, updated_at = CURRENT_TIMESTAMP, payload = ?
+                    WHERE ticket_hash = ?
+                    """,
+                    (replacement_status, json.dumps(payload, sort_keys=True), existing_hash),
+                )
+                superseded.append(existing_hash)
+
+            if exact is not None:
+                existing_payload = json.loads(exact["payload"])
+                merged_payload = {**existing_payload, **ticket}
+                conn.execute(
+                    """
+                    UPDATE live_order_intents
+                    SET order_id = ?, idea_id = ?, created_at = ?, updated_at = CURRENT_TIMESTAMP, payload = ?
+                    WHERE ticket_hash = ?
+                    """,
+                    (
+                        str(ticket["order_id"]),
+                        str(ticket.get("idea_id") or ""),
+                        str(ticket.get("created_at") or exact["created_at"]),
+                        json.dumps(merged_payload, sort_keys=True),
+                        ticket_hash,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO live_order_intents
+                    (ticket_hash, order_id, plan_id, candidate_id, idea_id, intent_type, status, created_at, updated_at, payload)
+                    VALUES (?, ?, ?, ?, ?, 'open', ?, COALESCE(NULLIF(?, ''), CURRENT_TIMESTAMP), CURRENT_TIMESTAMP, ?)
+                    """,
+                    (
+                        ticket_hash,
+                        str(ticket["order_id"]),
+                        plan_id,
+                        candidate_id,
+                        str(ticket.get("idea_id") or ""),
+                        status,
+                        str(ticket.get("created_at") or ""),
+                        json.dumps(ticket, sort_keys=True),
+                    ),
+                )
+        return sorted(superseded)
+
     def live_order_intent(self, ticket_hash: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -973,12 +1091,33 @@ class LocalStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT plan_id FROM live_order_intents
+                SELECT plan_id
+                FROM live_order_intents
                 WHERE intent_type = 'open'
                   AND created_at >= ?
-                  AND status IN ('submitted', 'repriced', 'filled', 'manual_fill_recorded')
+                  AND status IN (
+                    'submitted', 'submit_uncertain', 'repriced', 'partially_filled',
+                    'filled', 'filled_via_replacement', 'manual_fill_recorded'
+                  )
+                UNION
+                SELECT intents.plan_id
+                FROM live_order_attempts AS attempts
+                JOIN live_order_intents AS intents
+                  ON intents.ticket_hash = attempts.ticket_hash
+                WHERE attempts.created_at >= ?
+                  AND attempts.submit = 1
+                  AND attempts.action IN (
+                    'submit_open', 'reprice_submit_open', 'atomic_replace_open',
+                    'submit_staged_replace_open'
+                  )
+                UNION
+                SELECT plan_id
+                FROM live_positions
+                WHERE opened_at >= ?
+                  AND plan_id IS NOT NULL
+                  AND plan_id != ''
                 """,
-                (created_since,),
+                (created_since, created_since, created_since),
             ).fetchall()
         return {str(row["plan_id"]) for row in rows if row["plan_id"]}
 

@@ -127,9 +127,10 @@ def render_live_plan_rows(
         if not plan.candidates:
             continue
         tickets = [build_open_ticket(plan, candidate) for candidate in plan.candidates]
-        if persist_order_intents:
+        selected_for_execution = index == 0
+        if persist_order_intents and selected_for_execution:
             for ticket in tickets:
-                store.save_live_order_intent(ticket)
+                store.stage_selected_live_order_intent(ticket)
         candidate = plan.candidates[0]
         ticket = tickets[0]
         row = dict(zip(DAILY_PLAN_HEADER, rows[index], strict=False))
@@ -137,15 +138,16 @@ def render_live_plan_rows(
         detail = _loads(row.get("plan_detail_json"))
         metrics["real_account_json"] = account_json
         detail["lane"] = mode
-        detail["live_gate_status"] = "eligible"
-        detail["live_blockers"] = []
+        detail["live_gate_status"] = "eligible" if selected_for_execution else "advisory_only"
+        detail["live_blockers"] = [] if selected_for_execution else ["not_selected_rank_one"]
         detail["order_ticket_json"] = ticket
         detail["order_tickets_json"] = tickets
         detail["basket_execution_json"] = {
             "mode": "concurrent",
             "ticket_count": len(tickets),
-            "submit_default": "all_pending_tickets_up_to_live_limit",
+            "submit_default": "all_pending_tickets_up_to_live_limit" if selected_for_execution else "none_advisory_only",
             "requires_resync_between_fills": False,
+            "executable": selected_for_execution,
         }
         detail["public_preflight_json"] = candidate.preflight.to_dict() if candidate.preflight else None
         detail["real_account_json"] = account_json

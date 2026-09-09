@@ -1194,7 +1194,7 @@ def _fallback_submission_gate(
     return ""
 
 
-def _fallback_basket_cap_allows(config: dict[str, Any], store: LocalStore, campaign_id: str, plan_id: str) -> bool:
+def _fallback_basket_cap_allows(config: dict[str, Any], store: LocalStore, _campaign_id: str, plan_id: str) -> bool:
     raw_cap = (config.get("live") or {}).get("max_live_baskets_per_day")
     if raw_cap in (None, ""):
         return True
@@ -1202,21 +1202,6 @@ def _fallback_basket_cap_allows(config: dict[str, Any], store: LocalStore, campa
     if cap <= 0:
         return False
     used_plan_ids = store.live_entry_plan_ids_since(_market_day_start(config))
-    for registered_id in registered_campaign_ids(store):
-        state = store.latest_event(attempt_event_type(registered_id)) or {}
-        state_plan_id = str(state.get("plan_id") or "")
-        if str(state.get("status") or "") != "rank_one_active":
-            used_plan_ids.update(str(item) for item in state.get("attempted_plan_ids") or [] if item)
-        ticket_hashes = {str(item) for item in state.get("ticket_hashes") or [] if item}
-        tickets = [store.live_order_intent(ticket_hash) for ticket_hash in ticket_hashes]
-        tickets = [ticket for ticket in tickets if ticket]
-        submitted = any(
-            str(ticket.get("_ledger_status") or "") not in PENDING_TICKET_STATUSES | {"dry_run"}
-            or bool(store.live_order_attempts_for_ticket_hashes({str(ticket.get("ticket_hash") or "")}))
-            for ticket in tickets
-        )
-        if submitted and state_plan_id:
-            used_plan_ids.add(state_plan_id)
     return str(plan_id or "") in used_plan_ids or len(used_plan_ids) < cap
 
 
@@ -2494,6 +2479,11 @@ def _tickets_to_execute(
     submit: bool,
     close: bool,
 ) -> tuple[list[dict[str, Any]], str]:
+    if not close:
+        detail = _loads(row.get("plan_detail_json"))
+        basket = detail.get("basket_execution_json") or {}
+        if isinstance(basket, dict) and basket.get("executable") is False:
+            return [], "plan_not_selected_for_execution"
     tickets = _tickets_from_row(row, close=close)
     if close:
         if not tickets:
