@@ -67,3 +67,22 @@ actual fill cashflows. Do not adopt the limit price as an execution receipt.
 
 See the [official retry contract](https://developer.tastytrade.com/docs/guides/idempotency-and-retries/)
 and [order lifecycle](https://developer.tastytrade.com/docs/concepts/order-lifecycle/).
+
+## Selected entry intent ownership and daily caps (September 9)
+
+Persist executable intents only for the selected rank-one plan. Other ranked
+plans remain advisory rows and must say `executable=false`. If a later planning
+tick changes quotes while `plan_id` and `candidate_id` remain stable, replace
+the prior pre-submit ticket atomically and move the fallback campaign to the
+new hash. Supersession is allowed only when there is no submit attempt, broker
+status, or broker-assigned identity; any such evidence remains fail-closed.
+
+Daily basket capacity counts current-day broker admission/effect evidence, not
+campaign registration. A registration is planning state and may never have
+crossed the broker boundary. Count distinct plan IDs from submit attempts,
+uncertain/working/filled intents, and live positions; this collapses ordinary
+replacement lineage while retaining ambiguous submissions. Historical
+campaigns must not consume today's cap.
+
+Regression coverage is in `tests/test_entry_pricing_plan_fallback.py`. The
+repair shipped in `c01535f` / PR #30.
