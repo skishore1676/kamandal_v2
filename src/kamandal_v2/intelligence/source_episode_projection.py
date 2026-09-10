@@ -129,6 +129,7 @@ def project_source_episode_compilation(
                     "source_id": compilation.profile_id,
                     "post_ref": post_ref,
                     "event_id": str(event.get("event_id") or ""),
+                    "translation_batch": compilation.compiled_at + "|" + compilation.prompt_sha256,
                     "opportunity_group_id": str(event.get("opportunity_group_id") or ""),
                     "action": str(event.get("action") or ""),
                     "symbol": str(event.get("symbol") or ""),

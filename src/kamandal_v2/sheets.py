@@ -346,6 +346,54 @@ def write_trade_source_activity(
     return len(rows)
 
 
+def write_translation_review(config: dict[str, Any], rows: list[list[Any]]) -> int:
+    """Update translation columns in stable rows; never rewrite operator corrections."""
+    from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER, TRADE_SOURCE_REVIEW_HEADER
+    header = TRADE_SOURCE_REVIEW_HEADER
+    lock_path = Path("data/runlocks/translation_review_publish.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        client = GoogleSheetClient.from_config(config)
+        title = str((((config.get("google_sheets") or {}).get("tabs") or {}).get("trade_source_activity")) or "trade_source_activity")
+        worksheet = client._worksheet(title, rows=max(len(rows) + 10, 100), cols=len(header))
+        previous = client._retry(worksheet.get_all_values, operation="read translation review") or []
+        old_header = list(previous[0]) if previous else []
+        if old_header not in ([], header, TRADE_SOURCE_ACTIVITY_HEADER):
+            raise ValueError("translation review header is unrecognized; refusing to overwrite operator content")
+        if old_header != header:
+            if any(any(cell for cell in row[len(TRADE_SOURCE_ACTIVITY_HEADER):]) for row in previous):
+                raise ValueError("unexpected content outside old activity columns; refusing to remove it")
+            # Explicit migration of this machine-owned audit tab to translation review.
+            width = max(len(old_header), len(header))
+            values = [list(header), *[list(row) for row in rows]]
+            values = [row + [""] * (width - len(row)) for row in values]
+            values.extend([[""] * width for _ in range(max(len(previous) - len(values), 0))])
+            client._retry(lambda: worksheet.update(
+                range_name=f"A1:{_col_letter(width)}{len(values)}", values=values,
+                value_input_option="RAW"), operation="reset translation review")
+            client._retry(lambda: worksheet.resize(cols=len(header)), operation="remove audit-only columns")
+            return len(rows)
+
+        # Preserve row positions, including blank gaps: corrections in column G
+        # stay attached to their source even if the incoming sort order changes.
+        merged = [(list(row[:6]) + [""] * 6)[:6] for row in previous[1:]]
+        positions = {(str(row[0]), str(row[1])): index for index, row in enumerate(merged) if row[1]}
+        for row in rows:
+            key = (str(row[0]), str(row[1]))
+            if key in positions:
+                merged[positions[key]] = list(row[:6])
+            else:
+                positions[key] = len(merged)
+                merged.append(list(row[:6]))
+        if len(merged) + 1 > worksheet.row_count:
+            client._retry(lambda: worksheet.resize(rows=len(merged) + 10), operation="extend translation review")
+        values = [list(header[:6]), *merged]
+        client._retry(lambda: worksheet.update(range_name=f"A1:F{len(values)}", values=values,
+                     value_input_option="RAW"), operation="refresh translation review")
+        return sum(bool(row[1]) for row in merged)
+
+
 @contextmanager
 def daily_plan_publication():
     """One cross-process read/modify/write lease for every cockpit publisher."""

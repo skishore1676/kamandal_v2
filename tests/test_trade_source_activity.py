@@ -152,3 +152,91 @@ def test_current_activity_folds_revisions_and_idea_without_merging_distinct_pack
     assert current['effective_mode'] == 'Idea: live | Exact: shadow'
     history = json.loads(current['normalized_output'])['activity_history']
     assert {r['output_id'] for r in history} == {'revision-old', 'revision-new', 'event-1', 'failure'}
+
+
+def test_translation_review_is_post_based_and_reset_survives_reobservation(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import translation_review_rows
+    from kamandal_v2.schemas import TRADE_SOURCE_REVIEW_HEADER
+    import sqlite3
+    store = LocalStore(tmp_path / 'state.db')
+    def observation(post, event, symbol, classification='idea'):
+        store.event('trade_source_output_observed', {
+            'source_id': 'mike_butler', 'post_ref': f'x-post:{post}', 'output_id': event,
+            'classification': classification, 'planner_disposition': 'no_candidate',
+            'reason': 'no_playbook_match', 'normalized_output': {
+                'event_id': event, 'symbol': symbol, 'action': 'open', 'structure_hint': 'call_diagonal',
+                'thesis': f'Bullish {symbol}', 'evidence_status': 'complete',
+                'blockers': ['planner_structure_unsupported'], 'exact_packages': [{
+                    'complete': False, 'blocker': 'Missing source image', 'legs': []}]}})
+    observation('100', 'old-event', 'COST')
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute("UPDATE events SET created_at='2026-09-09 12:00:00'")
+    observation('100', 'old-event', 'COST')  # A fresh poll must not refill old posts.
+    observation('101', 'new-1', 'HIMS')
+    observation('101', 'new-2', 'NFLX')
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:101', 'output_id': 'revision',
+        'classification': 'exact_package', 'normalized_output': {'source_event_id': 'new-1'}})
+    with sqlite3.connect(store.sqlite_path) as conn:
+        conn.execute("UPDATE events SET created_at='2026-09-10 14:00:00' WHERE id>1")
+    rows = translation_review_rows(store, since='2026-09-10T13:00:00+00:00')
+    assert len(rows) == 1
+    row = dict(zip(TRADE_SOURCE_REVIEW_HEADER, rows[0]))
+    assert row['Source post'].endswith('/101')
+    assert 'HIMS' in row['Our understanding'] and 'NFLX' in row['Our understanding']
+    assert 'Missing source image' in row['Missing or uncertain']
+    assert 'no_playbook_match' not in str(row) and 'planner_structure_unsupported' not in str(row)
+    assert row['Your correction'] == ''
+
+
+def test_review_writer_keeps_corrections_in_place_when_order_changes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from kamandal_v2.sheets import write_translation_review, GoogleSheetClient
+    from kamandal_v2.schemas import TRADE_SOURCE_REVIEW_HEADER
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    previous = [TRADE_SOURCE_REVIEW_HEADER,
+                ['Mike', 'url-1', 'COST', 'old', '', '', 'This should be bearish'],
+                ['Greg', 'url-2', 'JNJ', 'old', '', '', 'Keep my note']]
+    worksheet = SimpleNamespace(row_count=100, get_all_values=lambda: previous,
+                                update=lambda **kw: calls.append(kw))
+    client = SimpleNamespace(_worksheet=lambda *a, **kw: worksheet, _retry=lambda fn, **kw: fn())
+    monkeypatch.setattr(GoogleSheetClient, 'from_config', lambda _config: client)
+    count = write_translation_review({}, [['Greg', 'url-2', 'JNJ', 'updated', '', '', ''],
+                                         ['Mike', 'url-1', 'COST', 'updated', '', '', ''],
+                                         ['Mike', 'url-3', 'NFLX', 'new', '', '', '']])
+    assert count == 3 and len(calls) == 1
+    assert calls[0]['range_name'] == 'A1:F4'  # Column G is never rewritten.
+    assert calls[0]['values'][1][1] == 'url-1'
+    assert calls[0]['values'][2][1] == 'url-2'
+    assert calls[0]['values'][3][1] == 'url-3'
+
+
+def test_review_migration_clears_old_noise_and_removes_internal_columns(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from kamandal_v2.sheets import write_translation_review, GoogleSheetClient
+    from kamandal_v2.schemas import TRADE_SOURCE_REVIEW_HEADER
+    monkeypatch.chdir(tmp_path)
+    calls, resizes = [], []
+    previous = [TRADE_SOURCE_ACTIVITY_HEADER, ['old data'] * 22]
+    worksheet = SimpleNamespace(row_count=100, get_all_values=lambda: previous,
+        update=lambda **kw: calls.append(kw), resize=lambda **kw: resizes.append(kw))
+    client = SimpleNamespace(_worksheet=lambda *a, **kw: worksheet, _retry=lambda fn, **kw: fn())
+    monkeypatch.setattr(GoogleSheetClient, 'from_config', lambda _config: client)
+    assert write_translation_review({}, []) == 0
+    assert calls[0]['values'][0][:7] == TRADE_SOURCE_REVIEW_HEADER
+    assert calls[0]['values'][1] == [''] * 22
+    assert resizes == [{'cols': 7}]
+
+
+def test_translation_review_uses_latest_complete_batch(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import translation_review_rows
+    store = LocalStore(tmp_path / 'state.db')
+    for output, batch, thesis in [('removed', 'old', 'Wrong interpretation'), ('kept', 'new', 'Corrected interpretation')]:
+        store.event('trade_source_output_observed', {
+            'source_id': 'greg', 'post_ref': 'x-post:123', 'output_id': output,
+            'translation_batch': batch, 'normalized_output': {'event_id': output, 'thesis': thesis}})
+    rows = translation_review_rows(store)
+    assert len(rows) == 1
+    assert 'Corrected interpretation' in rows[0][3]
+    assert 'Wrong interpretation' not in str(rows)

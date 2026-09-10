@@ -438,6 +438,7 @@ def _record_episode_outputs(
                 "source_id": source_id,
                 "post_ref": str(observed.get("post_ref") or ""),
                 "output_id": str(observed.get("event_id") or ""),
+                "translation_batch": str(observed.get("translation_batch") or ""),
                 "planner_idea_id": opportunity_id if opportunity_id in idea_ids else "",
                 "opportunity_group_id": str(observed.get("opportunity_group_id") or ""),
                 "acquisition_status": acquisition_status,
