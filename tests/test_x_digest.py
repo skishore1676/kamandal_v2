@@ -266,3 +266,20 @@ def test_configured_source_author_ownership_is_not_bypassed_when_disabled():
         {'profile_path': 'config/correspondents/mike_butler.yaml'},
     ]}}}
     assert correspondent_author_handles(config) == {'harmongreg', 'tradermikeyb'}
+
+
+def test_source_document_stable_across_poll_receipts_and_order():
+    from types import SimpleNamespace
+    from pathlib import Path
+    from kamandal_v2.intelligence.x_digest import _source_doc_text
+    def record(post, seen):
+        return SimpleNamespace(post_id=post, source_id=str(post), source='timeline',
+            author='author', created_at='2026-09-10T14:00:00Z', seen_at=str(seen),
+            seen_count=seen, delta='new' if seen==1 else 'resurfaced',
+            url=f'https://x.com/i/status/{post}', text='TSLA thesis')
+    first = _source_doc_text(Path('db'), None, 'timeline', [record(1, 1), record(2, 1)])
+    repeated = _source_doc_text(Path('db'), None, 'timeline', [record(2, 3), record(1, 3)])
+    assert first == repeated
+    changed = record(1, 3)
+    changed.text = 'New thesis'
+    assert _source_doc_text(Path('db'), None, 'timeline', [changed, record(2, 3)]) != first

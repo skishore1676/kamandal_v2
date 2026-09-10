@@ -121,3 +121,34 @@ def test_retained_legacy_receipt_has_readable_interpretation_without_reclassific
     assert row["interpretation"] == "Reports a bullish call crab."
     assert row["symbol"] == "GOOGL"
     assert row["classification"] == "residual" and row["effective_mode"] == "observe"
+
+
+def test_current_activity_folds_revisions_and_idea_without_merging_distinct_packages(tmp_path):
+    import json
+    store = LocalStore(tmp_path / 'state.db')
+    for output, signature, reason in [('revision-old', 'legs-1', 'old-liquidity'),
+                                      ('revision-new', 'legs-1', 'current-liquidity'),
+                                      ('other-package', 'legs-2', 'other-strike')]:
+        store.event('trade_source_output_observed', {
+            'source_id': 'mike', 'post_ref': 'x-post:123', 'output_id': output,
+            'classification': 'exact_package', 'planner_disposition': 'parked',
+            'reason': reason, 'effective_mode': 'shadow', 'normalized_output': {
+                'source_event_id': 'event-1', 'package_signature': signature,
+                'symbol': 'SNOW', 'structure': 'call_calendar', 'action': 'open'}})
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike', 'post_ref': 'x-post:123', 'output_id': 'event-1',
+        'classification': 'idea,exact_package', 'planner_disposition': 'no_candidate',
+        'effective_mode': 'live', 'normalized_output': {'thesis': 'Bullish calendars'}})
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike', 'post_ref': 'x-post:123', 'output_id': 'failure',
+        'classification': 'residual', 'planner_disposition': 'parked',
+        'effective_mode': 'shadow', 'reason': 'source_too_old',
+        'normalized_output': {'source_id': 'event-1', 'reason': 'source_too_old'}})
+    rows = [dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, r)) for r in activity_rows(store)]
+    assert len(rows) == 2
+    current = next(r for r in rows if r['output_id'] == 'revision-new')
+    assert 'source_too_old' in current['reason'] and 'old-liquidity' not in current['reason']
+    assert current['symbol'] == 'SNOW'
+    assert current['effective_mode'] == 'Idea: live | Exact: shadow'
+    history = json.loads(current['normalized_output'])['activity_history']
+    assert {r['output_id'] for r in history} == {'revision-old', 'revision-new', 'event-1', 'failure'}

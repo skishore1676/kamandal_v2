@@ -444,7 +444,8 @@ def _source_doc_text(db_path: Path, state_path: Path | None, source: str, record
         "Extraction guidance: bookmark lane implies stronger operator intent than timeline lane.",
         "",
     ]
-    for index, record in enumerate(records, start=1):
+    # Poll receipts are operational history, not new semantic input.
+    for index, record in enumerate(sorted(records, key=lambda item: (item.created_at, item.post_id)), start=1):
         lines.extend([
             f"Record {index}",
             f"post_id: {record.post_id}",
@@ -453,9 +454,6 @@ def _source_doc_text(db_path: Path, state_path: Path | None, source: str, record
             f"source_priority: {priority}",
             f"author: {record.author}",
             f"created_at: {record.created_at}",
-            f"seen_at: {record.seen_at}",
-            f"delta: {record.delta}",
-            f"seen_count: {record.seen_count}",
             f"url: {record.url}",
             "text:",
             record.text,

@@ -148,6 +148,15 @@ def test_sheet_backed_unified_cli_reaches_planner_without_import_shadowing(tmp_p
         trading_date="2026-08-17",
     )
     called = []
+    from kamandal_v2.sheets import GoogleSheetClient
+
+    sheet_connections = []
+
+    def forbid_sheet_connection(*_args, **_kwargs):
+        sheet_connections.append(True)
+        raise AssertionError("Planning without --write-sheet must not publish activity")
+
+    monkeypatch.setattr(GoogleSheetClient, "from_config", forbid_sheet_connection)
     monkeypatch.setattr(cli, "pull_sheet_tables", lambda _config: snapshot.tables)
     monkeypatch.setattr(daily_policy, "capture_daily_policy_snapshot", lambda _config, tables: snapshot)
     monkeypatch.setattr(
@@ -167,7 +176,10 @@ def test_sheet_backed_unified_cli_reaches_planner_without_import_shadowing(tmp_p
     cli.main()
 
     assert called == [True]
-    assert json.loads(capsys.readouterr().out)["policy_errors"] == []
+    output = json.loads(capsys.readouterr().out)
+    assert output["policy_errors"] == []
+    assert "activity_projection" not in output
+    assert sheet_connections == []
 
 
 def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) -> None:

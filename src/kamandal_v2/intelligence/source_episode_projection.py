@@ -343,7 +343,12 @@ def _exact_package_projections(
                         "source_event_id": event_id,
                         "package_signature": signature,
                         "image_sha256": image_sha,
-                        "prompt_sha256": compilation.prompt_sha256,
+                        # Batch prompt changes do not revise this source trade.
+                        "schema": "source_package_semantics.v1",
+                        "action": action,
+                        "symbol": str(event.get("symbol") or "").upper(),
+                        "structure": event.get("structure_hint"),
+                        "displayed_price": raw.get("displayed_price"),
                     }
                 )
             )[:24]

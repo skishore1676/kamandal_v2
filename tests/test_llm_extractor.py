@@ -178,3 +178,34 @@ def test_reviewer_writes_local_json_and_markdown(tmp_path) -> None:
     assert "Rejected on liquidity" in markdown
     assert "tag_suggestions" not in payload
     assert payload["human_review_queue"]
+
+
+def test_x_extraction_reuses_only_same_day_content_and_prompt(tmp_path):
+    from datetime import date
+    class CountingClient(_FakeExtractorClient):
+        calls = 0
+        def chat_json(self, *args):
+            self.calls += 1
+            return super().chat_json(*args)
+    client = CountingClient()
+    source = tmp_path / 'source'
+    source.mkdir()
+    document = source / 'x.txt'
+    document.write_text('TSLA looks stretched.')
+    kw = dict(digest_dir=tmp_path / 'digest', ideas_dir=tmp_path / 'ideas',
+              output_prefix='x_bookmarks_imported', client=client,
+              run_date=date(2026, 9, 10), allowed_symbols={'TSLA'})
+    first = extract_ideas_llm({}, source, **kw)
+    original = first.ideas_path.read_text()
+    again = extract_ideas_llm({}, source, **kw)
+    assert client.calls == 1 and again.cache_hits == 1 and again.model_calls == 0
+    assert again.ideas_path.read_text() == original
+    document.write_text('TSLA has changed.')
+    assert extract_ideas_llm({}, source, **kw).model_calls == 1
+    kw['allowed_symbols'] = {'TSLA', 'ZZZZ'}
+    assert extract_ideas_llm({}, source, **kw).model_calls == 1
+    kw['run_date'] = date(2026, 9, 11)
+    assert extract_ideas_llm({}, source, **kw).model_calls == 1
+    for path in (tmp_path / 'digest' / 'extraction_cache').glob('*.json'):
+        path.write_text('{broken')
+    assert extract_ideas_llm({}, source, **kw).model_calls == 1
