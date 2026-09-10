@@ -199,6 +199,11 @@ def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(t
         from tests.test_entry_pricing_plan_fallback import _campaign_config
         adapter = _adapter(tmp_path)
         adapter._config.update(_campaign_config(absolute_allowance_cap=.10))
+        def campaign_dry_run(endpoint, payload):
+            assert endpoint.endswith("/orders/dry-run")
+            bpr = round(400 + (2.02 - float(payload["price"])) * 100, 2)
+            return {"data": {"buying-power-effect": {"impact": bpr}}}
+        monkeypatch.setattr(adapter, "_post", campaign_dry_run)
         market.preflight = adapter.preflight
         original_chain = market.chain_snapshot
         def priced_chain(symbol):
@@ -227,6 +232,9 @@ def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(t
         prices = ticket["preflight"]["raw"]["entry_pricing"]["campaign"]["prices"]
         assert len(prices) == 3
         assert ticket["limit_price"] == prices[0]
+        checks = ticket["preflight"]["raw"]["campaign_bpr_checks"]
+        assert ticket["entry_risk_budget"] == max(check["bpr"] for check in checks)
+        assert ticket["entry_risk_budget"] > checks[0]["bpr"]
         midpoint = _repriced_open_ticket(ticket, control)
         terminal = _repriced_open_ticket(midpoint, control)
         assert midpoint["limit_price"] == prices[1]

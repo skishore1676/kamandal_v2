@@ -141,3 +141,29 @@ def test_csa_open_ticket_preserves_accepted_entry_price_and_metadata(tmp_path):
     assert live["limit_price"] == "-1.01"
     assert live["submit_payload"]["limitPrice"] == "-1.01"
     assert live["preflight"] == candidate.preflight.to_dict()
+
+
+@pytest.mark.parametrize("terminal_ok,terminal_bpr", [(True, 430), (False, 430), (True, None)])
+def test_campaign_preflight_reserves_all_prices_or_blocks(tmp_path, monkeypatch, terminal_ok, terminal_bpr):
+    candidate = _credit_candidate()
+    adapter = _adapter(tmp_path)
+    adapter._config.update(_campaign_config(absolute_allowance_cap=.10))
+    requests = []
+    def dry_run(endpoint, payload):
+        assert endpoint.endswith("/orders/dry-run")
+        requests.append(payload["price"])
+        amount = [410, 420, terminal_bpr][len(requests)-1]
+        data = {"buying-power-effect": {"impact": amount}} if amount is not None else {"order": {"price": payload["price"]}}
+        if len(requests) == 3 and not terminal_ok:
+            data["errors"] = [{"message": "insufficient buying power"}]
+        return {"data": data}
+    monkeypatch.setattr(adapter, "_post", dry_run)
+    result = adapter.preflight(candidate)
+    assert requests == ["1.01", "1.00", "0.99"]
+    assert result.ok == (terminal_ok and terminal_bpr is not None)
+    if result.ok:
+        assert result.bpr == 430
+        assert result.raw["request"]["price"] == "1.01"
+        assert [check["bpr"] for check in result.raw["campaign_bpr_checks"]] == [410, 420, 430]
+    else:
+        assert not result.ok

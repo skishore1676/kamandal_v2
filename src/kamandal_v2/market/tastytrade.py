@@ -356,6 +356,28 @@ class TastytradeAdapter:
             )
             response = self._post(f"/accounts/{self._account_number()}/orders/dry-run", payload)
             result = _preflight_result(payload, response, default_bpr=candidate.estimated_bpr)
+            if result.ok and campaign.get("enabled"):
+                # Selection must reserve the entire authorized price envelope,
+                # since a lower credit can require more buying power. A later
+                # reprice must not need permission to grow the selected budget.
+                checks = [{"limit_price": accepted, "ok": result.ok, "bpr": result.bpr,
+                           "broker_bpr_provided": result.raw.get("broker_bpr_provided") is True}]
+                for next_limit in campaign.get("prices", [])[1:]:
+                    payload = {**payload, "price": f"{abs(float(next_limit)):.2f}"}
+                    response = self._post(f"/accounts/{self._account_number()}/orders/dry-run", payload)
+                    step = _preflight_result(payload, response, default_bpr=candidate.estimated_bpr)
+                    checks.append({"limit_price": next_limit, "ok": step.ok, "bpr": step.bpr,
+                                   "broker_bpr_provided": step.raw.get("broker_bpr_provided") is True})
+                    if not step.ok:
+                        result = step
+                        break
+                provided = all(check["broker_bpr_provided"] for check in checks)
+                result = PreflightResult(
+                    ok=result.ok and provided,
+                    bpr=max(check["bpr"] for check in checks),
+                    message=result.message if provided else "entry campaign broker BPR missing",
+                    raw={**result.raw, "broker_bpr_provided": provided, "campaign_bpr_checks": checks},
+                )
         except Exception as exc:  # noqa: BLE001
             response = _api_error_payload(exc)
             if response:

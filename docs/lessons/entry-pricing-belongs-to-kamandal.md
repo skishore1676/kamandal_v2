@@ -34,8 +34,12 @@ Replacement requires a distinct price that moves toward execution without changi
 credit/debit side. Missing metadata, missing endpoints, exhausted sequences, and
 no-op or reverse-direction prices cannot call the broker. Legacy working tickets
 are left under normal expiry/reconciliation rather than retrofitted with newly
-invented economic authority. Fresh preflight and the strangle's approved BPR budget
-still gate replacements. Uncertain outcomes and partial fills retain their existing
+invented economic authority. Candidate preflight validates every proposed price and returns the maximum broker
+BPR across the sequence, so portfolio selection reserves the whole envelope. The
+NTAP dry-run exposed why this matters: lower credits increased BPR; reserving only
+the initial price would block valid later steps. Every step must provide broker
+BPR and pass preflight. Fresh preflight and the selected BPR budget still gate
+replacements; a later market-driven increase beyond that budget remains blocked. Uncertain outcomes and partial fills retain their existing
 lineage/reconciliation owner.
 
 Acceptance includes native Tastytrade dry-run -> unified exact-package planning ->
