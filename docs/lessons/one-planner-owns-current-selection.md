@@ -45,3 +45,18 @@ and normal unified planning remain covered by the full suite.
 Tradeoff: replacement opportunities wait for the next regular planning cycle. If
 latency later proves material, reconsider the existing planner schedule with evidence;
 do not restore a second portfolio-selection owner inside order reconciliation.
+
+## Planner quote latency
+
+The first manual run after retirement took about 17 minutes: candidate construction
+and diagnostics each requested complete chains for scan symbols before testing IV
+or thesis eligibility. Public fetched expirations serially, multiplying the work.
+Each `run_plan` now owns one `PlanningMarketCache`, shared by source groups,
+source-exact supplements, and diagnostics. Preserve capture timestamps and complete
+expiration coverage (including calendar/diagonal far legs and fallback dates).
+Never extend this cache into execution or across invocations; preflight capabilities
+remain delegated and uncached. Test quote-independent rejections first, defer the
+strangle price gate until quotes exist, and respect permissive research matching.
+Diagnostics report only proven rejections when price was not fetched. Plan metrics
+record requests, cache hits, and symbols fetched; measure the next natural cycle
+before claiming an observed runtime improvement.
