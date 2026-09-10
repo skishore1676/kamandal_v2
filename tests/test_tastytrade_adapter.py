@@ -178,7 +178,8 @@ def test_tastytrade_preflight_builds_open_option_order(tmp_path) -> None:
     assert result.raw["broker_bpr_provided"] is True
     assert result.raw["bpr_source"] == "tastytrade_dry_run"
     request = result.raw["request"]
-    assert request["price"] == "1.25"
+    assert request["price"] == "1.26"
+    assert result.raw["entry_pricing"]["accepted_limit_price"] == "-1.26"
     assert request["price-effect"] == "Credit"
     assert request["legs"][0]["action"] == "Sell to Open"
     assert request["legs"][0]["symbol"] == "QQQ   260619C00465000"

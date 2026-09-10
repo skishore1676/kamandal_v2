@@ -164,7 +164,8 @@ def test_final_live_gate_accepts_tasty_bpr_and_rejects_missing_or_increased_bpr(
     assert _preflight_bpr_incomplete(candidate)
 
 
-def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(tmp_path, monkeypatch):
+@pytest.mark.parametrize("native_pricing", [False, True])
+def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(tmp_path, monkeypatch, native_pricing):
     from kamandal_v2.config import load_control
     from kamandal_v2.domain.models import PortfolioState
     from kamandal_v2.strategy_engine import planning
@@ -193,6 +194,22 @@ def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(t
     control["live"]["max_bpr_per_order"] = 2500
     control["risk_manager"]["enabled"] = False  # risk-manager behavior has its own suite; broker effects remain impossible here
     market = Market()
+    if native_pricing:
+        from tests.test_tastytrade_adapter import _adapter
+        from tests.test_entry_pricing_plan_fallback import _campaign_config
+        adapter = _adapter(tmp_path)
+        adapter._config.update(_campaign_config(absolute_allowance_cap=.10))
+        def campaign_dry_run(endpoint, payload):
+            assert endpoint.endswith("/orders/dry-run")
+            bpr = round(400 + (2.02 - float(payload["price"])) * 100, 2)
+            return {"data": {"buying-power-effect": {"impact": bpr}}}
+        monkeypatch.setattr(adapter, "_post", campaign_dry_run)
+        market.preflight = adapter.preflight
+        original_chain = market.chain_snapshot
+        def priced_chain(symbol):
+            chain = original_chain(symbol)
+            return replace(chain, quotes=[replace(q, bid=.90, ask=1.10) for q in chain.quotes])
+        market.chain_snapshot = priced_chain
     market.account_state = lambda: PortfolioState(100000, 100000, 0, 0)
     monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: market)
     store = _migrated_store(tmp_path)
@@ -209,6 +226,22 @@ def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(t
     assert lifecycle.metadata["source_identity"]["package_signature"] == _package().package_signature
     assert lifecycle.metadata["compiled_management_policy"]["resolved_fields"]["profit_target_pct"] == 40
     assert not result.shadow.result.candidates
+    if native_pricing:
+        from kamandal_v2.live.execution import _repriced_open_ticket
+        ticket, = store.live_order_intents_by_type("open")
+        prices = ticket["preflight"]["raw"]["entry_pricing"]["campaign"]["prices"]
+        assert len(prices) == 3
+        assert ticket["limit_price"] == prices[0]
+        checks = ticket["preflight"]["raw"]["campaign_bpr_checks"]
+        assert ticket["entry_risk_budget"] == max(check["bpr"] for check in checks)
+        assert ticket["entry_risk_budget"] > checks[0]["bpr"]
+        midpoint = _repriced_open_ticket(ticket, control)
+        terminal = _repriced_open_ticket(midpoint, control)
+        assert midpoint["limit_price"] == prices[1]
+        assert terminal["limit_price"] == prices[2]
+        assert ticket["csa_lifecycle_id"] == midpoint["csa_lifecycle_id"] == terminal["csa_lifecycle_id"]
+        assert ticket["legs"] == midpoint["legs"] == terminal["legs"]
+        assert ticket["entry_risk_budget"] == midpoint["entry_risk_budget"] == terminal["entry_risk_budget"]
     replay = planning.run_unified_books(control, **args)
     assert not replay.live.result.plans
     assert replay.live.result.candidates[0].rejection_reason == "pilot_live_canary_already_reserved"

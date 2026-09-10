@@ -1589,6 +1589,11 @@ working orders, reserved capacity, and fresh quotes. Uncertain submissions remai
 blocked and reserved until broker reconciliation resolves them. No executor or
 reconciler invokes a planner or republishes an old selection.
 
+For venue pricing or same-price replacement problems, see
+[Entry pricing belongs to Kamandal](lessons/entry-pricing-belongs-to-kamandal.md).
+The shared policy and its accepted-price metadata must survive every adapter and
+opening-ticket translation; missing metadata cannot authorize a replacement.
+
 The same-order pricing ladder above remains: it changes a limit within frozen
 economics, not the selected portfolio. Its legacy configuration calls it an entry
 pricing `campaign`; this is not the removed portfolio fallback coordinator.

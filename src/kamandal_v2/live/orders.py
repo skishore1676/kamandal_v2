@@ -33,7 +33,7 @@ def build_open_ticket(plan: Plan, candidate: Candidate) -> dict[str, Any]:
     )
 
 
-def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
+def build_csa_live_ticket(ticket: StrategyTicket, *, entry_candidate: Candidate | None = None) -> dict[str, Any]:
     """Translate one app-owned CSA strategy ticket into a broker-ready live ticket."""
 
     effects = {leg.effect for leg in ticket.legs}
@@ -49,6 +49,10 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
     )
     if ticket.order_kind == "credit":
         limit_price = f"-{limit_price}"
+    if intent_type == "open" and entry_candidate is not None:
+        accepted = _accepted_preflight_limit_price(entry_candidate)
+        if accepted:
+            limit_price = accepted
     seed = json.dumps(
         {
             "strategy_ticket_id": ticket.ticket_id,
@@ -77,7 +81,7 @@ def build_csa_live_ticket(ticket: StrategyTicket) -> dict[str, Any]:
         "limit_price": limit_price,
         "time_in_force": "DAY",
         "created_at": ticket.created_at,
-        "preflight": None,
+        "preflight": entry_candidate.preflight.to_dict() if intent_type == "open" and entry_candidate is not None and entry_candidate.preflight else None,
         "execution_quality": {},
         "legs": [leg.to_dict() for leg in ticket.legs],
         "submit_payload": submit_payload,
@@ -342,8 +346,10 @@ def _close_net_credit_from_legs(legs: list[OptionLeg]) -> float:
 def _accepted_preflight_limit_price(candidate: Candidate) -> str:
     if candidate.preflight is None or not candidate.preflight.ok:
         return ""
-    request = (candidate.preflight.raw or {}).get("request") or {}
-    value = request.get("limitPrice")
+    raw = candidate.preflight.raw or {}
+    accepted = (raw.get("entry_pricing") or {}).get("accepted_limit_price")
+    request = raw.get("request") or {}
+    value = accepted if accepted not in (None, "") else request.get("limitPrice")
     return str(value) if value not in (None, "") else ""
 
 

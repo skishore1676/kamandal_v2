@@ -379,7 +379,7 @@ def _run_csa_scan(
                 portfolio = _reserve_candidate_bpr(portfolio, candidate)
         else:
             candidate.preflight = preflight_result
-            live_ticket = build_csa_live_ticket(ticket)
+            live_ticket = build_csa_live_ticket(ticket, entry_candidate=candidate)
             live_ticket.update(
                 {
                     "created_at": started_at,

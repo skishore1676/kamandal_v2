@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 from dataclasses import replace
@@ -1100,7 +1101,14 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
         if not window["allowed"]:
             store.event("live_order_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_entry_cutoff", "submission_window": window}
-        new_ticket = _repriced_open_ticket(ticket, config)
+        try:
+            new_ticket = _repriced_open_ticket(ticket, config)
+        except ValueError as exc:
+            # Keep the working order under normal expiry/reconciliation. A
+            # missing or exhausted price contract never authorizes replacement.
+            reason = str(exc)
+            store.event("live_order_reprice_skipped", {"ticket_hash": ticket.get("ticket_hash"), "reason": reason})
+            return {"reprice_status": "skipped", "reprice_message": reason}
         campaign_metadata = (((new_ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {}).get("campaign") or {}
         if campaign_metadata.get("enabled"):
             fresh_preflight = _preflight_ticket_with_entry_risk(adapter, new_ticket)
@@ -1680,23 +1688,38 @@ def _repriced_close_ticket(ticket: dict[str, Any], config: dict[str, Any]) -> di
 
 def _repriced_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str:
     metadata = (((ticket.get("preflight") or {}).get("raw") or {}).get("entry_pricing") or {})
-    current = abs(float(str(ticket.get("limit_price") or "0").replace("-", "")))
+    if not metadata:
+        raise ValueError("entry_pricing_metadata_missing")
+    current = abs(float(ticket.get("limit_price") or 0))
+    if not math.isfinite(current) or current <= 0:
+        raise ValueError("entry_reprice_current_price_invalid")
     campaign = metadata.get("campaign") or {}
-    base = float(metadata.get("base_mid_limit") or current)
-    improved = float(metadata.get("improved_limit") or current)
     attempt = int(ticket.get("reprice_attempt") or 0) + 1
+    signed = str(ticket.get("limit_price") or "")
     if campaign.get("enabled"):
         prices = campaign.get("prices") or []
         if attempt >= len(prices):
             raise ValueError("entry campaign has no valid next price")
-        return str(prices[attempt])
-    multiplier = _reprice_improvement_multiplier(config, attempt)
-    multiplier = max(0.0, min(multiplier, 1.0))
-    target = base + ((improved - base) * multiplier)
-    signed = str(ticket.get("limit_price") or "")
-    if signed.startswith("-"):
-        return f"-{_round_cent(target):.2f}"
-    return f"{_round_cent(target):.2f}"
+        next_price = str(prices[attempt])
+        if next_price.startswith("-") != signed.startswith("-"):
+            raise ValueError("entry_reprice_side_changed")
+        target = abs(float(next_price))
+    else:
+        if metadata.get("base_mid_limit") is None or metadata.get("improved_limit") is None:
+            raise ValueError("entry_pricing_endpoints_missing")
+        base = float(metadata["base_mid_limit"])
+        improved = float(metadata["improved_limit"])
+        multiplier = max(0.0, min(_reprice_improvement_multiplier(config, attempt), 1.0))
+        target = _round_cent(base + ((improved - base) * multiplier))
+        next_price = f"-{target:.2f}" if signed.startswith("-") else f"{target:.2f}"
+    if not math.isfinite(target) or target <= 0:
+        raise ValueError("entry_reprice_target_invalid")
+    side = str(metadata.get("side") or ("credit" if signed.startswith("-") else "debit"))
+    if abs(target - current) < 0.000001:
+        raise ValueError("entry_reprice_no_price_change")
+    if (side == "credit" and target > current) or (side == "debit" and target < current):
+        raise ValueError("entry_reprice_not_more_executable")
+    return next_price
 
 
 def _repriced_close_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str:
