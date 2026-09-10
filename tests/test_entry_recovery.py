@@ -38,90 +38,6 @@ def _stale_result() -> dict:
     }
 
 
-def test_stale_selected_entry_rebuilds_once_and_submits(tmp_path, monkeypatch) -> None:
-    store = LocalStore(tmp_path / "kamandal.db")
-    calls = [_stale_result(), {"processed": 1, "results": [{"status": "submitted", "ticket_hash": "fresh-ticket", "underlying": "V"}]}]
-    monkeypatch.setattr(execution, "execute_live_approved", lambda *_args, **_kwargs: calls.pop(0))
-    monkeypatch.setattr(
-        advisory,
-        "run_live_advisory_plan",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            plan_run_id="fresh-plan",
-            plans=[object()],
-            candidates=[object()],
-            daily_plan_rows=[["fresh-row"]],
-        ),
-    )
-    monkeypatch.setattr(
-        execution,
-        "send_lathi_alert",
-        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("successful recovery should stay silent")),
-    )
-
-    result = execution.execute_live_approved_with_recovery(
-        _config(),
-        submit=True,
-        recovery_idea_paths=[tmp_path],
-        store=store,
-    )
-
-    assert result["results"][0]["status"] == "submitted"
-    assert result["recovery"] == {
-        "attempted": True,
-        "rebuilds": 1,
-        "plan_run_id": "fresh-plan",
-        "plans": 1,
-        "candidates": 1,
-        "outcome": "submitted",
-    }
-    assert result["operator_notification"]["needed"] is False
-    assert calls == []
-
-
-def test_stale_rebuild_without_current_rank1_notifies_once(tmp_path, monkeypatch) -> None:
-    store = LocalStore(tmp_path / "kamandal.db")
-    monkeypatch.setattr(execution, "execute_live_approved", lambda *_args, **_kwargs: _stale_result())
-    monkeypatch.setattr(
-        advisory,
-        "run_live_advisory_plan",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            plan_run_id="empty-plan",
-            plans=[],
-            candidates=[],
-            daily_plan_rows=[],
-        ),
-    )
-    sent = []
-
-    def fake_alert(**kwargs):
-        sent.append(kwargs)
-        return AlertResult(attempted=True, ok=True, mode="spool")
-
-    monkeypatch.setattr(execution, "send_lathi_alert", fake_alert)
-
-    first = execution.execute_live_approved_with_recovery(
-        _config(),
-        submit=True,
-        recovery_idea_paths=[tmp_path],
-        store=store,
-    )
-    second = execution.execute_live_approved_with_recovery(
-        _config(),
-        submit=True,
-        recovery_idea_paths=[tmp_path],
-        store=store,
-    )
-
-    assert first["operator_notification"]["ok"] is True
-    assert first["recovery"]["outcome"] == "stale_rebuild_no_eligible_current_rank1"
-    assert second["operator_notification"]["attempted"] is False
-    assert second["operator_notification"]["reason"] == "unchanged_selected_entry_failure"
-    assert len(sent) == 1
-    assert sent[0]["title"] == "Kamandal selected entry not placed: V"
-    assert "One fresh rank-1 rebuild was attempted" in sent[0]["body"]
-    assert "No new position was opened" in sent[0]["body"]
-
-
 def test_fresh_selected_entry_failure_notifies_without_rebuild(tmp_path, monkeypatch) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     monkeypatch.setattr(
@@ -151,7 +67,7 @@ def test_fresh_selected_entry_failure_notifies_without_rebuild(tmp_path, monkeyp
     assert result["recovery"] == {"attempted": False}
     assert result["operator_notification"]["needed"] is True
     assert len(sent) == 1
-    assert "No stale-ticket rebuild applied" in sent[0]["body"]
+    assert "next scheduled planner" in sent[0]["body"]
 
 
 def test_no_selected_entry_is_silent(tmp_path, monkeypatch) -> None:
@@ -333,3 +249,36 @@ def test_auto_selected_drawdown_block_still_notifies(tmp_path, monkeypatch) -> N
 
     assert result["ok"] is True
     assert len(sent) == 1
+
+
+def test_stale_selection_notifies_once_without_replanning(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / "state.db")
+    monkeypatch.setattr(execution, "execute_live_approved", lambda *a, **kw: _stale_result())
+    monkeypatch.setattr(advisory, "run_live_advisory_plan", lambda *a, **kw: pytest.fail("executor must not plan"))
+    sent = []
+    def alert(**kw):
+        sent.append(kw)
+        return AlertResult(attempted=True, ok=True, mode="spool")
+    monkeypatch.setattr(execution, "send_lathi_alert", alert)
+    first = execution.execute_live_approved_with_recovery(_config(), submit=True, store=store)
+    second = execution.execute_live_approved_with_recovery(_config(), submit=True, store=store)
+    assert first["recovery"] == {"attempted": False}
+    assert first["operator_notification"]["ok"]
+    assert second["operator_notification"]["reason"] == "unchanged_selected_entry_failure"
+    assert len(sent) == 1
+
+
+def test_lost_current_selection_is_visible_without_ledger_submission(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / "state.db")
+    ticket = {"ticket_hash": "selected", "order_id": "id", "plan_id": "plan", "candidate_id": "candidate", "intent_type": "open", "underlying": "NTAP"}
+    store.save_live_order_intent(ticket, status="pending_approval")
+    config = _config()
+    config["live"]["entry_approval_mode"] = "auto_top_plan"
+    store.event("live_current_selection", {"trading_date": execution.market_today(config), "ticket_hashes": ["selected"]})
+    monkeypatch.setattr(execution, "execute_live_approved", lambda *a, **kw: {"processed": 0, "results": []})
+    monkeypatch.setattr(execution, "send_lathi_alert", lambda **kw: AlertResult(attempted=True, ok=True, mode="spool"))
+    result = execution.execute_live_approved_with_recovery(config, submit=True, store=store)
+    assert result["results"][0]["reason"] == "selected_entry_missing_from_cockpit"
+    assert store.live_order_intent("selected")["_ledger_status"] == "pending_approval"
+    store.update_live_order_intent_status("selected", "submit_uncertain")
+    assert execution._missing_selected_entry(config, store) is None

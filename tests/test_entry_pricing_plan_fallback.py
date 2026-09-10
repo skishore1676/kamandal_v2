@@ -7,11 +7,9 @@ import pytest
 
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, Playbook, PortfolioState, PreflightResult
 from kamandal_v2.live.advisory import render_live_plan_rows
-from kamandal_v2.live.execution import _entry_reprice_due, _fallback_submission_gate, _project_fallback_daily_plan, _repriced_open_ticket
-from kamandal_v2.live.execution import _fallback_basket_cap_allows
+from kamandal_v2.live.execution import _entry_reprice_due, _repriced_open_ticket
 from kamandal_v2.live.execution import _sync_live_orders_locked
 from kamandal_v2.live.orders import APPROVE_LIVE, build_open_ticket, ticket_hash
-from kamandal_v2.live.plan_fallback import PlanFallbackCoordinator, fallback_enabled, register_rank_one_attempt
 from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_campaign, entry_campaign_policy, entry_price_metadata, normalize_campaign_entry_metadata
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.planner.candidate_builder import _entry_economic_bounds
@@ -148,7 +146,7 @@ def test_characterize_live_approval_is_rank_one_only(tmp_path) -> None:
 
 def test_selected_quote_revision_atomically_supersedes_unsubmitted_ticket(tmp_path) -> None:
     store = LocalStore(tmp_path / "state.db")
-    first = _fallback_ticket("first-selected-quote")
+    first = _selected_ticket("first-selected-quote")
     second = {**first, "ticket_hash": "second-selected-quote", "order_id": "second-order", "limit_price": "-0.95"}
     second["submit_payload"] = {**first["submit_payload"], "orderId": "second-order", "limitPrice": "-0.95"}
 
@@ -169,7 +167,7 @@ def test_selected_quote_revision_atomically_supersedes_unsubmitted_ticket(tmp_pa
 
 def test_selected_quote_revision_fails_closed_on_broker_evidence(tmp_path) -> None:
     store = LocalStore(tmp_path / "state.db")
-    first = _fallback_ticket("first-selected-quote")
+    first = _selected_ticket("first-selected-quote")
     second = {**first, "ticket_hash": "second-selected-quote", "order_id": "second-order", "limit_price": "-0.95"}
     store.stage_selected_live_order_intent(first)
     store.record_live_order_attempt(
@@ -186,43 +184,6 @@ def test_selected_quote_revision_fails_closed_on_broker_evidence(tmp_path) -> No
 
     assert store.live_order_intent(first["ticket_hash"])["_ledger_status"] == "pending_approval"
     assert store.live_order_intent(second["ticket_hash"]) is None
-
-
-def test_rank_one_campaign_follows_unsubmitted_selected_quote_revision(tmp_path) -> None:
-    store = LocalStore(tmp_path / "state.db")
-    first = _fallback_ticket("first-selected-quote")
-    second = {**first, "ticket_hash": "second-selected-quote", "order_id": "second-order", "limit_price": "-0.95"}
-    second["submit_payload"] = {**first["submit_payload"], "orderId": "second-order", "limitPrice": "-0.95"}
-    plan = type(
-        "Plan",
-        (),
-        {
-            "plan_id": "rank-one-plan",
-            "plan_rank": 1,
-            "to_dict": lambda self: {"plan_id": self.plan_id, "plan_rank": self.plan_rank},
-        },
-    )()
-    store.stage_selected_live_order_intent(first)
-    initial = register_rank_one_attempt(
-        store,
-        campaign_id="campaign-one",
-        plan=plan,
-        tickets=[first],
-        plan_run_id="run-one",
-    )
-    store.stage_selected_live_order_intent(second)
-    refreshed = register_rank_one_attempt(
-        store,
-        campaign_id="campaign-one",
-        plan=plan,
-        tickets=[second],
-        plan_run_id="run-two",
-    )
-
-    assert initial["ticket_hashes"] == [first["ticket_hash"]]
-    assert refreshed["ticket_hashes"] == [second["ticket_hash"]]
-    assert refreshed["superseded_ticket_hashes"] == [first["ticket_hash"]]
-    assert store.live_order_intent(second["ticket_hash"])["plan_attempt_id"] == "campaign-one"
 
 
 def test_characterize_ticket_hash_is_deterministic() -> None:
@@ -595,60 +556,6 @@ def test_configured_tick_keeps_debit_midpoint_on_operator_side() -> None:
     assert abs(float(campaign.prices[1])) <= 1.43
 
 
-def test_fallback_inline_submit_requires_canonical_live_confirmation(monkeypatch) -> None:
-    monkeypatch.delenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", raising=False)
-    config = {"runtime": {"mode": "live", "trading_enabled": True}, "live": {}}
-
-    reason = _fallback_submission_gate(config, [{"underlying": "TSLA"}], gate={"risk_manager": {}})
-
-    assert reason.startswith("blocked_live_submit_gate:")
-
-
-def test_fallback_inline_submit_rechecks_stage_and_cluster_gates(monkeypatch) -> None:
-    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
-    monkeypatch.setattr("kamandal_v2.live.execution.load_daily_policy_snapshot", lambda _config: object())
-    config = {"runtime": {"mode": "live", "trading_enabled": True}, "live": {}}
-    ticket = {"underlying": "TSLA"}
-
-    monkeypatch.setattr(
-        "kamandal_v2.live.execution._stage_ticket_authorization",
-        lambda _ticket, _snapshot: (False, "blocked_stage_authorization_policy_changed"),
-    )
-    assert _fallback_submission_gate(config, [ticket], gate={"risk_manager": {}}) == "blocked_stage_authorization_policy_changed"
-
-    monkeypatch.setattr(
-        "kamandal_v2.live.execution._stage_ticket_authorization",
-        lambda _ticket, _snapshot: (True, "stage_authorization_current"),
-    )
-    reason = _fallback_submission_gate(
-        config,
-        [ticket],
-        gate={"risk_manager": {"clusters_at_cap": {"mega_cap_tech": ["TSLA", "NVDA"]}}},
-    )
-    assert reason == "blocked_risk_cluster_cap:mega_cap_tech"
-    reason = _fallback_submission_gate(
-        config,
-        [ticket],
-        gate={"risk_manager": {"underlyings_at_cap": {"TSLA": 1}}},
-    )
-    assert reason == "blocked_risk_underlying_cap:TSLA"
-
-
-def test_repriced_root_uses_terminal_leaf_for_fallback(tmp_path) -> None:
-    store, ticket = _registered_fallback(tmp_path)
-    child = _fallback_ticket("rank-one-child")
-    child["parent_ticket_hash"] = ticket["ticket_hash"]
-    child["limit_price"] = "-0.95"
-    store.save_live_order_intent(child, status="cancelled")
-    store.update_live_order_intent_status(ticket["ticket_hash"], "repriced")
-    coordinator = PlanFallbackCoordinator(store, {"live": {"plan_fallback": {"enabled": True, "max_attempts": 2}}})
-
-    decision = coordinator.advance("campaign-one", replan=lambda _context: _validated_rank_two(store))
-
-    assert decision.status == "fallback_ready"
-    assert decision.reason == "zero_fill_terminal"
-
-
 def test_terminal_partial_fill_is_adopted_into_typed_lifecycle_before_replan(tmp_path, monkeypatch) -> None:
     database = tmp_path / "partial.db"
     store = LocalStore(database)
@@ -713,7 +620,23 @@ def test_terminal_partial_fill_is_adopted_into_typed_lifecycle_before_replan(tmp
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "partially_filled_terminal"
 
 
-def _fallback_ticket(ticket_hash_value: str, candidate_id: str = "rank-one-candidate") -> dict:
+def test_configuration_keeps_order_pricing_without_portfolio_fallback(monkeypatch) -> None:
+    monkeypatch.delenv("KAMANDAL_ENTRY_CAMPAIGN_ENABLED", raising=False)
+    monkeypatch.delenv("KAMANDAL_LIVE_PLAN_FALLBACK_ENABLED", raising=False)
+    from kamandal_v2.config import load_control
+
+    control = load_control()
+
+    assert control["live"]["entry_pricing"]["campaign"]["enabled"] is True
+    assert control["live"]["entry_pricing"]["campaign"]["absolute_allowance_cap"] == 0.10
+    assert control["live"]["entry_pricing"]["campaign"]["valid_tick"] == 0.01
+    assert "plan_fallback" not in control["live"]
+
+
+def test_missing_activation_keys_remain_fail_closed() -> None:
+    assert entry_campaign_policy({"live": {"entry_pricing": {"mode": "liquidity_adjusted_mid"}}}).enabled is False
+
+def _selected_ticket(ticket_hash_value: str, candidate_id: str = "rank-one-candidate") -> dict:
     return {
         "ticket_hash": ticket_hash_value,
         "order_id": f"order-{ticket_hash_value}",
@@ -731,252 +654,3 @@ def _fallback_ticket(ticket_hash_value: str, candidate_id: str = "rank-one-candi
         "legs": [],
         "submit_payload": {"orderId": f"order-{ticket_hash_value}", "limitPrice": "-1.00", "legs": []},
     }
-
-
-def _registered_fallback(tmp_path, status: str = "submitted"):
-    store = LocalStore(tmp_path / "fallback.db")
-    ticket = _fallback_ticket("rank-one-ticket")
-    store.save_live_order_intent(ticket, status=status)
-    plan = type("Plan", (), {"plan_id": "rank-one-plan", "plan_rank": 1, "to_dict": lambda self: {"plan_id": self.plan_id, "plan_rank": self.plan_rank}})()
-    register_rank_one_attempt(
-        store,
-        campaign_id="campaign-one",
-        plan=plan,
-        tickets=[ticket],
-        plan_run_id="run-one",
-        idea_paths=[str(tmp_path / "ideas.yaml")],
-    )
-    return store, ticket
-
-
-def _validated_rank_two(store: LocalStore) -> dict:
-    ticket = _fallback_ticket("rank-two-ticket", "rank-two-candidate")
-    ticket["plan_id"] = "rank-two-plan"
-    store.save_live_order_intent(ticket, status="pending_approval")
-    return {
-        "plan_id": "rank-two-plan",
-        "candidate_ids": ["rank-two-candidate"],
-        "tickets": [ticket],
-        "validation": {key: True for key in ("fresh_session", "fresh_quotes", "risk_valid", "bpr_valid", "concentration_valid", "overlap_valid", "broker_preflight_valid")},
-    }
-
-
-def test_fallback_projection_replaces_only_live_lane_before_submission(tmp_path, monkeypatch) -> None:  # noqa: ANN001
-    row = {column: "" for column in DAILY_PLAN_HEADER}
-    row.update(
-        {
-            "plan_date": "2026-08-21",
-            "plan_rank": 1,
-            "plan_id": "rank-two-plan",
-            "plan_status": "eligible",
-            "mode": "live_advisory",
-            "plan_detail_json": json.dumps({"lane": "live_advisory"}),
-        }
-    )
-    decision = SimpleNamespace(
-        daily_plan_rows=(tuple(row[column] for column in DAILY_PLAN_HEADER),),
-        attempt=2,
-        campaign_id="campaign-one",
-        reason="zero_fill_terminal",
-        plan_id="rank-two-plan",
-    )
-    captured = {}
-
-    def write(_config, rows, header, *, replace_lanes):  # noqa: ANN001
-        captured.update(rows=rows, header=header, replace_lanes=replace_lanes)
-        return len(rows)
-
-    monkeypatch.setattr("kamandal_v2.live.execution.write_daily_plan", write)
-    receipt = _project_fallback_daily_plan({}, LocalStore(tmp_path / "projection.db"), decision)
-    projected = dict(zip(DAILY_PLAN_HEADER, captured["rows"][0], strict=False))
-    detail = json.loads(projected["plan_detail_json"])
-
-    assert receipt["ok"] is True
-    assert captured["header"] == DAILY_PLAN_HEADER
-    assert captured["replace_lanes"] == {"live_advisory"}
-    assert projected["operator_action"] == APPROVE_LIVE
-    assert projected["operator_notes"] == "automatic Plan 2 after zero_fill_terminal"
-    assert detail["fallback_campaign_id"] == "campaign-one"
-    assert detail["fallback_attempt"] == 2
-
-
-def test_fallback_blocks_working_orders_and_is_idempotent_after_zero_fill(tmp_path) -> None:
-    store, ticket = _registered_fallback(tmp_path)
-    coordinator = PlanFallbackCoordinator(store, {"live": {"plan_fallback": {"enabled": True, "max_attempts": 2}}})
-    calls = []
-
-    blocked = coordinator.advance("campaign-one", replan=lambda _context: calls.append("unexpected") or _validated_rank_two(store))
-    assert blocked.status == "blocked_unresolved"
-    assert calls == []
-
-    store.update_live_order_intent_status(ticket["ticket_hash"], "cancelled")
-    ready = coordinator.advance("campaign-one", replan=lambda context: calls.append(context["reason"]) or _validated_rank_two(store))
-    replay = coordinator.advance("campaign-one", replan=lambda _context: calls.append("duplicate") or _validated_rank_two(store))
-
-    assert ready.status == "fallback_ready"
-    assert ready.attempt == 2
-    assert calls == ["zero_fill_terminal"]
-    assert replay.status == "fallback_ready"
-    assert replay.reason == "idempotent_replay"
-
-
-def test_fallback_partial_fill_replans_from_actual_positions(tmp_path) -> None:
-    store, ticket = _registered_fallback(tmp_path)
-    store.update_live_order_intent_status_with_payload(ticket["ticket_hash"], "partially_filled_terminal", {"filled_quantity": 0.5})
-    store.save_live_position_group("group-filled", {"underlying": "TSLA", "candidate": {"candidate_id": ticket["candidate_id"]}}, status="open")
-    coordinator = PlanFallbackCoordinator(store, {"live": {"plan_fallback": {"enabled": True, "max_attempts": 2}}})
-    observed = []
-
-    decision = coordinator.advance(
-        "campaign-one",
-        replan=lambda context: observed.append(context) or _validated_rank_two(store),
-    )
-
-    assert decision.status == "fallback_ready"
-    assert observed[0]["reason"] == "partial_fill_terminal"
-    assert observed[0]["attempted_candidate_ids"] == [ticket["candidate_id"]]
-    assert observed[0]["actual_portfolio_groups"][0]["group_id"] == "group-filled"
-
-
-def test_fallback_never_releases_fully_filled_rank_one(tmp_path) -> None:
-    store, ticket = _registered_fallback(tmp_path, status="filled")
-    coordinator = PlanFallbackCoordinator(store, {"live": {"plan_fallback": {"enabled": True, "max_attempts": 2}}})
-
-    decision = coordinator.advance("campaign-one", replan=lambda _context: (_ for _ in ()).throw(AssertionError("must not replan")))
-
-    assert decision.status == "complete"
-    assert decision.reason == "rank_one_filled"
-
-
-def test_fallback_rejects_unvalidated_second_plan(tmp_path) -> None:
-    store, ticket = _registered_fallback(tmp_path)
-    store.update_live_order_intent_status(ticket["ticket_hash"], "expired")
-    store.record_live_order_status(ticket["order_id"], "CANCELLED", {"status": "CANCELLED"}, ticket_hash=ticket["ticket_hash"])
-    coordinator = PlanFallbackCoordinator(store, {"live": {"plan_fallback": {"enabled": True, "max_attempts": 2}}})
-    invalid = {"plan_id": "rank-two-plan", "candidate_ids": ["rank-two-candidate"], "tickets": [_fallback_ticket("rank-two-ticket")], "validation": {"fresh_session": True}}
-
-    decision = coordinator.advance("campaign-one", replan=lambda _context: invalid)
-
-    assert decision.status == "terminal_no_valid_plan"
-    assert decision.reason.startswith("fresh_validation_failed:")
-
-
-def test_fallback_counts_terminal_rank_one_attempt_against_basket_cap(tmp_path) -> None:
-    store, ticket = _registered_fallback(tmp_path)
-    store.record_live_order_attempt(
-        ticket,
-        action="submit_open",
-        submit=True,
-        ok=True,
-        request_payload=ticket["submit_payload"],
-        response_payload={"orderId": ticket["order_id"]},
-    )
-    store.update_live_order_intent_status(ticket["ticket_hash"], "cancelled")
-    store.record_live_order_status(ticket["order_id"], "CANCELLED", {"status": "CANCELLED"}, ticket_hash=ticket["ticket_hash"])
-    config = {"live": {"max_live_baskets_per_day": 1, "plan_fallback": {"enabled": True, "max_attempts": 2}}}
-
-    assert _fallback_basket_cap_allows(config, store, "campaign-one", "rank-two-plan") is False
-
-
-def test_fallback_cap_ignores_historical_registrations_and_counts_current_broker_effect(tmp_path) -> None:
-    store = LocalStore(tmp_path / "fallback-cap.db")
-    plan_type = type(
-        "Plan",
-        (),
-        {
-            "plan_rank": 1,
-            "to_dict": lambda self: {"plan_id": self.plan_id, "plan_rank": self.plan_rank},
-        },
-    )
-    for index in range(6):
-        ticket = _fallback_ticket(f"historical-{index}", f"historical-candidate-{index}")
-        ticket["plan_id"] = f"historical-plan-{index}"
-        store.save_live_order_intent(ticket, status="cancelled")
-        plan = plan_type()
-        plan.plan_id = ticket["plan_id"]
-        register_rank_one_attempt(
-            store,
-            campaign_id=f"historical-campaign-{index}",
-            plan=plan,
-            tickets=[ticket],
-            plan_run_id=f"historical-run-{index}",
-        )
-
-    public = _fallback_ticket("current-public", "current-public-candidate")
-    public["plan_id"] = "current-public-plan"
-    public["execution_venue"] = "public_primary"
-    store.save_live_order_intent(public, status="cancelled")
-    store.record_live_order_attempt(
-        public,
-        action="submit_open",
-        submit=True,
-        ok=False,
-        request_payload=public["submit_payload"],
-        response_payload={"error": "broker response uncertain"},
-    )
-
-    config = {"live": {"max_live_baskets_per_day": 3}}
-
-    assert store.live_entry_plan_ids_since("2000-01-01 00:00:00") == {"current-public-plan"}
-    assert _fallback_basket_cap_allows(config, store, "tasty-campaign", "tasty-fallback-plan") is True
-
-
-def test_integrated_credit_replay_reaches_one_fresh_rank_two_attempt(tmp_path) -> None:
-    config = _campaign_config()
-    config["live"]["plan_fallback"] = {"enabled": True, "max_attempts": 2, "auto_submit": False}
-    candidate = _credit_candidate()
-    metadata = entry_price_metadata(candidate, config)
-    candidate.preflight = PreflightResult(
-        ok=True,
-        bpr=400,
-        message="fixture-preflight",
-        raw={"request": {"limitPrice": metadata["campaign"]["prices"][0]}, "entry_pricing": metadata},
-    )
-    root = build_open_ticket(type("Plan", (), {"plan_id": "rank-one-plan", "plan_rank": 1})(), candidate)
-    store = LocalStore(tmp_path / "integrated-replay.db")
-    store.save_live_order_intent(root, status="submitted")
-    plan = type("Plan", (), {"plan_id": "rank-one-plan", "plan_rank": 1, "to_dict": lambda self: {"plan_id": self.plan_id, "plan_rank": self.plan_rank}})()
-    register_rank_one_attempt(store, campaign_id="integrated-campaign", plan=plan, tickets=[root], plan_run_id="run-integrated")
-    coordinator = PlanFallbackCoordinator(store, config)
-
-    working = coordinator.advance("integrated-campaign", replan=lambda _context: (_ for _ in ()).throw(AssertionError("working rank one must block")))
-    store.update_live_order_intent_status(root["ticket_hash"], "expired")
-    store.record_live_order_status(root["order_id"], "CANCELLED", {"status": "CANCELLED"}, ticket_hash=root["ticket_hash"])
-    second = _fallback_ticket("integrated-rank-two-ticket", "integrated-rank-two-candidate")
-    second["plan_id"] = "rank-two-plan"
-    store.save_live_order_intent(second, status="pending_approval")
-    first_terminal = coordinator.advance("integrated-campaign", replan=lambda context: {
-        "plan_id": "rank-two-plan",
-        "candidate_ids": ["integrated-rank-two-candidate"],
-        "tickets": [second],
-        "validation": {key: True for key in ("fresh_session", "fresh_quotes", "risk_valid", "bpr_valid", "concentration_valid", "overlap_valid", "broker_preflight_valid")},
-        "reason_from_context": context["reason"],
-    })
-    replay = coordinator.advance("integrated-campaign", replan=lambda _context: (_ for _ in ()).throw(AssertionError("rank two must be exactly once")))
-
-    assert root["limit_price"] == "-1.01"
-    assert working.status == "blocked_unresolved"
-    assert first_terminal.status == "fallback_ready"
-    assert first_terminal.attempt == 2
-    assert replay.status == "fallback_ready"
-    assert replay.reason == "idempotent_replay"
-    assert store.latest_event("live_plan_attempt:integrated-campaign")["ticket_hashes"] == [second["ticket_hash"]]
-
-
-def test_operator_approved_configuration_activates_campaign_and_fallback(monkeypatch) -> None:
-    monkeypatch.delenv("KAMANDAL_ENTRY_CAMPAIGN_ENABLED", raising=False)
-    monkeypatch.delenv("KAMANDAL_LIVE_PLAN_FALLBACK_ENABLED", raising=False)
-    from kamandal_v2.config import load_control
-
-    control = load_control()
-
-    assert control["live"]["entry_pricing"]["campaign"]["enabled"] is True
-    assert control["live"]["entry_pricing"]["campaign"]["absolute_allowance_cap"] == 0.10
-    assert control["live"]["entry_pricing"]["campaign"]["valid_tick"] == 0.01
-    assert control["live"]["plan_fallback"]["enabled"] is True
-    assert control["live"]["plan_fallback"]["max_attempts"] == 2
-
-
-def test_missing_activation_keys_remain_fail_closed() -> None:
-    assert entry_campaign_policy({"live": {"entry_pricing": {"mode": "liquidity_adjusted_mid"}}}).enabled is False
-    assert fallback_enabled({"live": {}}) is False

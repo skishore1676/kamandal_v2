@@ -1,6 +1,6 @@
 # Kamandal V2 Architecture
 
-Date: 2026-09-04
+Date: 2026-09-10
 Status: one-engine, source routing, and source-episode interpretation deployed; first natural source-episode execution pending
 
 ## Purpose
@@ -149,8 +149,8 @@ gate, action reason, execution envelope, and ticket shapes as live, with
 broker-free shadow fills as the effect. An invalid or excessively wide quote
 cannot create a price-derived decision or fill in either mode. A scheduled or
 structural exit obligation remains due, waits for actionable execution
-evidence, and escalates if its deadline cannot be met. Live Plan 2 is not a
-shadow retry mechanism and may never advance the shadow book. Reports must
+evidence, and escalates if its deadline cannot be met. Live execution never
+advances the shadow book. Reports must
 retain the complete selected -> working -> filled/missed -> managed -> closed
 funnel so executable fill friction is not hidden from alpha analysis.
 
@@ -599,7 +599,7 @@ Already-repaired cutover regressions remain part of the required contract:
 live/shadow book identity, quote coverage for owned expirations, Sheet-owned
 half-time and pre-event clocks, terminal lifecycle/projection convergence,
 complete order-lineage ownership, and pricing-envelope preservation for entry
-replacements and Plan 2. They must stay in the regression suite even though no
+replacements. They must stay in the regression suite even though no
 new implementation is required for them in this correction. For entry-side
 liquidity parity, see
 `docs/lessons/shadow-liquidity-policy-must-match-live-selection.md`.
@@ -1581,18 +1581,34 @@ candidate. For debit structures, the Sheet-owned
 older `max_debit_pct_bpr` values have mixed historical units and cannot authorize
 a live price until the column is normalized under a separate Sheet migration.
 
-If the selected rank-one basket becomes terminal with no fill, Kamandal may
-compile exactly one fresh Plan 2 through the same live portfolio planner. It
-uses the frozen policy snapshot and current portfolio, excludes the attempted
-contracts, rechecks every normal live gate, and consumes the same daily basket
-cap. This is a live-book retry only: it must not run the shadow book, create a
-second planner, or bypass partial-fill reconciliation.
+Automatic portfolio fallback was retired on September 10, 2026. The scheduled
+unified planner is the sole owner of new portfolio selections. Only rank one
+receives executable intents; alternatives remain advisory. After a zero-fill or
+partial-fill outcome, the next scheduled planning cycle uses reconciled positions,
+working orders, reserved capacity, and fresh quotes. Uncertain submissions remain
+blocked and reserved until broker reconciliation resolves them. No executor or
+reconciler invokes a planner or republishes an old selection.
 
-Before Plan 2 can produce a broker effect, its current ranked plan is projected
-to the existing `daily_plan` tab by replacing only today's `live_advisory` lane.
-Fallback identity and reason live inside `plan_detail_json` and operator notes;
-no extra Sheet tab or approval ceremony is introduced. A failed projection
-blocks submission, preserving the Google Sheet as the operator-visible surface.
+The same-order pricing ladder above remains: it changes a limit within frozen
+economics, not the selected portfolio. Its legacy configuration calls it an entry
+pricing `campaign`; this is not the removed portfolio fallback coordinator.
+
+`daily_plan` publication is serialized across jobs. Replacement accepts only
+current-day rows for the owned lanes, preserves other lanes, and collapses repeated
+historical plan identities. An old date cannot erase today's selection. The live
+planner emits `live_current_selection` after publication; the entry executor checks
+that receipt when the cockpit offers no executable rows and reports a lost pending
+automatic selection without treating the receipt as trading authorization.
+
+Historical `live_plan_attempt:*` receipts remain for audit but have no runtime
+consumer. No database deletion or replay is required. Old pending tickets retain
+normal stale-entry cleanup; submitted, partially filled, or uncertain tickets stay
+under the existing order/lifecycle reconciliation owner. Executor-side stale-plan
+rebuild is also retired; a stale entry produces an attention receipt and awaits the
+next scheduled planner. Legacy CLI recovery flags are notification-only aliases.
+
+See [the retirement decision](lessons/one-planner-owns-current-selection.md) for
+migration boundaries and regression evidence.
 
 The portfolio BPR target is an optimization target, not a minimum-spend order.
 When no candidate survives idea, playbook, economics, portfolio, session, and

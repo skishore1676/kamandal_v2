@@ -147,9 +147,10 @@ def main() -> None:
     live_execute_parser.add_argument("--submit", action="store_true", help="Submit real orders; default is dry-run")
     live_execute_parser.add_argument("--submit-auto", action="store_true", help="Submit only when global live submit and live.auto_submit_entries are enabled")
     live_execute_parser.add_argument(
-        "--recover-stale-selected",
+        "--notify-selected-entry-failures", "--recover-stale-selected",
+        dest="recover_stale_selected",
         action="store_true",
-        help="Rebuild a stale selected entry once with current ideas, quotes, health, risk, and broker preflight",
+        help="Report selected-entry failures; legacy recovery flag is an alias and never replans",
     )
     live_execute_parser.add_argument("--recovery-ideas", nargs="+", default=["data/ideas/active"])
     live_execute_parser.add_argument("--recovery-config-source", choices=["sheet", "seed"], default="sheet")

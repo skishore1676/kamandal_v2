@@ -198,7 +198,7 @@ def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(t
     store = _migrated_store(tmp_path)
     args = dict(universe_rows=universe, playbook_rows=[row], idea_paths=[], provider="fixture", store=store,
                 audit_root=tmp_path / "audit", daily_policy_snapshot=snapshot, trade_source_rows=sources,
-                observed_package_batches=(replace(_batch(), packages=(_package(),)),), register_plan_attempt=False)
+                observed_package_batches=(replace(_batch(), packages=(_package(),)),))
     result = planning.run_unified_books(control, **args)
     assert result.compilation.ok
     assert result.live.errors == ()

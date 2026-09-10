@@ -17,10 +17,9 @@ from kamandal_v2.strategy_lanes.operator_policy import OperatorPolicyBundle
 from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState
 from kamandal_v2.strategy_lanes.store import CsaStore
 from kamandal_v2.strategy_engine.ownership import retire_orphaned_pending_live_lifecycles
-from kamandal_v2.strategy_engine.planning import _gate_reserved_pilot_live_candidates, _is_pilot_live, run_unified_books, run_unified_fallback_plan
+from kamandal_v2.strategy_engine.planning import _gate_reserved_pilot_live_candidates, _is_pilot_live, run_unified_books
 from kamandal_v2.strategy_engine.policy import compile_playbook_policy
-from kamandal_v2.live.execution import _advance_plan_fallbacks, execute_live_approved
-from kamandal_v2.live.plan_fallback import attempt_event_type
+from kamandal_v2.live.execution import execute_live_approved
 
 
 def test_unified_planner_does_not_import_deprecated_scanner_runtime() -> None:
@@ -28,33 +27,6 @@ def test_unified_planner_does_not_import_deprecated_scanner_runtime() -> None:
 
     source = Path(planning.__file__).read_text(encoding="utf-8")
     assert "kamandal_v2.strategy_lanes.runtime" not in source
-
-
-def test_unified_fallback_rejects_a_different_policy_snapshot(tmp_path) -> None:  # noqa: ANN001
-    snapshot = SimpleNamespace(
-        trading_date="2026-08-21",
-        snapshot_hash="current-hash",
-        tables={"universe": [], "playbooks": []},
-    )
-
-    mismatches = (
-        ({"date": "2026-08-20", "hash": "current-hash"}, "date no longer matches"),
-        ({"date": "2026-08-21", "hash": "rank-one-hash"}, "hash no longer matches"),
-    )
-    for expected, message in mismatches:
-        try:
-            run_unified_fallback_plan(
-                {},
-                store=LocalStore(tmp_path / "state.db"),
-                idea_paths=[],
-                provider="fixture",
-                daily_policy_snapshot=snapshot,
-                expected_policy_snapshot=expected,
-            )
-        except ValueError as exc:
-            assert message in str(exc)
-        else:
-            raise AssertionError("fallback with a different policy snapshot must fail closed")
 
 
 def test_orphaned_pending_live_lifecycle_retires_before_next_plan(tmp_path) -> None:  # noqa: ANN001
@@ -763,122 +735,3 @@ def test_unified_pilot_live_policy_reserves_only_one_canary_lifecycle(tmp_path) 
     _gate_reserved_pilot_live_candidates([later_candidate], (policy,), CsaStore(store.sqlite_path, read_only=True))
 
     assert later_candidate.rejection_reason == "pilot_live_canary_already_reserved"
-
-
-def test_active_unified_path_replans_once_into_typed_plan_two(tmp_path, monkeypatch) -> None:  # noqa: ANN001
-    database = tmp_path / "unified-fallback.db"
-    store = LocalStore(database)
-    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
-    live_row = {
-        "playbook_id": "live_call_spread",
-        "enabled": "TRUE",
-        "strategy_family": "call_spread",
-        "structure": "call_spread",
-        "mode": "live",
-        "source_mode": "idea",
-        "dte_min": "30",
-        "dte_max": "45",
-        "short_delta_min": "0.20",
-        "short_delta_max": "0.30",
-        "spread_width": "5",
-        "max_bid_ask_pct": "0.25",
-        "profit_target_pct": "50",
-        "resting_profit_enabled": "FALSE",
-        "resting_profit_arm_progress_pct": "25",
-        "max_loss_multiple": "2",
-        "exit_dte_min": "21",
-        "half_time_exit": "TRUE",
-        "avoid_earnings": "TRUE",
-        "management_policy_json": "{}",
-    }
-    tables = {
-        "universe": [{"symbol": "XYZ", "enabled": "TRUE", "profile": "large_cap"}],
-        "playbooks": [live_row],
-        "trade_sources": _trade_source_rows(),
-    }
-    control = load_control()
-    control.setdefault("live", {}).update(
-        {
-            "entry_approval_mode": "auto_top_plan",
-            "plan_fallback": {"enabled": True, "max_attempts": 2, "auto_submit": False},
-        }
-    )
-    monkeypatch.setenv("KAMANDAL_STRATEGY_POLICY_SNAPSHOT_DIR", str(tmp_path / "policy"))
-    snapshot = capture_daily_policy_snapshot(
-        control,
-        trading_date=current_trading_date(control),
-        tables=tables,
-        captured_at="2026-08-21T14:00:00Z",
-    )
-    portfolio = PortfolioState(100_000, 100_000, 0, 0, greeks=Greeks())
-
-    def candidate(candidate_id: str) -> Candidate:
-        return Candidate(
-            candidate_id=candidate_id,
-            idea_id=f"idea-{candidate_id}",
-            underlying="XYZ",
-            playbook_id="live_call_spread",
-            structure="call_spread",
-            legs=[
-                OptionLeg("short_call", "sell", "call", 100, "2026-10-16", 1, 2.0, 1.95, 2.05, 0.25, 0, 0, 0, 100),
-                OptionLeg("long_call", "buy", "call", 105, "2026-10-16", 1, 1.0, 0.95, 1.05, 0.15, 0, 0, 0, 100),
-            ],
-            net_credit=1.0,
-            estimated_bpr=400,
-            greeks=Greeks(),
-            liquidity_score=1.0,
-            score=1.0,
-            preflight=PreflightResult(True, 400, "fixture", {"request": {"limitPrice": "-1.00"}}),
-        )
-
-    first = PlanRunResult(
-        plan_run_id="run-unified-rank-one",
-        ideas=[],
-        candidates=[candidate("rank-one-candidate")],
-        plans=[Plan("unified-rank-one", 1, "eligible", [candidate("rank-one-candidate")], 1, 400, 0.4, 99_600, portfolio, portfolio)],
-        daily_plan_rows=[], metrics={}, idea_diagnostics=[], rejection_summary=[],
-    )
-    second = PlanRunResult(
-        plan_run_id="run-unified-rank-two",
-        ideas=[],
-        candidates=[candidate("rank-two-candidate")],
-        plans=[Plan("unified-rank-two", 1, "eligible", [candidate("rank-two-candidate")], 1, 400, 0.4, 99_600, portfolio, portfolio)],
-        daily_plan_rows=[], metrics={}, idea_diagnostics=[], rejection_summary=[],
-    )
-    from kamandal_v2.strategy_engine import planning
-
-    results = iter([first, second])
-    monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: next(results))
-    initial = run_unified_books(
-        control,
-        universe_rows=tables["universe"],
-        playbook_rows=tables["playbooks"],
-        idea_paths=["fixture.yaml"],
-        provider="fixture",
-        store=store,
-        audit_root=tmp_path / "audit",
-        daily_policy_snapshot=snapshot,
-    )
-    assert initial.live.errors == ()
-    root = store.live_order_intents_by_type("open")[0]
-    campaign_id = f"unified:{snapshot.trading_date}:unified-rank-one"
-    state = store.latest_event(attempt_event_type(campaign_id))
-    assert state is not None
-    assert state["config_source"] == "unified-plan"
-    assert state["daily_policy_snapshot"]["hash"] == snapshot.snapshot_hash
-    assert root["stage_authorized"] is True
-    assert root["csa_lifecycle_id"]
-
-    store.update_live_order_intent_status(root["ticket_hash"], "cancelled")
-    monkeypatch.setattr("kamandal_v2.live.execution.submission_window", lambda *_args, **_kwargs: {"allowed": True})
-    decisions = _advance_plan_fallbacks(control, store)
-
-    assert decisions[0]["status"] == "fallback_ready"
-    child_state = store.latest_event(attempt_event_type(campaign_id))
-    assert child_state["plan_id"] == "unified-rank-two"
-    child = store.live_order_intent(child_state["ticket_hashes"][0])
-    assert child["csa_lifecycle_id"]
-    assert child["csa_compiled_policy_hash"] == child["csa_policy_hash"]
-    assert child["csa_policy_snapshot_hash"] == snapshot.snapshot_hash
-    assert child["csa_policy_snapshot_date"] == snapshot.trading_date
-    assert child["stage_authorized"] is True

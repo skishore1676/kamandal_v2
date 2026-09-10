@@ -24,7 +24,6 @@ from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMI
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.live.option_sessions import submission_window
 from kamandal_v2.live.order_identity import broker_order_id, client_order_id, persist_broker_identity
-from kamandal_v2.live.plan_fallback import FallbackDecision, PlanFallbackCoordinator, attempt_event_type, fallback_enabled, registered_campaign_ids
 from kamandal_v2.live.risk_manager import (
     BREAKER_CONSECUTIVE_LOSSES,
     BREAKER_DAILY_NEW_POSITIONS,
@@ -35,7 +34,7 @@ from kamandal_v2.market.broker import broker_adapter, default_execution_venue, t
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.ops.stage_receipt import reconciliation_stage
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
-from kamandal_v2.sheets import GoogleSheetClient, pull_sheet_tables, write_daily_plan
+from kamandal_v2.sheets import daily_plan_publication, GoogleSheetClient, pull_sheet_tables, write_daily_plan
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.models import CsaStage
 from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, load_daily_policy_snapshot
@@ -363,94 +362,17 @@ def execute_live_approved_with_recovery(
     provider: str = "public",
     store: LocalStore | None = None,
 ) -> dict[str, Any]:
-    """Execute one selected entry, rebuilding a stale ticket at most once."""
+    """Execute the selected entry and report failures without invoking a planner."""
 
     store = store or LocalStore()
     initial = execute_live_approved(config, submit=submit, store=store)
     final = initial
     recovery: dict[str, Any] = {"attempted": False}
-    policy = ((config.get("live") or {}).get("stale_entry_recovery") or {})
-    stale = _stale_selected_entry_failure(initial)
-    recovery_enabled = _as_bool(policy.get("enabled"), True)
-    max_rebuilds = max(int(policy.get("max_rebuilds_per_execution") or 1), 0)
-
-    if submit and stale and recovery_enabled and max_rebuilds > 0:
-        from kamandal_v2.live.advisory import run_live_advisory_plan
-
-        store.event(
-            "live_stale_selected_entry_rebuild_started",
-            {
-                "ticket_hash": stale.get("ticket_hash"),
-                "underlying": stale.get("underlying"),
-                "max_rebuilds": min(max_rebuilds, 1),
-            },
-        )
-        try:
-            advisory = run_live_advisory_plan(
-                config,
-                idea_paths=list(recovery_idea_paths or []),
-                config_source=config_source,
-                provider=provider,
-                write_sheet=True,
-                persist_order_intents=True,
-                notify_unplaced_selected=False,
-                store=store,
-            )
-            recovery = {
-                "attempted": True,
-                "rebuilds": 1,
-                "plan_run_id": advisory.plan_run_id,
-                "plans": len(advisory.plans),
-                "candidates": len(advisory.candidates),
-            }
-        except Exception as exc:  # noqa: BLE001
-            recovery = {
-                "attempted": True,
-                "rebuilds": 1,
-                "outcome": "stale_rebuild_failed",
-                "error": _safe_broker_error(exc),
-            }
-            final = {
-                "action": APPROVE_LIVE,
-                "submit": submit,
-                "processed": 1,
-                "results": [
-                    {
-                        "status": "blocked",
-                        "reason": "stale_rebuild_failed",
-                        "failure_code": "stale_rebuild_failed",
-                        "ticket_hash": stale.get("ticket_hash"),
-                        "underlying": stale.get("underlying"),
-                    }
-                ],
-            }
-        else:
-            if advisory.daily_plan_rows:
-                final = execute_live_approved(config, submit=submit, store=store)
-            else:
-                final = {
-                    "action": APPROVE_LIVE,
-                    "submit": submit,
-                    "processed": 1,
-                    "results": [
-                        {
-                            "status": "blocked",
-                            "reason": "stale_rebuild_no_eligible_current_rank1",
-                            "failure_code": "stale_rebuild_no_eligible_current_rank1",
-                            "ticket_hash": stale.get("ticket_hash"),
-                            "underlying": stale.get("underlying"),
-                        }
-                    ],
-                }
-            recovery["outcome"] = _execution_outcome(final)
-        store.event(
-            "live_stale_selected_entry_rebuild_completed",
-            {
-                **recovery,
-                "original_ticket_hash": stale.get("ticket_hash"),
-                "original_underlying": stale.get("underlying"),
-            },
-        )
+    # Compatibility entrypoint: new portfolio decisions belong to scheduled planning.
+    if submit and not initial.get("results"):
+        missing = _missing_selected_entry(config, store)
+        if missing:
+            final = {**initial, "processed": 1, "results": [missing]}
 
     notification = _notify_selected_entry_failure(
         config,
@@ -465,6 +387,25 @@ def execute_live_approved_with_recovery(
         "recovery": recovery,
         "operator_notification": notification,
     }
+
+
+def _missing_selected_entry(config: dict[str, Any], store: LocalStore) -> dict[str, Any] | None:
+    """Detect a lost automatic Sheet handoff without authorizing ledger tickets."""
+    if (config.get("live") or {}).get("entry_approval_mode") != "auto_top_plan":
+        return None
+    selection = store.latest_event("live_current_selection") or {}
+    if selection.get("trading_date") != market_today(config):
+        return None
+    for ticket_hash in selection.get("ticket_hashes") or []:
+        ticket = store.live_order_intent(str(ticket_hash)) or {}
+        if ticket.get("_ledger_status") != "pending_approval":
+            continue
+        return {
+            "status": "blocked", "reason": "selected_entry_missing_from_cockpit",
+            "failure_code": "selected_entry_missing_from_cockpit",
+            "ticket_hash": ticket_hash, "underlying": ticket.get("underlying"),
+        }
+    return None
 
 
 def _execute_ticket(
@@ -626,8 +567,6 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
             try:
                 result = _sync_live_orders_locked(config, store=store, manage_entries=manage_entries)
-                if manage_entries and fallback_enabled(config):
-                    result["plan_fallback"] = _advance_plan_fallbacks(config, store)
                 return result
             finally:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
@@ -933,276 +872,6 @@ def _entry_ticket_lineage(store: LocalStore, ticket: dict[str, Any]) -> list[dic
         current = parent
     lineage.reverse()
     return lineage
-
-
-def _advance_plan_fallbacks(config: dict[str, Any], store: LocalStore) -> list[dict[str, Any]]:
-    coordinator = PlanFallbackCoordinator(store, config)
-    decisions: list[dict[str, Any]] = []
-    for campaign_id in registered_campaign_ids(store):
-        decision = coordinator.advance(
-            campaign_id,
-            replan=lambda context: _fresh_fallback_replan(config, store, context),
-        )
-        decision_payload = decision.to_dict()
-        policy = ((config.get("live") or {}).get("plan_fallback") or {})
-        if decision.status == "fallback_ready" and bool(policy.get("auto_submit", True)):
-            if not _fallback_basket_cap_allows(config, store, campaign_id, decision.plan_id):
-                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, "max_live_baskets_per_day_reached"))
-                continue
-            tickets = [
-                ticket
-                for ticket_hash in decision.ticket_hashes
-                if (ticket := store.live_order_intent(ticket_hash)) is not None
-            ]
-            if len(tickets) != len(decision.ticket_hashes):
-                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, "blocked_fallback_tickets_missing"))
-                continue
-            gate = _entry_health_gate_for_tickets(config, store, tickets)
-            if gate.get("blocked"):
-                reason = "blocked_live_health_red:" + ",".join(gate.get("reasons") or [])
-                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, reason))
-                continue
-            submission_gate = _fallback_submission_gate(config, tickets, gate=gate)
-            if submission_gate:
-                decisions.append(_blocked_fallback_decision(config, store, decision, decision_payload, submission_gate))
-                continue
-            projection = _project_fallback_daily_plan(config, store, decision)
-            decision_payload["sheet_projection"] = projection
-            if not projection.get("ok"):
-                decisions.append(
-                    _blocked_fallback_decision(
-                        config,
-                        store,
-                        decision,
-                        decision_payload,
-                        "blocked_fallback_sheet_projection:" + str(projection.get("reason") or "unknown"),
-                        project=False,
-                    )
-                )
-                continue
-            adapter = broker_adapter(config)
-            submission_results = []
-            submit_limit = _ticket_limit(config, submit=True, close=False)
-            for ticket_hash in decision.ticket_hashes[:submit_limit]:
-                ticket = store.live_order_intent(ticket_hash)
-                status = str((ticket or {}).get("_ledger_status") or "")
-                if not ticket or status not in PENDING_TICKET_STATUSES:
-                    continue
-                symbol = str(ticket.get("underlying") or "").upper()
-                risk_manager = gate.get("risk_manager") or {}
-                if symbol in {str(item).upper() for item in (risk_manager.get("underlyings_at_cap") or {})}:
-                    submission_results.append({"status": "blocked", "ticket_hash": ticket_hash, "reason": "blocked_risk_underlying_cap"})
-                    continue
-                try:
-                    submission_results.append(_execute_ticket(config, adapter, store, ticket, submit=True, close=False))
-                except Exception as exc:  # noqa: BLE001
-                    submission_results.append({"status": "blocked", "ticket_hash": ticket_hash, "reason": _safe_broker_error(exc)})
-            if submission_results:
-                coordinator.mark_submitted(decision, submission_results)
-                decision_payload["submission_results"] = submission_results
-        decisions.append(decision_payload)
-    return decisions
-
-
-def _blocked_fallback_decision(
-    config: dict[str, Any],
-    store: LocalStore,
-    decision: FallbackDecision,
-    payload: dict[str, Any],
-    reason: str,
-    *,
-    project: bool = True,
-) -> dict[str, Any]:
-    payload["submission_blocked"] = reason
-    if project:
-        payload["sheet_projection"] = _project_fallback_daily_plan(config, store, decision, blocked_reason=reason)
-    store.event(
-        "live_plan_fallback_blocked",
-        {"campaign_id": decision.campaign_id, "reason": reason, "plan_id": decision.plan_id},
-    )
-    return payload
-
-
-def _project_fallback_daily_plan(
-    config: dict[str, Any],
-    store: LocalStore,
-    decision: FallbackDecision,
-    *,
-    blocked_reason: str = "",
-) -> dict[str, Any]:
-    """Make the current fallback portfolio visible before any broker effect."""
-
-    if not decision.daily_plan_rows:
-        return {"ok": False, "reason": "daily_plan_rows_missing", "rows": 0}
-    rows: list[list[Any]] = []
-    for raw_row in decision.daily_plan_rows:
-        row = dict(zip(DAILY_PLAN_HEADER, raw_row, strict=False))
-        detail = _loads(row.get("plan_detail_json"))
-        detail["fallback_attempt"] = decision.attempt
-        detail["fallback_campaign_id"] = decision.campaign_id
-        detail["fallback_parent_attempt_id"] = decision.campaign_id
-        detail["fallback_reason"] = decision.reason
-        detail["fallback_submission_blocked"] = blocked_reason
-        row["plan_detail_json"] = json.dumps(detail, sort_keys=True)
-        row["mode"] = "live_advisory"
-        is_selected = str(row.get("plan_id") or "") == decision.plan_id
-        row["operator_action"] = APPROVE_LIVE if is_selected and not blocked_reason else ""
-        if is_selected:
-            row["plan_status"] = "blocked" if blocked_reason else "eligible"
-            row["operator_notes"] = (
-                f"automatic Plan {decision.attempt} after {decision.reason}"
-                + (f"; blocked={blocked_reason}" if blocked_reason else "")
-            )
-        rows.append([row.get(column, "") for column in DAILY_PLAN_HEADER])
-    try:
-        written = write_daily_plan(config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_advisory"})
-    except Exception as exc:  # noqa: BLE001 - projection failure must block the live fallback.
-        reason = f"{type(exc).__name__}:{_safe_broker_error(exc)}"
-        store.event(
-            "live_plan_fallback_sheet_projection_failed",
-            {"campaign_id": decision.campaign_id, "plan_id": decision.plan_id, "reason": reason},
-        )
-        return {"ok": False, "reason": reason, "rows": 0}
-    receipt = {
-        "ok": True,
-        "campaign_id": decision.campaign_id,
-        "plan_id": decision.plan_id,
-        "attempt": decision.attempt,
-        "blocked_reason": blocked_reason,
-        "rows": written,
-    }
-    store.event("live_plan_fallback_sheet_projected", receipt)
-    return receipt
-
-
-def _fresh_fallback_replan(config: dict[str, Any], store: LocalStore, context: dict[str, Any]) -> dict[str, Any] | None:
-    """Re-enter the active unified planner with current portfolio truth."""
-
-    from kamandal_v2.strategy_engine.planning import run_unified_fallback_plan
-
-    idea_paths = [path for path in context.get("idea_paths") or [] if path]
-    if not idea_paths:
-        store.event("live_unified_fallback_replan_blocked", {"campaign_id": context.get("campaign_id"), "reason": "idea_paths_missing"})
-        return None
-    try:
-        unified = run_unified_fallback_plan(
-            config,
-            store=store,
-            idea_paths=idea_paths,
-            provider=str(context.get("provider") or "public"),
-            exclude_candidate_ids=set(str(item) for item in context.get("attempted_candidate_ids") or []),
-            exclude_contract_keys=set(str(item) for item in context.get("attempted_contract_keys") or []),
-            expected_policy_snapshot=dict(context.get("daily_policy_snapshot") or {}),
-        )
-    except (FileNotFoundError, ValueError, RuntimeError) as exc:
-        store.event(
-            "live_unified_fallback_replan_blocked",
-            {"campaign_id": context.get("campaign_id"), "reason": f"{type(exc).__name__}: {exc}"},
-        )
-        return None
-    book = unified.live
-    if book.result is None or book.errors or not book.result.plans or not book.result.plans[0].candidates:
-        store.event(
-            "live_unified_fallback_replan_blocked",
-            {
-                "campaign_id": context.get("campaign_id"),
-                "reason": "unified_live_book_unavailable",
-                "errors": list(book.errors),
-                "has_result": book.result is not None,
-            },
-        )
-        return None
-    plan = book.result.plans[0]
-    candidate_ids = {candidate.candidate_id for candidate in plan.candidates}
-    tickets = [
-        dict(ticket)
-        for ticket in store.live_order_intents_by_type("open", statuses=PENDING_TICKET_STATUSES)
-        if str(ticket.get("plan_id") or "") == plan.plan_id
-        and str(ticket.get("candidate_id") or "") in candidate_ids
-    ]
-    if {str(ticket.get("candidate_id") or "") for ticket in tickets} != candidate_ids:
-        store.event(
-            "live_unified_fallback_replan_blocked",
-            {"campaign_id": context.get("campaign_id"), "reason": "unified_ticket_handoff_missing", "candidate_ids": sorted(candidate_ids), "ticket_ids": sorted(str(ticket.get("candidate_id") or "") for ticket in tickets)},
-        )
-        return None
-    fresh_session = all(submission_window(config, ticket, close=False).get("allowed") is True for ticket in tickets)
-    fresh_quotes = all(
-        float(leg.get("bid") or 0.0) >= 0 and float(leg.get("ask") or 0.0) > 0 and float(leg.get("ask") or 0.0) >= float(leg.get("bid") or 0.0)
-        for candidate in plan.candidates
-        for leg in candidate.to_dict().get("legs") or []
-    )
-    broker_preflight_valid = all(candidate.preflight is not None and candidate.preflight.ok for candidate in plan.candidates)
-    unified_lifecycle_handoff_valid = all(
-        bool(ticket.get("csa_lifecycle_id"))
-        and bool(ticket.get("csa_compiled_policy_hash"))
-        and bool(ticket.get("stage_authorized"))
-        and bool(ticket.get("csa_policy_snapshot_hash"))
-        and bool(ticket.get("csa_policy_snapshot_date"))
-        for ticket in tickets
-    )
-    validation = {
-        "fresh_session": fresh_session,
-        "fresh_quotes": fresh_quotes,
-        "risk_valid": all(not candidate.rejection_reason for candidate in plan.candidates),
-        "bpr_valid": plan.total_bpr > 0 and plan.buying_power_after >= 0,
-        "concentration_valid": not plan.blocked_by,
-        "overlap_valid": all(candidate.eligible for candidate in plan.candidates),
-        "broker_preflight_valid": broker_preflight_valid,
-        "unified_lifecycle_handoff": unified_lifecycle_handoff_valid,
-    }
-    return {
-        "plan_id": plan.plan_id,
-        "candidate_ids": [candidate.candidate_id for candidate in plan.candidates],
-        "tickets": tickets,
-        "validation": validation,
-        "daily_plan_rows": [list(row) for row in book.result.daily_plan_rows],
-    }
-
-
-def _fallback_submission_gate(
-    config: dict[str, Any],
-    tickets: list[dict[str, Any]],
-    *,
-    gate: dict[str, Any],
-) -> str:
-    """Apply the canonical money and stage gates before inline Plan-2 submit."""
-
-    try:
-        _assert_submit_allowed(config, submit=True)
-    except RuntimeError as exc:
-        return "blocked_live_submit_gate:" + str(exc)
-    try:
-        daily_policy = load_daily_policy_snapshot(config)
-    except (FileNotFoundError, ValueError) as exc:
-        return f"blocked_daily_policy_snapshot:{type(exc).__name__}"
-    if not tickets:
-        return "blocked_fallback_tickets_missing"
-    for ticket in tickets:
-        authorized, reason = _stage_ticket_authorization(ticket, daily_policy)
-        if not authorized:
-            return reason
-    risk_manager = gate.get("risk_manager") or {}
-    underlyings = {str(ticket.get("underlying") or "").upper() for ticket in tickets}
-    at_cap = {str(symbol).upper() for symbol in (risk_manager.get("underlyings_at_cap") or {})}
-    blocked_underlying = sorted(underlyings & at_cap)
-    if blocked_underlying:
-        return "blocked_risk_underlying_cap:" + ",".join(blocked_underlying)
-    for cluster, symbols in (risk_manager.get("clusters_at_cap") or {}).items():
-        if underlyings & {str(symbol).upper() for symbol in symbols}:
-            return f"blocked_risk_cluster_cap:{cluster}"
-    return ""
-
-
-def _fallback_basket_cap_allows(config: dict[str, Any], store: LocalStore, _campaign_id: str, plan_id: str) -> bool:
-    raw_cap = (config.get("live") or {}).get("max_live_baskets_per_day")
-    if raw_cap in (None, ""):
-        return True
-    cap = int(raw_cap)
-    if cap <= 0:
-        return False
-    used_plan_ids = store.live_entry_plan_ids_since(_market_day_start(config))
-    return str(plan_id or "") in used_plan_ids or len(used_plan_ids) < cap
 
 
 def _display_entry_limit(value: Any) -> str:
@@ -2233,6 +1902,7 @@ def _as_bool(value: Any, default: bool) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+@daily_plan_publication()
 def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None = None) -> dict[str, Any]:
     store = store or LocalStore()
     client = GoogleSheetClient.from_config(config)
@@ -2257,7 +1927,7 @@ def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None =
         row["plan_status"] = "filled" if states == {"done"} else "terminal"
         cleared.append({"statuses": statuses, "trade_bundle": row.get("trade_bundle")})
     if cleared:
-        client.replace_tab(title, header=DAILY_PLAN_HEADER, rows=[[row.get(column, "") for column in DAILY_PLAN_HEADER] for row in rows])
+        client.replace_plan_values(title, header=DAILY_PLAN_HEADER, rows=[[row.get(column, "") for column in DAILY_PLAN_HEADER] for row in rows])
     retired = _retire_stale_entry_approvals(config, store, rows)
     store.event("live_approval_cleanup_completed", {"cleared": cleared, "retired_stale_entry_approvals": retired})
     return {"cleared": len(cleared), "rows": cleared, "retired_stale_entry_approvals": len(retired), "retired_rows": retired}
@@ -3126,23 +2796,6 @@ def _failure(
     return result
 
 
-def _stale_selected_entry_failure(execution: dict[str, Any]) -> dict[str, Any] | None:
-    for result in execution.get("results") or []:
-        reason = str(result.get("failure_code") or result.get("reason") or "")
-        if reason == "ticket_preflight_stale" or reason.endswith(":blocked_preflight_stale"):
-            return result
-    return None
-
-
-def _execution_outcome(execution: dict[str, Any]) -> str:
-    results = execution.get("results") or []
-    if any(str(result.get("status") or "") == "submitted" for result in results):
-        return "submitted"
-    if not results:
-        return "no_selected_entry"
-    return str(results[0].get("failure_code") or results[0].get("reason") or results[0].get("status") or "blocked")
-
-
 def _selected_entry_failure(execution: dict[str, Any], *, submit: bool) -> dict[str, Any] | None:
     if not submit:
         return None
@@ -3318,12 +2971,12 @@ def _notify_selected_entry_failure(
     recovery_line = (
         f"One fresh rank-1 rebuild was attempted; outcome: {recovery.get('outcome')}."
         if recovery.get("attempted")
-        else "No stale-ticket rebuild applied to this failure."
+        else "The next scheduled planner evaluates fresh opportunities from reconciled state."
     )
     effect_line = (
         "The position remains open; review is needed only if the next canonical management cycle cannot recover."
         if intent_type == "close"
-        else "No new position was opened. Review is needed only if you want to override or investigate this failed entry."
+        else "This entry did not complete. Check the ledger for any other filled or working legs before acting."
     )
     body = "\n".join(
         [

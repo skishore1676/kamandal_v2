@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from contextlib import contextmanager
 import json
+import fcntl
 from pathlib import Path
 import re
 import sys
@@ -12,6 +13,7 @@ import time
 from typing import Any, Callable, Sequence, TypeVar
 
 from kamandal_v2.config import google_credentials_path, spreadsheet_id
+from kamandal_v2.live.entry_hygiene import market_today
 
 
 T = TypeVar("T")
@@ -101,6 +103,27 @@ class GoogleSheetClient:
                 value_input_option="USER_ENTERED",
             ),
             operation=f"update worksheet {title!r}",
+        )
+        self._retry(lambda: worksheet.freeze(rows=1), operation=f"freeze worksheet {title!r}")
+        return len(rows)
+
+    def replace_plan_values(
+        self, title: str, *, header: Sequence[str], rows: Sequence[Sequence[Any]],
+    ) -> int:
+        """Publish a complete cockpit value matrix without an empty-sheet interval."""
+        worksheet = self._worksheet(title, rows=max(len(rows) + 10, 100), cols=max(len(header), 26))
+        previous = self._retry(worksheet.get_all_values, operation=f"read worksheet {title!r}") or []
+        values = [list(header)] + [
+            [_cell(value) for value in (list(row) + [""] * len(header))[:len(header)]]
+            for row in rows
+        ]
+        values.extend([[""] * len(header) for _ in range(max(len(previous) - len(values), 0))])
+        self._retry(
+            lambda: worksheet.update(
+                range_name=f"A1:{_col_letter(len(header))}{len(values)}",
+                values=values, value_input_option="RAW",
+            ),
+            operation=f"publish plan values {title!r}",
         )
         self._retry(lambda: worksheet.freeze(rows=1), operation=f"freeze worksheet {title!r}")
         return len(rows)
@@ -323,34 +346,55 @@ def write_trade_source_activity(
     return len(rows)
 
 
+@contextmanager
+def daily_plan_publication():
+    """One cross-process read/modify/write lease for every cockpit publisher."""
+    lock_path = Path("data/runlocks/daily_plan_publish.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+@daily_plan_publication()
 def write_daily_plan(
-    config: dict[str, Any],
-    rows: list[list[Any]],
-    header: list[str],
-    *,
+    config: dict[str, Any], rows: list[list[Any]], header: list[str], *,
     replace_lanes: set[str] | None = None,
 ) -> int:
+    return _write_daily_plan_locked(config, rows, header, replace_lanes=replace_lanes)
+
+
+def _write_daily_plan_locked(
+    config: dict[str, Any], rows: list[list[Any]], header: list[str], *,
+    replace_lanes: set[str] | None = None,
+) -> int:
+    incoming = [dict(zip(header, row)) for row in rows]
+    today = market_today(config)
+    if replace_lanes and any(
+        str(row.get("plan_date") or "") != today or _row_lane(row) not in replace_lanes
+        for row in incoming
+    ):
+        raise ValueError("daily_plan publication must contain only current-day rows for the owned lanes")
     client = GoogleSheetClient.from_config(config)
-    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
-    title = str(tab_names.get("daily_plan") or "daily_plan")
-    merged_rows = rows
+    title = (((config.get("google_sheets") or {}).get("tabs") or {}).get("daily_plan") or "daily_plan")
+    merged = incoming
     if replace_lanes:
         existing = client.read_tab(title)
-        today = date.today().isoformat()
-        keep = [
-            _row_from_dict(row, header)
-            for row in existing
-            if not (
-                str(row.get("plan_date") or "") == today
-                and _row_lane(row) in replace_lanes
-            )
-        ]
-        merged_rows = keep + rows
-    return client.replace_tab(
-        title,
-        header=header,
-        rows=merged_rows,
-    )
+        kept = [row for row in existing if not (
+            str(row.get("plan_date") or "") == today and _row_lane(row) in replace_lanes
+        )]
+        # Historical duplicate projections are not distinct decisions. Preserve
+        # the latest row for each identity, including operator notes/actions.
+        unique = {}
+        for row in kept + incoming:
+            key = (str(row.get("plan_date") or ""), _row_lane(row),
+                   str(row.get("plan_id") or ""), str(row.get("plan_rank") or ""))
+            unique[key] = row
+        merged = list(unique.values())
+    return client.replace_plan_values(title, header=header, rows=[_row_from_dict(row, header) for row in merged])
 
 
 def write_live_book(config: dict[str, Any], header: list[str], rows: list[list[Any]]) -> int:
