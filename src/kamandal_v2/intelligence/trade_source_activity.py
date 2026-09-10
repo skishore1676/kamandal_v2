@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER
-from kamandal_v2.sheets import write_trade_source_activity
+from kamandal_v2.sheets import write_translation_review
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -195,11 +195,76 @@ def project_trade_source_activity(
     *,
     limit: int = 500,
 ) -> int:
-    return write_trade_source_activity(
-        config,
-        activity_rows(store, limit=limit),
-        TRADE_SOURCE_ACTIVITY_HEADER,
-    )
+    since = str(((config.get("source_intelligence") or {}).get("translation_review") or {}).get("since") or "")
+    return write_translation_review(config, translation_review_rows(store, since=since, limit=limit))
+
+
+def translation_review_rows(store: LocalStore, *, since: str = "", limit: int = 500) -> list[list[Any]]:
+    """One source post and its semantic interpretation, without planner receipts."""
+    if since:
+        _timestamp(since)  # Invalid reset boundaries fail visibly, never silently reset.
+    posts: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    latest_batches: dict[tuple[str, str], str] = {}
+    for item in store.source_translation_observations(since=since, limit=max(limit * 20, 2000)):
+        raw = item.get("normalized_output") or {}
+        if not isinstance(raw, dict) or not raw.get("event_id"):
+            continue  # Exact revisions and planner failures are audit evidence.
+        source_id, post_ref = str(item.get("source_id") or ""), str(item.get("post_ref") or "")
+        if not post_ref.removeprefix("x-post:").isdigit():
+            continue
+        key = (source_id, post_ref)
+        batch = str(item.get("translation_batch") or "")
+        latest_batches.setdefault(key, batch)
+        if latest_batches[key] and batch != latest_batches[key]:
+            continue  # A later interpretation may remove events from this post.
+        posts.setdefault(key, []).append(raw)
+    rows = []
+    for (source_id, post_ref), events in list(posts.items())[:max(limit, 1)]:
+        symbols, interpretations, details, uncertainties = [], [], [], []
+        for event in sorted(events, key=lambda event: str(event.get("event_id"))):
+            symbol = str(event.get("symbol") or "")
+            if symbol:
+                symbols.append(symbol)
+            thesis = str(event.get("thesis") or "")
+            action = str(event.get("action") or "").replace("_", " ")
+            structure = str(event.get("structure_hint") or "").replace("_", " ")
+            summary = " — ".join(part for part in (symbol, action, structure, thesis) if part)
+            if summary:
+                interpretations.append(summary)
+            for package in event.get("exact_packages") or []:
+                if package.get("legs"):
+                    terms = _interpretation(package)
+                    price = package.get("displayed_price") or {}
+                    if price:
+                        terms += f"; source price: {price.get('amount', '')} {price.get('effect', '')}".rstrip()
+                    details.append(f"{symbol}: {terms}".lstrip(": "))
+                if package.get("blocker"):
+                    uncertainties.append(str(package["blocker"]))
+            uncertainties.extend(_review_uncertainties(event))
+        unique = lambda values: "\n".join(dict.fromkeys(value for value in values if value))
+        rows.append([source_id.replace("_", " ").title(),
+                     "https://x.com/i/status/" + post_ref.removeprefix("x-post:"),
+                     ", ".join(dict.fromkeys(symbols)), unique(interpretations), unique(details),
+                     unique(uncertainties), ""])
+    return rows
+
+
+def _review_uncertainties(event: dict[str, Any]) -> list[str]:
+    labels = {"needs_media": "Source image or linked content is missing.",
+              "needs_history": "Earlier source context is missing.",
+              "lifecycle_link_missing": "Earlier source position could not be linked.",
+              "exact_package_incomplete": "Exact contract details are incomplete."}
+    ignored = {"planner_structure_unsupported", "outside_configured_universe", "source_too_old"}
+    result = []
+    status = str(event.get("evidence_status") or "")
+    if status in labels:
+        result.append(labels[status])
+    for blocker in event.get("blockers") or []:
+        text = str(blocker)
+        if text in ignored:
+            continue
+        result.append(labels.get(text, text.replace("needs_media:", "Missing source image:").replace("needs_history:", "Missing earlier context:")))
+    return result
 
 
 def _interpretation(raw: dict[str, Any]) -> str:

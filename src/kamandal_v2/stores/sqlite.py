@@ -2055,6 +2055,32 @@ class LocalStore:
         payload = json.loads(str(row["payload"]))
         return {**payload, "_created_at": str(row["created_at"])}
 
+    def source_translation_observations(self, *, since: str = "", limit: int = 2000) -> list[dict[str, Any]]:
+        """Latest semantic observations, excluding posts first seen before a review reset."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """WITH observations AS (
+                    SELECT id, created_at, payload,
+                        MIN(created_at) OVER (
+                            PARTITION BY json_extract(payload, '$.source_id'),
+                                         json_extract(payload, '$.post_ref')
+                        ) AS first_seen,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY json_extract(payload, '$.source_id'),
+                                         json_extract(payload, '$.post_ref'),
+                                         json_extract(payload, '$.output_id')
+                            ORDER BY id DESC
+                        ) AS revision
+                    FROM events WHERE event_type = 'trade_source_output_observed'
+                )
+                SELECT id, created_at, payload, first_seen FROM observations
+                WHERE revision = 1 AND (? = '' OR datetime(first_seen) >= datetime(?))
+                ORDER BY id DESC LIMIT ?""",
+                (since, since, max(int(limit), 1)),
+            ).fetchall()
+        return [{**json.loads(row["payload"]), "_created_at": row["created_at"],
+                 "_event_id": row["id"], "_first_seen": row["first_seen"]} for row in rows]
+
     def source_activity_lifecycles(self, *, idea_ids: set[str], revision_ids: set[str]) -> list[dict[str, Any]]:
         """Read current/closed lifecycle evidence for only the displayed source outputs."""
         found: dict[str, dict[str, Any]] = {}

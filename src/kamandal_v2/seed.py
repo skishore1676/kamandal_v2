@@ -13,7 +13,7 @@ from kamandal_v2.paths import OLD_KAMANDAL_ROOT
 from kamandal_v2.schemas import (
     DAILY_PLAN_HEADER,
     PLAYBOOKS_HEADER,
-    TRADE_SOURCE_ACTIVITY_HEADER,
+    TRADE_SOURCE_REVIEW_HEADER,
     TRADE_SOURCES_HEADER,
     UNIVERSE_HEADER,
 )
@@ -197,7 +197,7 @@ def seed_headers() -> dict[str, list[str]]:
         "playbooks": PLAYBOOKS_HEADER,
         "daily_plan": DAILY_PLAN_HEADER,
         "trade_sources": TRADE_SOURCES_HEADER,
-        "trade_source_activity": TRADE_SOURCE_ACTIVITY_HEADER,
+        "trade_source_activity": TRADE_SOURCE_REVIEW_HEADER,
     }
 
 

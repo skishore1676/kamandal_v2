@@ -20,12 +20,25 @@ still retained but does not define trade identity. Candidate identity continues 
 use the existing opportunity, playbook, and package signature; no historical IDs,
 order lineage, or lifecycle state are rewritten.
 
-The observation projector groups by source, post, source event, and package
-signature. It attaches the related idea and exact-failure receipts, retains separate
-idea/exact decisions and execution modes, and carries revision references in
-`normalized_output.activity_history`. Different packages in a post remain separate.
-All events remain in SQLite. The existing bounded event window still applies; the
-tab is a current observation view, not a complete historical ledger.
+The operator tab is now a translation review surface: Guru, Source post, Symbols,
+Our understanding, Trade details, Missing or uncertain, and Your correction. It
+shows one row per post from the latest translation batch, not planner receipts or
+revision IDs. The operator reset boundary in
+`source_intelligence.translation_review.since` filters on the post's first retained
+observation. Polling an old post again cannot refill the cleared review queue.
+
+`activity_rows` remains an internal audit serializer: it groups revisions by source,
+post, source event, and package signature, retaining idea/exact decisions and
+history. All underlying events remain in SQLite; historical data is not deleted.
+
+The review publisher preserves row positions and only writes columns A:F on normal
+refreshes. Column G belongs to the operator and is never overwritten, including
+while source interpretations change or new posts arrive. It retains earlier review
+rows rather than dropping corrections when a post falls out of the bounded input
+window. Changing a reset boundary alone does not remove already published review
+rows: a future operator reset must explicitly clear those rows as well. The initial
+migration from the old audit header clears its contents and removes audit-only
+columns. An unrecognized header fails closed to protect operator content.
 
 Generic X extraction reuses validated raw responses for identical same-day content,
 prompts, and configured provider/model. Normalization and universe checks still run.
@@ -47,4 +60,4 @@ operator authorization. Do not trigger planning or execution to repair a display
 Verification: focused tests cover cache hits/invalidation/corruption, stable source
 documents, revision identity, distinct-package preservation, current exact failures,
 and absence of unintended Sheet writes. Runtime readback must verify both the
-published row count and representative collapsed trades.
+published row count, review-only headers, reset persistence, and preserved corrections.

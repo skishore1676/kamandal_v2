@@ -111,6 +111,12 @@ TRADE_SOURCES_HEADER = [
     "live_structures",
 ]
 
+TRADE_SOURCE_REVIEW_HEADER = [
+    "Guru", "Source post", "Symbols", "Our understanding", "Trade details",
+    "Missing or uncertain", "Your correction",
+]
+
+# Internal audit serialization; the operator Sheet uses the review header above.
 TRADE_SOURCE_ACTIVITY_HEADER = [
     "observed_at",
     "source_id",

@@ -330,6 +330,9 @@ llm:
   codex_timeout_seconds: 450
 
 source_intelligence:
+  translation_review:
+    # Operator reset: earlier source posts remain in runtime history, not this review tab.
+    since: "2026-09-10T18:37:15+00:00"
   correspondents:
     enabled: true
     mode: active_planner
