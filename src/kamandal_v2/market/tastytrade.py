@@ -15,6 +15,7 @@ import requests
 
 from kamandal_v2.domain.models import Candidate, ChainSnapshot, Greeks, OptionLeg, PortfolioState, PreflightResult
 from kamandal_v2.paths import resolve_path
+from kamandal_v2.live.pricing import candidate_entry_limit_price, entry_price_metadata
 from kamandal_v2.volatility.scale import normalize_iv_abs, normalize_iv_percentile, normalize_iv_rank
 
 
@@ -50,6 +51,7 @@ def parse_tasty_option_symbol(symbol: str) -> dict[str, Any]:
 
 class TastytradeAdapter:
     def __init__(self, config: dict[str, Any]) -> None:
+        self._config = config
         tasty_cfg = ((config.get("broker") or {}).get("tastytrade") or {})
         self.api_base_url = str(tasty_cfg.get("api_base_url") or DEFAULT_API_BASE_URL).rstrip("/")
         self.client_secret = str(tasty_cfg.get("client_secret") or "")
@@ -326,8 +328,25 @@ class TastytradeAdapter:
 
     def preflight(self, candidate: Candidate) -> PreflightResult:
         self._require_available()
+        payload: dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
         try:
-            price, price_effect = _price_from_net_credit(candidate.net_credit)
+            # The app owns entry economics; the adapter translates only the
+            # accepted price and side into the venue's payload convention.
+            metadata = entry_price_metadata(candidate, self._config)
+            limit = candidate_entry_limit_price(candidate, self._config)
+            price = f"{abs(float(limit)):.2f}"
+            price_effect = "Credit" if candidate.net_credit > 0 else "Debit"
+            # Tasty tickets use negative credit limits, including single legs.
+            accepted = f"-{price}" if price_effect == "Credit" else price
+            campaign = dict(metadata.get("campaign") or {})
+            if campaign.get("enabled"):
+                campaign["prices"] = [
+                    f"-{abs(float(value)):.2f}" if price_effect == "Credit" else f"{abs(float(value)):.2f}"
+                    for value in campaign.get("prices") or []
+                ]
+                metadata["campaign"] = campaign
+            metadata["accepted_limit_price"] = accepted
             payload = self._order_payload(
                 candidate.underlying,
                 candidate.legs,
@@ -336,12 +355,15 @@ class TastytradeAdapter:
                 intent_type="open",
             )
             response = self._post(f"/accounts/{self._account_number()}/orders/dry-run", payload)
-            return _preflight_result(payload, response, default_bpr=candidate.estimated_bpr)
+            result = _preflight_result(payload, response, default_bpr=candidate.estimated_bpr)
         except Exception as exc:  # noqa: BLE001
             response = _api_error_payload(exc)
             if response:
-                return _preflight_result(payload, response, default_bpr=candidate.estimated_bpr)
-            return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"tastytrade preflight failed: {exc}", raw={"source": "tastytrade"})
+                result = _preflight_result(payload, response, default_bpr=candidate.estimated_bpr)
+            else:
+                result = PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=f"tastytrade preflight failed: {exc}", raw={"source": "tastytrade"})
+        result.raw["entry_pricing"] = metadata
+        return result
 
     def preflight_ticket(self, ticket: dict[str, Any]) -> PreflightResult:
         self.require_live_ready()
