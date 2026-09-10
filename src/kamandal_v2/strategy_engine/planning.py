@@ -94,7 +94,6 @@ def run_unified_books(
     daily_policy_snapshot: DailyPolicySnapshot | None = None,
     exclude_candidate_ids: set[str] | None = None,
     exclude_contract_keys: set[str] | None = None,
-    register_plan_attempt: bool = True,
     include_shadow: bool = True,
     observed_package_batches: tuple[ObservedPackageBatch, ...] = (),
     trade_source_rows: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
@@ -174,7 +173,6 @@ def run_unified_books(
         supplied_policy_hash=supplied_policy_hash,
         exclude_candidate_ids=exclude_candidate_ids,
         exclude_contract_keys=exclude_contract_keys,
-        register_plan_attempt=register_plan_attempt,
         observed_packages=observed_packages,
         trade_source_policies=source_policies,
     )
@@ -225,7 +223,6 @@ def _run_book(
     supplied_policy_hash: str = "",
     exclude_candidate_ids: set[str] | None = None,
     exclude_contract_keys: set[str] | None = None,
-    register_plan_attempt: bool = True,
     observed_packages: tuple[ObservedPackageEvidence, ...] = (),
     trade_source_policies: dict[tuple[str, TradeSourceOutputKind], TradeSourcePolicy] | None = None,
 ) -> PlanningBook:
@@ -297,7 +294,6 @@ def _run_book(
             return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), None, (snapshot_error,))
     if mode is ExecutionMode.LIVE:
         from kamandal_v2.live.advisory import _live_candidate_policy, live_config, render_live_plan_rows
-        from kamandal_v2.live.plan_fallback import fallback_enabled
 
         mode_config = live_config(mode_config)
         live_renderer = (render_live_plan_rows, _live_candidate_policy)
@@ -388,15 +384,17 @@ def _run_book(
         result.daily_plan_rows[:] = rows
         if write_sheet:
             write_daily_plan(mode_config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_advisory"})
-        if register_plan_attempt and fallback_enabled(mode_config) and result.plans:
-            _register_unified_rank_one_attempt(
-                result,
-                store=store,
-                handoffs=handoffs,
-                daily_policy_snapshot=daily_policy_snapshot,
-                idea_paths=idea_paths,
-                provider=provider,
-            )
+            selected_id = result.plans[0].plan_id if result.plans else ""
+            store.event("live_current_selection", {
+                "trading_date": daily_policy_snapshot.trading_date,
+                "plan_run_id": result.plan_run_id,
+                "plan_id": selected_id,
+                "ticket_hashes": [
+                    ticket["ticket_hash"] for ticket in store.live_order_intents_by_type(
+                        "open", statuses=LIVE_ENTRY_BINDABLE_STATUSES
+                    ) if ticket.get("plan_id") == selected_id
+                ] if selected_id else [],
+            })
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (), tuple(handoffs))
     elif result.plans and result.plans[0].operator_action == "approve":
         try:
@@ -913,103 +911,6 @@ def _pilot_live_reservations(
         ):
             reservations.add(str(payload.get("lifecycle_id") or row.get("id") or ""))
     return reservations
-
-
-def _register_unified_rank_one_attempt(
-    result: PlanRunResult,
-    *,
-    store: LocalStore,
-    handoffs: list[dict[str, Any]],
-    daily_policy_snapshot: DailyPolicySnapshot | None,
-    idea_paths: list[str | Path],
-    provider: str,
-) -> dict[str, Any] | None:
-    """Register fallback only after the unified typed live handoff succeeds."""
-
-    if not result.plans or daily_policy_snapshot is None:
-        return None
-    from kamandal_v2.live.plan_fallback import register_rank_one_attempt
-
-    selected_plan = result.plans[0]
-    candidate_ids = {candidate.candidate_id for candidate in selected_plan.candidates}
-    tickets = [
-        dict(ticket)
-        for ticket in store.live_order_intents_by_type("open", statuses=LIVE_ENTRY_BINDABLE_STATUSES)
-        if str(ticket.get("plan_id") or "") == selected_plan.plan_id
-        and str(ticket.get("candidate_id") or "") in candidate_ids
-    ]
-    if not tickets:
-        return None
-    handoff_by_candidate = {str(item.get("candidate_id") or ""): item for item in handoffs}
-    if {str(ticket.get("candidate_id") or "") for ticket in tickets} != candidate_ids:
-        raise ValueError("unified rank-one fallback registration lacks one guarded ticket per selected candidate")
-    for ticket in tickets:
-        candidate_id = str(ticket.get("candidate_id") or "")
-        handoff = handoff_by_candidate.get(candidate_id) or {}
-        if (
-            ticket.get("stage_authorized") is not True
-            or not ticket.get("csa_lifecycle_id")
-            or not ticket.get("csa_compiled_policy_hash")
-            or str(ticket.get("csa_policy_snapshot_hash") or "") != daily_policy_snapshot.snapshot_hash
-            or str(ticket.get("csa_policy_snapshot_date") or "") != daily_policy_snapshot.trading_date
-            or str(handoff.get("lifecycle_id") or "") != str(ticket.get("csa_lifecycle_id") or "")
-        ):
-            raise ValueError(f"unified rank-one ticket {candidate_id} failed typed lifecycle identity")
-    return register_rank_one_attempt(
-        store,
-        campaign_id=f"unified:{daily_policy_snapshot.trading_date}:{selected_plan.plan_id}",
-        plan=selected_plan,
-        tickets=tickets,
-        plan_run_id=result.plan_run_id,
-        idea_paths=[str(path) for path in idea_paths],
-        config_source="unified-plan",
-        provider=provider,
-        daily_policy_snapshot=daily_policy_snapshot,
-        lifecycle_handoffs=handoffs,
-    )
-
-
-def run_unified_fallback_plan(
-    config: dict[str, Any],
-    *,
-    store: LocalStore,
-    idea_paths: list[str | Path],
-    provider: str,
-    exclude_candidate_ids: set[str] | None = None,
-    exclude_contract_keys: set[str] | None = None,
-    daily_policy_snapshot: DailyPolicySnapshot | None = None,
-    expected_policy_snapshot: dict[str, str] | None = None,
-    audit_root: str | Path = "data/audit/unified",
-) -> UnifiedPlanningResult:
-    """Replan through the production unified path using the frozen day snapshot."""
-
-    if daily_policy_snapshot is None:
-        from kamandal_v2.strategy_lanes.daily_policy import load_daily_policy_snapshot
-
-        daily_policy_snapshot = load_daily_policy_snapshot(config)
-    expected = expected_policy_snapshot or {}
-    expected_date = str(expected.get("date") or "")
-    expected_hash = str(expected.get("hash") or "")
-    if expected_date and daily_policy_snapshot.trading_date != expected_date:
-        raise ValueError("fallback policy snapshot date no longer matches rank-one campaign")
-    if expected_hash and daily_policy_snapshot.snapshot_hash != expected_hash:
-        raise ValueError("fallback policy snapshot hash no longer matches rank-one campaign")
-    tables = daily_policy_snapshot.tables
-    return run_unified_books(
-        config,
-        universe_rows=[dict(row) for row in tables.get("universe") or []],
-        playbook_rows=[dict(row) for row in tables.get("playbooks") or []],
-        idea_paths=idea_paths,
-        provider=provider,
-        store=store,
-        audit_root=audit_root,
-        write_sheet=False,
-        daily_policy_snapshot=daily_policy_snapshot,
-        exclude_candidate_ids=set(exclude_candidate_ids or set()),
-        exclude_contract_keys=set(exclude_contract_keys or set()),
-        register_plan_attempt=False,
-        include_shadow=False,
-    )
 
 
 def _validate_live_policy_snapshot(

@@ -55,7 +55,6 @@ def run_live_advisory_plan(
     audit: AuditWriter | None = None,
     exclude_candidate_ids: set[str] | None = None,
     exclude_contract_keys: set[str] | None = None,
-    register_plan_attempt: bool | None = None,
 ) -> PlanRunResult:
     store = store or LocalStore()
     audit = audit or AuditWriter("data/audit/live")

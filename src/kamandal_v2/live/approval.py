@@ -12,7 +12,7 @@ from typing import Any
 from kamandal_v2.live.orders import APPROVE_LIVE
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, default_lathi_invocation, optional_bool, parse_lathi_receipt, populate_secret_fallbacks, redact
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
-from kamandal_v2.sheets import GoogleSheetClient
+from kamandal_v2.sheets import daily_plan_publication, GoogleSheetClient
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -290,6 +290,7 @@ def _send_lathi_live_approval_message(policy: dict[str, Any], message: str) -> N
         raise RuntimeError(f"Lathi Bus live approval send failed: {tail}")
 
 
+@daily_plan_publication()
 def update_daily_plan_operator_action(
     config: dict[str, Any],
     *,
@@ -313,7 +314,7 @@ def update_daily_plan_operator_action(
     row["operator_action"] = action
     row["operator_notes"] = note
     row["plan_status"] = plan_status
-    client.replace_tab(title, header=DAILY_PLAN_HEADER, rows=[[item.get(column, "") for column in DAILY_PLAN_HEADER] for item in rows])
+    client.replace_plan_values(title, header=DAILY_PLAN_HEADER, rows=[[item.get(column, "") for column in DAILY_PLAN_HEADER] for item in rows])
     return {"sheet_tab": title, "matched_rows": 1, "ticket_hash": ticket_hash}
 
 

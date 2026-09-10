@@ -768,7 +768,7 @@ def test_approve_live_request_updates_matching_sheet_row(tmp_path, monkeypatch) 
         def read_tab(self, _title):
             return [dict(row)]
 
-        def replace_tab(self, title, *, header, rows):
+        def replace_plan_values(self, title, *, header, rows):
             written["title"] = title
             written["header"] = header
             written["rows"] = rows
@@ -1181,7 +1181,7 @@ def test_cleanup_live_approvals_keeps_pending_basket_ticket(tmp_path, monkeypatc
         def read_tab(self, _title):
             return [row]
 
-        def replace_tab(self, _title, *, header, rows):
+        def replace_plan_values(self, _title, *, header, rows):
             written["rows"] = [dict(zip(header, item, strict=False)) for item in rows]
             return len(rows)
 
@@ -1247,7 +1247,7 @@ def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_p
         def read_tab(self, _title):
             return [row, old_row]
 
-        def replace_tab(self, _title, *, header, rows):
+        def replace_plan_values(self, _title, *, header, rows):
             written["rows"] = rows
             return len(rows)
 
@@ -1970,7 +1970,7 @@ def test_cleanup_live_approvals_clears_terminal_ticket_status(tmp_path, monkeypa
         def read_tab(self, _title):
             return [row]
 
-        def replace_tab(self, _title, *, header, rows):
+        def replace_plan_values(self, _title, *, header, rows):
             written["rows"] = [dict(zip(header, item, strict=False)) for item in rows]
             return len(rows)
 
@@ -2017,7 +2017,7 @@ def test_cleanup_live_approvals_clears_close_filled_ticket_status(tmp_path, monk
         def read_tab(self, _title):
             return [row]
 
-        def replace_tab(self, _title, *, header, rows):
+        def replace_plan_values(self, _title, *, header, rows):
             written["rows"] = [dict(zip(header, item, strict=False)) for item in rows]
             return len(rows)
 
@@ -2043,7 +2043,7 @@ def test_sync_live_orders_serializes_cross_job_broker_mutation(tmp_path, monkeyp
 
     result = sync_live_orders(_live_control(), store=store)
 
-    assert result == {"synced": 0, "manage_entries": True, "orders": [], "plan_fallback": []}
+    assert result == {"synced": 0, "manage_entries": True, "orders": []}
     assert [operation for _, operation in lock_calls] == [live_execution.fcntl.LOCK_EX, live_execution.fcntl.LOCK_UN]
     assert (tmp_path / "runlocks" / "live_order_sync.lock").exists()
 

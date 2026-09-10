@@ -85,10 +85,6 @@ live:
   max_close_submits_per_run: 10
   max_new_plans_per_day: 3
   max_live_baskets_per_day: 3
-  plan_fallback:
-    enabled: true                   # operator-approved 2026-08-21 canary; at most one fresh Plan-2 replan
-    max_attempts: 2
-    auto_submit: true
   option_submission:
     # The broker-facing guard is authoritative; launchd timing is only a wake-up schedule.
     enabled: true
@@ -132,9 +128,7 @@ live:
     strangle: 2500
   max_bpr_per_underlying_pct: 55
   preflight_max_age_minutes: 10
-  stale_entry_recovery:
-    enabled: true
-    max_rebuilds_per_execution: 1
+  stale_entry_recovery:             # legacy section name; notifications only
     notification_mode: live
   entry_pricing:
     mode: liquidity_adjusted_mid       # liquidity_adjusted_mid | improved_mid | mid | disabled
