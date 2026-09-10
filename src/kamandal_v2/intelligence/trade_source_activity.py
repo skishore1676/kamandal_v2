@@ -51,12 +51,13 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
         if event.get("mode"):
             current["effective_mode"] = str(event["mode"])
         current["_created_at"] = str(event.get("_created_at") or current.get("_created_at") or "")
+        current["_event_id"] = event.get("_event_id", current.get("_event_id", 0))
 
     records = sorted(
         by_output.values(),
         key=lambda item: (str(item.get("observed_at") or item.get("_created_at") or ""), str(item.get("output_id") or "")),
         reverse=True,
-    )[: max(int(limit), 1)]
+    )
     lifecycles = store.source_activity_lifecycles(
         idea_ids={str(item.get("planner_idea_id") or "") for item in records},
         revision_ids={str(item.get("output_id") or "") for item in records if item.get("classification") == "exact_package"},
@@ -112,7 +113,80 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
             "last_update": max([str(item.get("_created_at") or ""), *[str(life.get("updated_at") or "") for life in matched]], key=_timestamp),
         }
         rows.append([row[column] for column in TRADE_SOURCE_ACTIVITY_HEADER])
-    return rows
+    return _current_trade_rows(rows, event_orders={str(item["output_id"]): int(item.get("_event_id") or 0) for item in records})[:max(int(limit), 1)]
+
+
+def _current_trade_rows(rows: list[list[Any]], *, event_orders: dict[str, int] | None = None) -> list[list[Any]]:
+    """Fold receipt revisions for display only; retain every execution identity."""
+    event_orders = event_orders or {}
+    records = [dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, row)) for row in rows]
+    groups: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+    parents: dict[tuple[str, str, str], list[tuple[str, ...]]] = {}
+    pending = []
+    for row in records:
+        try:
+            raw = json.loads(row["normalized_output"])
+        except (ValueError, TypeError):
+            raw = {}
+        raw = raw if isinstance(raw, dict) else {}
+        row["_raw"] = raw
+        parent = str(raw.get("source_event_id") or "")
+        signature = str(raw.get("package_signature") or "")
+        if row["classification"] == "exact_package" and parent and signature:
+            identity = (row["source_id"], row["post_ref"], parent)
+            key = (*identity, signature)
+            groups.setdefault(key, []).append(row)
+            if key not in parents.setdefault(identity, []):
+                parents[identity].append(key)
+        else:
+            pending.append(row)
+    for row in pending:
+        raw = row["_raw"]
+        parent = str(raw.get("source_id") or "") if row["classification"] == "residual" else str(row["output_id"])
+        keys = parents.get((row["source_id"], row["post_ref"], parent), [])
+        if keys:
+            for key in keys:
+                groups[key].append(row)
+        else:
+            groups[("output", str(row["output_id"]))] = [row]
+
+    result = []
+    for members in groups.values():
+        members.sort(key=lambda row: (_timestamp(str(row["last_update"])), event_orders.get(str(row["output_id"]), 0)))
+        current = dict(members[-1])
+        if len(members) > 1:
+            exact = [row for row in members if row["classification"] == "exact_package"]
+            ideas = [row for row in members if "idea" in str(row["classification"]).split(",")]
+            latest_exact = exact[-1] if exact else None
+            latest_idea = ideas[-1] if ideas else None
+            exact_decisions = [row for row in members if row["classification"] in {"exact_package", "residual"}]
+            exact_decision = exact_decisions[-1] if exact_decisions else latest_exact
+            if latest_exact:
+                current["output_id"] = latest_exact["output_id"]
+                for field in ("symbol", "structure", "action", "evidence_status", "capability_support",
+                              "acquisition_status", "link_status", "interpretation_confidence"):
+                    current[field] = (latest_idea or {}).get(field) or latest_exact[field]
+                current["interpretation"] = "; ".join(dict.fromkeys(
+                    str(row["interpretation"]) for row in [latest_idea, latest_exact]
+                    if row and row["interpretation"]))
+            if latest_exact and latest_idea:
+                for field in ("planner_disposition", "effective_mode", "reason"):
+                    current[field] = " | ".join(f"{label}: {row[field]}" for label, row in
+                                              [("Idea", latest_idea), ("Exact", exact_decision)] if row[field])
+            current["classification"] = ",".join(sorted({kind for row in members
+                                                         for kind in str(row["classification"]).split(",")}))
+            for field in ("lifecycle_ids", "lifecycle_status"):
+                values = {part for row in members for part in str(row[field]).split("; ")
+                          if part and part != "no_linked_lifecycle"}
+                current[field] = "; ".join(sorted(values)) or ("no_linked_lifecycle" if field == "lifecycle_status" else "")
+            raw = dict((latest_exact or current)["_raw"])
+            raw["activity_history"] = [{field: row[field] for field in
+                ("output_id", "classification", "last_update", "planner_disposition", "effective_mode", "reason", "lifecycle_ids")}
+                for row in members]
+            current["normalized_output"] = json.dumps(raw, sort_keys=True, separators=(",", ":"))
+        result.append(current)
+    result.sort(key=lambda row: (_timestamp(str(row["last_update"])), str(row["output_id"])), reverse=True)
+    return [[row[column] for column in TRADE_SOURCE_ACTIVITY_HEADER] for row in result]
 
 
 def project_trade_source_activity(

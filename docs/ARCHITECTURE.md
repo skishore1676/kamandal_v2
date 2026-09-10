@@ -1630,3 +1630,6 @@ not trade-by-trade approval.
 
 No blocking product questions remain about manual idea ownership or ordinary
 plan selection.
+
+For repeated guru activity rows, extraction-cache behavior, or a header-only activity
+tab, see [source activity and translation work](lessons/source-activity-is-not-translation-work.md).

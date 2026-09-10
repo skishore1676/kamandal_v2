@@ -746,3 +746,36 @@ def test_crab_thesis_enters_existing_idea_path_with_original_shape_retained():
     assert projection.observed_batches == ()
     from kamandal_v2.intelligence.source_episode_projection import _allowed_structures
     assert _allowed_structures('call_crab', 'bearish', profile) == []
+
+
+def test_exact_revision_ignores_batch_prompt_but_tracks_trade_terms(tmp_path):
+    from types import SimpleNamespace
+    from copy import deepcopy
+    from kamandal_v2.intelligence.source_episode_projection import _exact_package_projections
+    image = tmp_path / 'post.jpg'
+    image.write_bytes(b'public fixture')
+    record = _record('123', 'New calendar', ['SNOW'], media=[{
+        'media_index': 1, 'type': 'photo', 'cache_status': 'cached',
+        'artifact_path': str(image), 'sha256': hashlib.sha256(image.read_bytes()).hexdigest()}])
+    event = {'event_id': 'event-1', 'opportunity_group_id': 'opp-1', 'action': 'open',
+             'symbol': 'SNOW', 'structure_hint': 'call_calendar', 'exact_packages': [{
+        'complete': True, 'field_provenance': ['image:1'],
+        'displayed_price': {'amount': '2.00', 'effect': 'debit'},
+        'legs': [{'order_code': code, 'quantity': 1, 'expiration': expiry,
+                  'strike': '150', 'option_type': 'call'}
+                 for code, expiry in [('STO', '2026-09-18'), ('BTO', '2026-10-16')]]}]}
+    def project(value, prompt):
+        packages, failures = _exact_package_projections(value, record,
+            compilation=SimpleNamespace(profile_id='mike_butler', prompt_sha256=prompt))
+        assert failures == []
+        return packages[0]
+    first = project(event, 'batch-1')
+    again = project(event, 'batch-2-with-other-post')
+    assert first.evidence_revision_id == again.evidence_revision_id
+    assert first.prompt_sha256 != again.prompt_sha256
+    changed = deepcopy(event)
+    changed['exact_packages'][0]['displayed_price']['amount'] = '2.50'
+    assert project(changed, 'batch-2').evidence_revision_id != first.evidence_revision_id
+    changed['exact_packages'][0]['legs'][0]['strike'] = '155'
+    assert project(changed, 'batch-2').package_signature != first.package_signature
+    assert project(changed, 'batch-2').opportunity_group_id == first.opportunity_group_id

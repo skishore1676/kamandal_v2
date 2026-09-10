@@ -645,7 +645,7 @@ def main() -> None:
             "live": {"policy_ids": result.live.policy_ids, "plans": len(result.live.result.plans) if result.live.result else None, "errors": result.live.errors},
             "shadow": {"policy_ids": result.shadow.policy_ids, "plans": len(result.shadow.result.plans) if result.shadow.result else None, "errors": result.shadow.errors},
         }
-        if args.config_source == "sheet":
+        if args.config_source == "sheet" and args.write_sheet:
             try:
                 from kamandal_v2.intelligence.trade_source_activity import project_trade_source_activity
 

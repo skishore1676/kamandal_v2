@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import fcntl
+import os
+import tempfile
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -29,9 +32,13 @@ class LlmExtractionResult:
     digest_path: Path
     ideas_path: Path | None
     raw_path: Path
+    cache_hits: int = 0
+    model_calls: int = 0
 
     def to_dict(self) -> dict[str, str | int | None]:
         return {
+            "cache_hits": self.cache_hits,
+            "model_calls": self.model_calls,
             "transcript_count": self.transcript_count,
             "idea_count": self.idea_count,
             "skipped_symbol_count": self.skipped_symbol_count,
@@ -53,7 +60,6 @@ def extract_ideas_llm(
     client: JsonLlmClient | None = None,
     store: LocalStore | None = None,
 ) -> LlmExtractionResult:
-    client = client or build_llm_client(config, actor="thesis_extractor")
     source_path = resolve_path(source_dir)
     digest_path = resolve_path(digest_dir)
     ideas_path = resolve_path(ideas_dir)
@@ -67,12 +73,29 @@ def extract_ideas_llm(
     skipped_symbol_count = 0
     digest_lines = [f"# Kamandal LLM Digest {today.isoformat()}", ""]
 
+    cache_hits = model_calls = 0
     for transcript_file in transcript_files:
         text = _clean_transcript_text(transcript_file.read_text(encoding="utf-8", errors="replace"))
-        payload = client.chat_json(
-            _system_prompt(allowed_symbols),
-            _user_prompt(transcript_file.name, text),
-        )
+        system_prompt = _system_prompt(allowed_symbols)
+        user_prompt = _user_prompt(transcript_file.name, text)
+
+        def request():
+            nonlocal client
+            client = client or build_llm_client(config, actor="thesis_extractor")
+            return client.chat_json(system_prompt, user_prompt)
+
+        if output_prefix == "x_bookmarks_imported":
+            # Day-scoped reuse never extends a prior day's normalized idea lifetime.
+            material = {"version": 1, "day": today.isoformat(), "text": text,
+                        "system": system_prompt, "user": user_prompt,
+                        "provider": (config.get("llm") or {}).get("provider"),
+                        "model": (config.get("llm") or {}).get("model")}
+            key = hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
+            payload, reused = _cached_extraction(digest_path / "extraction_cache", key, request)
+        else:
+            payload, reused = request(), False
+        cache_hits += int(reused)
+        model_calls += int(not reused)
         raw_payloads.append({"source": str(transcript_file), "payload": payload})
         source_ideas = payload.get("ideas") or []
         if not isinstance(source_ideas, list):
@@ -118,7 +141,34 @@ def extract_ideas_llm(
         digest_path=digest_file,
         ideas_path=output_ideas_file,
         raw_path=raw_file,
+        cache_hits=cache_hits,
+        model_calls=model_calls,
     )
+
+
+def _cached_extraction(root: Path, key: str, request) -> tuple[dict[str, Any], bool]:
+    """Reuse validated raw interpretation; normalization still runs each time."""
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / f"{key}.json"
+    with (root / f"{key}.lock").open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            cached = json.loads(path.read_text())
+            if cached.get("key") == key and _cacheable(cached.get("payload")):
+                return cached["payload"], True
+        except (OSError, ValueError, AttributeError):
+            pass
+        payload = request()
+        if _cacheable(payload):
+            with tempfile.NamedTemporaryFile(mode="w", dir=root, delete=False) as tmp:
+                json.dump({"key": key, "payload": payload}, tmp, sort_keys=True)
+                temporary = tmp.name
+            os.replace(temporary, path)
+        return payload, False
+
+
+def _cacheable(payload: Any) -> bool:
+    return isinstance(payload, dict) and isinstance(payload.get("ideas"), list)
 
 
 def _discovery_profile(path: Path) -> str:
