@@ -100,11 +100,19 @@ def build_candidates(
         entry = universe_by_symbol.get(idea.underlying)
         if entry is None:
             continue
-        chain = market.chain_snapshot(idea.underlying)
         iv_pct = market.iv_percentile(idea.underlying)
         iv_rank = market.iv_rank(idea.underlying)
         iv_abs = market.iv_abs(idea.underlying)
         event_status = market.event_status(idea.underlying)
+        if not any(
+            not _apply_match_gate_mode(
+                _quote_independent_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status),
+                match_gate_mode,
+            )
+            for playbook in playbooks
+        ):
+            continue
+        chain = market.chain_snapshot(idea.underlying)
         built_for_idea: list[Candidate] = []
         rejected_for_idea: list[Candidate] = []
         for playbook in playbooks:
@@ -234,10 +242,18 @@ def diagnose_idea_matches(
         matched: list[str] = []
         matched_playbooks: list[Playbook] = []
         chain = None
-        try:
-            chain = market.chain_snapshot(idea.underlying)
-        except Exception:
-            pass
+        needs_chain = any(
+            not _apply_match_gate_mode(
+                _quote_independent_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status),
+                match_gate_mode,
+            )
+            for playbook in playbooks
+        )
+        if needs_chain:
+            try:
+                chain = market.chain_snapshot(idea.underlying)
+            except Exception:
+                pass
         for playbook in playbooks:
             raw_reasons = _match_rejections(
                 idea,
@@ -249,6 +265,9 @@ def diagnose_idea_matches(
                 event_status,
                 underlying_price=chain.underlying_price if chain is not None else None,
             )
+            if not needs_chain:
+                # No price was fetched: report proven rejections only.
+                raw_reasons = [r for r in raw_reasons if r != "strangle_entry_outside_configured_ranges"]
             reasons = _apply_match_gate_mode(raw_reasons, match_gate_mode)
             if reasons:
                 for reason in reasons:
@@ -310,11 +329,29 @@ def diagnose_idea_matches(
                 "iv_rank": iv_rank,
                 "iv_abs": iv_abs,
                 "event_status": event_status,
+                "chain_fetch_skipped": not needs_chain,
             },
             "match_context": _match_context(idea),
             "playbooks": playbook_rows,
         })
     return diagnostics
+
+
+def _quote_independent_rejections(
+    idea: Idea,
+    entry: UniverseEntry,
+    playbook: Playbook,
+    iv_pct: float | None,
+    iv_rank: float | None,
+    iv_abs: float | None,
+    event_status: str,
+) -> list[str]:
+    """Conservative early gate; price-dependent admission still runs with quotes."""
+    return [
+        reason
+        for reason in _match_rejections(idea, entry, playbook, iv_pct, iv_rank, iv_abs, event_status)
+        if reason != "strangle_entry_outside_configured_ranges"
+    ]
 
 
 def _matches(

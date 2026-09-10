@@ -16,6 +16,7 @@ from kamandal_v2.market.interfaces import MarketDataProvider
 from kamandal_v2.market.public import PublicAdapter
 from kamandal_v2.market.tastytrade import TastytradeAdapter
 from kamandal_v2.planner.candidate_builder import build_candidates, diagnose_idea_matches
+from kamandal_v2.planner.market_cache import PlanningMarketCache
 from kamandal_v2.planner.config_loader import load_planner_config
 from kamandal_v2.planner.daily_plan import render_daily_plan_rows
 from kamandal_v2.planner.idea_loader import load_ideas
@@ -91,7 +92,7 @@ def run_plan(
     else:
         universe, playbooks = universe_override, playbooks_override
     loaded_ideas = annotate_structural_breaks(load_ideas(idea_paths), config)
-    market = market_override or _market_provider(config, provider=provider, store=store)
+    market = PlanningMarketCache(market_override or _market_provider(config, provider=provider, store=store))
     preflight = _preflight_client(market) if provider == "public" else FixturePreflightClient()
     portfolio_raw = portfolio_override if portfolio_override is not None else market.account_state()
     portfolio = _shadow_portfolio_override(portfolio_raw, config)
@@ -157,6 +158,7 @@ def run_plan(
         match_gate_mode,
         candidate_filter_mode,
     )
+    metrics["planning_market"] = market.metrics()
     rows = render_daily_plan_rows(plans, mode=mode)
 
     store.save_candidates(plan_run_id, candidates)
