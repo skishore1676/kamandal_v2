@@ -45,3 +45,7 @@ evidence > diary > brain summary**.
 - No external sends without an explicit operator gate.
 - Default stance: read-and-recommend. Execution authority is granted per lane by the
   operator, never inherited from documentation.
+
+Before changing `scheduled-job-health`, launchd availability projection, or its
+operator status contract, read
+`docs/lessons/non-recursive-monitors-need-direct-status-receipts.md`.
