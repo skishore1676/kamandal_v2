@@ -1,7 +1,8 @@
 """Import operator ideas from the my_ideas Google Sheet tab.
 
 The operator fills rows (date, ticker, type_of_trade, direction, horizon_days,
-notes, conviction) before 7:00 AM market time. This importer converts today's
+notes, conviction). Scheduled imports and explicit intraday manual-strangle
+commands use the same conversion. This importer converts today's
 rows into idea YAML under data/ideas/active so the existing advisory/shadow
 cycles consume them like any other idea source, then writes per-row import
 status back to the sheet.
@@ -50,7 +51,8 @@ TYPE_OF_TRADE_TAGS = {
 
 CONVICTIONS = {"low", "medium", "high"}
 DEFAULT_HORIZON_DAYS = 45
-SKIP_STATUSES = {"example"}
+SKIP_STATUSES = {"example", "skip", "cancelled", "disabled"}
+STRANGLE_TYPES = {"strangle", "short strangle", "short_strangle"}
 
 
 def import_my_ideas(
@@ -93,9 +95,8 @@ def import_my_ideas(
         ):
             discovery_recorded += 1
 
-    ideas_path = None
-    if ideas:
-        ideas_path = _write_ideas_file(ideas, ideas_dir=ideas_dir, today=today)
+    # Replace even with an empty set so withdrawn rows cannot survive in YAML.
+    ideas_path = _write_ideas_file(ideas, ideas_dir=ideas_dir, today=today)
 
     rows_written = 0
     if write_sheet and rows:
@@ -154,7 +155,7 @@ def _convert_row(
 ) -> tuple[dict[str, Any] | None, str]:
     existing_status = str(row.get("status") or "").strip().lower()
     if existing_status in SKIP_STATUSES:
-        return None, "example"
+        return None, existing_status
 
     row_date = _parse_row_date(str(row.get("date") or ""), today=today)
     if row_date is None:
@@ -176,20 +177,26 @@ def _convert_row(
     if direction is None:
         return None, "invalid_direction_use_bull_bear_neutral"
 
+    is_strangle = raw_type.lower() in STRANGLE_TYPES
+    if is_strangle and direction != "neutral":
+        return None, "strangle_requires_neutral_direction"
     tags, tag_status = _thesis_tags(raw_type, direction)
+    if is_strangle:
+        tags, tag_status = ["high_iv", "range_bound", "vol_contraction"], "imported"
     horizon = _parse_int(str(row.get("horizon_days") or ""), default=DEFAULT_HORIZON_DAYS)
     conviction = str(row.get("conviction") or "").strip().lower()
     if conviction not in CONVICTIONS:
         conviction = "high"
 
-    idea_id = f"op_{today.isoformat()}_{ticker}_{direction[:4]}"
+    idea_id = f"op_{today.isoformat()}_{ticker}_{direction[:4]}" + ("_strangle" if is_strangle else "")
     idea = {
         "idea_id": idea_id,
         "source": SOURCE_NAME,
         "underlying": ticker,
         "direction": direction,
-        "strategy_hint": "",
-        "mentioned_strategy": "",
+        "strategy_hint": "short_strangle" if is_strangle else "",
+        "mentioned_strategy": "short_strangle" if is_strangle else "",
+        "allowed_structures": ["short_strangle"] if is_strangle else [],
         "thesis_tags": tags,
         "horizon_days": horizon,
         "trade_horizon_days": horizon,

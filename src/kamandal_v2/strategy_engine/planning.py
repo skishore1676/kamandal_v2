@@ -347,6 +347,7 @@ def _run_book(
                 portfolio=portfolio,
                 mode=mode,
                 trade_source_policies=trade_source_policies,
+                manual_strangle_symbol=str((mode_config.get("runtime") or {}).get("manual_strangle_symbol") or ""),
             ),
             supplemental_candidate_factory=(
                 lambda market, selected_playbooks, _portfolio, current_store: build_observed_package_candidates(
@@ -1223,12 +1224,20 @@ def _source_groups(
     portfolio: PortfolioState,
     mode: ExecutionMode,
     trade_source_policies: dict[tuple[str, TradeSourceOutputKind], TradeSourcePolicy] | None,
+    manual_strangle_symbol: str = "",
 ) -> list[PlanningSourceGroup]:
     """Normalize every supported source mode before one candidate/plan pass."""
     policy_by_id = {policy.playbook_id: policy for policy in policies}
     groups: list[PlanningSourceGroup] = []
     idea_groups: dict[tuple[str, ...], list[Idea]] = {}
     for idea in idea_inputs:
+        manual_strangle = idea.source == "operator_sheet" and idea.strategy_hint == "short_strangle"
+        if manual_strangle_symbol:
+            if not manual_strangle or idea.underlying != manual_strangle_symbol:
+                continue
+        elif manual_strangle:
+            # Staged manual strangles require the explicit ticker-targeted run.
+            continue
         source_id = source_id_from_idea_source(idea.source)
         source_policy = (
             (trade_source_policies or {}).get((source_id, TradeSourceOutputKind.IDEA))
@@ -1242,7 +1251,10 @@ def _source_groups(
         eligible_ids: list[str] = []
         for playbook in playbooks:
             policy = policy_by_id[playbook.playbook_id]
-            if "idea" not in policy.accepted_inputs:
+            if manual_strangle_symbol:
+                if policy.structure != "short_strangle" or "operator_idea" not in policy.accepted_inputs:
+                    continue
+            elif "idea" not in policy.accepted_inputs:
                 continue
             effective_mode = policy.mode
             if source_policy is not None and source_policy.mode is TradeSourceMode.SHADOW:
@@ -1255,6 +1267,8 @@ def _source_groups(
     for playbook_ids, inputs in idea_groups.items():
         groups.append(PlanningSourceGroup("idea", inputs, [playbook_by_id[item] for item in playbook_ids]))
 
+    if manual_strangle_symbol:
+        return groups
     for source_mode in ("market_scan", "portfolio_hedge"):
         selected = [
             playbook

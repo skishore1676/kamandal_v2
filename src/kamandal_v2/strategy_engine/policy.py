@@ -183,7 +183,7 @@ def _compile_accepted_inputs(
     source_mode: str,
     playbook_id: str,
 ) -> tuple[str, ...]:
-    allowed = {"idea", "market_scan", "portfolio_hedge", "exact_package"}
+    allowed = {"idea", "operator_idea", "market_scan", "portfolio_hedge", "exact_package"}
     if source_mode == "observed_package":
         return ("exact_package",)
     explicit = tuple(dict.fromkeys(item.lower() for item in _text_list(row.get("accepted_inputs"))))
