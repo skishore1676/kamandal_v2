@@ -103,6 +103,55 @@ def test_launchd_status_outputs_units_without_broker_mutation(monkeypatch, tmp_p
     }
 
 
+def test_launchd_status_reads_self_health_from_its_owner_receipt(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:  # noqa: ANN001
+    monkeypatch.setattr(launchd_status, "_csa_plist_enabled_jobs", lambda: set())
+    repo = tmp_path / "repo"
+    log_dir = repo / "data" / "logs" / "launchd"
+    launchd_dir = tmp_path / "LaunchAgents"
+    log_dir.mkdir(parents=True)
+    launchd_dir.mkdir()
+    label = "com.kamandal.v2.scheduled_job_health"
+    monkeypatch.setattr(launchd_status, "_launchd_loaded_labels", lambda: {label})
+    (launchd_dir / f"{label}.plist").write_text("installed\n", encoding="utf-8")
+    (log_dir / f"{label}.out.log").write_text(
+        "KAMANDAL_LAUNCHD_JOB="
+        + json.dumps(
+            {
+                "job": "scheduled-job-health",
+                "status": "ok",
+                "issues": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KAMANDAL_LAUNCHD_DIR", str(launchd_dir))
+
+    payload = launchd_status.build_status(
+        repo_root=repo,
+        db_path=tmp_path / "kamandal.db",
+        config=_config(),
+    )
+
+    unit = next(
+        item
+        for item in payload["units"]
+        if item["unit_id"] == label
+    )
+    assert unit["effective_enabled"] is True
+    assert unit["launchd"] == {
+        "available": True,
+        "loaded": True,
+        "installed": True,
+    }
+    assert unit["last_run_status"] == "ok"
+    assert unit["last_run_at"] is not None
+    assert unit["status_source"] == "owner_receipt"
+
+
 def test_launchd_status_reports_retired_shadow_history_without_reclassifying_it(
     monkeypatch,
     tmp_path: Path,

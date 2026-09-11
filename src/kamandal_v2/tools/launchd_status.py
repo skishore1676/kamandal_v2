@@ -6,8 +6,10 @@ import argparse
 from datetime import UTC, datetime
 import hashlib
 import json
+import os
 import plistlib
 import socket
+import subprocess
 from pathlib import Path
 import sqlite3
 from typing import Any
@@ -18,7 +20,7 @@ from kamandal_v2.ops.alerts import default_lathi_bus_profile
 from kamandal_v2.ops.launchd_registry import CENTRAL, launchd_jobs
 from kamandal_v2.paths import PROJECT_ROOT
 from kamandal_v2.stores.sqlite import LocalStore
-from kamandal_v2.tools.launchd_job import scheduled_job_health
+from kamandal_v2.tools.launchd_job import read_launchd_observation, scheduled_job_health
 from kamandal_v2.tools.review_queue import build_review_queue
 
 
@@ -41,6 +43,7 @@ def build_status(
     checked_at = checked_at.astimezone(UTC)
     generated_at = checked_at.isoformat(timespec="seconds").replace("+00:00", "Z")
     schedule_report = scheduled_job_health(repo_root=repo, now=checked_at.astimezone(CENTRAL))
+    loaded_labels = _launchd_loaded_labels()
     live_health = _safe_live_health(store, config, now=checked_at)
     review_queue = build_review_queue(store=store)
     shadow_evidence = _shadow_evidence_status(
@@ -49,7 +52,15 @@ def build_status(
         observed_at=checked_at,
     )
     units = [
-        *[_job_unit(job, schedule_report) for job in launchd_jobs()],
+        *[
+            _job_unit(
+                job,
+                schedule_report,
+                repo_root=repo,
+                loaded_labels=loaded_labels,
+            )
+            for job in launchd_jobs()
+        ],
         _live_health_unit(live_health),
         _review_queue_unit(review_queue),
     ]
@@ -256,9 +267,22 @@ def _semantic_hash(payload: Any) -> str:
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def _job_unit(job: Any, schedule_report: dict[str, Any]) -> dict[str, Any]:
+def _job_unit(
+    job: Any,
+    schedule_report: dict[str, Any],
+    *,
+    repo_root: Path,
+    loaded_labels: set[str] | None,
+) -> dict[str, Any]:
     rows = {str(row.get("job")): row for row in schedule_report.get("jobs") or []}
-    row = rows.get(job.job) or {}
+    row = rows.get(job.job)
+    status_source = "scheduled_job_health"
+    if row is None:
+        row = {
+            "last": _direct_job_observation(job, repo_root=repo_root),
+            "issue": None,
+        }
+        status_source = "owner_receipt"
     last = row.get("last") or {}
     issue = row.get("issue")
     findings = []
@@ -273,13 +297,24 @@ def _job_unit(job: Any, schedule_report: dict[str, Any]) -> dict[str, Any]:
     last_status = str(last.get("status") or "")
     if last_status.lower() == "failed":
         lifecycle = "stuck"
+    installed = bool(last.get("installed_at"))
+    effective_enabled = (
+        job.label in loaded_labels
+        if loaded_labels is not None
+        else installed
+    )
     return {
         "unit_id": job.label,
         "job": job.job,
         "kind": "external_launchd_job",
         "serves_job": "C",
         "declared_enabled": True,
-        "effective_enabled": bool(last.get("installed_at") or last.get("log_path")),
+        "effective_enabled": effective_enabled,
+        "launchd": {
+            "available": loaded_labels is not None,
+            "loaded": effective_enabled if loaded_labels is not None else None,
+            "installed": installed,
+        },
         "risk_class": job.risk_class,
         "lifecycle": lifecycle,
         "schedule": job.schedule_label,
@@ -293,7 +328,52 @@ def _job_unit(job: Any, schedule_report: dict[str, Any]) -> dict[str, Any]:
         "action_requirements": job.action_requirements or {},
         "source_id": "kamandal",
         "readiness_role": job.purpose,
+        "status_source": status_source,
     }
+
+
+def _direct_job_observation(job: Any, *, repo_root: Path) -> dict[str, Any]:
+    """Read a registered job's own receipt when it is not in the monitor set."""
+
+    log_dir = Path(
+        os.getenv(
+            "KAMANDAL_LAUNCHD_LOG_DIR",
+            str(repo_root / "data" / "logs" / "launchd"),
+        )
+    )
+    launchd_dir = Path(
+        os.getenv(
+            "KAMANDAL_LAUNCHD_DIR",
+            str(Path.home() / "Library" / "LaunchAgents"),
+        )
+    )
+    return read_launchd_observation(
+        log_dir / f"{job.label}.out.log",
+        plist_path=launchd_dir / f"{job.label}.plist",
+    )
+
+
+def _launchd_loaded_labels() -> set[str] | None:
+    """Read the user launchd domain once; fall back to installed plist evidence."""
+
+    try:
+        completed = subprocess.run(
+            ["launchctl", "list"],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    labels: set[str] = set()
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if fields:
+            labels.add(fields[-1])
+    return labels
 
 
 def _live_health_unit(live_health: dict[str, Any]) -> dict[str, Any]:
