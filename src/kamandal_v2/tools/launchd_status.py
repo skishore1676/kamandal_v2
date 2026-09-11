@@ -23,6 +23,7 @@ from kamandal_v2.tools.review_queue import build_review_queue
 
 
 SCHEMA = "kamandal.launchd.status.v1"
+SELECTED_ENTRY_ATTENTION_STATE_EVENT = "live_selected_entry_attention_state"
 
 
 def build_status(
@@ -48,10 +49,12 @@ def build_status(
         db_path=Path(store.sqlite_path),
         observed_at=checked_at,
     )
+    selected_entry_attention = _selected_entry_attention_unit(store)
     units = [
         *[_job_unit(job, schedule_report) for job in launchd_jobs()],
         _live_health_unit(live_health),
         _review_queue_unit(review_queue),
+        *([selected_entry_attention] if selected_entry_attention else []),
     ]
     return {
         "schema": SCHEMA,
@@ -390,6 +393,80 @@ def _review_queue_unit(review_queue: dict[str, Any]) -> dict[str, Any]:
         "source_id": "kamandal",
         "readiness_role": "Kamandal operator review queue.",
     }
+
+
+def _selected_entry_attention_unit(store: LocalStore) -> dict[str, Any] | None:
+    """Project the app-owned entry alert into Lathi while it remains open."""
+    state = store.latest_event(SELECTED_ENTRY_ATTENTION_STATE_EVENT) or {}
+    if str(state.get("status") or "").strip().lower() != "open":
+        return None
+
+    intent_type = str(state.get("intent_type") or "open").strip().lower()
+    operation = "close" if intent_type == "close" else "entry"
+    underlying = str(state.get("underlying") or "unknown").strip().upper()
+    reason = str(state.get("reason") or "placement_failed").strip()
+    notification_ok = bool(state.get("notification_ok"))
+    notification_mode = str(state.get("notification_mode") or "unknown").strip().lower()
+    recorded_at = str(state.get("_created_at") or "") or None
+    latest_alert: dict[str, Any] = {
+        "mode": notification_mode,
+        "status": _selected_entry_alert_status(
+            mode=notification_mode,
+            ok=notification_ok,
+        ),
+    }
+    if notification_mode != "off":
+        latest_alert["ok"] = notification_ok
+    return {
+        "unit_id": "kamandal:selected-entry-attention",
+        "kind": "external_execution_attention",
+        "serves_job": "C",
+        "declared_enabled": True,
+        "effective_enabled": True,
+        "risk_class": "trading_execution",
+        "lifecycle": "stuck",
+        "schedule": None,
+        "next_fire": None,
+        "last_run_status": "operator_needed",
+        "last_run_at": recorded_at,
+        "observed_at": recorded_at,
+        "findings": [f"selected_{operation}_not_placed:{reason}"],
+        "operator_state": "operator_needed",
+        "available_actions": ["live-status"],
+        "action_requirements": {
+            "live-status": {
+                "requires_confirmation": False,
+                "reason": "Read-only status for the failed selected order.",
+            }
+        },
+        "source_id": "kamandal",
+        "readiness_role": "Kamandal selected-order placement attention.",
+        "attention_key": "kamandal:selected-entry-attention",
+        "attention_class": "system_attention",
+        "human_action": (
+            f"Review the failed selected {operation} for {underlying}; "
+            "investigate or override only if needed."
+        ),
+        "attention_exit": "A later canonical execution cycle clears or supersedes the incident.",
+        "attention_mover": "kamandal",
+        "last": {
+            "domain": {
+                "ok": False,
+                "status": "operator_needed",
+                "attention_required": True,
+                "failure_code": reason,
+            }
+        },
+        "latest_alert": latest_alert,
+    }
+
+
+def _selected_entry_alert_status(*, mode: str, ok: bool) -> str:
+    if mode == "off":
+        return "disabled"
+    if not ok:
+        return "failed"
+    return "delivered" if mode == "live" else "spooled" if mode == "spool" else "unknown"
 
 
 def _safe_live_health(
