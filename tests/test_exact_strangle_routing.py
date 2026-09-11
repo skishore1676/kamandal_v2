@@ -233,7 +233,9 @@ def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(t
         assert len(prices) == 3
         assert ticket["limit_price"] == prices[0]
         checks = ticket["preflight"]["raw"]["campaign_bpr_checks"]
-        assert ticket["entry_risk_budget"] == max(check["bpr"] for check in checks)
+        assert ticket["entry_risk_budget"] == 2500
+        assert result.live.result.plans[0].total_bpr == 2500
+        assert ticket["entry_risk_budget"] >= max(check["bpr"] for check in checks)
         assert ticket["entry_risk_budget"] > checks[0]["bpr"]
         midpoint = _repriced_open_ticket(ticket, control)
         terminal = _repriced_open_ticket(midpoint, control)

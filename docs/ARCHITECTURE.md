@@ -1633,3 +1633,5 @@ plan selection.
 
 For repeated guru activity rows, extraction-cache behavior, or a header-only activity
 tab, see [source activity and translation work](lessons/source-activity-is-not-translation-work.md).
+
+Manual strangle entry uses the same planner and executor with an explicit ticker scope; see [Manual strangle entry](MANUAL_STRANGLE_ENTRY.md). Operator rows require the distinct `operator_idea` input and remain staged until a targeted run. Live strangles reserve their effective BPR cap before portfolio optimization, retaining broker estimates separately.

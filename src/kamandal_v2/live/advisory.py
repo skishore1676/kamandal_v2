@@ -232,6 +232,12 @@ def _live_candidate_policy(
             candidate.rejection_reason = "live_preflight_required"
         elif _preflight_bpr_incomplete(candidate):
             candidate.rejection_reason = "live_preflight_bpr_incomplete"
+        elif candidate.structure in {"short_strangle", "strangle"}:
+            # Reserve the authorized cap before optimization, not the moving
+            # broker estimate. The selected ticket inherits this same budget.
+            candidate.metadata["broker_bpr_estimate"] = candidate.preflight.bpr
+            candidate.metadata["entry_budget_source"] = "reserved_live_bpr_cap"
+            candidate.estimated_bpr = round(max_bpr, 2)
 
 
 def _open_live_contract_keys(store: LocalStore) -> set[str]:

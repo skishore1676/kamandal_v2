@@ -91,6 +91,7 @@ def main() -> None:
     csa_history_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_history_parser.add_argument("--lifecycle-id", default="")
     unified_plan_parser = subparsers.add_parser("unified-plan", help="Build isolated live and shadow books through the unified policy compiler")
+    unified_plan_parser.add_argument("--manual-strangle", metavar="TICKER", help="Plan only today's explicit Strangle row for this ticker from my_ideas")
     unified_plan_parser.add_argument("--db", default="data/kamandal_v2.db")
     unified_plan_parser.add_argument("--ideas", nargs="+", default=["data/ideas/active"])
     unified_plan_parser.add_argument("--provider", choices=["fixture", "public"], default="public")
@@ -623,11 +624,24 @@ def main() -> None:
                     "observed_package_feed_rejected",
                     {"path": str(feed_path), "error": observed_package_feed_warning, "broker_effects": False},
                 )
+        idea_paths = _expand_paths(args.ideas)
+        if args.manual_strangle:
+            from kamandal_v2.planner.idea_loader import load_ideas
+            symbol = args.manual_strangle.strip().upper()
+            if args.config_source != "sheet":
+                raise SystemExit("Manual strangle entry requires the canonical Sheet policy")
+            imported = import_my_ideas(config, write_sheet=False, store=active_store)
+            idea_paths = [imported["ideas_path"]]
+            if not any(idea.source == "operator_sheet" and idea.underlying == symbol and idea.strategy_hint == "short_strangle" for idea in load_ideas(idea_paths)):
+                raise SystemExit(f"No valid current Strangle row for {symbol} in my_ideas; check date, ticker, neutral direction and enabled universe")
+            config.setdefault("runtime", {})["manual_strangle_symbol"] = symbol
+            observed_package_batches = ()
         result = run_unified_books(
             config,
             universe_rows=daily_policy_snapshot.tables["universe"],
             playbook_rows=daily_policy_snapshot.tables["playbooks"],
-            idea_paths=_expand_paths(args.ideas),
+            idea_paths=idea_paths,
+            include_shadow=not bool(args.manual_strangle),
             provider=args.provider,
             store=active_store,
             write_sheet=args.write_sheet,
@@ -665,6 +679,8 @@ def main() -> None:
         print(json.dumps(output, indent=2, sort_keys=True))
         if not result.compilation.ok or result.live.errors or result.shadow.errors:
             raise SystemExit(1)
+        if args.manual_strangle and (not result.live.result or not result.live.result.plans):
+            raise SystemExit("Manual strangle did not produce an eligible plan; no execution requested")
         return
     if args.command == "unified-lifecycle-management":
         from kamandal_v2.strategy_engine.management import run_unified_lifecycle_management

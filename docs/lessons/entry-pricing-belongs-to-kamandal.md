@@ -47,3 +47,16 @@ selected live ticket -> immutable replacement sequence, plus credit/debit parity
 metadata preservation across fresh preflight and CSA translation, no-broker-call
 checks for invalid repricing, and a fresh BPR increase that blocks replacement.
 Use `PYTHONPATH=.:src .venv/bin/python -m pytest -q -o addopts=''`.
+
+
+## September 11: reserve the cap, retain the estimate
+
+A broker estimate is not an authorization ceiling. MS was blocked at $2,493.58
+against a $2,457.52 estimate even though the configured cap was $2,500. Eligible
+live strangles now reserve the effective per-order cap before portfolio
+optimization. `estimated_bpr` carries that reservation into plan totals and
+`entry_risk_budget`; `preflight.bpr` and `metadata.broker_bpr_estimate` retain the
+observed requirement. Fresh broker BPR can move within the selected reservation,
+but cannot exceed it. Account, portfolio, concentration, and per-order limits
+continue to apply to the full reservation. Existing tickets are not silently
+rebudgeted; new planning creates the corrected handoff.
