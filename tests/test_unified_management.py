@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import date
+import json
+import os
 from pathlib import Path
+import subprocess
 
 from kamandal_v2.domain.models import OptionLeg
 from kamandal_v2.events.earnings import EarningsSnapshot, EarningsStore
@@ -133,13 +136,115 @@ def test_scheduled_management_completes_live_cycle_before_shadow() -> None:
     shadow = source.index("--branch shadow")
 
     assert pre_sync < live < close < post_sync < cleanup < shadow
-    assert "live || cycle_status=$?" in source
-    assert "shadow || cycle_status=$?" in source
+    assert 'return "$live_status"' in source
+    assert "KAMANDAL_LIFECYCLE_TERMINAL=" in source
 
     entry_source = Path("scripts/run_live_approved_orders.sh").read_text(encoding="utf-8")
     assert '"$KAMANDAL_BIN" sync-live-orders --read-only' in entry_source
     assert "execute-live-approved-closes" not in entry_source
     assert "cleanup-live-approvals" not in entry_source
+
+
+def _run_scheduled_manager(tmp_path, failures: dict[str, int]):  # noqa: ANN001
+    fake = tmp_path / "kamandal"
+    fake.write_text(
+        """#!/bin/bash
+set -u
+command="$1"
+shift
+step="$command"
+if [[ "$command" == "unified-lifecycle-management" ]]; then
+  while (( $# )); do
+    if [[ "$1" == "--branch" ]]; then
+      step="${command}:$2"
+      break
+    fi
+    shift
+  done
+elif [[ "$command" == "sync-live-orders" ]]; then
+  count_file="${FAKE_SYNC_COUNT_FILE}"
+  count=0
+  [[ -f "$count_file" ]] && count="$(<"$count_file")"
+  count=$((count + 1))
+  printf '%s' "$count" > "$count_file"
+  step="${command}:$count"
+fi
+printf '{"step":"%s"}\n' "$step"
+case "$step" in
+  sync-live-orders:1) exit "${FAIL_PRE_SYNC:-0}" ;;
+  unified-lifecycle-management:live) exit "${FAIL_LIVE:-0}" ;;
+  execute-live-approved-closes) exit "${FAIL_CLOSE:-0}" ;;
+  sync-live-orders:2) exit "${FAIL_POST_SYNC:-0}" ;;
+  cleanup-live-approvals) exit "${FAIL_CLEANUP:-0}" ;;
+  unified-lifecycle-management:shadow) exit "${FAIL_SHADOW:-0}" ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    env = {
+        **os.environ,
+        "KAMANDAL_BIN": str(fake),
+        "KAMANDAL_FORCE_RUN": "1",
+        "KAMANDAL_RUNLOCK_ROOT": str(tmp_path / "locks"),
+        "FAKE_SYNC_COUNT_FILE": str(tmp_path / "sync-count"),
+        **{name: str(code) for name, code in failures.items()},
+    }
+    return subprocess.run(
+        ["bash", "scripts/run_unified_lifecycle_management.sh"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+def _terminal_receipt(stdout: str) -> dict:
+    line = next(line for line in stdout.splitlines() if line.startswith("KAMANDAL_LIFECYCLE_TERMINAL="))
+    return json.loads(line.split("=", 1)[1])
+
+
+def test_scheduled_manager_shadow_failure_is_non_terminal(tmp_path) -> None:  # noqa: ANN001
+    completed = _run_scheduled_manager(tmp_path, {"FAIL_SHADOW": 9})
+
+    assert completed.returncode == 0
+    assert _terminal_receipt(completed.stdout) == {
+        "status": "succeeded",
+        "exit_code": 0,
+        "steps": {
+            "pre_sync": 0,
+            "live_lifecycle": 0,
+            "execute_live_closes": 0,
+            "post_sync": 0,
+            "cleanup_live_approvals": 0,
+            "shadow_lifecycle": 9,
+        },
+    }
+
+
+def test_scheduled_manager_live_failure_remains_terminal_after_shadow_success(tmp_path) -> None:  # noqa: ANN001
+    completed = _run_scheduled_manager(tmp_path, {"FAIL_LIVE": 7})
+
+    assert completed.returncode == 7
+    receipt = _terminal_receipt(completed.stdout)
+    assert receipt["status"] == "failed"
+    assert receipt["exit_code"] == 7
+    assert receipt["steps"]["live_lifecycle"] == 7
+    assert receipt["steps"]["shadow_lifecycle"] == 0
+
+
+def test_scheduled_manager_pre_sync_failure_skips_live_effects(tmp_path) -> None:  # noqa: ANN001
+    completed = _run_scheduled_manager(tmp_path, {"FAIL_PRE_SYNC": 6})
+
+    assert completed.returncode == 6
+    assert _terminal_receipt(completed.stdout)["steps"] == {
+        "pre_sync": 6,
+        "live_lifecycle": -1,
+        "execute_live_closes": -1,
+        "post_sync": -1,
+        "cleanup_live_approvals": -1,
+        "shadow_lifecycle": 0,
+    }
 
 
 def _policy(**fields) -> CsaPolicy:  # noqa: ANN003
