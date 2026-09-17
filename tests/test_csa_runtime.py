@@ -1161,3 +1161,58 @@ def test_shadow_management_ignores_live_contract_ownership(tmp_path) -> None:
     assert followup.filled_count == 1
     assert management.selected_actions == {"hold": 1}
     assert len(CsaStore(database, read_only=True).rows("csa_shadow_order_intents")) == 1
+
+
+def test_adopt_csa_live_fill_prioritizes_filled_at_over_updated_at_and_normalizes_epoch(tmp_path) -> None:
+    database = tmp_path / "kamandal.db"
+    LocalStore(database)
+    migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
+    tables = _tables()
+    tables["playbooks"][0]["csa_stage"] = "live"
+
+    class BrokerAuthoritativeFixture:
+        def preflight(self, candidate):  # noqa: ANN001
+            return type(FixturePreflightClient().preflight(candidate))(
+                ok=True,
+                bpr=candidate.estimated_bpr,
+                message="broker authoritative fixture",
+                raw={"bpr_source": "broker_preflight", "broker_bpr_provided": True},
+            )
+
+    run_csa_live_scan(
+        {},
+        sqlite_path=str(database),
+        provider="fixture",
+        tables=tables,
+        market=FixtureMarketDataProvider(account_size=100_000),
+        preflight=BrokerAuthoritativeFixture(),
+        observed_at="2026-08-10T15:00:00Z",
+    )
+    live_store = LocalStore(database)
+    entry = live_store.live_order_intents_by_status({"stage_approved_pending_submit"})[0]
+
+    order_status = {
+        "averagePrice": "1.00",
+        "updatedAt": 1789405811442,
+        "filledAt": "2026-09-14T17:10:11.411+00:00",
+    }
+    adopted = _adopt_csa_live_fill(live_store, entry, order_status)
+
+    lifecycle = CsaStore(database, read_only=True).lifecycle(entry["csa_lifecycle_id"])
+    assert lifecycle.status == "open"
+    assert lifecycle.cashflow_ledger[0]["filled_at"] == "2026-09-14T17:10:11.411000+00:00"
+
+
+def test_normalize_fill_timestamp_converts_epoch_ms_and_preserves_iso() -> None:
+    from kamandal_v2.live.execution import _normalize_fill_timestamp
+
+    iso = _normalize_fill_timestamp(1789405811442)
+    assert iso.startswith("2026-09-14T17:10:11")
+    assert "+00:00" in iso or "Z" in iso
+
+    iso_str = _normalize_fill_timestamp("1789405811442")
+    assert iso_str == iso
+
+    normal = _normalize_fill_timestamp("2026-09-14T17:10:11.411+00:00")
+    assert normal == "2026-09-14T17:10:11.411000+00:00"
+

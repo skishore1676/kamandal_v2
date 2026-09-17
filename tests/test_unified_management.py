@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import replace
+from datetime import date, timezone
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,11 @@ import subprocess
 from kamandal_v2.domain.models import OptionLeg
 from kamandal_v2.events.earnings import EarningsSnapshot, EarningsStore
 from kamandal_v2.strategy_engine.management import run_unified_lifecycle_management
-from kamandal_v2.strategy_lanes.management_runtime import _half_time_state, _pre_event_exit_state
+from kamandal_v2.strategy_lanes.management_runtime import (
+    _half_time_state,
+    _parse_timestamp,
+    _pre_event_exit_state,
+)
 from kamandal_v2.strategy_lanes.models import CsaStage, LaneId, LifecycleState, SourceMode
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 
@@ -299,6 +304,47 @@ def test_half_time_uses_completed_entry_fill_date_and_sheet_switch() -> None:
     assert before == {"entry_dte": 30, "remaining_dte": 16, "threshold": 15, "due": False}
     assert due["due"] is True
     assert disabled["due"] is False
+
+
+def test_half_time_handles_epoch_millisecond_timestamp_in_cashflow_ledger() -> None:
+    lifecycle = replace(
+        _lifecycle(),
+        cashflow_ledger=(
+            {
+                "ticket_id": "entry",
+                "fill_id": "entry-fill",
+                "amount": 5.03,
+                "filled_at": "1789405811442",  # Tastytrade epoch ms from 2026-09-14
+            },
+        ),
+    )
+    policy = _policy(half_time_exit="TRUE")
+    leg = _leg("2026-10-30")  # 46 DTE from 2026-09-14
+
+    state = _half_time_state(lifecycle, policy, (leg,), remaining_dtes=[23])
+    assert state == {"entry_dte": 46, "remaining_dte": 23, "threshold": 23, "due": True}
+
+
+def test_parse_timestamp_handles_epoch_and_iso_variants() -> None:
+    # Epoch milliseconds string & int
+    dt_ms_str = _parse_timestamp("1789405811442")
+    assert dt_ms_str.year == 2026 and dt_ms_str.month == 9 and dt_ms_str.day == 14
+    assert dt_ms_str.tzinfo == timezone.utc
+
+    dt_ms_int = _parse_timestamp(1789405811442)
+    assert dt_ms_int == dt_ms_str
+
+    # Epoch seconds
+    dt_sec = _parse_timestamp("1789405811")
+    assert dt_sec.year == 2026 and dt_sec.month == 9 and dt_sec.day == 14
+
+    # ISO formats
+    dt_iso = _parse_timestamp("2026-09-14T17:10:11.411+00:00")
+    assert dt_iso.year == 2026 and dt_iso.month == 9 and dt_iso.day == 14
+
+    dt_compact = _parse_timestamp("20260914T165505Z")
+    assert dt_compact.year == 2026 and dt_compact.month == 9 and dt_compact.day == 14
+
 
 
 def test_pre_event_exit_uses_latest_captured_earnings_and_sheet_days(tmp_path) -> None:  # noqa: ANN001

@@ -90,7 +90,7 @@ def test_manual_sheet_row_reaches_selected_typed_ticket_with_reserved_cap(tmp_pa
     control["risk_manager"]["enabled"] = False
     row = _strangle_row(mode="live", csa_stage="pilot_live", accepted_inputs="market_scan,operator_idea",
                         execution_venue="tasty_primary", live_max_bpr_per_order=2500, leg_count=2,
-                        dte_min=30, dte_max=50, iv_rank_min=50, iv_rank_max=100)
+                        dte_min=20, dte_max=50, iv_rank_min=50, iv_rank_max=100)
     universe = [{"symbol": "MS", "enabled": "TRUE"}, {"symbol": "NTAP", "enabled": "TRUE"}]
     snapshot = _daily_snapshot(tmp_path, control, universe, [row])
     ideas, _ = convert_rows([manual_row(), manual_row(ticker="NTAP")], universe_symbols={"MS", "NTAP"}, today=date.today())

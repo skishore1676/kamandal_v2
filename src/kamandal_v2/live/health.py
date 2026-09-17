@@ -959,10 +959,21 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _parse_timestamp(raw: str) -> datetime | None:
+def _parse_timestamp(raw: Any) -> datetime | None:
     if not raw:
         return None
-    normalized = str(raw).replace("Z", "+00:00")
+    if isinstance(raw, datetime):
+        return raw if raw.tzinfo is not None else raw.replace(tzinfo=UTC)
+    cleaned = str(raw).strip()
+    try:
+        ts = float(cleaned)
+        seconds = ts / 1000.0 if ts > 1e11 else ts
+        return datetime.fromtimestamp(seconds, tz=UTC)
+    except ValueError:
+        pass
+    normalized = cleaned.replace("Z", "+00:00")
+    if " " in normalized and "T" not in normalized:
+        normalized = normalized.replace(" ", "T")
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:

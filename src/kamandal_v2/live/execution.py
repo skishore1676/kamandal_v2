@@ -1917,6 +1917,33 @@ def _now_utc() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _normalize_fill_timestamp(value: Any) -> str:
+    if value in (None, ""):
+        return _now_utc()
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).isoformat()
+    if isinstance(value, (int, float)):
+        seconds = value / 1000.0 if value > 1e11 else float(value)
+        return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
+    raw = str(value).strip()
+    try:
+        ts = float(raw)
+        seconds = ts / 1000.0 if ts > 1e11 else ts
+        return datetime.fromtimestamp(seconds, tz=UTC).isoformat()
+    except ValueError:
+        pass
+    normalized = raw.replace("Z", "+00:00")
+    if " " in normalized and "T" not in normalized:
+        normalized = normalized.replace(" ", "T")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        dt = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).isoformat()
+    except ValueError:
+        return raw
+
+
 def _as_bool(value: Any, default: bool) -> bool:
     if value in (None, ""):
         return default
@@ -2384,13 +2411,16 @@ def _adopt_csa_live_fill(
     if raw_price in (None, ""):
         raw_price = order_status.get("average-price")
     filled_price = abs(float(raw_price)) if raw_price not in (None, "") else abs(float(strategy_ticket.limit_price))
-    observed_at = str(
-        order_status.get("updatedAt")
-        or order_status.get("updated-at")
-        or order_status.get("filledAt")
+    raw_observed = (
+        order_status.get("filledAt")
         or order_status.get("filled-at")
+        or order_status.get("terminalAt")
+        or order_status.get("terminal-at")
+        or order_status.get("updatedAt")
+        or order_status.get("updated-at")
         or _now_utc()
     )
+    observed_at = _normalize_fill_timestamp(raw_observed)
     fill = ShadowFill(
         fill_id=stable_csa_id("live-fill", [strategy_ticket.ticket_id, ticket.get("order_id"), filled_price]),
         ticket_id=strategy_ticket.ticket_id,

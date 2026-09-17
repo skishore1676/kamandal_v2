@@ -994,8 +994,20 @@ def _with_position_projection(ticket: Any, lifecycle: LifecycleState) -> Any:
     )
 
 
-def _parse_timestamp(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+def _parse_timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    cleaned = str(value).strip()
+    try:
+        ts = float(cleaned)
+        seconds = ts / 1000.0 if ts > 1e11 else ts
+        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+    except ValueError:
+        pass
+    normalized = cleaned.replace("Z", "+00:00")
+    if " " in normalized and "T" not in normalized:
+        normalized = normalized.replace(" ", "T")
+    parsed = datetime.fromisoformat(normalized)
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 

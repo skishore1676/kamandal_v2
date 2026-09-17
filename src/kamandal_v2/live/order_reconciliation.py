@@ -277,8 +277,17 @@ def _ticket_age_minutes(ticket: dict[str, Any], *, now: datetime) -> float | Non
     return max(0.0, (now - parsed).total_seconds() / 60.0)
 
 
-def _parse_timestamp(value: str) -> datetime:
-    normalized = value.strip().replace("Z", "+00:00")
+def _parse_timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    raw = str(value).strip()
+    try:
+        ts = float(raw)
+        seconds = ts / 1000.0 if ts > 1e11 else ts
+        return datetime.fromtimestamp(seconds, tz=UTC)
+    except ValueError:
+        pass
+    normalized = raw.replace("Z", "+00:00")
     if " " in normalized and "T" not in normalized:
         normalized = normalized.replace(" ", "T")
     parsed = datetime.fromisoformat(normalized)
