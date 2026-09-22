@@ -51,12 +51,12 @@ run_x_bookmark_extraction() {
   fi
   if ! find "$source_doc_dir" -type f \( -name '*.txt' -o -name '*.md' \) -print -quit | grep -q .; then
     log "No X source docs produced in $source_doc_dir; skipping extraction."
-    exit 0
+    return 0
   fi
 
   if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" == "1" ]]; then
     log "Import-only smoke mode complete; source docs produced in $source_doc_dir."
-    exit 0
+    return 0
   fi
 
   find "$ideas_dir" -maxdepth 1 -type f -name 'x_bookmarks_imported_*.yaml' ! -name "x_bookmarks_imported_$today.yaml" -delete
@@ -72,3 +72,9 @@ run_x_bookmark_extraction() {
 }
 
 with_lock x_bookmark_extraction run_x_bookmark_extraction
+
+# Isolated comparison after the production run completes. Failures never change
+# the production result. No additional acquisition, Astra, Sheet or broker calls.
+if [[ "${TYPE_SAFE_SHADOW_ENABLED:-0}" == "1" && "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then
+  "$KAMANDAL_PYTHON" "$SCRIPT_DIR/run_typesafe_shadow.py" || log "TypeSafe shadow failed; production result unaffected."
+fi
