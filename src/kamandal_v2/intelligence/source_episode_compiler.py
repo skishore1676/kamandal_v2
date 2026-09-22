@@ -7,6 +7,7 @@ call a broker.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -18,6 +19,10 @@ from typing import Any, Iterable, Mapping
 from pydantic import TypeAdapter
 
 from kamandal_v2.intelligence.llm_client import JsonLlmClient
+
+from kamandal_v2.intelligence.exact_entry_review import possible_edit_duplicates
+
+INTERPRETATION_RULES_VERSION = "source-evidence-v2"
 
 EPISODE_COMPILATION_SCHEMA = "kamandal.source_episode_compilation.v1"
 EPISODE_SCHEMA = "kamandal.source_episode.v1"
@@ -102,6 +107,7 @@ def compile_source_episode_packet(
         if isinstance(item, Mapping)
         and item.get("schema") == EPISODE_SCHEMA
         and str(item.get("profile_version") or "") == profile_version
+        and item.get("interpretation_rules_version") == INTERPRETATION_RULES_VERSION
     }
     reused: dict[str, dict[str, Any]] = {}
     model_records: list[Mapping[str, Any]] = []
@@ -167,12 +173,13 @@ def compile_source_episode_packet(
             str(item.get("signal_id") or ""),
         ),
     )
+    duplicate_peers = possible_edit_duplicates(records)
     active = _active_history(history_context)
     episodes: list[dict[str, Any]] = []
     for record in ordered_records:
         signal_id = str(record["signal_id"])
         if signal_id in reused:
-            episodes.append(reused[signal_id])
+            episodes.append(_hold_possible_edits(reused[signal_id], duplicate_peers.get(signal_id, [])))
             continue
         normalized = by_signal.get(signal_id)
         if normalized is None:
@@ -187,7 +194,7 @@ def compile_source_episode_packet(
             image_numbers=image_map.get(signal_id, []),
             profile=profile,
         )
-        episodes.append(episode)
+        episodes.append(_hold_possible_edits(episode, duplicate_peers.get(signal_id, [])))
 
     return SourceEpisodeCompilation(
         profile_id=profile_id,
@@ -215,6 +222,20 @@ def load_episode_history(root: str | Path, profile_id: str, *, limit: int = 40) 
         if len(episodes) >= limit:
             break
     return tuple(episodes)
+
+
+def _hold_possible_edits(episode: dict[str, Any], peers: list[str]) -> dict[str, Any]:
+    if not peers:
+        return episode
+    episode = copy.deepcopy(episode)
+    episode["possible_edit_duplicates"] = peers
+    for event in episode["events"]:
+        event["planner_new_entry"] = False
+        event["blockers"] = list(dict.fromkeys([*event["blockers"], "possible_edit_duplicate_requires_resolution"]))
+        for disposition in event["projection_dispositions"]:
+            if disposition["projection"] in {"idea", "exact_package"}:
+                disposition.update(disposition="parked", reason="possible_edit_duplicate_requires_resolution")
+    return episode
 
 
 def write_episode_compilation(compilation: SourceEpisodeCompilation, root: str | Path) -> Path:
@@ -599,6 +620,7 @@ def _finalize_episode(
         "published_at": str(source.get("published_at") or ""),
         "profile_version": profile_version,
         "source_record_sha256": _sha256(_stable_json(record)),
+        "interpretation_rules_version": INTERPRETATION_RULES_VERSION,
         "events": events,
         "effects": _effects(),
     }
@@ -687,6 +709,8 @@ def _canonicalize_event(
     config = profile.get("episode_interpreter") or {}
     text = str((record.get("literal") or {}).get("text") or "")
     for rule in config.get("action_overrides") or []:
+        if rule.get("action") in _ENTRY_ACTIONS and not result.get("symbol"):
+            continue
         if re.search(str(rule["regex"]), text, flags=re.IGNORECASE):
             result["action"] = str(rule["action"])
             break
@@ -900,7 +924,7 @@ def _record_symbols(record: Mapping[str, Any], profile: Mapping[str, Any]) -> li
 def _obvious_noise(text: str, *, classification: str) -> bool:
     lowered = text.strip().lower()
     trade_language = re.compile(
-        r"\b(?:bought|sold|opened|closed|rolled|added|calendar|diagonal|spread|strangle|butterfly|fly)\b"
+        r"\b(?:bought|sold|opened|closed|rolled|added|calendar|diagonal|spread|strangle|butterfly|fly|hedge|hedging)\b"
     )
     if classification == "irrelevant" and not trade_language.search(lowered):
         return True

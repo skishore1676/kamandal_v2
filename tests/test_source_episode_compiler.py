@@ -779,3 +779,30 @@ def test_exact_revision_ignores_batch_prompt_but_tracks_trade_terms(tmp_path):
     changed['exact_packages'][0]['legs'][0]['strike'] = '155'
     assert project(changed, 'batch-2').package_signature != first.package_signature
     assert project(changed, 'batch-2').opportunity_group_id == first.opportunity_group_id
+
+
+def test_hedge_smarttag_is_not_discarded_and_old_empty_cache_is_invalidated():
+    record = _record('hedge-smarttag', 'Downside hedge in ethereum:0x123', [], classification='irrelevant')
+    response = {'schema': PROMPT_SCHEMA, 'episodes': [{'signal_id':record['signal_id'], 'events':[
+        _event(action='open',symbol='SPX',direction='bearish',structure_hint='butterfly',thesis='Hedge needs source image',projections=['residual'])]}]}
+    client=FakeClient(response)
+    first=compile_source_episode_packet(_packet([record]),_profile('mike_butler'),client)
+    assert len(client.calls)==1
+    assert first.episodes[0]['events'][0]['symbol']=='SPX'
+    old=dict(first.episodes[0]);old.pop('interpretation_rules_version');old['events']=[]
+    repair=FakeClient(response)
+    fixed=compile_source_episode_packet(_packet([record]),_profile('mike_butler'),repair,history=[old])
+    assert len(repair.calls)==1
+    # Current-rule receipts reuse without paying again or changing event identity.
+    reused=compile_source_episode_packet(_packet([record]),_profile('mike_butler'),FakeClient(),history=fixed.episodes)
+    assert reused.episodes==fixed.episodes
+    assert first.episodes[0]['events'][0]['event_id']==fixed.episodes[0]['events'][0]['event_id']
+
+
+def test_performance_added_does_not_create_scale_in():
+    record=_record('performance', 'Portfolio added 1.255% on the week using 70% of capital', [])
+    response={'schema':PROMPT_SCHEMA,'episodes':[{'signal_id':record['signal_id'],'events':[
+        _event(action='commentary',symbol=None,direction='unknown',structure_hint=None,thesis='Portfolio performance report',projections=['residual'])]}]}
+    result=compile_source_episode_packet(_packet([record]),_profile('greg_harmon'),FakeClient(response))
+    assert result.episodes[0]['events'][0]['action']=='commentary'
+    assert result.episodes[0]['events'][0]['planner_new_entry'] is False

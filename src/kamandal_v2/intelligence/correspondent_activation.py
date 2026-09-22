@@ -206,6 +206,11 @@ def activate_correspondent_sources(
                     history=load_episode_history(episode_root, profile["profile_id"], limit=500),
                 )
                 compilation_path = write_episode_compilation(compilation, episode_root)
+                from kamandal_v2.intelligence.exact_entry_review import build_review
+                _atomic_write(
+                    output_root / "exact_entry_review" / profile["profile_id"] / f"{compilation_path.stem}.json",
+                    json.dumps(build_review(packet, compilation), indent=2, sort_keys=True) + "\n",
+                )
                 projected = project_source_episode_compilation(
                     compilation,
                     packet,
