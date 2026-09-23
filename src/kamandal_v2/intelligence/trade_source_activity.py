@@ -211,6 +211,7 @@ def project_trade_source_activity(
             for row in source_rows if row.get("source_id") and row.get("output_kind")
         },
         sleeve_policy=sleeves,
+        max_positions=int((config.get("portfolio") or {}).get("max_positions") or 0) or None,
         policy_errors=source_compilation.errors,
         limit=limit,
     )
@@ -222,6 +223,7 @@ def chief_of_staff_rows(
     *,
     source_modes: dict[tuple[str, str], str],
     sleeve_policy: Any,
+    max_positions: int | None = None,
     policy_errors: tuple[str, ...] = (),
     limit: int = 500,
     now: datetime | None = None,
@@ -232,6 +234,20 @@ def chief_of_staff_rows(
     records = [dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, row)) for row in activity_rows(store, limit=max(limit, 500))]
     groups = [*store.open_live_position_groups(), *store.closed_live_position_groups(limit=1000)]
     intents = store.live_order_intents_by_type("open")
+    policy_blocks: dict[str, dict[str, Any]] = {}
+    for event in store.recent_events(("live_entry_sheet_policy_blocked",), limit=1000):
+        ticket_hash = str(event.get("ticket_hash") or "")
+        if ticket_hash:
+            policy_blocks[ticket_hash] = event
+    failed_hashes = {
+        str(ticket.get("ticket_hash") or "") for ticket in intents
+        if str(ticket.get("_ledger_status") or "") in {"blocked_preflight_failed", "blocked_preflight_stale"}
+    }
+    failed_preflights: dict[str, str] = {}
+    for attempt in store.live_order_attempts_for_ticket_hashes(failed_hashes) if failed_hashes else []:
+        if str(attempt.get("action") or "") == "preflight_open":
+            failure = str((attempt.get("response_payload") or {}).get("message") or "")
+            failed_preflights.setdefault(str(attempt.get("ticket_hash") or ""), failure)
     decisions: list[list[Any]] = []
     confirmed = templates = complete_packages = entered = held = 0
     issues: Counter[str] = Counter()
@@ -271,6 +287,10 @@ def chief_of_staff_rows(
             if opportunity and str(ticket.get("source_opportunity_id") or ticket.get("idea_id") or "") == opportunity
             and (not ticket.get("source_id") or ticket.get("source_id") == source_id)
         ]
+        matched_intents.sort(key=lambda ticket: _timestamp(str(ticket.get("_ledger_updated_at") or "")), reverse=True)
+        latest_intent = matched_intents[0] if matched_intents else None
+        blocked_intent = latest_intent if latest_intent and str(latest_intent.get("_ledger_status") or "").startswith("blocked_") else None
+        policy_block = policy_blocks.get(str(latest_intent.get("ticket_hash") or "")) if latest_intent else None
         has_complete_package = any(
             (evidence.get("legs") and evidence.get("complete") is True and not evidence.get("blocker"))
             or any(package.get("legs") and package.get("complete") is True and not package.get("blocker")
@@ -291,6 +311,12 @@ def chief_of_staff_rows(
         elif any(str(ticket.get("_ledger_status") or "") in {"submitted", "partially_filled", "submit_uncertain"} for ticket in matched_intents):
             decision = "Submitted; awaiting fill"
             reason = "Broker status pending"
+        elif policy_block:
+            decision = "Blocked by policy"
+            reason = str(policy_block.get("reason") or "Sheet or source policy blocked this entry")
+        elif blocked_intent:
+            decision = "Blocked by preflight" if "preflight" in str(blocked_intent.get("_ledger_status") or "") else "Blocked"
+            reason = failed_preflights.get(str(blocked_intent.get("ticket_hash") or "")) or str(blocked_intent.get("_ledger_status") or "")
         elif any(str(ticket.get("_ledger_status") or "") in {"pending_approval", "stage_approved_pending_submit", "waiting_entry_window"} for ticket in matched_intents):
             decision = "Queued"
             reason = "Entry has not been submitted"
@@ -314,7 +340,7 @@ def chief_of_staff_rows(
             decision = "Selected"
         else:
             decision = "Held"
-        if decision in {"Unsupported", "Needs evidence", "Stale", "Held", "Blocked by risk", "Blocked by quote", "Duplicate"}:
+        if decision in {"Unsupported", "Needs evidence", "Stale", "Held", "Blocked by risk", "Blocked by quote", "Blocked by policy", "Blocked by preflight", "Blocked", "Duplicate"}:
             held += 1
             if decision != "Stale":
                 issues[_issue_label(reason or str(item.get("evidence_status") or "unresolved"))] += 1
@@ -360,9 +386,13 @@ def chief_of_staff_rows(
             total_room = max(sleeve_policy.portfolio_total_pct - usage.portfolio_total_bpr / usage.account_size * 100, 0.0)
             capacity = "; ".join(
                 f"{label} {usage.used(lane) / usage.account_size * 100:.1f}/{sleeve_policy.limit(lane):.1f}%"
-                f" ({min(max(sleeve_policy.limit(lane) - usage.used(lane) / usage.account_size * 100, 0.0), total_room):.1f}% room)"
+                f" ({min(max(sleeve_policy.limit(lane) - usage.used(lane) / usage.account_size * 100, 0.0), total_room):.1f}% BPR room)"
                 for label, lane in (("Current", "current_idea"), ("Guru", "guru_exact"), ("Total", "portfolio_total"))
             )
+            if max_positions:
+                position_count = max(account.positions_count, len(store.open_live_position_groups()))
+                slots = max(max_positions - position_count, 0)
+                capacity += f"; Positions {position_count}/{max_positions} ({slots} new slot{'s' if slots != 1 else ''} available)"
             if usage.unmatched_bpr / usage.account_size >= 0.01:
                 capacity += f"; Broker residual {usage.unmatched_bpr / usage.account_size * 100:.1f}% charged to Current"
             elif (usage.ledger_open_bpr - usage.broker_bpr) / usage.account_size >= 0.01:
@@ -421,6 +451,12 @@ def _plain_reason(value: str) -> str:
         return "Structure lacks a live path; add broker and exit proof"
     if "bpr cap" in lower or "bpr_cap" in value:
         return "BPR ceiling blocks entry; wait for capacity or change the Sheet limit"
+    if "entry source route not live" in lower or "entry source route missing" in lower or "blocked source route" in lower:
+        return "Source route is Off or Shadow; no new entry"
+    if "entry sheet policy unavailable" in lower or "entry source route unavailable" in lower:
+        return "Operator Sheet unavailable; new entry paused"
+    if "blocked preflight" in lower or "fresh preflight" in lower:
+        return "Fresh broker preflight blocked entry; inspect order receipt"
     if "health gate" in lower:
         return "Live health gate blocks entry; review health receipt"
     aliases = {
@@ -448,6 +484,10 @@ def _issue_label(reason: str) -> str:
         return "Edited-post or duplicate review"
     if "bpr" in lower or "risk" in lower:
         return "Risk or BPR gate"
+    if "source route" in lower or "sheet policy" in lower:
+        return "Sheet source/policy block"
+    if "preflight" in lower:
+        return "Broker preflight block"
     return "Other held opening"
 
 
