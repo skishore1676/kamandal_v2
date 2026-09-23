@@ -311,12 +311,15 @@ def chief_of_staff_rows(
         elif any(str(ticket.get("_ledger_status") or "") in {"submitted", "partially_filled", "submit_uncertain"} for ticket in matched_intents):
             decision = "Submitted; awaiting fill"
             reason = "Broker status pending"
+        elif blocked_intent and "preflight" in str(blocked_intent.get("_ledger_status") or ""):
+            decision = "Blocked by preflight"
+            reason = failed_preflights.get(str(blocked_intent.get("ticket_hash") or "")) or str(blocked_intent.get("_ledger_status") or "")
         elif policy_block:
             decision = "Blocked by policy"
             reason = str(policy_block.get("reason") or "Sheet or source policy blocked this entry")
         elif blocked_intent:
-            decision = "Blocked by preflight" if "preflight" in str(blocked_intent.get("_ledger_status") or "") else "Blocked"
-            reason = failed_preflights.get(str(blocked_intent.get("ticket_hash") or "")) or str(blocked_intent.get("_ledger_status") or "")
+            decision = "Blocked"
+            reason = str(blocked_intent.get("_ledger_status") or "")
         elif any(str(ticket.get("_ledger_status") or "") in {"pending_approval", "stage_approved_pending_submit", "waiting_entry_window"} for ticket in matched_intents):
             decision = "Queued"
             reason = "Entry has not been submitted"

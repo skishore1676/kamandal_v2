@@ -433,3 +433,11 @@ def test_brief_shows_actual_sheet_block_and_separate_position_slot(tmp_path):
     assert details[0][3] == 'Blocked by policy'
     assert details[0][4] == 'Source route is Off or Shadow; no new entry'
     assert 'Positions 14/15 (1 new slot available)' in summary[2][1]
+
+    # A later terminal broker check wins over the prior mutable Sheet block.
+    store.update_live_order_intent_status('blocked-ticket', 'blocked_preflight_failed')
+    _summary, later_details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'exact_package'): 'off'},
+        sleeve_policy=policy, max_positions=15,
+    )
+    assert later_details[0][3] == 'Blocked by preflight'
