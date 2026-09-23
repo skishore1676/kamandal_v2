@@ -5,8 +5,9 @@ runtime:
   market_timezone: America/Chicago
 
 portfolio:
-  target_max_bpr_utilization_pct: 55
-  hard_max_bpr_utilization_pct: 55
+  sleeves_source: sheet
+  target_max_bpr_utilization_pct:
+  hard_max_bpr_utilization_pct:
   max_bpr_per_underlying_pct: 55
   max_positions: 15
   delta_bias: slightly_negative
@@ -289,6 +290,7 @@ google_sheets:
     my_ideas: my_ideas
     trade_sources: trade_sources
     trade_source_activity: trade_source_activity
+    portfolio_sleeves: portfolio_sleeves
 
 broker:
   active: public

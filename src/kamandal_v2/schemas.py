@@ -116,6 +116,11 @@ TRADE_SOURCE_REVIEW_HEADER = [
     "Missing or uncertain", "Your correction",
 ]
 
+TRADE_SOURCE_BRIEF_HEADER = [
+    "Guru", "Source post", "Opening", "Decision", "Why / next", "Decision mode",
+    "Your correction", "Key",
+]
+
 # Internal audit serialization; the operator Sheet uses the review header above.
 TRADE_SOURCE_ACTIVITY_HEADER = [
     "observed_at",

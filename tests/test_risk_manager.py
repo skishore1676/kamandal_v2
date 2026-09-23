@@ -322,8 +322,9 @@ def test_env_overrides_wire_risk_manager(tmp_path: Path, monkeypatch) -> None:
 def test_control_defaults_keep_global_bpr_and_define_entry_concentration_caps() -> None:
     config = load_control()
 
-    assert config["portfolio"]["target_max_bpr_utilization_pct"] == 55
-    assert config["portfolio"]["hard_max_bpr_utilization_pct"] == 55
+    assert config["portfolio"]["sleeves_source"] == "sheet"
+    assert config["portfolio"]["target_max_bpr_utilization_pct"] is None
+    assert config["portfolio"]["hard_max_bpr_utilization_pct"] is None
     assert config["risk_manager"]["max_positions_per_underlying"] == 3
     assert config["risk_manager"]["max_positions_by_cluster"] == {
         "megacap_tech": 5,

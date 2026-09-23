@@ -57,6 +57,7 @@ def test_one_earnings_playbook_selects_call_or_put_shape_from_direction() -> Non
 
 def _shadow_control() -> dict:
     control = load_control()
+    control["portfolio"]["hard_max_bpr_utilization_pct"] = 55
     control.setdefault("runtime", {})["mode"] = "shadow"
     control.setdefault("execution", {})["approval_mode"] = "shadow_auto_top_plan"
     return control
@@ -203,6 +204,8 @@ def test_live_plan_context_includes_open_live_groups(tmp_path) -> None:
     store.save_live_position(group["group_id"], group["group_id"], group, status="open")
     control = load_control()
     control.setdefault("runtime", {})["mode"] = "live"
+    control["portfolio"]["sleeves_source"] = ""
+    control["portfolio"]["hard_max_bpr_utilization_pct"] = 55
     control["portfolio"]["max_positions"] = 15
     control["live"]["candidate_filter_mode"] = "warn"
     # This test exercises live-position accounting, not the separately tested

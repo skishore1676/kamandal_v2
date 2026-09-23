@@ -7,6 +7,8 @@ import hashlib
 import json
 import re
 
+from kamandal_v2.intelligence.trade_sources import LIVE_EXACT_STRUCTURES
+
 REVIEW_VERSION = 'exact-entry-review-v1'
 LEG_COUNTS = {
     'long_call': 1, 'short_put': 1, 'covered_call': 1,
@@ -87,7 +89,7 @@ def build_review(packet, compilation):
                         except ValueError:
                             blockers.append('expiration_date_unresolved')
             # Execution capability is separate from transcription completeness.
-            capability = 'supported_structure_requires_live_gates' if event.get('structure_hint') == 'short_strangle' else 'unsupported_live_exact_structure'
+            capability = 'supported_structure_requires_live_gates' if event.get('structure_hint') in LIVE_EXACT_STRUCTURES else 'unsupported_live_exact_structure'
             rows.append({'post_ref':episode['post_ref'], 'source_url':record['source'].get('source_url'),
                          'event_id':event['event_id'], 'symbol':event.get('symbol'),
                          'action':event['action'], 'structure':event.get('structure_hint'),

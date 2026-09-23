@@ -86,6 +86,8 @@ def test_manual_sheet_row_reaches_selected_typed_ticket_with_reserved_cap(tmp_pa
     from tests.test_exact_strangle_routing import Market
 
     control = load_control()
+    control["portfolio"]["sleeves_source"] = ""
+    control["portfolio"]["hard_max_bpr_utilization_pct"] = 55
     control["runtime"]["manual_strangle_symbol"] = "MS"
     control["risk_manager"]["enabled"] = False
     row = _strangle_row(mode="live", csa_stage="pilot_live", accepted_inputs="market_scan,operator_idea",

@@ -142,6 +142,21 @@ class GoogleSheetClient:
             rows.append({header[index]: str(padded[index]).strip() for index in range(len(header)) if header[index]})
         return rows
 
+    def read_existing_tab(self, title: str) -> list[dict[str, str]]:
+        """Read a policy tab without creating it when missing."""
+        worksheet = self._retry(lambda: self._spreadsheet.worksheet(title), operation=f"find worksheet {title!r}")
+        values = self._retry(worksheet.get_all_values, operation=f"read worksheet {title!r}") or []
+        if not values:
+            return []
+        header = [str(cell).strip() for cell in values[0]]
+        rows: list[dict[str, str]] = []
+        for raw in values[1:]:
+            if not any(str(cell).strip() for cell in raw):
+                continue
+            padded = list(raw) + [""] * (len(header) - len(raw))
+            rows.append({header[index]: str(padded[index]).strip() for index in range(len(header)) if header[index]})
+        return rows
+
     def read_tab_values(self, title: str) -> list[list[str]]:
         """Read the exact populated value matrix without changing the tab."""
         worksheet = self._worksheet(title, rows=100, cols=26)
@@ -322,6 +337,18 @@ def pull_sheet_tables(config: dict[str, Any]) -> dict[str, list[dict[str, str]]]
     }
 
 
+def pull_portfolio_sleeves(config: dict[str, Any]) -> list[dict[str, str]]:
+    client = GoogleSheetClient.from_config(config)
+    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    return client.read_existing_tab(str(tab_names.get("portfolio_sleeves") or "portfolio_sleeves"))
+
+
+def pull_trade_sources(config: dict[str, Any]) -> list[dict[str, str]]:
+    client = GoogleSheetClient.from_config(config)
+    tab_names = ((config.get("google_sheets") or {}).get("tabs") or {})
+    return client.read_existing_tab(str(tab_names.get("trade_sources") or "trade_sources"))
+
+
 def write_trade_source_activity(
     config: dict[str, Any],
     rows: list[list[Any]],
@@ -392,6 +419,82 @@ def write_translation_review(config: dict[str, Any], rows: list[list[Any]]) -> i
         client._retry(lambda: worksheet.update(range_name=f"A1:F{len(values)}", values=values,
                      value_input_option="RAW"), operation="refresh translation review")
         return sum(bool(row[1]) for row in merged)
+
+
+def write_trade_source_brief(
+    config: dict[str, Any],
+    summary: list[list[Any]],
+    decisions: list[list[Any]],
+) -> int:
+    """Publish a compact brief, carrying every operator correction by identity."""
+    from kamandal_v2.schemas import TRADE_SOURCE_BRIEF_HEADER, TRADE_SOURCE_REVIEW_HEADER
+
+    lock_path = Path("data/runlocks/translation_review_publish.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        client = GoogleSheetClient.from_config(config)
+        title = str((((config.get("google_sheets") or {}).get("tabs") or {}).get("trade_source_activity")) or "trade_source_activity")
+        worksheet = client._worksheet(title, rows=max(len(decisions) + 15, 100), cols=8)
+        previous = client._retry(worksheet.get_all_values, operation="read source brief") or []
+        old_review = bool(previous and list(previous[0]) == TRADE_SOURCE_REVIEW_HEADER)
+        old_brief = bool(len(previous) >= 7 and list(previous[6])[:8] == TRADE_SOURCE_BRIEF_HEADER)
+        if previous and not (old_review or old_brief):
+            raise ValueError("trade_source_activity header is unrecognized; refusing to overwrite operator content")
+
+        corrections_by_key: dict[str, str] = {}
+        corrections_by_post: dict[str, str] = {}
+        old_rows = previous[1:] if old_review else previous[7:] if old_brief else []
+        for row in old_rows:
+            correction = str(row[6] if len(row) > 6 else "").strip()
+            if not correction:
+                continue
+            post = str(row[1] if len(row) > 1 else "")
+            key = str(row[7] if old_brief and len(row) > 7 else "")
+            if key:
+                corrections_by_key[key] = correction
+            elif post:
+                corrections_by_post[post] = correction
+        merged: list[list[Any]] = []
+        used_keys: set[str] = set()
+        used_posts: set[str] = set()
+        for raw in decisions:
+            row = (list(raw) + [""] * 8)[:8]
+            post, key = str(row[1]), str(row[7])
+            if key in corrections_by_key:
+                row[6] = corrections_by_key[key]
+                used_keys.add(key)
+            elif post in corrections_by_post:
+                row[6] = corrections_by_post[post]
+                used_posts.add(post)
+            merged.append(row)
+        # A correction never disappears because its source aged out of the
+        # bounded brief; keep only those older rows with human content.
+        for old in old_rows:
+            correction = str(old[6] if len(old) > 6 else "").strip()
+            if not correction:
+                continue
+            post = str(old[1] if len(old) > 1 else "")
+            key = str(old[7] if old_brief and len(old) > 7 else "")
+            if key in used_keys or post in used_posts:
+                continue
+            guru = str(old[0] if old else "")
+            opening = str(old[2] if len(old) > 2 else "")
+            merged.append([guru, post, opening, "Correction retained", "Review the source correction", "", correction, key or f"post:{post}"])
+
+        summary_rows = [(list(row) + [""] * 8)[:8] for row in summary[:5]]
+        summary_rows.extend([[""] * 8] * (5 - len(summary_rows)))
+        values = [*summary_rows, [""] * 8, TRADE_SOURCE_BRIEF_HEADER, *merged]
+        if len(values) > worksheet.row_count:
+            client._retry(lambda: worksheet.resize(rows=len(values) + 10), operation="extend source brief")
+        if worksheet.col_count < 8:
+            client._retry(lambda: worksheet.resize(cols=8), operation="extend source brief columns")
+        values.extend([[""] * 8 for _ in range(max(len(previous) - len(values), 0))])
+        client._retry(
+            lambda: worksheet.update(range_name=f"A1:H{len(values)}", values=values, value_input_option="RAW"),
+            operation="publish source brief",
+        )
+        return len(merged)
 
 
 @contextmanager

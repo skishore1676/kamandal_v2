@@ -89,6 +89,25 @@ def test_sheet_policy_gate_accepts_one_snapshot_across_all_compilers() -> None:
     assert result.to_dict()["source"] == "google_sheet"
 
 
+def test_deployment_gate_requires_sheet_sleeves_and_reports_compiled_limits() -> None:
+    control = {"portfolio": {"sleeves_source": "sheet"}}
+    missing = validate_sheet_policy(control, tables=_tables(), read_at="2026-08-24T15:00:00Z")
+    assert not missing.ok
+    assert missing.sleeve_errors
+
+    tables = _tables()
+    tables["portfolio_sleeves"] = [
+        {"lane": "current_idea", "max_bpr_pct": "40"},
+        {"lane": "guru_exact", "max_bpr_pct": "40"},
+        {"lane": "portfolio_total", "max_bpr_pct": "80"},
+    ]
+    compiled = validate_sheet_policy(control, tables=tables, read_at="2026-08-24T15:00:00Z")
+    assert compiled.ok
+    assert compiled.to_dict()["portfolio_sleeves"]["limits"] == {
+        "current_idea": 40, "guru_exact": 40, "portfolio_total": 80,
+    }
+
+
 def test_sheet_policy_gate_catches_missing_watch_multiple_before_deploy() -> None:
     result = validate_sheet_policy({}, tables=_tables(watch_multiple=None), read_at="2026-08-24T15:00:00Z")
 

@@ -787,6 +787,10 @@ def _bind_selected_live_lifecycle(
                     "unified_plan_id": selected_plan.plan_id,
                     "execution_mode": "live",
                     "execution_venue": candidate.execution_venue,
+                    "sleeve_id": "guru_exact" if candidate.metadata.get("input_kind") == "exact_package" else "current_idea",
+                    "source_id": str(candidate.metadata.get("source_profile") or ""),
+                    "source_output_kind": "exact_package" if candidate.metadata.get("input_kind") == "exact_package" else "idea",
+                    "source_opportunity_id": str(candidate.metadata.get("source_opportunity_id") or ""),
                     # This is the daily Sheet snapshot identity, not the
                     # per-playbook compiled-policy identity below.
                     "policy_snapshot_hash": daily_policy_snapshot.snapshot_hash,
@@ -796,6 +800,7 @@ def _bind_selected_live_lifecycle(
                     "pilot_policy_hash": policy.policy_hash if pilot_live else None,
                     "source_identity": {
                         "idea_id": candidate.idea_id, "plan_run_id": result.plan_run_id,
+                        "source_opportunity_id": str(candidate.metadata.get("source_opportunity_id") or ""),
                         **{key: candidate.metadata[key] for key in (
                             "source_profile", "source_event_id", "canonical_post_id", "package_signature", "evidence_revision_id",
                         ) if key in candidate.metadata},

@@ -23,6 +23,12 @@ from kamandal_v2.live.entry_hygiene import (
 from kamandal_v2.live.lineage import EntryLineage, resolve_entry_lineage
 from kamandal_v2.live.orders import APPROVE_LIVE, APPROVE_LIVE_CLOSE, LIVE_SUBMIT_CONFIRM
 from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
+from kamandal_v2.intelligence.trade_sources import (
+    TradeSourceMode, TradeSourceOutputKind, compile_trade_source_policies,
+)
+from kamandal_v2.portfolio_sleeves import (
+    compile_sleeve_policy, live_sleeve_usage, occupied_source_opportunities, sleeve_entry_blocker, ticket_lane,
+)
 from kamandal_v2.live.option_sessions import submission_window
 from kamandal_v2.live.order_identity import broker_order_id, client_order_id, persist_broker_identity
 from kamandal_v2.live.risk_manager import (
@@ -35,7 +41,7 @@ from kamandal_v2.market.broker import broker_adapter, default_execution_venue, t
 from kamandal_v2.ops.alerts import default_lathi_bus_profile, send_lathi_alert
 from kamandal_v2.ops.stage_receipt import reconciliation_stage
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
-from kamandal_v2.sheets import daily_plan_publication, GoogleSheetClient, pull_sheet_tables, write_daily_plan
+from kamandal_v2.sheets import daily_plan_publication, GoogleSheetClient, pull_portfolio_sleeves, pull_trade_sources, pull_sheet_tables, write_daily_plan
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.models import CsaStage
 from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, load_daily_policy_snapshot
@@ -465,6 +471,18 @@ def _execute_ticket(
                 fresh_preflight.message or "fresh_preflight_failed",
                 failure_code="fresh_preflight_failed",
             )
+        if not close and str((config.get("portfolio") or {}).get("sleeves_source") or "") == "sheet":
+            blocker = _fresh_sheet_entry_blocker(
+                config, adapter, store, ticket, preflight_bpr=float(fresh_preflight.bpr or 0),
+            )
+            if blocker:
+                store.event("live_entry_sheet_policy_blocked", {
+                    "ticket_hash": ticket.get("ticket_hash"), "reason": blocker,
+                    "sleeve_id": ticket.get("sleeve_id"), "source_id": ticket.get("source_id"),
+                })
+                if blocker in {"entry_source_route_not_live", "entry_source_route_missing", "trade_sources_policy_invalid"}:
+                    store.update_live_order_intent_status(str(ticket["ticket_hash"]), "blocked_source_route")
+                return _failure(ticket, blocker, failure_code=blocker)
         window = submission_window(config, ticket, close=close)
         if not window["allowed"]:
             return _defer_ticket_for_window(store, ticket, window)
@@ -526,6 +544,80 @@ def _execute_ticket(
     return result
 
 
+def _fresh_sheet_entry_blocker(
+    config: dict[str, Any],
+    adapter: Any,
+    store: LocalStore,
+    ticket: dict[str, Any],
+    *,
+    preflight_bpr: float,
+) -> str:
+    """Recheck mutable operator controls immediately before an opening POST."""
+    if "sleeve_id" not in ticket or "source_id" not in ticket:
+        return "entry_source_identity_missing"
+    if str(ticket.get("sleeve_id") or "") not in {"current_idea", "guru_exact"}:
+        return "entry_sleeve_identity_invalid"
+    if ticket_lane(ticket) == "guru_exact" and not all(
+        str(ticket.get(key) or "") for key in ("source_id", "source_opportunity_id", "source_package_signature")
+    ):
+        return "entry_source_identity_missing"
+    try:
+        budget = float(ticket.get("entry_risk_budget") or 0)
+    except (TypeError, ValueError):
+        return "fresh_preflight_exceeds_approved_risk_budget"
+    if preflight_bpr <= 0 or budget <= 0 or preflight_bpr > budget + 0.01:
+        return "fresh_preflight_exceeds_approved_risk_budget"
+    try:
+        source = str(ticket.get("source_id") or "").lower()
+        opportunity = str(ticket.get("source_opportunity_id") or "")
+        if source and opportunity and (source, opportunity) in occupied_source_opportunities(
+            store, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""),
+        ):
+            return "source_opportunity_already_open_or_pending"
+        sleeve_policy = compile_sleeve_policy(pull_portfolio_sleeves(config))
+        if str(ticket.get("source_id") or ""):
+            if blocker := _source_route_blocker(ticket, pull_trade_sources(config)):
+                return blocker
+        account = adapter.account_state()
+        usage = live_sleeve_usage(
+            store, account, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""),
+        )
+        return sleeve_entry_blocker(sleeve_policy, usage, [(ticket_lane(ticket), preflight_bpr)])
+    except Exception as exc:  # noqa: BLE001 - unavailable Sheet or broker account fails closed.
+        return f"entry_sheet_policy_unavailable:{type(exc).__name__}"
+
+
+def _source_route_blocker(ticket: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+    source_id = str(ticket.get("source_id") or "").lower()
+    if not source_id:
+        return ""
+    source_compilation = compile_trade_source_policies(rows)
+    if not source_compilation.ok:
+        return "trade_sources_policy_invalid"
+    try:
+        kind = TradeSourceOutputKind(str(ticket.get("source_output_kind") or ""))
+    except ValueError:
+        return "entry_source_route_missing"
+    policy = source_compilation.by_key().get((source_id, kind))
+    if policy is None:
+        return "entry_source_route_missing"
+    return "" if policy.mode_for_structure(str(ticket.get("structure") or "")) is TradeSourceMode.LIVE else "entry_source_route_not_live"
+
+
+def _fresh_source_route_blocker(config: dict[str, Any], ticket: dict[str, Any]) -> str:
+    if str((config.get("portfolio") or {}).get("sleeves_source") or "") != "sheet":
+        return ""
+    # The source switch applies only to source-routed openings. A legacy or
+    # ordinary planner order already working at the broker has no such route;
+    # do not cancel it merely because it predates sleeve attribution.
+    if not str(ticket.get("source_id") or ""):
+        return ""
+    try:
+        return _source_route_blocker(ticket, pull_trade_sources(config))
+    except Exception as exc:  # noqa: BLE001 - a failed operator read cannot authorize entry.
+        return f"entry_source_route_unavailable:{type(exc).__name__}"
+
+
 def _preflight_ticket_with_entry_risk(adapter: Any, ticket: dict[str, Any]) -> Any:
     preflight = adapter.preflight_ticket(ticket)
     blocker = _fresh_entry_preflight_blocker(ticket, preflight)
@@ -533,7 +625,10 @@ def _preflight_ticket_with_entry_risk(adapter: Any, ticket: dict[str, Any]) -> A
 
 
 def _fresh_entry_preflight_blocker(ticket: dict[str, Any], preflight: Any) -> str:
-    if ticket.get("intent_type") != "open" or ticket.get("structure") not in {"short_strangle", "strangle"}:
+    if ticket.get("intent_type") != "open" or (
+        ticket.get("structure") not in {"short_strangle", "strangle"}
+        and ticket.get("source_output_kind") != "exact_package"
+    ):
         return ""
     if not preflight.ok:
         return ""
@@ -664,7 +759,7 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
         store.record_live_order_status(str(ticket["order_id"]), status, response, ticket_hash=str(ticket["ticket_hash"]))
         if ledger_status == REPLACE_CANCEL_PENDING or bool(ticket.get("_staged_replacement_recovery")):
             if manage_entries:
-                replacement_result = _advance_staged_replacement(adapter, store, ticket, response)
+                replacement_result = _advance_staged_replacement(adapter, store, config, ticket, response)
                 results.append(
                     {
                         "ticket_hash": ticket["ticket_hash"],
@@ -689,6 +784,13 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
             expire_result = _expire_live_close_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **expire_result})
             continue
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "open":
+            route_blocker = _fresh_source_route_blocker(config, ticket)
+            if route_blocker:
+                store.event("live_entry_route_cancel_requested", {"ticket_hash": ticket.get("ticket_hash"), "reason": route_blocker})
+                expire_result = _expire_live_entry_order(adapter, store, config, ticket, response)
+                results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, "route_blocker": route_blocker, **expire_result})
+                continue
         if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "close" and _close_reprice_due(store, ticket, response, config):
             reprice_result = _reprice_live_close_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **reprice_result})
@@ -999,6 +1101,7 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
             return _replace_live_order_atomically(
                 adapter,
                 store,
+                config,
                 ticket,
                 new_ticket,
                 broker_status=broker_status,
@@ -1140,10 +1243,12 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
             return _replace_live_order_atomically(
                 adapter,
                 store,
+                config,
                 ticket,
                 new_ticket,
                 broker_status=broker_status,
                 close=False,
+                preflight_checked=bool(campaign_metadata.get("enabled")),
             )
         fresh_preflight = _preflight_ticket_with_entry_risk(adapter, new_ticket)
         if not fresh_preflight.ok:
@@ -1170,6 +1275,8 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
         if not window["allowed"]:
             store.event("live_order_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_entry_cutoff", "submission_window": window}
+        if blocker := _fresh_source_route_blocker(config, new_ticket):
+            return {"reprice_status": "deferred_source_route", "reprice_message": blocker}
         cancel_response = adapter.cancel_order(broker_order_id(ticket))
         store.record_live_order_status(str(ticket["order_id"]), "REPRICE_CANCEL_REQUESTED", cancel_response, ticket_hash=str(ticket["ticket_hash"]))
         response = adapter.place_order_ticket(new_ticket)
@@ -1212,11 +1319,13 @@ def _reprice_live_entry_order(adapter: Any, store: LocalStore, config: dict[str,
 def _replace_live_order_atomically(
     adapter: Any,
     store: LocalStore,
+    config: dict[str, Any],
     ticket: dict[str, Any],
     new_ticket: dict[str, Any],
     *,
     broker_status: dict[str, Any],
     close: bool,
+    preflight_checked: bool = False,
 ) -> dict[str, Any]:
     """Use the broker's atomic cancel-replace operation when available.
 
@@ -1224,6 +1333,15 @@ def _replace_live_order_atomically(
     after an indeterminate network response remains idempotent.
     """
 
+    if not close:
+        if blocker := _fresh_source_route_blocker(config, new_ticket):
+            return {"reprice_status": "deferred_source_route", "reprice_message": blocker}
+        if new_ticket.get("entry_risk_budget") and not preflight_checked:
+            fresh_preflight = _preflight_ticket_with_entry_risk(adapter, new_ticket)
+            if not fresh_preflight.ok:
+                return {"reprice_status": "deferred_preflight_failed", "reprice_message": fresh_preflight.message}
+            new_ticket["preflight"] = _preflight_with_entry_pricing(fresh_preflight.to_dict(), new_ticket)
+            new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
     response = adapter.replace_order(broker_order_id(ticket), new_ticket)
     request_id = client_order_id(new_ticket)
     response_order_id = persist_broker_identity(new_ticket, response)
@@ -1379,6 +1497,7 @@ def stage_live_management_replacement(
 def _advance_staged_replacement(
     adapter: Any,
     store: LocalStore,
+    config: dict[str, Any],
     ticket: dict[str, Any],
     broker_status: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1466,6 +1585,14 @@ def _advance_staged_replacement(
             "broker_status": status,
             "position_evidence": position_evidence,
         }
+
+    if not management:
+        if blocker := _fresh_source_route_blocker(config, replacement):
+            return {
+                "reprice_status": "waiting_source_route",
+                "reprice_method": "staged_cancel",
+                "reprice_message": blocker,
+            }
 
     fresh_preflight = _preflight_ticket_with_entry_risk(adapter, replacement)
     if not fresh_preflight.ok:
@@ -2510,6 +2637,12 @@ def _save_live_position_from_ticket(
         "underlying": canonical.get("underlying"),
         "playbook_id": canonical.get("playbook_id"),
         "structure": canonical.get("structure"),
+        "sleeve_id": canonical.get("sleeve_id") or "current_idea",
+        "source_id": canonical.get("source_id") or "",
+        "source_output_kind": canonical.get("source_output_kind") or "",
+        "source_opportunity_id": canonical.get("source_opportunity_id") or "",
+        "source_package_signature": canonical.get("source_package_signature") or "",
+        "csa_lifecycle_id": canonical.get("csa_lifecycle_id") or "",
         "execution_venue": ticket_execution_venue({}, canonical),
         "candidate": candidate,
         "execution_quality": canonical.get("execution_quality") or {},
@@ -2614,6 +2747,7 @@ def _candidate_from_ticket(ticket: dict[str, Any], *, fill_quantity: float = 1.0
         "underlying": ticket.get("underlying"),
         "playbook_id": ticket.get("playbook_id"),
         "structure": ticket.get("structure"),
+        "estimated_bpr": float(ticket.get("entry_risk_budget") or 0.0) * fill_quantity,
         "net_credit": _net_credit_from_ticket(ticket),
         "execution_quality": ticket.get("execution_quality") or {},
         "legs": legs,

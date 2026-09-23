@@ -59,6 +59,12 @@ def test_trade_source_policy_requires_one_pair_and_scopes_exact_live() -> None:
     policy = scoped.by_key()[("mike_butler", TradeSourceOutputKind.EXACT_PACKAGE)]
     assert policy.mode_for_structure("short_strangle") is TradeSourceMode.LIVE
     assert policy.mode_for_structure("call_diagonal") is TradeSourceMode.SHADOW
+    exact_live[-1]["live_structures"] = "short_strangle,call_calendar,put_calendar,call_diagonal,put_diagonal"
+    expanded = compile_trade_source_policies(exact_live)
+    assert expanded.ok
+    assert expanded.by_key()[("mike_butler", TradeSourceOutputKind.EXACT_PACKAGE)].mode_for_structure("call_diagonal") is TradeSourceMode.LIVE
+    exact_live[-1]["live_structures"] += ",butterfly"
+    assert not compile_trade_source_policies(exact_live).ok
 
 
 def test_source_mode_is_a_ceiling_over_existing_playbook_mode() -> None:

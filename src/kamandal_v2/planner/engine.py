@@ -24,9 +24,11 @@ from kamandal_v2.planner.plan_generator import generate_plans
 from kamandal_v2.planner.shadow_preflight import shadow_preflight_client
 from kamandal_v2.planner.structural_break_gates import annotate_structural_breaks
 from kamandal_v2.schemas import DAILY_PLAN_HEADER
-from kamandal_v2.sheets import write_daily_plan
+from kamandal_v2.sheets import pull_portfolio_sleeves, write_daily_plan
 from kamandal_v2.stores.audit import AuditWriter
 from kamandal_v2.stores.sqlite import LocalStore
+from kamandal_v2.portfolio_sleeves import compile_sleeve_policy, live_sleeve_usage, occupied_source_opportunities
+from kamandal_v2.intelligence.trade_sources import source_id_from_idea_source
 from kamandal_v2.volatility.iv import IvOverlayMarket, PrimaryIvOverlayMarket
 from kamandal_v2.volatility.iv_store import IvStore
 
@@ -85,6 +87,14 @@ def run_plan(
     plan_run_id = "run_" + utc_now().replace(":", "").replace("-", "")
     store = store or LocalStore()
     audit = audit or AuditWriter()
+    mode = str((config.get("runtime") or {}).get("mode") or "shadow").strip().lower()
+    if mode == "live" and str((config.get("portfolio") or {}).get("sleeves_source") or "") == "sheet":
+        sleeve_rows = config.get("_portfolio_sleeve_rows")
+        if sleeve_rows is None:
+            sleeve_rows = pull_portfolio_sleeves(config)
+        sleeve_policy = compile_sleeve_policy(sleeve_rows)
+        config.setdefault("portfolio", {})["hard_max_bpr_utilization_pct"] = sleeve_policy.portfolio_total_pct
+        config["_live_sleeve_policy"] = sleeve_policy
     if universe_override is None or playbooks_override is None:
         loaded_universe, loaded_playbooks = load_planner_config(config, source=config_source)
         universe = loaded_universe if universe_override is None else universe_override
@@ -98,6 +108,8 @@ def run_plan(
     portfolio = _shadow_portfolio_override(portfolio_raw, config)
     portfolio = _shadow_portfolio_with_open_fills(portfolio, store, config)
     portfolio = _live_portfolio_with_open_groups(portfolio, store, config)
+    if mode == "live" and config.get("_live_sleeve_policy") is not None:
+        config["_live_sleeve_usage"] = live_sleeve_usage(store, portfolio)
     preflight = _live_overlap_preflight_guard(preflight, store, config)
     match_gate_mode = _match_gate_mode(config)
     candidate_filter_mode = _candidate_filter_mode(config)
@@ -130,8 +142,23 @@ def run_plan(
     ]
     if supplemental_candidate_factory is not None:
         candidates.extend(supplemental_candidate_factory(market, playbooks, portfolio, store))
+    source_by_idea = {idea.idea_id: source_id_from_idea_source(idea.source) for idea in loaded_ideas}
+    for candidate in candidates:
+        if candidate.metadata.get("input_kind") != "exact_package":
+            source_id = source_by_idea.get(candidate.idea_id)
+            if source_id:
+                candidate.metadata.setdefault("source_profile", source_id)
+                candidate.metadata.setdefault("source_opportunity_id", candidate.idea_id)
+                candidate.metadata.setdefault("input_kind", "idea")
     if candidate_postprocessor is not None:
         candidate_postprocessor(candidates, store, config, portfolio)
+    if mode == "live":
+        occupied = occupied_source_opportunities(store)
+        for candidate in candidates:
+            source = str(candidate.metadata.get("source_profile") or "").lower()
+            opportunity = str(candidate.metadata.get("source_opportunity_id") or "")
+            if not candidate.rejection_reason and source and opportunity and (source, opportunity) in occupied:
+                candidate.rejection_reason = "source_opportunity_already_open_or_pending"
     _reject_open_shadow_candidates(candidates, store, config)
     idea_diagnostics = [
         diagnostic

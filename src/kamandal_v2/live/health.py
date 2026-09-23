@@ -17,6 +17,8 @@ from kamandal_v2.live.risk_manager import (
 )
 from kamandal_v2.ops.launchd_registry import CENTRAL, JOB_SCHEDULES
 from kamandal_v2.ops.market_calendar import is_non_trading_day
+from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+from kamandal_v2.sheets import pull_portfolio_sleeves
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -794,6 +796,14 @@ def _risk_overview(store: LocalStore, config: dict[str, Any]) -> dict[str, Any]:
     portfolio = config.get("portfolio") or {}
     target_pct = _optional_float(portfolio.get("target_max_bpr_utilization_pct"))
     hard_pct = _optional_float(portfolio.get("hard_max_bpr_utilization_pct"))
+    policy_error = ""
+    if str(portfolio.get("sleeves_source") or "") == "sheet":
+        try:
+            policy = config.get("_live_sleeve_policy") or compile_sleeve_policy(pull_portfolio_sleeves(config))
+            hard_pct = policy.portfolio_total_pct
+            target_pct = None
+        except Exception as exc:  # noqa: BLE001 - no stale fallback for the live cap.
+            policy_error = f"portfolio_sleeves_unavailable:{type(exc).__name__}"
     result: dict[str, Any] = {
         "snapshot_id": "",
         "account_size": None,
@@ -805,6 +815,9 @@ def _risk_overview(store: LocalStore, config: dict[str, Any]) -> dict[str, Any]:
         "reason": "",
         "detail": "no account snapshot",
     }
+    if policy_error:
+        result.update({"severity": "red", "reason": policy_error, "detail": "Sheet sleeve limits unavailable"})
+        return result
     if not snapshot:
         return result
     account_size = _optional_float(snapshot.get("account_size"))
