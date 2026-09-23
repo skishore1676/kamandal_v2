@@ -270,7 +270,7 @@ def test_chief_brief_counts_confirmed_openings_without_template_inflation(tmp_pa
     )
     assert len(details) == 1
     assert details[0][3] == 'Unsupported'
-    assert '1 non-template openings; 1 templates' in summary[3][1]
+    assert '1 openings; 1 templates excluded' in summary[3][1]
 
 
 def test_brief_writer_preserves_operator_correction_when_migrating(tmp_path, monkeypatch):
@@ -325,9 +325,9 @@ def test_chief_brief_counts_multi_package_opening_once(tmp_path):
     )
     assert len(details) == 1
     assert details[0][7] == 'mike_butler|' + _opportunity_id('op-1')
-    assert details[0][4] == 'multi package opening requires atomic group'
+    assert details[0][4] == 'Multiple packages require one atomic source opening'
     assert '330' in details[0][2]
-    assert '1 non-template openings' in summary[3][1]
+    assert '1 openings' in summary[3][1]
 
 
 def test_chief_brief_joins_projected_opportunity_to_entered_position(tmp_path):
@@ -365,3 +365,79 @@ def test_chief_brief_joins_projected_opportunity_to_entered_position(tmp_path):
     assert details[0][3] == 'Entered exact'
     assert 'STO 1 2026-10-16 330 call' in details[0][2]
     assert '1 entered' in summary[3][1]
+
+
+def test_brief_marks_unresolved_contract_as_evidence_and_summarizes_action(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'state.db')
+    store.event('trade_source_output_observed', {
+        'source_id': 'greg_harmon', 'post_ref': 'x-post:2102487291415667185',
+        'output_id': 'fly-1', 'classification': 'exact_package', 'effective_mode': 'live',
+        'action': 'open', 'symbol': 'ARM', 'structure': 'broken_wing_call_fly',
+        'reason': 'exact package incomplete: exact monthly expiration date unresolved,planner_structure_unsupported',
+        'normalized_output': {'source_event_id': 'fly-1', 'opportunity_group_id': 'fly-1',
+                              'action': 'open', 'symbol': 'ARM', 'complete': False},
+    })
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    summary, details = chief_of_staff_rows(
+        store, source_modes={('greg_harmon', 'exact_package'): 'live'}, sleeve_policy=policy,
+    )
+    assert details[0][3] == 'Needs evidence'
+    assert details[0][4] == 'Resolve the exact expiration date from the source'
+    assert 'Incomplete contract terms (1)' in summary[4][1]
+
+
+def test_brief_shows_actual_sheet_block_and_separate_position_slot(tmp_path):
+    from kamandal_v2.domain.models import PortfolioState
+    from kamandal_v2.intelligence.source_episode_projection import _opportunity_id
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'state.db')
+    opportunity = _opportunity_id('blocked-opening')
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:2102487291415667185',
+        'output_id': 'blocked-output', 'classification': 'exact_package',
+        'effective_mode': 'live', 'action': 'open', 'symbol': 'SNOW',
+        'structure': 'short_strangle', 'normalized_output': {
+            'source_event_id': 'blocked-output', 'opportunity_group_id': opportunity,
+            'action': 'open', 'symbol': 'SNOW', 'complete': True,
+            'legs': [{'order_code': 'STO', 'quantity': 1, 'expiration': '2026-10-16',
+                      'strike': 100, 'option_type': 'put'}],
+        },
+    })
+    store.save_live_order_intent({
+        'ticket_hash': 'blocked-ticket', 'order_id': 'blocked-ticket',
+        'plan_id': 'p', 'candidate_id': 'c', 'intent_type': 'open',
+        'source_id': 'mike_butler', 'source_opportunity_id': opportunity,
+    }, status='blocked_source_route')
+    store.event('live_entry_sheet_policy_blocked', {
+        'ticket_hash': 'blocked-ticket', 'reason': 'entry_source_route_not_live',
+    })
+    store.save_account_snapshot('latest', PortfolioState(10_000, 5_000, 5_000, 14), mode='live')
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    summary, details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'exact_package'): 'off'},
+        sleeve_policy=policy, max_positions=15,
+    )
+    assert details[0][3] == 'Blocked by policy'
+    assert details[0][4] == 'Source route is Off or Shadow; no new entry'
+    assert 'Positions 14/15 (1 new slot available)' in summary[2][1]
+
+    # A later terminal broker check wins over the prior mutable Sheet block.
+    store.update_live_order_intent_status('blocked-ticket', 'blocked_preflight_failed')
+    _summary, later_details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'exact_package'): 'off'},
+        sleeve_policy=policy, max_positions=15,
+    )
+    assert later_details[0][3] == 'Blocked by preflight'
