@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -277,7 +278,7 @@ def chief_of_staff_rows(
             for member, evidence in members
         )
         complete_packages += int(has_complete_package)
-        reason = str(item.get("reason") or "")
+        reason = str(item.get("reason") or item.get("evidence_status") or "")
         signatures = {str(evidence.get("package_signature") or "") for _member, evidence in members if evidence.get("package_signature")}
         if len(signatures) > 1 and not matched_groups:
             reason = "multi_package_opening_requires_atomic_group"
@@ -295,14 +296,16 @@ def chief_of_staff_rows(
             reason = "Entry has not been submitted"
         elif any(token in reason for token in ("duplicate", "already_open", "superseded")):
             decision = "Duplicate"
+        elif "incomplete" in reason or str(item.get("evidence_status") or "") in {"needs_media", "needs_history", "ambiguous"}:
+            decision = "Needs evidence"
+        elif "stale" in reason or "source_too_old" in reason or "source too old" in reason:
+            decision = "Stale"
+        elif "bid_ask_pct_above_max" in reason or "bid ask pct above max" in reason:
+            decision = "Blocked by quote"
         elif any(token in reason for token in ("risk", "bpr_cap", "health_gate")):
             decision = "Blocked by risk"
         elif "unsupported" in reason:
             decision = "Unsupported"
-        elif "incomplete" in reason or str(item.get("evidence_status") or "") in {"needs_media", "needs_history", "ambiguous"}:
-            decision = "Needs evidence"
-        elif "stale" in reason or "source_too_old" in reason:
-            decision = "Stale"
         elif "shadow" in mode.lower():
             decision = "Shadow"
         elif "off" in mode.lower() or "observe" in mode.lower():
@@ -311,10 +314,10 @@ def chief_of_staff_rows(
             decision = "Selected"
         else:
             decision = "Held"
-        if decision in {"Unsupported", "Needs evidence", "Stale", "Held", "Blocked by risk", "Duplicate"}:
+        if decision in {"Unsupported", "Needs evidence", "Stale", "Held", "Blocked by risk", "Blocked by quote", "Duplicate"}:
             held += 1
             if decision != "Stale":
-                issues[_plain_reason(reason or str(item.get("evidence_status") or "unresolved"))[:80]] += 1
+                issues[_issue_label(reason or str(item.get("evidence_status") or "unresolved"))] += 1
         package_terms = []
         for _member, evidence in members:
             packages = evidence.get("exact_packages") or []
@@ -377,7 +380,7 @@ def chief_of_staff_rows(
         ["Guru trade brief", observed.isoformat(timespec="seconds"), "Window", "Last 35 calendar days"],
         ["Route switches", modes],
         ["BPR used / ceiling", capacity, "Account receipt", snapshot_id],
-        ["Opening decisions", f"{confirmed} non-template openings; {templates} templates; {complete_packages} model-complete; {entered} entered; {held} exceptions"],
+        ["Opening decisions", f"{confirmed} openings; {templates} templates excluded; {complete_packages} model-complete (source verification unmeasured); {entered} entered; {held} exceptions"],
         ["Needs attention", attention],
     ]
     return summary, decisions
@@ -396,6 +399,30 @@ def _post_published_at(value: str) -> datetime | None:
 
 
 def _plain_reason(value: str) -> str:
+    lower = value.lower().replace("_", " ")
+    if "possible edit duplicate" in lower:
+        return "Possible edited-post duplicate; resolve source lineage"
+    if "monthly expiration date unresolved" in lower:
+        return "Resolve the exact expiration date from the source"
+    if "needs media" in lower or "expected media" in lower:
+        return "Source image or linked article missing; obtain contract terms"
+    if "incomplete" in lower:
+        return "Incomplete source contracts; resolve terms before exact entry"
+    if "source too old" in lower or "stale" in lower:
+        return "Opening is stale; await a new confirmed entry"
+    quote = re.search(r"bid ask pct above max:([0-9]+(?:\.[0-9]+)?)>([0-9]+(?:\.[0-9]+)?)", lower)
+    if quote:
+        return f"Quote spread {float(quote[1]) * 100:.1f}% exceeds {float(quote[2]) * 100:.1f}% limit"
+    if "outside configured universe" in lower:
+        return "Symbol outside configured universe; review eligibility"
+    if "multi package opening" in lower:
+        return "Multiple packages require one atomic source opening"
+    if "unsupported" in lower or "no playbook match" in lower:
+        return "Structure lacks a live path; add broker and exit proof"
+    if "bpr cap" in lower or "bpr_cap" in value:
+        return "BPR ceiling blocks entry; wait for capacity or change the Sheet limit"
+    if "health gate" in lower:
+        return "Live health gate blocks entry; review health receipt"
     aliases = {
         "planner_structure_unsupported": "Structure understood; no executable playbook",
         "source_too_old": "Source opening is stale",
@@ -403,6 +430,25 @@ def _plain_reason(value: str) -> str:
         "unsupported_live_exact_structure": "Exact structure lacks live execution support",
     }
     return aliases.get(value, value.replace("_", " ").strip())
+
+
+def _issue_label(reason: str) -> str:
+    lower = reason.lower().replace("_", " ")
+    if "media" in lower or "linked article" in lower:
+        return "Missing source media/article"
+    if "expiration" in lower or "incomplete" in lower:
+        return "Incomplete contract terms"
+    if "bid ask" in lower:
+        return "Quote spread too wide"
+    if "outside configured universe" in lower:
+        return "Universe eligibility"
+    if "unsupported" in lower or "no playbook match" in lower:
+        return "Structure not live enabled"
+    if "duplicate" in lower:
+        return "Edited-post or duplicate review"
+    if "bpr" in lower or "risk" in lower:
+        return "Risk or BPR gate"
+    return "Other held opening"
 
 
 def translation_review_rows(store: LocalStore, *, since: str = "", limit: int = 500) -> list[list[Any]]:
