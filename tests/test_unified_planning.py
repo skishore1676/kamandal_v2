@@ -22,6 +22,14 @@ from kamandal_v2.strategy_engine.policy import compile_playbook_policy
 from kamandal_v2.live.execution import execute_live_approved
 
 
+def _fixture_control() -> dict:
+    control = load_control()
+    control["portfolio"]["sleeves_source"] = ""
+    control["portfolio"]["hard_max_bpr_utilization_pct"] = 55
+    control["portfolio"]["target_max_bpr_utilization_pct"] = 55
+    return control
+
+
 def test_unified_planner_does_not_import_deprecated_scanner_runtime() -> None:
     from kamandal_v2.strategy_engine import planning
 
@@ -64,7 +72,7 @@ def _rows() -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     # Kamandal checkout.  Planner unit tests must not change with the host's
     # filesystem, so exercise the checked-in fallback seed deterministically.
     with patch("kamandal_v2.seed.OLD_KAMANDAL_ROOT", Path("/__kamandal_v2_test_no_legacy__")):
-        tables = build_seed_tables(load_control())
+        tables = build_seed_tables(_fixture_control())
     headers = seed_headers()
     universe = [dict(zip(headers["universe"], [*row, *[""] * len(headers["universe"])])) for row in tables["universe"]]
     playbooks = [dict(zip(headers["playbooks"], [*row, *[""] * len(headers["playbooks"])])) for row in tables["playbooks"]]
@@ -132,7 +140,7 @@ def _trade_source_rows() -> list[dict[str, object]]:
     headers = seed_headers()["trade_sources"]
     return [
         dict(zip(headers, row, strict=True))
-        for row in build_seed_tables(load_control())["trade_sources"]
+        for row in build_seed_tables(_fixture_control())["trade_sources"]
     ]
 
 
@@ -184,7 +192,7 @@ def test_sheet_backed_unified_cli_reaches_planner_without_import_shadowing(tmp_p
 
 def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) -> None:
     universe, playbooks = _rows()
-    control = load_control()
+    control = _fixture_control()
     snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
     result = run_unified_books(
         control,
@@ -207,7 +215,7 @@ def test_unified_books_keep_live_and_shadow_policy_ownership_isolated(tmp_path) 
 
 def test_live_fallback_book_does_not_advance_shadow(tmp_path) -> None:
     universe, playbooks = _rows()
-    control = load_control()
+    control = _fixture_control()
     snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
 
     result = run_unified_books(
@@ -239,7 +247,7 @@ def test_one_book_failure_does_not_erase_other_book(tmp_path, monkeypatch) -> No
         return original(config, **kwargs)
 
     monkeypatch.setattr(planning, "run_plan", fail_shadow)
-    control = load_control()
+    control = _fixture_control()
     snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
     result = run_unified_books(
         control,
@@ -287,7 +295,7 @@ def test_market_scan_and_portfolio_hedge_inputs_join_the_same_book(tmp_path) -> 
         }
     )
 
-    control = load_control()
+    control = _fixture_control()
     snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
     result = run_unified_books(
         control,
@@ -364,7 +372,7 @@ def test_unified_books_only_project_when_explicitly_requested(tmp_path, monkeypa
 
     monkeypatch.setattr(planning, "write_daily_plan", write_daily_plan)
     monkeypatch.setattr(engine, "write_daily_plan", write_daily_plan)
-    control = load_control()
+    control = _fixture_control()
     snapshot = _daily_snapshot(tmp_path, control, universe, playbooks)
     run_unified_books(
         control,
@@ -418,7 +426,7 @@ def test_selected_shadow_plan_persists_one_typed_lifecycle_ticket_and_fill(tmp_p
     monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: result)
     for _ in range(2):
         unified = run_unified_books(
-            load_control(),
+            _fixture_control(),
             universe_rows=universe,
             playbook_rows=shadow_rows,
             idea_paths=[],
@@ -491,7 +499,7 @@ def test_selected_shadow_working_entry_advances_and_legacy_rows_are_not_canonica
     monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: WorkingMarket())
 
     first = run_unified_books(
-        load_control(), universe_rows=universe, playbook_rows=shadow_rows,
+        _fixture_control(), universe_rows=universe, playbook_rows=shadow_rows,
         idea_paths=[], store=store, audit_root=tmp_path / "audit",
     )
     assert first.shadow.handoffs[0]["adapter_state"] == "working"
@@ -512,7 +520,7 @@ def test_selected_shadow_working_entry_advances_and_legacy_rows_are_not_canonica
     )
     monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: empty_result)
     second = run_unified_books(
-        load_control(), universe_rows=universe, playbook_rows=shadow_rows,
+        _fixture_control(), universe_rows=universe, playbook_rows=shadow_rows,
         idea_paths=[], store=store, audit_root=tmp_path / "audit-2",
     )
     assert second.shadow.errors == ()
@@ -575,14 +583,14 @@ def test_working_shadow_entry_retires_when_playbook_leaves_shadow(tmp_path, monk
     monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: working_result)
     monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: WorkingMarket())
     first = run_unified_books(
-        load_control(), universe_rows=universe, playbook_rows=shadow_rows,
+        _fixture_control(), universe_rows=universe, playbook_rows=shadow_rows,
         idea_paths=[], store=store, audit_root=tmp_path / "audit",
     )
     assert first.shadow.handoffs[0]["adapter_state"] == "working"
 
     shadow_rows[0]["mode"] = "live"
     second = run_unified_books(
-        load_control(), universe_rows=universe, playbook_rows=shadow_rows,
+        _fixture_control(), universe_rows=universe, playbook_rows=shadow_rows,
         idea_paths=[], store=store, audit_root=tmp_path / "audit-2",
     )
 
@@ -650,7 +658,7 @@ def test_selected_live_plan_persists_guarded_intent_and_live_advisory_projection
     from kamandal_v2.strategy_engine import planning
 
     monkeypatch.setattr(planning, "run_plan", lambda *_args, **_kwargs: result)
-    control = load_control()
+    control = _fixture_control()
     control.setdefault("live", {})["entry_approval_mode"] = "auto_top_plan"
     tables = {
         "universe": [{"symbol": "XYZ", "enabled": "TRUE", "profile": "large_cap"}],

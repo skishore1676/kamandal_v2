@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from collections import Counter
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from kamandal_v2.domain.models import PortfolioState
+from kamandal_v2.intelligence.trade_sources import compile_trade_source_policies
+from kamandal_v2.intelligence.source_episode_projection import _opportunity_id
+from kamandal_v2.portfolio_sleeves import compile_sleeve_policy, live_sleeve_usage
 from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER
-from kamandal_v2.sheets import write_translation_review
+from kamandal_v2.sheets import pull_portfolio_sleeves, pull_trade_sources, write_trade_source_brief
 from kamandal_v2.stores.sqlite import LocalStore
 
 
@@ -195,8 +200,209 @@ def project_trade_source_activity(
     *,
     limit: int = 500,
 ) -> int:
-    since = str(((config.get("source_intelligence") or {}).get("translation_review") or {}).get("since") or "")
-    return write_translation_review(config, translation_review_rows(store, since=since, limit=limit))
+    source_rows = pull_trade_sources(config)
+    source_compilation = compile_trade_source_policies(source_rows)
+    sleeves = compile_sleeve_policy(pull_portfolio_sleeves(config))
+    summary, decisions = chief_of_staff_rows(
+        store,
+        source_modes={
+            (str(row.get("source_id") or ""), str(row.get("output_kind") or "")): str(row.get("mode") or "")
+            for row in source_rows if row.get("source_id") and row.get("output_kind")
+        },
+        sleeve_policy=sleeves,
+        policy_errors=source_compilation.errors,
+        limit=limit,
+    )
+    return write_trade_source_brief(config, summary, decisions)
+
+
+def chief_of_staff_rows(
+    store: LocalStore,
+    *,
+    source_modes: dict[tuple[str, str], str],
+    sleeve_policy: Any,
+    policy_errors: tuple[str, ...] = (),
+    limit: int = 500,
+    now: datetime | None = None,
+) -> tuple[list[list[Any]], list[list[Any]]]:
+    """Answer operator questions from receipts, without rendering the audit payload."""
+    observed = now or datetime.now(UTC)
+    cutoff = observed - timedelta(days=35)
+    records = [dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, row)) for row in activity_rows(store, limit=max(limit, 500))]
+    groups = [*store.open_live_position_groups(), *store.closed_live_position_groups(limit=1000)]
+    intents = store.live_order_intents_by_type("open")
+    decisions: list[list[Any]] = []
+    confirmed = templates = complete_packages = entered = held = 0
+    issues: Counter[str] = Counter()
+    opening_groups: dict[tuple[str, str], list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for item in records:
+        if str(item.get("action") or "") != "open":
+            continue
+        published = _post_published_at(str(item.get("post_ref") or item.get("source_url") or ""))
+        if published is not None and published < cutoff:
+            continue
+        try:
+            raw = json.loads(str(item.get("normalized_output") or "{}"))
+        except ValueError:
+            raw = {}
+        if not isinstance(raw, dict):
+            raw = {}
+        if raw.get("template_number"):
+            templates += 1
+            continue  # A proposed menu item is not a confirmed guru opening.
+        source_id = str(item.get("source_id") or "")
+        raw_group = str(raw.get("opportunity_group_id") or "")
+        opportunity = ((raw_group if raw_group.startswith("corr_opp_") else _opportunity_id(raw_group)) if raw_group else str(
+            raw.get("source_opportunity_id") or raw.get("event_id") or raw.get("source_event_id") or item.get("output_id") or ""
+        ))
+        opening_groups.setdefault((source_id, opportunity), []).append((item, raw))
+
+    for (source_id, opportunity), members in opening_groups.items():
+        item, raw = max(members, key=lambda pair: (_timestamp(str(pair[0].get("last_update") or "")), str(pair[0].get("output_id") or "")))
+        confirmed += 1
+        matched_groups = [
+            group for group in groups
+            if opportunity and str(group.get("source_opportunity_id") or group.get("idea_id") or "") == opportunity
+            and (not group.get("source_id") or group.get("source_id") == source_id)
+        ]
+        matched_intents = [
+            ticket for ticket in intents
+            if opportunity and str(ticket.get("source_opportunity_id") or ticket.get("idea_id") or "") == opportunity
+            and (not ticket.get("source_id") or ticket.get("source_id") == source_id)
+        ]
+        has_complete_package = any(
+            (evidence.get("legs") and evidence.get("complete") is True and not evidence.get("blocker"))
+            or any(package.get("legs") and package.get("complete") is True and not package.get("blocker")
+                   for package in evidence.get("exact_packages") or [] if isinstance(package, dict))
+            for member, evidence in members
+        )
+        complete_packages += int(has_complete_package)
+        reason = str(item.get("reason") or "")
+        signatures = {str(evidence.get("package_signature") or "") for _member, evidence in members if evidence.get("package_signature")}
+        if len(signatures) > 1 and not matched_groups:
+            reason = "multi_package_opening_requires_atomic_group"
+        mode = str(item.get("effective_mode") or "observe")
+        if matched_groups:
+            lane = str(matched_groups[0].get("source_output_kind") or "idea")
+            decision = "Entered exact" if lane == "exact_package" else "Entered idea"
+            reason = "Kamandal manages the position"
+            entered += 1
+        elif any(str(ticket.get("_ledger_status") or "") in {"submitted", "partially_filled", "submit_uncertain"} for ticket in matched_intents):
+            decision = "Submitted; awaiting fill"
+            reason = "Broker status pending"
+        elif any(str(ticket.get("_ledger_status") or "") in {"pending_approval", "stage_approved_pending_submit", "waiting_entry_window"} for ticket in matched_intents):
+            decision = "Queued"
+            reason = "Entry has not been submitted"
+        elif any(token in reason for token in ("duplicate", "already_open", "superseded")):
+            decision = "Duplicate"
+        elif any(token in reason for token in ("risk", "bpr_cap", "health_gate")):
+            decision = "Blocked by risk"
+        elif "unsupported" in reason:
+            decision = "Unsupported"
+        elif "incomplete" in reason or str(item.get("evidence_status") or "") in {"needs_media", "needs_history", "ambiguous"}:
+            decision = "Needs evidence"
+        elif "stale" in reason or "source_too_old" in reason:
+            decision = "Stale"
+        elif "shadow" in mode.lower():
+            decision = "Shadow"
+        elif "off" in mode.lower() or "observe" in mode.lower():
+            decision = "Observed only"
+        elif "selected" in str(item.get("planner_disposition") or ""):
+            decision = "Selected"
+        else:
+            decision = "Held"
+        if decision in {"Unsupported", "Needs evidence", "Stale", "Held", "Blocked by risk", "Duplicate"}:
+            held += 1
+            if decision != "Stale":
+                issues[_plain_reason(reason or str(item.get("evidence_status") or "unresolved"))[:80]] += 1
+        package_terms = []
+        for _member, evidence in members:
+            packages = evidence.get("exact_packages") or []
+            if evidence.get("legs"):
+                packages = [evidence, *packages]
+            for package in packages:
+                if isinstance(package, dict) and package.get("legs"):
+                    detail = _interpretation(package)
+                    price = package.get("displayed_price") or {}
+                    if isinstance(price, dict) and price:
+                        detail += f"; source price {price.get('amount', '')} {price.get('effect', '')}".rstrip()
+                    if detail and detail not in package_terms:
+                        package_terms.append(detail)
+        opening = " ".join(part for part in (
+            str(item.get("symbol") or ""),
+            str(item.get("structure") or "").replace("_", " "),
+            "; ".join(package_terms) if package_terms else str(item.get("interpretation") or "") if has_complete_package else "",
+        ) if part)
+        source_url = str(item.get("source_url") or "")
+        key = "|".join((source_id, opportunity))
+        decisions.append([
+            source_id.replace("_", " ").title(), source_url, opening[:700], decision,
+            _plain_reason(reason)[:130], mode[:90], "", key,
+        ])
+    decisions.sort(key=lambda row: (_post_published_at(str(row[1])) or datetime.min.replace(tzinfo=UTC), str(row[7])), reverse=True)
+    decisions = decisions[:max(min(int(limit), 150), 1)]
+    snapshot = store.latest_account_snapshot(mode="live")
+    capacity = "Latest account snapshot unavailable"
+    snapshot_id = ""
+    if snapshot:
+        snapshot_id = str(snapshot.get("_snapshot_id") or "")
+        try:
+            account = PortfolioState(
+                account_size=float(snapshot["account_size"]),
+                buying_power=float(snapshot["buying_power"]),
+                bpr_used=float(snapshot["bpr_used"]),
+                positions_count=int(snapshot.get("positions_count") or 0),
+            )
+            usage = live_sleeve_usage(store, account)
+            total_room = max(sleeve_policy.portfolio_total_pct - usage.portfolio_total_bpr / usage.account_size * 100, 0.0)
+            capacity = "; ".join(
+                f"{label} {usage.used(lane) / usage.account_size * 100:.1f}/{sleeve_policy.limit(lane):.1f}%"
+                f" ({min(max(sleeve_policy.limit(lane) - usage.used(lane) / usage.account_size * 100, 0.0), total_room):.1f}% room)"
+                for label, lane in (("Current", "current_idea"), ("Guru", "guru_exact"), ("Total", "portfolio_total"))
+            )
+            if usage.unmatched_bpr / usage.account_size >= 0.01:
+                capacity += f"; Broker residual {usage.unmatched_bpr / usage.account_size * 100:.1f}% charged to Current"
+            elif (usage.ledger_open_bpr - usage.broker_bpr) / usage.account_size >= 0.01:
+                capacity += f"; Review ledger BPR above broker by {(usage.ledger_open_bpr - usage.broker_bpr) / usage.account_size * 100:.1f}%"
+        except (KeyError, TypeError, ValueError) as exc:
+            capacity = f"BPR accounting unavailable ({type(exc).__name__})"
+    modes = "; ".join(
+        f"{source.replace('_', ' ').title()} {kind.replace('_', ' ')}: {mode}"
+        for (source, kind), mode in sorted(source_modes.items())
+    )
+    attention_items = [f"Source switch invalid: {_plain_reason(error)}" for error in policy_errors]
+    attention_items.extend(f"{reason} ({count})" for reason, count in issues.most_common(3))
+    attention = "; ".join(attention_items[:3]) or "No decision exception in this window"
+    summary = [
+        ["Guru trade brief", observed.isoformat(timespec="seconds"), "Window", "Last 35 calendar days"],
+        ["Route switches", modes],
+        ["BPR used / ceiling", capacity, "Account receipt", snapshot_id],
+        ["Opening decisions", f"{confirmed} non-template openings; {templates} templates; {complete_packages} model-complete; {entered} entered; {held} exceptions"],
+        ["Needs attention", attention],
+    ]
+    return summary, decisions
+
+
+def _post_published_at(value: str) -> datetime | None:
+    """An X post id carries its creation time; polling time is not trade time."""
+    post_id = value.rsplit("/", 1)[-1].removeprefix("x-post:")
+    if not post_id.isdigit() or len(post_id) < 16:
+        return None
+    milliseconds = (int(post_id) >> 22) + 1288834974657
+    try:
+        return datetime.fromtimestamp(milliseconds / 1000, UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _plain_reason(value: str) -> str:
+    aliases = {
+        "planner_structure_unsupported": "Structure understood; no executable playbook",
+        "source_too_old": "Source opening is stale",
+        "outside_configured_universe": "Symbol outside configured universe",
+        "unsupported_live_exact_structure": "Exact structure lacks live execution support",
+    }
+    return aliases.get(value, value.replace("_", " ").strip())
 
 
 def translation_review_rows(store: LocalStore, *, since: str = "", limit: int = 500) -> list[list[Any]]:

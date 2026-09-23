@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
@@ -8,7 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from kamandal_v2.config import load_control
-from kamandal_v2.domain.models import ChainSnapshot, OptionQuote, Playbook, PortfolioState, utc_now
+from kamandal_v2.domain.models import ChainSnapshot, OptionQuote, Playbook, PortfolioState, PreflightResult, utc_now
+from kamandal_v2.intelligence.trade_sources import compile_trade_source_policies
 from kamandal_v2.intelligence.observed_packages import normalize_observed_package_output
 from kamandal_v2.seed import build_seed_tables, seed_headers
 from kamandal_v2.planner.observed_package_candidates import build_observed_package_candidates
@@ -248,6 +250,75 @@ def test_mike_exact_package_uses_existing_playbook_under_source_shadow_ceiling(
         ("long_far", "buy"),
     ]
     assert candidate.preflight.raw["broker_effects"] is False
+
+
+def test_exact_calendar_can_enter_live_only_with_source_permission_and_broker_bpr(tmp_path: Path) -> None:
+    package = replace(
+        _batch().packages[0],
+        source_published_at="2026-08-28T13:00:00Z",
+        source_valid_until="2026-08-28T16:00:00Z",
+    )
+    row = _observed_calendar_row()
+    row.update({
+        "mode": "live", "csa_stage": "live", "source_mode": "idea",
+        "accepted_inputs": "exact_package", "dte_min": 0, "dte_max": 40,
+        "long_dte_min": 0, "long_dte_max": 40,
+        "max_debit_pct_bpr": 1, "max_contracts": 1,
+    })
+    playbook = Playbook.from_row(row)
+    policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, source_mode="idea",
+        accepted_inputs=("exact_package",), mode=SimpleNamespace(value="live"),
+        structure="call_calendar",
+    )
+    market = _Market(captured_at="2026-08-28T14:00:00Z")
+    market.preflight = lambda _candidate: PreflightResult(
+        True, 500, "broker quote accepted", {"broker_bpr_provided": True},
+    )
+    source_policies = compile_trade_source_policies([{
+        "source_id": "mike_butler", "output_kind": "exact_package",
+        "mode": "live", "live_structures": "call_calendar",
+    }]).by_key()
+    candidates = build_observed_package_candidates(
+        [package], policies=(policy,), playbooks=[playbook], market=market,
+        store=LocalStore(tmp_path / "live-calendar.db"),
+        config={"runtime": {"observed_at": "2026-08-28T14:00:00Z"},
+                "live": {"option_submission": {"quote_max_age_minutes": 5}}},
+        trade_source_policies=source_policies, mode="live",
+    )
+    assert len(candidates) == 1
+    assert candidates[0].eligible
+    assert [(leg.side, leg.expiration, leg.strike) for leg in candidates[0].legs] == [
+        ("sell", "2026-08-28", 290), ("buy", "2026-09-04", 290),
+    ]
+    assert candidates[0].estimated_bpr == 500
+
+
+def test_multi_package_opening_cannot_partially_enter_live(tmp_path: Path) -> None:
+    package = replace(
+        _batch().packages[0],
+        source_published_at="2026-08-28T13:00:00Z",
+        source_valid_until="2026-08-28T16:00:00Z",
+    )
+    second = replace(package, package_position=2, package_signature="second-package")
+    row = _observed_calendar_row()
+    row.update({"mode": "live", "csa_stage": "live", "source_mode": "idea", "accepted_inputs": "exact_package"})
+    playbook = Playbook.from_row(row)
+    policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, source_mode="idea", accepted_inputs=("exact_package",),
+        mode=SimpleNamespace(value="live"), structure="call_calendar",
+    )
+    source_policies = compile_trade_source_policies([{
+        "source_id": "mike_butler", "output_kind": "exact_package",
+        "mode": "live", "live_structures": "call_calendar",
+    }]).by_key()
+    assert build_observed_package_candidates(
+        [package, second], policies=(policy,), playbooks=[playbook],
+        market=_Market(captured_at="2026-08-28T14:00:00Z"),
+        store=LocalStore(tmp_path / "multiple.db"),
+        config={"runtime": {"observed_at": "2026-08-28T14:00:00Z"}},
+        trade_source_policies=source_policies, mode="live",
+    ) == []
 
 
 def test_stale_chain_parks_before_candidate_or_fill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

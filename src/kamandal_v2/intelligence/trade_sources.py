@@ -23,6 +23,14 @@ class TradeSourceMode(StrEnum):
     LIVE = "live"
 
 
+# These names have an implemented structural path. A Sheet CSV can grant live
+# permission only within this set; broker and exit readback are still required
+# before promoting a new name in the operator Sheet.
+LIVE_EXACT_STRUCTURES = frozenset({
+    "short_strangle", "call_calendar", "put_calendar", "call_diagonal", "put_diagonal",
+})
+
+
 @dataclass(frozen=True, slots=True)
 class TradeSourcePolicy:
     source_id: str
@@ -94,8 +102,8 @@ def compile_trade_source_policies(
         live_structures = tuple(dict.fromkeys(
             item.strip().lower() for item in str(row.get("live_structures") or "").split(",") if item.strip()
         ))
-        if live_structures and (output_kind is not TradeSourceOutputKind.EXACT_PACKAGE or set(live_structures) - {"short_strangle"}):
-            errors.append(f"trade_sources: {source_id} live_structures supports only exact short_strangle")
+        if live_structures and (output_kind is not TradeSourceOutputKind.EXACT_PACKAGE or set(live_structures) - LIVE_EXACT_STRUCTURES):
+            errors.append(f"trade_sources: {source_id} live_structures contains unsupported exact structure")
             continue
         if output_kind is TradeSourceOutputKind.EXACT_PACKAGE and mode is TradeSourceMode.LIVE and not live_structures:
             errors.append(f"trade_sources: {source_id}/exact_package live requires explicit live_structures")

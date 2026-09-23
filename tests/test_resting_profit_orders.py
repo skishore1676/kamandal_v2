@@ -354,6 +354,7 @@ def test_parent_fill_during_cancel_aborts_child_and_projects_once(tmp_path, monk
     result = _advance_staged_replacement(
         object(),
         store,
+        {},
         store.live_order_intent("parent"),
         {"status": "FILLED", "filledQuantity": 1},
     )
@@ -392,6 +393,7 @@ def test_parent_partial_fill_aborts_child_and_requires_reconciliation(tmp_path) 
     result = _advance_staged_replacement(
         object(),
         store,
+        {},
         store.live_order_intent("parent"),
         {"status": "PARTIALLY_FILLED", "filledQuantity": 0.5},
     )

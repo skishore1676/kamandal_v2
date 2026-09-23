@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from kamandal_v2.domain.models import Candidate, Greeks, Plan, PortfolioState
 from kamandal_v2.liquidity import candidate_liquidity_metrics
 from kamandal_v2.planner.source_priority import candidate_source_priority
+from kamandal_v2.portfolio_sleeves import candidate_lane, sleeve_entry_blocker
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +113,17 @@ def _constraint_violation(
 ) -> str:
     total_bpr = sum(candidate.estimated_bpr for candidate in plan)
     if _bpr_capacity_enforced(control):
+        sleeve_policy = control.get("_live_sleeve_policy")
+        sleeve_usage = control.get("_live_sleeve_usage")
+        if sleeve_policy is not None:
+            if sleeve_usage is None:
+                return "sleeve_usage_missing"
+            if blocker := sleeve_entry_blocker(
+                sleeve_policy,
+                sleeve_usage,
+                ((candidate_lane(candidate), candidate.estimated_bpr) for candidate in plan),
+            ):
+                return blocker
         if hard_new_bpr_pct is not None and (total_bpr / max(portfolio.account_size, 1.0)) * 100 > hard_new_bpr_pct:
             return "new_bpr_cap"
         if ((portfolio.bpr_used + total_bpr) / max(portfolio.account_size, 1.0)) * 100 > max_bpr_pct:

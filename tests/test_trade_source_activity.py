@@ -240,3 +240,128 @@ def test_translation_review_uses_latest_complete_batch(tmp_path):
     assert len(rows) == 1
     assert 'Corrected interpretation' in rows[0][3]
     assert 'Wrong interpretation' not in str(rows)
+
+
+def test_chief_brief_counts_confirmed_openings_without_template_inflation(tmp_path):
+    from datetime import UTC, datetime
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'brief.db')
+    post_id = str((int(datetime.now(UTC).timestamp() * 1000) - 1288834974657) << 22)
+    for suffix, template in [('confirmed', None), ('menu', 2)]:
+        store.event('trade_source_output_observed', {
+            'source_id': 'greg_harmon', 'post_ref': 'x-post:' + post_id,
+            'output_id': suffix, 'classification': 'idea', 'effective_mode': 'live',
+            'planner_disposition': 'parked', 'reason': 'planner_structure_unsupported',
+            'normalized_output': {
+                'event_id': suffix, 'action': 'open', 'symbol': 'XYZ',
+                'structure_hint': 'call_spread', 'opportunity_group_id': suffix,
+                'template_number': template,
+            },
+        })
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    summary, details = chief_of_staff_rows(
+        store, source_modes={('greg_harmon', 'idea'): 'live'}, sleeve_policy=policy,
+    )
+    assert len(details) == 1
+    assert details[0][3] == 'Unsupported'
+    assert '1 non-template openings; 1 templates' in summary[3][1]
+
+
+def test_brief_writer_preserves_operator_correction_when_migrating(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from kamandal_v2.schemas import TRADE_SOURCE_REVIEW_HEADER
+    from kamandal_v2.sheets import GoogleSheetClient, write_trade_source_brief
+
+    monkeypatch.chdir(tmp_path)
+    writes = []
+    previous = [TRADE_SOURCE_REVIEW_HEADER,
+                ['Greg Harmon', 'https://x.com/i/status/123', 'XYZ', 'old', '', '', 'Check strike']]
+    worksheet = SimpleNamespace(
+        row_count=100, col_count=7, get_all_values=lambda: previous,
+        resize=lambda **_kw: None, update=lambda **kw: writes.append(kw),
+    )
+    client = SimpleNamespace(_worksheet=lambda *a, **_kw: worksheet, _retry=lambda fn, **_kw: fn())
+    monkeypatch.setattr(GoogleSheetClient, 'from_config', lambda _config: client)
+    count = write_trade_source_brief({}, [['Brief', 'now']], [
+        ['Greg Harmon', 'https://x.com/i/status/123', 'XYZ call spread', 'Held', 'No quote', 'live', '', 'stable-key']
+    ])
+    assert count == 1
+    assert writes[0]['values'][6][0] == 'Guru'
+    assert writes[0]['values'][7][6] == 'Check strike'
+    assert writes[0]['values'][7][7] == 'stable-key'
+
+
+def test_chief_brief_counts_multi_package_opening_once(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.intelligence.source_episode_projection import _opportunity_id
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'state.db')
+    for signature in ('first', 'second'):
+        store.event('trade_source_output_observed', {
+            'source_id': 'mike_butler', 'post_ref': 'x-post:2102059954588758048',
+            'output_id': signature, 'classification': 'exact_package',
+            'planner_disposition': 'parked', 'reason': 'unsupported',
+            'effective_mode': 'live', 'action': 'open', 'symbol': 'SNOW',
+            'structure': 'call_calendar', 'normalized_output': {
+                'source_event_id': 'event-1', 'opportunity_group_id': 'op-1',
+                'package_signature': signature, 'action': 'open', 'symbol': 'SNOW',
+                'structure': 'call_calendar', 'complete': True, 'legs': [{'strike': 330}],
+            },
+        })
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    summary, details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'exact_package'): 'live'}, sleeve_policy=policy,
+    )
+    assert len(details) == 1
+    assert details[0][7] == 'mike_butler|' + _opportunity_id('op-1')
+    assert details[0][4] == 'multi package opening requires atomic group'
+    assert '330' in details[0][2]
+    assert '1 non-template openings' in summary[3][1]
+
+
+def test_chief_brief_joins_projected_opportunity_to_entered_position(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.intelligence.source_episode_projection import _opportunity_id
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'state.db')
+    group = 'source-group-1'
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:2102059954588758048',
+        'output_id': 'exact-1', 'classification': 'exact_package',
+        'effective_mode': 'live', 'action': 'open', 'symbol': 'SNOW',
+        'structure': 'call_calendar', 'normalized_output': {
+            'source_event_id': 'event-1', 'opportunity_group_id': _opportunity_id(group),
+            'action': 'open', 'symbol': 'SNOW', 'complete': True,
+            'legs': [{'order_code': 'STO', 'quantity': 1, 'expiration': '2026-10-16',
+                      'strike': 330, 'option_type': 'call'}],
+        },
+    })
+    store.save_live_position_group('entered-1', {
+        'source_id': 'mike_butler', 'source_output_kind': 'exact_package',
+        'source_opportunity_id': _opportunity_id(group),
+        'candidate': {'estimated_bpr': 500},
+    }, status='open')
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    summary, details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'exact_package'): 'live'}, sleeve_policy=policy,
+    )
+    assert len(details) == 1
+    assert details[0][3] == 'Entered exact'
+    assert 'STO 1 2026-10-16 330 call' in details[0][2]
+    assert '1 entered' in summary[3][1]

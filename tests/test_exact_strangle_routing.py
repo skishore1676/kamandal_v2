@@ -190,6 +190,8 @@ def test_exact_source_reaches_normal_live_lifecycle_and_one_canary_reservation(t
     snapshot = DailyPolicySnapshot(NOW[:10], NOW, policy_tables_hash(tables), tables, tmp_path / "policy.json",
                                    OperatorPolicyBundle((), (), (), NOW, source="fixture"))
     control = load_control()
+    control["portfolio"]["sleeves_source"] = ""
+    control["portfolio"]["hard_max_bpr_utilization_pct"] = 55
     control["runtime"]["observed_at"] = NOW
     control["live"]["max_bpr_per_order"] = 2500
     control["risk_manager"]["enabled"] = False  # risk-manager behavior has its own suite; broker effects remain impossible here

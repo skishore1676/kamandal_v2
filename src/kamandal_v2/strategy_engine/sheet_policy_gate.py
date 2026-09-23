@@ -1,6 +1,6 @@
 """Read-only deployment gate for the canonical Google Sheet policy.
 
-The gate deliberately validates every policy consumer against one Sheet read.
+The gate validates every policy consumer against bounded Sheet reads.
 It does not capture a daily snapshot or touch a database, report, or broker.
 """
 
@@ -11,9 +11,10 @@ from typing import Any
 
 from kamandal_v2.domain.models import Playbook, UniverseEntry, utc_now
 from kamandal_v2.intelligence.trade_sources import compile_trade_source_policies
+from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
 from kamandal_v2.planner.config_validator import validate_config
 from kamandal_v2.schemas import TRADE_SOURCES_HEADER, UNIVERSE_HEADER
-from kamandal_v2.sheets import pull_sheet_tables
+from kamandal_v2.sheets import pull_portfolio_sleeves, pull_sheet_tables
 from kamandal_v2.strategy_engine.policy import compile_playbook_policies
 from kamandal_v2.strategy_lanes.daily_policy import policy_tables_hash
 from kamandal_v2.strategy_lanes.policy import compile_csa_policies
@@ -34,6 +35,8 @@ class SheetPolicyGateResult:
     csa_errors: tuple[str, ...]
     trade_source_count: int = 0
     trade_source_errors: tuple[str, ...] = ()
+    sleeve_limits: dict[str, float] | None = None
+    sleeve_errors: tuple[str, ...] = ()
     model_errors: tuple[str, ...] = ()
 
     @property
@@ -44,6 +47,7 @@ class SheetPolicyGateResult:
             or self.unified_errors
             or self.csa_errors
             or self.trade_source_errors
+            or self.sleeve_errors
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -78,6 +82,11 @@ class SheetPolicyGateResult:
                 "policy_count": self.trade_source_count,
                 "errors": list(self.trade_source_errors),
             },
+            "portfolio_sleeves": {
+                "ok": not self.sleeve_errors,
+                "limits": self.sleeve_limits or {},
+                "errors": list(self.sleeve_errors),
+            },
         }
 
 
@@ -95,6 +104,18 @@ def validate_sheet_policy(
         "playbooks": [dict(row) for row in (resolved.get("playbooks") or [])],
         "trade_sources": [dict(row) for row in (resolved.get("trade_sources") or [])],
     }
+    sleeves_required = str((config.get("portfolio") or {}).get("sleeves_source") or "") == "sheet"
+    sleeve_errors: tuple[str, ...] = ()
+    sleeve_limits: dict[str, float] | None = None
+    if sleeves_required:
+        try:
+            sleeve_rows = resolved.get("portfolio_sleeves") if tables is not None else pull_portfolio_sleeves(config)
+            sleeve_rows = sleeve_rows or []
+            sleeve_limits = compile_sleeve_policy(sleeve_rows).to_dict()
+            policy_tables["portfolio_sleeves"] = [dict(row) for row in sleeve_rows]
+        except Exception as exc:  # noqa: BLE001 - deployment must fail closed on a missing policy.
+            detail = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+            sleeve_errors = (f"portfolio_sleeves:{detail}",)
     observed_at = read_at or utc_now()
     model_errors: list[str] = []
     universe: list[UniverseEntry] = []
@@ -178,4 +199,6 @@ def validate_sheet_policy(
         csa_errors=csa.errors,
         trade_source_count=len(trade_sources.policies),
         trade_source_errors=trade_sources.errors,
+        sleeve_limits=sleeve_limits,
+        sleeve_errors=sleeve_errors,
     )

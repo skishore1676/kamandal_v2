@@ -83,8 +83,6 @@ def load_control(config_path: str | Path | None = None) -> dict[str, Any]:
         "runtime.mode": os.environ.get("KAMANDAL_MODE"),
         "runtime.trading_enabled": _env_bool("KAMANDAL_TRADING_ENABLED"),
         "runtime.halt": _env_bool("KAMANDAL_HALT"),
-        "portfolio.target_max_bpr_utilization_pct": _env_float("KAMANDAL_TARGET_MAX_BPR_UTILIZATION_PCT"),
-        "portfolio.hard_max_bpr_utilization_pct": _env_float("KAMANDAL_HARD_MAX_BPR_UTILIZATION_PCT"),
         "portfolio.max_bpr_per_underlying_pct": _env_float("KAMANDAL_MAX_BPR_PER_UNDERLYING_PCT"),
         "portfolio.max_positions": _env_int("KAMANDAL_MAX_POSITIONS"),
         "portfolio.delta_guard.enabled": _env_bool("KAMANDAL_PORTFOLIO_DELTA_GUARD_ENABLED"),

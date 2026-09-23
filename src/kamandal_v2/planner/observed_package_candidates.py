@@ -17,6 +17,7 @@ from typing import Any
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook, PreflightResult, UniverseEntry, utc_now
 from kamandal_v2.intelligence.observed_packages import ObservedPackageBatch, ObservedPackageEvidence
 from kamandal_v2.intelligence.trade_sources import (
+    LIVE_EXACT_STRUCTURES,
     TradeSourceMode,
     TradeSourceOutputKind,
     TradeSourcePolicy,
@@ -100,10 +101,16 @@ def build_observed_package_candidates(
             ("exact_package",) if getattr(policy, "source_mode", "") == "observed_package" else (),
         )
     )
+    package_list = tuple(packages)
+    opening_counts: dict[tuple[str, str], int] = {}
+    for item in package_list:
+        if item.action == "open" and item.complete:
+            key = (item.source_profile, item.opportunity_group_id or item.source_event_id)
+            opening_counts[key] = opening_counts.get(key, 0) + 1
     chain_cache: dict[str, Any] = {}
     candidates: list[Candidate] = []
 
-    for package in packages:
+    for package in package_list:
         blocker = _evidence_blocker(package)
         source_policy = (trade_source_policies or {}).get(
             (package.source_profile.lower(), TradeSourceOutputKind.EXACT_PACKAGE)
@@ -137,7 +144,10 @@ def build_observed_package_candidates(
         if effective_mode != mode:
             continue
         if mode == "live":
-            if package.structure != "short_strangle":
+            if opening_counts.get((package.source_profile, package.opportunity_group_id or package.source_event_id), 0) > 1:
+                _receipt(store, package, status="parked", blocker="multi_package_opening_requires_atomic_group")
+                continue
+            if package.structure not in LIVE_EXACT_STRUCTURES:
                 _receipt(store, package, status="parked", blocker="unsupported_live_exact_structure")
                 continue
             if blocker := _live_source_freshness_blocker(package, config):
@@ -353,6 +363,8 @@ def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
         raise ValueError("exact_calendar_or_diagonal_requires_one_buy_and_one_sell")
     sold_index, sold_leg = sold[0]
     bought_index, bought_leg = bought[0]
+    if sold_leg.quantity != bought_leg.quantity:
+        raise ValueError("exact_calendar_or_diagonal_requires_equal_quantity")
     if not sold_leg.expiration or not bought_leg.expiration or sold_leg.expiration >= bought_leg.expiration:
         raise ValueError("exact_calendar_or_diagonal_requires_short_near_long_far")
     roles = ["", ""]

@@ -54,6 +54,11 @@ def _isolate_fixture_plans_from_runtime_earnings(monkeypatch) -> None:
 
 def _live_control() -> dict:
     control = load_control()
+    # Legacy fixtures exercise their own gates without Google Sheet I/O.
+    # Sheet-owned sleeve admission is covered in test_portfolio_sleeves.py.
+    control["portfolio"]["sleeves_source"] = ""
+    control["portfolio"]["hard_max_bpr_utilization_pct"] = 55
+    control["portfolio"]["target_max_bpr_utilization_pct"] = 55
     control["live"]["max_bpr_per_order"] = 1000
     control["risk_manager"]["enabled"] = False
     return control
@@ -418,7 +423,7 @@ def test_live_can_warn_on_quality_filters_without_permissive_matching(tmp_path, 
 
 def test_live_advisory_uses_sheet_playbooks_not_legacy_structure_allowlist(tmp_path, monkeypatch) -> None:
     _patch_live_config(monkeypatch)
-    control = load_control()
+    control = _live_control()
     control["live"]["allowed_structures"] = ["long_call", "long_put"]
     store = LocalStore(tmp_path / "kamandal.db")
 
@@ -2926,6 +2931,7 @@ def test_two_staged_entry_replacements_preserve_original_pricing_envelope(tmp_pa
     live_execution._advance_staged_replacement(
         adapter,
         store,
+        config,
         original,
         {"status": "CANCELLED"},
     )
@@ -2948,6 +2954,7 @@ def test_two_staged_entry_replacements_preserve_original_pricing_envelope(tmp_pa
     live_execution._advance_staged_replacement(
         adapter,
         store,
+        config,
         first_submitted,
         {"status": "CANCELLED"},
     )
