@@ -932,12 +932,81 @@ def test_exact_revision_ignores_batch_prompt_but_tracks_trade_terms(tmp_path):
     changed['exact_packages'][0]['displayed_price']['amount'] = '2.50'
     assert project(changed, 'batch-2').evidence_revision_id != first.evidence_revision_id
     changed['exact_packages'][0]['legs'][0]['strike'] = '155'
+    changed['exact_packages'][0]['legs'][1]['strike'] = '155'
     assert project(changed, 'batch-2').package_signature != first.package_signature
     assert project(changed, 'batch-2').opportunity_group_id == first.opportunity_group_id
     changed = deepcopy(event)
     changed['exact_packages'].append({'complete': False, 'blocker': 'other package unreadable', 'legs': []})
     assert project(changed, 'batch-2').source_opening_package_count == 2
     assert project(changed, 'batch-2').evidence_revision_id != first.evidence_revision_id
+
+
+def test_exact_projection_holds_calendar_label_on_vertical_contracts(tmp_path):
+    from types import SimpleNamespace
+    from kamandal_v2.intelligence.source_episode_projection import _exact_package_projections
+
+    image = tmp_path / 'post.jpg'
+    image.write_bytes(b'public fixture')
+    record = _record('shape-mismatch', 'New call calendar', ['SNOW'], media=[{
+        'media_index': 1, 'type': 'photo', 'cache_status': 'cached',
+        'artifact_path': str(image), 'sha256': hashlib.sha256(image.read_bytes()).hexdigest()}])
+    event = {'event_id': 'event-shape', 'opportunity_group_id': 'opp-shape', 'action': 'open',
+             'symbol': 'SNOW', 'structure_hint': 'call_calendar', 'exact_packages': [{
+                 'complete': True, 'field_provenance': ['image:1'],
+                 'displayed_price': {'amount': '2.00', 'effect': 'debit'},
+                 'legs': [
+                     {'order_code': 'BTO', 'quantity': 1, 'expiration': '2026-10-16',
+                      'strike': '150', 'option_type': 'call'},
+                     {'order_code': 'STO', 'quantity': 1, 'expiration': '2026-10-16',
+                      'strike': '160', 'option_type': 'call'},
+                 ]}]}
+    packages, failures = _exact_package_projections(
+        event, record, compilation=SimpleNamespace(profile_id='mike_butler', prompt_sha256='batch'))
+    assert packages == []
+    assert 'source structure disagrees with exact contracts' in failures[0]['reason']
+
+    event['exact_packages'][0]['legs'] = [
+        {'order_code': 'STO', 'quantity': 2, 'expiration': '2026-09-18',
+         'strike': '150', 'option_type': 'call'},
+        {'order_code': 'BTO', 'quantity': 1, 'expiration': '2026-10-16',
+         'strike': '150', 'option_type': 'call'},
+    ]
+    packages, failures = _exact_package_projections(
+        event, record, compilation=SimpleNamespace(profile_id='mike_butler', prompt_sha256='batch'))
+    assert packages == []
+    assert 'source structure disagrees with exact contracts' in failures[0]['reason']
+
+
+def test_retained_fly_plus_vertical_is_labeled_composite_not_simple_fly(tmp_path):
+    from kamandal_v2.intelligence.source_episode_projection import _exact_package_projections
+
+    image = tmp_path / 'post.jpg'
+    image.write_bytes(b'public composite fixture')
+    record = _record('meta-composite', 'New META butterfly plus call vertical', ['META'], media=[{
+        'media_index': 1, 'type': 'photo', 'cache_status': 'cached',
+        'artifact_path': str(image), 'sha256': hashlib.sha256(image.read_bytes()).hexdigest()}])
+    raw_legs = [
+        ('BTO', 1, '670', 'put'), ('STO', 2, '685', 'put'), ('BTO', 1, '700', 'put'),
+        ('STO', 1, '820', 'call'), ('BTO', 1, '830', 'call'),
+    ]
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(symbol='META', structure_hint='butterfly', projections=['idea', 'exact_package'],
+               exact_packages=[{
+                   'complete': True, 'blocker': None,
+                   'displayed_price': {'amount': '1.00', 'effect': 'credit'},
+                   'field_provenance': ['image:1'],
+                   'legs': [{'order_code': code, 'quantity': quantity,
+                             'expiration': '2026-10-16', 'strike': strike, 'option_type': kind}
+                            for code, quantity, strike, kind in raw_legs],
+               }])
+    ]}]}
+    compilation = compile_source_episode_packet(_packet([record]), _profile('mike_butler'), FakeClient(response))
+    event = compilation.episodes[0]['events'][0]
+    assert event['exact_packages'][0]['complete'] is True
+    assert event['exact_packages'][0]['deterministic_structure'] == 'put_butterfly_with_call_vertical'
+    packages, failures = _exact_package_projections(event, record, compilation=compilation)
+    assert failures == []
+    assert packages[0].structure == 'put_butterfly_with_call_vertical'
 
 
 def test_hedge_smarttag_is_not_discarded_and_old_empty_cache_is_invalidated():

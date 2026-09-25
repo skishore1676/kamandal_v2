@@ -13,6 +13,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -531,7 +532,10 @@ def _finalize_episode(
         for package in exact_packages:
             if not package["complete"]:
                 continue
-            expected = LEG_COUNTS.get(structure)
+            if structure == "butterfly" and _is_put_fly_with_call_vertical(package["legs"]):
+                package["deterministic_structure"] = "put_butterfly_with_call_vertical"
+            expected = (5 if package.get("deterministic_structure") == "put_butterfly_with_call_vertical"
+                        else LEG_COUNTS.get(structure))
             if expected is not None and len(package["legs"]) != expected:
                 package["complete"] = False
                 package["blocker"] = "structure_leg_count_mismatch"
@@ -672,6 +676,29 @@ def _localize_package_image_refs(package: Mapping[str, Any], image_numbers: list
         localized["complete"] = False
         localized["blocker"] = "image_reference_outside_source_post"
     return localized
+
+
+def _is_put_fly_with_call_vertical(legs: list[Mapping[str, Any]]) -> bool:
+    """Keep the retained five-leg META package distinct from a simple fly."""
+
+    puts = [leg for leg in legs if leg.get("option_type") == "put"]
+    calls = [leg for leg in legs if leg.get("option_type") == "call"]
+    if len(puts) != 3 or len(calls) != 2:
+        return False
+    if len({leg.get("expiration") for leg in legs}) != 1:
+        return False
+    try:
+        ordered = sorted(puts, key=lambda leg: Decimal(str(leg.get("strike"))))
+        short_call = next(leg for leg in calls if leg.get("order_code") == "STO")
+        long_call = next(leg for leg in calls if leg.get("order_code") == "BTO")
+        return (
+            [leg.get("quantity") for leg in ordered] == [1, 2, 1]
+            and [leg.get("order_code") for leg in ordered] == ["BTO", "STO", "BTO"]
+            and all(leg.get("quantity") == 1 for leg in calls)
+            and Decimal(str(short_call.get("strike"))) < Decimal(str(long_call.get("strike")))
+        )
+    except (StopIteration, InvalidOperation, TypeError, ValueError):
+        return False
 
 
 def _source_quantity_conflicts(

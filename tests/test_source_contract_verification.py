@@ -153,3 +153,75 @@ def test_feed_rejects_inconsistent_verified_provenance() -> None:
     payload["packages"][0]["source_verification_reason"] = "source_price_disagrees_with_image"
     with pytest.raises(ObservedPackageValidationError, match="source verification is inconsistent"):
         observed_package_batch_from_dict(payload)
+
+
+@pytest.mark.parametrize("legs,expected", [
+    ([
+        (2, "2026-11-20", "105", "call", "STO"),
+        (1, "2026-11-20", "115", "call", "BTO"),
+        (1, "2026-12-18", "95", "call", "BTO"),
+    ], "call_crab"),
+    ([
+        (1, "2026-10-16", "670", "put", "BTO"),
+        (2, "2026-10-16", "685", "put", "STO"),
+        (1, "2026-10-16", "700", "put", "BTO"),
+    ], "put_butterfly"),
+    ([
+        (1, "2026-10-16", "670", "put", "BTO"),
+        (2, "2026-10-16", "685", "put", "STO"),
+        (1, "2026-10-16", "700", "put", "BTO"),
+        (1, "2026-10-16", "820", "call", "STO"),
+        (1, "2026-10-16", "830", "call", "BTO"),
+    ], "put_butterfly_with_call_vertical"),
+    ([(1, "2026-10-16", "100", "call", "BTO")], "long_call"),
+    ([(1, "2026-10-16", "100", "call", "BTO"),
+      (1, "2026-10-16", "110", "call", "STO")], "call_spread"),
+])
+def test_retained_guru_shapes_are_classified_without_live_authority(legs, expected) -> None:
+    raw = {
+        "schema": "kamandal.observed_package_extraction.v1",
+        "post_disposition": "packages", "post_blocker": None,
+        "packages": [{
+            "media_index": 1, "package_position": 1, "action": "open", "symbol": "XYZ",
+            "displayed_trade_time": None, "displayed_price": None,
+            "complete": True, "blocker": None,
+            "legs": [dict(zip(("quantity", "expiration", "strike", "option_type", "order_code"), leg))
+                     for leg in legs],
+        }],
+    }
+    batch = normalize_observed_package_output(
+        raw, source_profile="mike_butler", canonical_post_id="x-post:shape",
+        published_at="2026-09-08T14:00:00Z", image_sha256=("0" * 64,),
+        prompt_sha256="fixture",
+    )
+    assert batch.packages[0].structure == expected
+    assert not batch.packages[0].source_verified
+
+
+def test_unknown_ratio_package_does_not_hide_supported_sibling() -> None:
+    def leg(quantity, expiry, strike, kind, code):
+        return {"quantity": quantity, "expiration": expiry, "strike": strike,
+                "option_type": kind, "order_code": code}
+
+    raw = {
+        "schema": "kamandal.observed_package_extraction.v1",
+        "post_disposition": "packages", "post_blocker": None,
+        "packages": [
+            {"media_index": 1, "package_position": 1, "action": "open", "symbol": "XYZ",
+             "displayed_trade_time": None, "displayed_price": None,
+             "complete": True, "blocker": None,
+             "legs": [leg(2, "2026-10-16", "100", "call", "STO"),
+                      leg(1, "2026-11-20", "100", "call", "BTO")]},
+            {"media_index": 1, "package_position": 2, "action": "open", "symbol": "ABC",
+             "displayed_trade_time": None, "displayed_price": None,
+             "complete": True, "blocker": None,
+             "legs": [leg(1, "2026-10-16", "90", "put", "STO"),
+                      leg(1, "2026-10-16", "110", "call", "STO")]},
+        ],
+    }
+    batch = normalize_observed_package_output(
+        raw, source_profile="mike_butler", canonical_post_id="x-post:mixed",
+        published_at="2026-09-08T14:00:00Z", image_sha256=("0" * 64,),
+        prompt_sha256="fixture",
+    )
+    assert [package.structure for package in batch.packages] == [None, "short_strangle"]
