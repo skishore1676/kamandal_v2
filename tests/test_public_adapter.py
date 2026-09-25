@@ -100,6 +100,49 @@ def test_public_adapter_uses_configured_expiration_window() -> None:
     assert len(adapter.expiration_dates) == 8
 
 
+def test_public_exact_chain_requests_near_expiration_outside_default_window() -> None:
+    adapter = PublicAdapter({"broker": {"public": {"secret_token": "fixture", "account_id": "acct"}}})
+    adapter._underlying_price = lambda _symbol: 290
+    requested = []
+
+    def post(_endpoint, payload):  # noqa: ANN001, ANN202
+        expiration = payload["expirationDate"]
+        requested.append(expiration)
+        suffix = expiration[2:].replace("-", "")
+        return {"calls": [{
+            "instrument": {"symbol": f"ADSK{suffix}C00290000"},
+            "bid": 2.0, "ask": 2.2, "openInterest": 100,
+            "optionDetails": {"greeks": {"delta": 0.5, "gamma": 0.02, "theta": -0.1}},
+        }]}
+
+    adapter._post = post
+    snapshot = adapter.chain_snapshot_for_expirations("ADSK", ["2026-08-28", "2026-09-04"])
+    assert requested == ["2026-08-28", "2026-09-04"]
+    assert {quote.expiration for quote in snapshot.quotes} == set(requested)
+
+
+def test_venue_market_forwards_exact_expirations_without_changing_normal_chain() -> None:
+    from kamandal_v2.market.venue_router import VenueAwareMarket
+
+    class Market:
+        def __init__(self) -> None:
+            self.requests = []
+
+        def chain_snapshot(self, symbol):  # noqa: ANN001, ANN202
+            self.requests.append((symbol, None))
+            return "ordinary"
+
+        def chain_snapshot_for_expirations(self, symbol, expirations):  # noqa: ANN001, ANN202
+            self.requests.append((symbol, expirations))
+            return "exact"
+
+    inner = Market()
+    wrapper = VenueAwareMarket(inner, inner, {}, mode="live", venues={"public_primary"}, provider="public")
+    assert wrapper.chain_snapshot_for_expirations("ADSK", ["2026-08-28"]) == "exact"
+    assert wrapper.chain_snapshot("ADSK") == "ordinary"
+    assert inner.requests == [("ADSK", ["2026-08-28"]), ("ADSK", None)]
+
+
 def test_public_adapter_retries_http_429_then_returns_payload() -> None:
     adapter = PublicAdapter({"broker": {"public": {"retry_attempts": 2, "retry_base_delay_seconds": 0}}})
     adapter._access_token = "token"

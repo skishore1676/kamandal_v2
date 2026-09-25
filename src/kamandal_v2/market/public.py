@@ -111,12 +111,18 @@ class PublicAdapter:
         return positions
 
     def chain_snapshot(self, underlying: str) -> ChainSnapshot:
+        return self.chain_snapshot_for_expirations(underlying, self.expiration_dates)
+
+    def chain_snapshot_for_expirations(
+        self, underlying: str, expiration_dates: Sequence[str]
+    ) -> ChainSnapshot:
+        """Quote only the expirations needed to match source-exact contracts."""
         self._require_available()
         symbol = underlying.upper()
         underlying_price = self._underlying_price(symbol)
         quotes: list[OptionQuote] = []
         seen: set[str] = set()
-        for expiration in self.expiration_dates:
+        for expiration in dict.fromkeys(expiration_dates):
             try:
                 chain = self._post(
                     f"/userapigateway/marketdata/{self._account_id()}/option-chain",
