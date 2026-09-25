@@ -594,6 +594,66 @@ def test_cross_post_image_reference_cannot_project_an_exact_package(tmp_path: Pa
     assert [item.symbol for item in projection.observed_batches[0].packages] == ["SNOW"]
 
 
+def test_mixed_followup_post_gives_only_its_new_exact_opening_a_source_window(tmp_path: Path) -> None:
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    image = tmp_path / "mixed-post.jpg"
+    image.write_bytes(b"verified public image fixture")
+    record = _record(
+        "mixed-followup", "Closed an old call and opened a new WMT call diagonal", ["WMT"],
+        classification="observed_package_followup", published_at="2026-09-24T16:29:31Z",
+        media=[{
+            "media_index": 1, "type": "photo", "cache_status": "cached",
+            "artifact_path": str(image), "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+        }],
+    )
+    close = {
+        "event_id": "prior-close", "action": "close", "symbol": "WMT",
+        "projections": ["residual"], "projection_dispositions": [], "exact_packages": [],
+    }
+    opening = {
+        "event_id": "new-opening", "opportunity_group_id": "new-wmt-diagonal",
+        "action": "open", "symbol": "WMT", "structure_hint": "call_diagonal",
+        "projections": ["exact_package"],
+        "projection_dispositions": [{
+            "projection": "exact_package", "disposition": "ready_for_source_policy",
+        }],
+        "exact_packages": [{
+            "complete": True, "blocker": None, "field_provenance": ["image:1"],
+            "displayed_price": {"amount": "4.92", "effect": "debit"},
+            "legs": [
+                {"order_code": "STO", "quantity": 1, "expiration": "2026-11-20",
+                 "strike": "120", "option_type": "call"},
+                {"order_code": "BTO", "quantity": 1, "expiration": "2027-01-15",
+                 "strike": "110", "option_type": "call"},
+            ],
+        }],
+    }
+    compilation = SimpleNamespace(
+        profile_id="mike_butler", prompt_sha256="test-prompt",
+        compiled_at="2026-09-24T17:00:00Z",
+        episodes=[{"post_ref": record["signal_id"], "events": [close, opening]}],
+    )
+    packet = _packet([record])
+    profile = _profile("mike_butler")
+    projection = project_source_episode_compilation(
+        compilation, packet, profile, universe_symbols=("WMT",),
+    )
+
+    assert len(projection.observed_batches) == 1
+    assert [item.action for item in projection.observed_batches[0].packages] == ["open"]
+    assert projection.observed_batches[0].packages[0].source_valid_until == "2026-09-25T16:29:31+00:00"
+    assert [item["action"] for item in projection.observations] == ["close", "open"]
+
+    unknown_packet = deepcopy(packet)
+    unknown_packet["records"][0]["classification"]["type"] = "unknown"
+    unknown = project_source_episode_compilation(
+        compilation, unknown_packet, profile, universe_symbols=("WMT",),
+    )
+    assert unknown.observed_batches[0].packages[0].source_valid_until is None
+
+
 def test_same_thesis_package_variants_share_one_idea_event() -> None:
     record = _record(
         "variants",
