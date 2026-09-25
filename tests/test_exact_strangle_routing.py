@@ -133,10 +133,11 @@ def test_stale_incomplete_or_nonopening_exact_packages_are_parked(tmp_path, muta
 
 
 def test_live_source_freshness_survives_feed_roundtrip():
-    batch = replace(_batch(), packages=(_package(),))
+    batch = replace(_batch(), packages=(replace(_package(), source_opening_package_count=2),))
     restored = observed_package_batch_from_dict(batch.to_dict()).packages[0]
     assert restored.source_published_at == _package().source_published_at
     assert restored.source_valid_until == _package().source_valid_until
+    assert restored.source_opening_package_count == 2
 
 
 def test_exact_strangle_never_resizes_source_quantity(tmp_path):

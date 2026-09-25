@@ -126,6 +126,32 @@ def test_reinterpreted_post_does_not_link_to_its_old_revision_as_history():
     assert "prior_same_post" not in client.calls[0]["user_prompt"]
 
 
+def test_reused_opening_advances_lineage_before_new_roll_in_same_packet():
+    opening = _record("opening", "New $LULU put diagonal", ["LULU"])
+    opened_response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": opening["signal_id"], "events": [
+        _event(symbol="LULU", action="open", projections=["idea"])
+    ]}]}
+    old_episode = compile_source_episode_packet(
+        _packet([opening]), _profile("mike_butler"), FakeClient(opened_response)
+    ).episodes[0]
+    roll = _record("roll", "Rolled my $LULU put diagonal", ["LULU"],
+                   published_at="2026-09-03T14:05:00Z")
+    roll_response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": roll["signal_id"], "events": [
+        _event(symbol="LULU", action="roll", projections=["residual"])
+    ]}]}
+
+    client = FakeClient(roll_response)
+    compiled = compile_source_episode_packet(
+        _packet([opening, roll]), _profile("mike_butler"), client,
+        history=[old_episode],
+    )
+
+    assert compiled.episodes[0] == old_episode
+    assert compiled.episodes[1]["events"][0]["link_state"] == "linked"
+    assert compiled.episodes[1]["events"][0]["links_to"] == [old_episode["events"][0]["event_id"]]
+    assert old_episode["events"][0]["event_id"] in client.calls[0]["user_prompt"]
+
+
 def _profile(name: str) -> dict:
     return yaml.safe_load(Path(f"config/correspondents/{name}.yaml").read_text(encoding="utf-8"))
 
@@ -411,7 +437,7 @@ def test_source_quantity_conflict_holds_exact_long_call() -> None:
     assert "exact_package" not in event["projections"]
 
 
-def test_incomplete_sibling_holds_whole_exact_opening() -> None:
+def test_incomplete_sibling_retains_complete_shadow_evidence() -> None:
     record = _record("alternatives", "New $SNOW calendars at 330 and 340", ["SNOW"])
     good_legs = [
         {"quantity": 1, "expiration": expiry, "strike": "330", "option_type": "call", "order_code": code}
@@ -430,7 +456,7 @@ def test_incomplete_sibling_holds_whole_exact_opening() -> None:
     event = compile_source_episode_packet(_packet([record]), _profile("mike_butler"), FakeClient(response)).episodes[0]["events"][0]
 
     assert len(event["exact_packages"]) == 2
-    assert "exact_package" not in event["projections"]
+    assert "exact_package" in event["projections"]  # Complete sibling remains useful in shadow.
     assert event["planner_new_entry"] is True
 
 
@@ -908,6 +934,10 @@ def test_exact_revision_ignores_batch_prompt_but_tracks_trade_terms(tmp_path):
     changed['exact_packages'][0]['legs'][0]['strike'] = '155'
     assert project(changed, 'batch-2').package_signature != first.package_signature
     assert project(changed, 'batch-2').opportunity_group_id == first.opportunity_group_id
+    changed = deepcopy(event)
+    changed['exact_packages'].append({'complete': False, 'blocker': 'other package unreadable', 'legs': []})
+    assert project(changed, 'batch-2').source_opening_package_count == 2
+    assert project(changed, 'batch-2').evidence_revision_id != first.evidence_revision_id
 
 
 def test_hedge_smarttag_is_not_discarded_and_old_empty_cache_is_invalidated():

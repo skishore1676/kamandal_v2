@@ -144,7 +144,8 @@ def build_observed_package_candidates(
         if effective_mode != mode:
             continue
         if mode == "live":
-            if opening_counts.get((package.source_profile, package.opportunity_group_id or package.source_event_id), 0) > 1:
+            if (package.source_opening_package_count > 1 or
+                    opening_counts.get((package.source_profile, package.opportunity_group_id or package.source_event_id), 0) > 1):
                 _receipt(store, package, status="parked", blocker="multi_package_opening_requires_atomic_group")
                 continue
             if package.structure not in LIVE_EXACT_STRUCTURES:

@@ -130,7 +130,8 @@ def compile_source_episode_packet(
 
     history_context = _bounded_history(
         (item for item in history_items if isinstance(item, Mapping)
-         and str(item.get("post_ref") or "") not in current_post_refs),
+         and (str(item.get("post_ref") or "") not in current_post_refs
+              or str(item.get("post_ref") or "") in reused)),
         profile,
     )
     system_prompt = _system_prompt(profile)
@@ -180,12 +181,17 @@ def compile_source_episode_packet(
         ),
     )
     duplicate_peers = possible_edit_duplicates(records)
-    active = _active_history(history_context)
+    active = _active_history(
+        item for item in history_context
+        if str(item.get("post_ref") or "") not in current_post_refs
+    )
     episodes: list[dict[str, Any]] = []
     for record in ordered_records:
         signal_id = str(record["signal_id"])
         if signal_id in reused:
-            episodes.append(_hold_possible_edits(reused[signal_id], duplicate_peers.get(signal_id, [])))
+            episode = _hold_possible_edits(reused[signal_id], duplicate_peers.get(signal_id, []))
+            episodes.append(episode)
+            _advance_active_from_episode(active, episode)
             continue
         normalized = by_signal.get(signal_id)
         if normalized is None:
@@ -536,10 +542,8 @@ def _finalize_episode(
         complete_packages = [item for item in exact_packages if item["complete"]]
         if incomplete_packages:
             blockers.append("exact_package_incomplete")
-            # A source post can show alternatives or parts of one atomic
-            # opening. Never submit the surviving leg set when a sibling is
-            # unresolved.
-            projections = [item for item in projections if item != "exact_package"]
+            if not complete_packages:
+                projections = [item for item in projections if item != "exact_package"]
             if not complete_packages and not any(
                 item in projections for item in {"idea", "residual"}
             ):
@@ -1053,18 +1057,26 @@ def _active_history(history: Iterable[Mapping[str, Any]]) -> dict[tuple[str, str
         ),
     )
     for episode in ordered:
-        for event in episode.get("events") or []:
-            if not isinstance(event, Mapping):
-                continue
-            symbol = str(event.get("symbol") or "")
-            structure = str(event.get("structure_hint") or "unknown")
-            event_id = str(event.get("event_id") or "")
-            key = (symbol, structure)
-            if event.get("action") in _ENTRY_ACTIONS and symbol and event_id:
-                active.setdefault(key, []).append(event_id)
-            elif event.get("action") == "close":
-                active.pop(key, None)
+        _advance_active_from_episode(active, episode)
     return active
+
+
+def _advance_active_from_episode(
+    active: dict[tuple[str, str], list[str]], episode: Mapping[str, Any]
+) -> None:
+    for event in episode.get("events") or []:
+        if not isinstance(event, Mapping):
+            continue
+        symbol = str(event.get("symbol") or "")
+        structure = str(event.get("structure_hint") or "unknown")
+        event_id = str(event.get("event_id") or "")
+        key = (symbol, structure)
+        if event.get("action") in _ENTRY_ACTIONS and symbol and event_id:
+            entries = active.setdefault(key, [])
+            if event_id not in entries:
+                entries.append(event_id)
+        elif event.get("action") == "close":
+            active.pop(key, None)
 
 
 def _client_receipt(client: JsonLlmClient, *, pass_name: str) -> dict[str, Any]:
