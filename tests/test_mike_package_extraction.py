@@ -242,14 +242,15 @@ def test_complete_open_package_rejects_closing_leg() -> None:
         _normalize(fixture, raw)
 
 
-def test_wrong_double_calendar_pairing_is_rejected() -> None:
+def test_wrong_double_calendar_pairing_is_retained_without_executable_shape() -> None:
     fixture = _manifest()["fixtures"][1]
     raw = deepcopy(fixture["expected_extraction"])
     raw["packages"][0]["legs"][1]["order_code"] = "BTO"
     raw["packages"][0]["legs"][2]["order_code"] = "STO"
 
-    with pytest.raises(ObservedPackageValidationError, match="corpus-proven structure"):
-        _normalize(fixture, raw)
+    batch = _normalize(fixture, raw)
+    assert batch.packages[0].complete
+    assert batch.packages[0].structure is None
 
 
 def test_unknown_model_fields_fail_closed() -> None:

@@ -29,6 +29,7 @@ from kamandal_v2.intelligence.observed_packages import (
     _normalize_expiration,
     _package_signature,
     _product_type,
+    infer_observed_structure,
 )
 from kamandal_v2.intelligence.source_episode_compiler import (
     PROMPT_VERSION,
@@ -42,6 +43,22 @@ class SourceEpisodeProjection:
     observed_batches: tuple[ObservedPackageBatch, ...]
     observations: tuple[dict[str, Any], ...]
     failures: tuple[dict[str, str], ...]
+
+
+_SHAPE_ALIASES = {
+    "butterfly": {"call_butterfly", "put_butterfly"},
+    "put_butterfly_with_call_vertical": {"put_butterfly_with_call_vertical"},
+    "call_crab": {"call_crab"},
+    "short_strangle": {"short_strangle"},
+    "long_call": {"long_call"},
+    "long_put": {"long_put"},
+    "call_spread": {"call_spread"},
+    "put_spread": {"put_spread"},
+    "call_calendar": {"call_calendar"},
+    "put_calendar": {"put_calendar"},
+    "call_diagonal": {"call_diagonal"},
+    "put_diagonal": {"put_diagonal"},
+}
 
 
 def project_source_episode_compilation(
@@ -334,6 +351,14 @@ def _exact_package_projections(
                 raise ValueError("complete exact package requires legs")
             if action == "open" and {leg.effect for leg in legs} != {"open"}:
                 raise ValueError("opening package contains non-open leg")
+            declared_structure = str(raw.get("deterministic_structure") or event.get("structure_hint") or "")
+            if action == "open" and (expected_shapes := _SHAPE_ALIASES.get(declared_structure)):
+                inferred_structure = infer_observed_structure(legs, action=action)
+                if (declared_structure == "butterfly"
+                        and inferred_structure == "put_butterfly_with_call_vertical"):
+                    declared_structure = inferred_structure
+                elif inferred_structure not in expected_shapes:
+                    raise ValueError("source structure disagrees with exact contracts")
             positions[media_index] = positions.get(media_index, 0) + 1
             signature = _package_signature(legs)
             image_sha = str(descriptor.get("sha256") or "").lower()
@@ -348,7 +373,7 @@ def _exact_package_projections(
                         "schema": "source_package_semantics.v1",
                         "action": action,
                         "symbol": str(event.get("symbol") or "").upper(),
-                        "structure": event.get("structure_hint"),
+                        "structure": declared_structure,
                         "displayed_price": raw.get("displayed_price"),
                         "source_opening_package_count": len(event.get("exact_packages") or []),
                     }
@@ -362,7 +387,7 @@ def _exact_package_projections(
                     media_index=media_index,
                     package_position=positions[media_index],
                     action=action,
-                    structure=str(event.get("structure_hint") or "") or None,
+                    structure=declared_structure or None,
                     symbol=str(event.get("symbol") or "").upper(),
                     product_type=_product_type(str(event.get("symbol") or "").upper()),
                     displayed_trade_time=None,

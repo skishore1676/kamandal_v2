@@ -504,7 +504,7 @@ def _normalize_package(
         if action in {"roll", "adjust"} and not {"open", "close"}.issubset(effects):
             raise ObservedPackageValidationError(f"{action} package requires opening and closing legs")
 
-    structure = _infer_corpus_structure(legs, action=action) if complete else None
+    structure = infer_observed_structure(legs, action=action) if complete else None
     locator_text = f"{source_profile}|{canonical_post_id}|media:{media_index}|package:{package_position}"
     source_event_id = f"ose_{_sha256_text(locator_text)[:24]}"
     package_signature = _package_signature(legs) if complete else None
@@ -626,12 +626,14 @@ def _product_type(symbol: str) -> str:
     return "equity_or_etf_option"
 
 
-def _infer_corpus_structure(legs: tuple[ObservedLegEvidence, ...], *, action: str) -> str | None:
+def infer_observed_structure(legs: tuple[ObservedLegEvidence, ...], *, action: str) -> str | None:
     """Recognize only structures proven by the browser-grounded corpus."""
 
     if action in {"roll", "adjust"}:
         return None
     opening_legs = tuple(_as_opening_leg(leg) for leg in legs)
+    if len(opening_legs) == 1 and opening_legs[0].order_code == "BTO":
+        return f"long_{opening_legs[0].option_type}"
     if len(opening_legs) == 2:
         first, second = opening_legs
         if (
@@ -646,16 +648,24 @@ def _infer_corpus_structure(legs: tuple[ObservedLegEvidence, ...], *, action: st
         if (
             first.expiration == second.expiration
             and first.strike == second.strike
+            and first.quantity == second.quantity
             and {first.option_type, second.option_type} == {"call", "put"}
             and {first.order_code, second.order_code} in ({"STO"}, {"BTO"})
         ):
             prefix = "short" if first.order_code == "STO" else "long"
             return f"{prefix}_straddle"
-        if first.option_type == second.option_type and first.expiration != second.expiration:
+        if (first.option_type == second.option_type and first.expiration != second.expiration
+                and first.quantity == second.quantity):
             near, far = sorted(opening_legs, key=lambda leg: str(leg.expiration))
             if near.order_code == "STO" and far.order_code == "BTO":
                 kind = "calendar" if near.strike == far.strike else "diagonal"
                 return f"{first.option_type}_{kind}"
+        if (first.option_type == second.option_type and first.expiration == second.expiration
+                and first.strike != second.strike and first.quantity == second.quantity
+                and {first.order_code, second.order_code} == {"BTO", "STO"}):
+            return f"{first.option_type}_spread"
+    if len(opening_legs) == 3 and _is_call_crab(opening_legs):
+        return "call_crab"
     if len(opening_legs) == 3 and _is_butterfly(opening_legs):
         return f"{opening_legs[0].option_type}_butterfly"
     if len(opening_legs) == 4:
@@ -665,7 +675,20 @@ def _infer_corpus_structure(legs: tuple[ObservedLegEvidence, ...], *, action: st
         super_type = _super_spread_type(opening_legs)
         if super_type:
             return super_type
-    raise ObservedPackageValidationError("complete package does not match a corpus-proven structure")
+    if len(opening_legs) == 5:
+        puts = tuple(leg for leg in opening_legs if leg.option_type == "put")
+        calls = tuple(leg for leg in opening_legs if leg.option_type == "call")
+        if (len(puts) == 3 and _is_butterfly(puts) and len(calls) == 2
+                and calls[0].expiration == calls[1].expiration
+                and calls[0].quantity == calls[1].quantity == 1
+                and {leg.order_code for leg in calls} == {"STO", "BTO"}
+                and Decimal(str(next(leg for leg in calls if leg.order_code == "STO").strike))
+                    < Decimal(str(next(leg for leg in calls if leg.order_code == "BTO").strike))):
+            return "put_butterfly_with_call_vertical"
+    # Preserve a fully transcribed but unrecognized package for shadow review.
+    # A sibling's independent verification must not fail merely because this
+    # package has no executable shape. Live planning parks structure=None.
+    return None
 
 
 def _as_opening_leg(leg: ObservedLegEvidence) -> ObservedLegEvidence:
@@ -692,6 +715,25 @@ def _is_butterfly(legs: tuple[ObservedLegEvidence, ...]) -> bool:
         [leg.quantity for leg in ordered] == [1, 2, 1]
         and [leg.order_code for leg in ordered] == ["BTO", "STO", "BTO"]
     )
+
+
+def _is_call_crab(legs: tuple[ObservedLegEvidence, ...]) -> bool:
+    if {leg.option_type for leg in legs} != {"call"}:
+        return False
+    expirations = sorted({str(leg.expiration) for leg in legs})
+    if len(expirations) != 2:
+        return False
+    near = [leg for leg in legs if leg.expiration == expirations[0]]
+    far = [leg for leg in legs if leg.expiration == expirations[1]]
+    if len(near) != 2 or len(far) != 1:
+        return False
+    shorts = [leg for leg in near if leg.order_code == "STO" and leg.quantity == 2]
+    near_longs = [leg for leg in near if leg.order_code == "BTO" and leg.quantity == 1]
+    far_long = far[0]
+    return (len(shorts) == len(near_longs) == 1
+            and far_long.order_code == "BTO" and far_long.quantity == 1
+            and Decimal(str(far_long.strike)) < Decimal(str(shorts[0].strike))
+            < Decimal(str(near_longs[0].strike)))
 
 
 def _double_calendar_type(legs: tuple[ObservedLegEvidence, ...]) -> str | None:
