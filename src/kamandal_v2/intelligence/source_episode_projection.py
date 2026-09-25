@@ -130,7 +130,14 @@ def project_source_episode_compilation(
                         compilation=compilation,
                     )
                     classification = str((record.get("classification") or {}).get("type") or "")
-                    maximum_age = ((profile.get("families") or {}).get(classification) or {}).get("max_age_hours")
+                    families = profile.get("families") or {}
+                    maximum_age = (families.get(classification) or {}).get("max_age_hours")
+                    if (maximum_age is None and classification == "observed_package_followup"
+                            and event.get("action") == "open"):
+                        # A post can mix closes or rolls with a new opening. Its
+                        # envelope may be classified as a follow-up, but the
+                        # opening still needs the configured exact-entry age.
+                        maximum_age = (families.get("observed_package_open") or {}).get("max_age_hours")
                     published_at = str((record.get("source") or {}).get("published_at") or "")
                     valid_until = (
                         (datetime.fromisoformat(published_at.replace("Z", "+00:00")) + timedelta(hours=float(maximum_age))).isoformat()
