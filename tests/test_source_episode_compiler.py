@@ -67,6 +67,65 @@ def test_greg_call_vertical_synonym_preserves_source_idea(synonym):
     assert event["planner_new_entry"] is True
 
 
+@pytest.mark.parametrize("text", [
+    "5 Trade Ideas for Monday: Arm and AMD $ARM $AMD",
+    "This went live Thursday, opening it for all to see. $META",
+])
+def test_greg_research_announcements_are_not_confirmed_openings(text):
+    record = _record("research-headline", text, ["ARM"])
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(symbol="ARM", structure_hint="call_spread", projections=["idea"])
+    ]}]}
+
+    event = compile_source_episode_packet(_packet([record]), _profile("greg_harmon"), FakeClient(response)).episodes[0]["events"][0]
+
+    assert event["action"] == "discovery"
+    assert event["planner_new_entry"] is False
+
+
+@pytest.mark.parametrize("text", [
+    "5 Trade Ideas for Monday: $ARM call spread. I also bought the $AMD Oct 100 call spread today.",
+    "5 Trade Ideas for Monday: $ARM call spread. $AMD: bought the Oct 100 call spread today.",
+])
+def test_greg_research_headline_does_not_suppress_explicit_fill_in_same_post(text):
+    record = _record(
+        "mixed-headline",
+        text,
+        ["ARM", "AMD"],
+    )
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(action="open", symbol="ARM", structure_hint="call_spread", projections=["idea"]),
+        _event(action="open", symbol="AMD", structure_hint="call_spread", projections=["idea"]),
+    ]}]}
+
+    events = compile_source_episode_packet(_packet([record]), _profile("greg_harmon"), FakeClient(response)).episodes[0]["events"]
+
+    assert [event["action"] for event in events] == ["discovery", "open"]
+    assert events[0]["planner_new_entry"] is False
+    assert events[1]["planner_new_entry"] is True
+
+
+def test_reinterpreted_post_does_not_link_to_its_old_revision_as_history():
+    record = _record("same-post", "Rolled my $LULU put diagonal", ["LULU"])
+    old = {
+        "schema": EPISODE_SCHEMA, "post_ref": record["signal_id"],
+        "published_at": "2026-09-03T14:00:00Z", "profile_version": "3",
+        "interpretation_rules_version": "source-evidence-v2",
+        "events": [{"event_id": "prior_same_post", "action": "open", "symbol": "LULU", "structure_hint": "put_diagonal"}],
+    }
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(action="roll", symbol="LULU", projections=["residual"])
+    ]}]}
+    client = FakeClient(response)
+
+    event = compile_source_episode_packet(
+        _packet([record]), _profile("mike_butler"), client, history=[old]
+    ).episodes[0]["events"][0]
+
+    assert event["link_state"] == "needs_history"
+    assert "prior_same_post" not in client.calls[0]["user_prompt"]
+
+
 def _profile(name: str) -> dict:
     return yaml.safe_load(Path(f"config/correspondents/{name}.yaml").read_text(encoding="utf-8"))
 
@@ -312,6 +371,69 @@ def test_incomplete_exact_package_is_parked_before_projection() -> None:
     assert "exact_package_incomplete" in event["blockers"]
 
 
+def test_four_leg_double_calendar_cannot_become_two_leg_exact_calendar() -> None:
+    record = _record("double-calendar", "New double put calendar in $ADBE", ["ADBE"])
+    legs = [
+        {"quantity": 1, "expiration": expiry, "strike": strike, "option_type": "put", "order_code": code}
+        for strike in ("220", "230")
+        for expiry, code in (("Sep 11 2026", "STO"), ("Sep 18 2026", "BTO"))
+    ]
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(symbol="ADBE", structure_hint="put_calendar", projections=["idea", "exact_package"],
+               exact_packages=[{"complete": True, "blocker": None, "displayed_price": None,
+                                "legs": legs, "field_provenance": ["text"]}])
+    ]}]}
+
+    event = compile_source_episode_packet(_packet([record]), _profile("mike_butler"), FakeClient(response)).episodes[0]["events"][0]
+
+    assert event["exact_packages"][0]["blocker"] == "structure_leg_count_mismatch"
+    assert event["exact_packages"][0]["complete"] is False
+    assert "exact_package" not in event["projections"]
+    assert event["planner_new_entry"] is True  # Adapted idea remains independent.
+
+
+def test_source_quantity_conflict_holds_exact_long_call() -> None:
+    record = _record("quantity-conflict", "New 3x long call LEAPs in $TLT", ["TLT"])
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(symbol="TLT", direction="bullish", structure_hint="long_call",
+               projections=["idea", "exact_package"], exact_packages=[{
+                   "complete": True, "blocker": None, "displayed_price": None,
+                   "legs": [{"quantity": 1, "expiration": "Jan 21 2028", "strike": "90",
+                             "option_type": "call", "order_code": "BTO"}],
+                   "field_provenance": ["text"],
+               }])
+    ]}]}
+
+    event = compile_source_episode_packet(_packet([record]), _profile("mike_butler"), FakeClient(response)).episodes[0]["events"][0]
+
+    assert event["exact_packages"][0]["blocker"] == "source_quantity_conflicts_with_displayed_package"
+    assert event["exact_packages"][0]["complete"] is False
+    assert "exact_package" not in event["projections"]
+
+
+def test_incomplete_sibling_holds_whole_exact_opening() -> None:
+    record = _record("alternatives", "New $SNOW calendars at 330 and 340", ["SNOW"])
+    good_legs = [
+        {"quantity": 1, "expiration": expiry, "strike": "330", "option_type": "call", "order_code": code}
+        for expiry, code in (("Sep 11 2026", "STO"), ("Oct 16 2026", "BTO"))
+    ]
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(symbol="SNOW", direction="bullish", structure_hint="call_calendar",
+               projections=["idea", "exact_package"], exact_packages=[
+                   {"complete": True, "blocker": None, "displayed_price": None,
+                    "legs": good_legs, "field_provenance": ["text"]},
+                   {"complete": False, "blocker": "340 expiration missing", "displayed_price": None,
+                    "legs": [], "field_provenance": ["text"]},
+               ])
+    ]}]}
+
+    event = compile_source_episode_packet(_packet([record]), _profile("mike_butler"), FakeClient(response)).episodes[0]["events"][0]
+
+    assert len(event["exact_packages"]) == 2
+    assert "exact_package" not in event["projections"]
+    assert event["planner_new_entry"] is True
+
+
 def test_verified_media_is_hashed_and_history_round_trips(tmp_path: Path) -> None:
     image = tmp_path / "post.jpg"
     image.write_bytes(b"public image fixture")
@@ -528,7 +650,14 @@ def test_optional_non_numeric_display_price_is_dropped_without_weakening_legs() 
                 "strike": "115",
                 "option_type": "put",
                 "order_code": "BTO",
-            }
+            },
+            {
+                "quantity": 1,
+                "expiration": "Sep 11 2026",
+                "strike": "120",
+                "option_type": "put",
+                "order_code": "STO",
+            },
         ],
         "field_provenance": ["text"],
     }

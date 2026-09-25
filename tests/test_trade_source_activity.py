@@ -270,7 +270,127 @@ def test_chief_brief_counts_confirmed_openings_without_template_inflation(tmp_pa
     )
     assert len(details) == 1
     assert details[0][3] == 'Unsupported'
-    assert '1 openings; 1 templates excluded' in summary[3][1]
+    assert '1 interpreted opening candidates; 1 templates excluded' in summary[3][1]
+
+
+def test_brief_retains_both_route_decisions_after_source_reobservation(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'brief.db')
+    post = 'x-post:2103159907973239124'
+    opportunity = 'corr_opp_d92dd097f9c57a60'
+    idea = {
+        'source_id': 'mike_butler', 'post_ref': post, 'output_id': 'source-event',
+        'planner_idea_id': opportunity, 'classification': 'idea',
+        'effective_mode': 'live', 'action': 'open', 'symbol': 'TLT',
+        'structure': 'long_call', 'normalized_output': {
+            'source_event_id': 'source-event', 'opportunity_group_id': opportunity,
+            'action': 'open', 'symbol': 'TLT', 'structure_hint': 'long_call',
+        },
+    }
+    exact = {
+        'source_id': 'mike_butler', 'post_ref': post, 'output_id': 'exact-revision',
+        'classification': 'exact_package', 'effective_mode': 'live',
+        'action': 'open', 'symbol': 'TLT', 'structure': 'long_call',
+        'normalized_output': {
+            'source_event_id': 'source-event', 'opportunity_group_id': opportunity,
+            'package_signature': 'package', 'action': 'open', 'symbol': 'TLT',
+            'structure': 'long_call', 'complete': True,
+            'legs': [{'order_code': 'BTO', 'quantity': 1, 'expiration': '2028-01-21',
+                      'strike': 90, 'option_type': 'call'}],
+        },
+    }
+    store.event('trade_source_output_observed', idea)
+    store.event('trade_source_output_observed', exact)
+    store.event('observed_package_planner_receipt', {
+        'evidence_revision_id': 'exact-revision', 'status': 'parked', 'blocker': 'unsupported',
+    })
+    store.event('trade_source_planner_disposition', {
+        'idea_id': opportunity, 'mode': 'live', 'status': 'candidate_rejected',
+        'reason': 'Public preflight blocked by entry pricing: allowance_below_valid_tick',
+    })
+    # Natural polling can observe the same output after its terminal receipt.
+    store.event('trade_source_output_observed', idea)
+    store.event('trade_source_output_observed', exact)
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    _summary, details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'idea'): 'live',
+                              ('mike_butler', 'exact_package'): 'live'},
+        sleeve_policy=policy,
+    )
+    assert len(details) == 1
+    assert details[0][3] == 'Unsupported'
+    assert 'Exact: Structure lacks a live path' in details[0][4]
+    assert 'Idea: Entry price allowance below a valid broker tick' in details[0][4]
+
+
+def test_source_revision_and_off_switch_do_not_inherit_old_planner_rejection(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import activity_rows
+    from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER
+
+    store = LocalStore(tmp_path / 'activity.db')
+    base = {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:2103159907973239124',
+        'planner_idea_id': 'one-opportunity', 'classification': 'idea',
+        'action': 'open', 'symbol': 'WMT', 'structure': 'call_diagonal',
+    }
+    store.event('trade_source_output_observed', {
+        **base, 'output_id': 'revision-1', 'effective_mode': 'live',
+        'normalized_output': {'action': 'open', 'source_event_id': 'revision-1'},
+    })
+    store.event('trade_source_planner_disposition', {
+        'idea_id': 'one-opportunity', 'mode': 'live', 'status': 'candidate_rejected',
+        'reason': 'old_quote_rejection',
+    })
+    store.event('trade_source_output_observed', {
+        **base, 'output_id': 'revision-2', 'effective_mode': 'live',
+        'normalized_output': {'action': 'open', 'source_event_id': 'revision-2'},
+    })
+    records = [dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, row)) for row in activity_rows(store)]
+    by_output = {row['output_id']: row for row in records}
+    assert by_output['revision-1']['reason'] == 'old_quote_rejection'
+    assert by_output['revision-2']['reason'] == ''
+
+    store.event('trade_source_output_observed', {
+        **base, 'output_id': 'revision-2', 'effective_mode': 'off',
+        'normalized_output': {'action': 'open', 'source_event_id': 'revision-2'},
+    })
+    records = [dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, row)) for row in activity_rows(store)]
+    current = next(row for row in records if row['output_id'] == 'revision-2')
+    assert current['effective_mode'] == 'off'
+    assert current['reason'] == ''
+
+
+def test_edited_post_same_output_id_does_not_keep_old_quote_rejection(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import activity_rows
+    from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER
+
+    store = LocalStore(tmp_path / 'activity.db')
+    base = {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:2103159907973239124',
+        'output_id': 'stable-event-id', 'planner_idea_id': 'one-opportunity',
+        'classification': 'idea', 'effective_mode': 'live',
+        'action': 'open', 'symbol': 'WMT', 'structure': 'call_diagonal',
+    }
+    store.event('trade_source_output_observed', {
+        **base, 'normalized_output': {'action': 'open', 'thesis': 'old terms'},
+    })
+    store.event('trade_source_planner_disposition', {
+        'idea_id': 'one-opportunity', 'mode': 'live', 'status': 'candidate_rejected',
+        'reason': 'old_quote_rejection',
+    })
+    store.event('trade_source_output_observed', {
+        **base, 'normalized_output': {'action': 'open', 'thesis': 'edited terms'},
+    })
+    rows = [dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, row)) for row in activity_rows(store)]
+    assert len(rows) == 1
+    assert rows[0]['reason'] == ''
+    assert rows[0]['planner_disposition'] == 'observed'
 
 
 def test_brief_writer_preserves_operator_correction_when_migrating(tmp_path, monkeypatch):
@@ -327,7 +447,7 @@ def test_chief_brief_counts_multi_package_opening_once(tmp_path):
     assert details[0][7] == 'mike_butler|' + _opportunity_id('op-1')
     assert details[0][4] == 'Multiple packages require one atomic source opening'
     assert '330' in details[0][2]
-    assert '1 openings' in summary[3][1]
+    assert '1 interpreted opening candidates' in summary[3][1]
 
 
 def test_chief_brief_joins_projected_opportunity_to_entered_position(tmp_path):
