@@ -26,6 +26,8 @@ from kamandal_v2.live.orders import ticket_hash as compute_ticket_hash
 from kamandal_v2.intelligence.trade_sources import (
     TradeSourceMode, TradeSourceOutputKind, compile_trade_source_policies,
 )
+from kamandal_v2.intelligence.observed_packages import load_observed_package_feed
+from kamandal_v2.paths import resolve_path
 from kamandal_v2.portfolio_sleeves import (
     compile_sleeve_policy, live_sleeve_usage, occupied_source_opportunities, sleeve_entry_blocker, ticket_lane,
 )
@@ -471,6 +473,19 @@ def _execute_ticket(
                 fresh_preflight.message or "fresh_preflight_failed",
                 failure_code="fresh_preflight_failed",
             )
+        if not close and ticket.get("source_output_kind") == "exact_package":
+            blocker = _fresh_source_route_blocker(config, ticket)
+            if blocker:
+                store.event("live_entry_exact_evidence_blocked", {
+                    "ticket_hash": ticket.get("ticket_hash"), "reason": blocker,
+                    "source_id": ticket.get("source_id"),
+                    "source_opportunity_id": ticket.get("source_opportunity_id"),
+                })
+                status = "blocked_source_route" if blocker in {
+                    "entry_source_route_not_live", "entry_source_route_missing", "trade_sources_policy_invalid",
+                } else "blocked_source_revision"
+                store.update_live_order_intent_status(str(ticket["ticket_hash"]), status)
+                return _failure(ticket, blocker, failure_code=blocker)
         if not close and str((config.get("portfolio") or {}).get("sleeves_source") or "") == "sheet":
             blocker = _fresh_sheet_entry_blocker(
                 config, adapter, store, ticket, preflight_bpr=float(fresh_preflight.bpr or 0),
@@ -587,6 +602,34 @@ def _fresh_sheet_entry_blocker(
         return f"entry_sheet_policy_unavailable:{type(exc).__name__}"
 
 
+def _fresh_exact_evidence_blocker(config: dict[str, Any], ticket: dict[str, Any]) -> str:
+    """An edited or absent source package cannot submit from an older approval."""
+    required = ("source_id", "source_event_id", "source_opportunity_id",
+                "source_package_signature", "source_evidence_revision_id", "source_verification_ref")
+    if not all(str(ticket.get(key) or "") for key in required):
+        return "entry_exact_evidence_identity_missing"
+    settings = ((config.get("source_intelligence") or {}).get("correspondents") or {})
+    path = resolve_path(settings.get("observed_package_feed") or
+                        "data/research/correspondent_signals/observed_packages/latest.json")
+    try:
+        batches = load_observed_package_feed(path)
+    except (OSError, ValueError, TypeError):
+        return "entry_exact_evidence_unavailable"
+    for batch in batches:
+        for package in batch.packages:
+            opportunity = package.opportunity_group_id or f"observed:{package.source_event_id}"
+            if (package.source_profile == str(ticket["source_id"])
+                    and package.source_event_id == str(ticket["source_event_id"])
+                    and opportunity == str(ticket["source_opportunity_id"])
+                    and package.package_signature == str(ticket["source_package_signature"])
+                    and package.evidence_revision_id == str(ticket["source_evidence_revision_id"])
+                    and package.source_verified
+                    and not package.source_verification_reason
+                    and package.source_verification_ref == str(ticket["source_verification_ref"])):
+                return ""
+    return "entry_exact_evidence_superseded"
+
+
 def _source_route_blocker(ticket: dict[str, Any], rows: list[dict[str, Any]]) -> str:
     source_id = str(ticket.get("source_id") or "").lower()
     if not source_id:
@@ -605,17 +648,17 @@ def _source_route_blocker(ticket: dict[str, Any], rows: list[dict[str, Any]]) ->
 
 
 def _fresh_source_route_blocker(config: dict[str, Any], ticket: dict[str, Any]) -> str:
-    if str((config.get("portfolio") or {}).get("sleeves_source") or "") != "sheet":
-        return ""
-    # The source switch applies only to source-routed openings. A legacy or
-    # ordinary planner order already working at the broker has no such route;
-    # do not cancel it merely because it predates sleeve attribution.
-    if not str(ticket.get("source_id") or ""):
-        return ""
-    try:
-        return _source_route_blocker(ticket, pull_trade_sources(config))
-    except Exception as exc:  # noqa: BLE001 - a failed operator read cannot authorize entry.
-        return f"entry_source_route_unavailable:{type(exc).__name__}"
+    if str((config.get("portfolio") or {}).get("sleeves_source") or "") == "sheet":
+        # Legacy or ordinary planner orders have no source switch.
+        if str(ticket.get("source_id") or ""):
+            try:
+                if blocker := _source_route_blocker(ticket, pull_trade_sources(config)):
+                    return blocker
+            except Exception as exc:  # noqa: BLE001 - failed operator read cannot authorize entry.
+                return f"entry_source_route_unavailable:{type(exc).__name__}"
+    if ticket.get("source_output_kind") == "exact_package":
+        return _fresh_exact_evidence_blocker(config, ticket)
+    return ""
 
 
 def _preflight_ticket_with_entry_risk(adapter: Any, ticket: dict[str, Any]) -> Any:

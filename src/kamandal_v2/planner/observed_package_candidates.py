@@ -144,6 +144,9 @@ def build_observed_package_candidates(
         if effective_mode != mode:
             continue
         if mode == "live":
+            if not package.source_verified or not package.source_verification_ref or package.source_verification_reason:
+                _receipt(store, package, status="parked", blocker="source_not_independently_verified")
+                continue
             if (package.source_opening_package_count > 1 or
                     opening_counts.get((package.source_profile, package.opportunity_group_id or package.source_event_id), 0) > 1):
                 _receipt(store, package, status="parked", blocker="multi_package_opening_requires_atomic_group")
@@ -432,6 +435,8 @@ def _candidate(
             "package_position": package.package_position,
             "package_signature": package.package_signature,
             "evidence_revision_id": package.evidence_revision_id,
+            "source_verified": package.source_verified,
+            "source_verification_ref": package.source_verification_ref,
             "displayed_price": dict(package.displayed_price) if package.displayed_price else None,
             "displayed_trade_time": package.displayed_trade_time,
             "chain_snapshot_id": chain_snapshot.chain_snapshot_id,

@@ -238,6 +238,18 @@ def activate_correspondent_sources(
                 if exact_policy is not None and exact_policy.inference_enabled:
                     profile_batches = list(projected.observed_batches)
                     profile_observed_failures = list(projected.failures)
+                    if exact_policy.mode is TradeSourceMode.LIVE:
+                        from kamandal_v2.intelligence.source_contract_verification import verify_live_source_contracts
+
+                        verified, verification_failures = verify_live_source_contracts(
+                            profile_batches,
+                            packet,
+                            live_structures=exact_policy.live_structures,
+                            client=observed_package_client,
+                            cache_root=output_root / "source_verification",
+                        )
+                        profile_batches = list(verified)
+                        profile_observed_failures.extend(verification_failures)
                 elif idea_policy is None or not idea_policy.inference_enabled:
                     _record_episode_outputs(
                         discovery_store,
@@ -503,9 +515,12 @@ def _record_exact_outputs(
                     "classification": "exact_package",
                     "normalized_output": package.to_dict(),
                     "capability_support": "pending_playbook_match",
-                    "planner_disposition": "pending" if source_mode is TradeSourceMode.SHADOW else "observed_only",
+                    "planner_disposition": (
+                        "parked" if source_mode is TradeSourceMode.LIVE and package.source_verification_reason
+                        else "pending" if source_mode is TradeSourceMode.SHADOW else "observed_only"
+                    ),
                     "effective_mode": source_mode.value,
-                    "reason": package.blocker or "",
+                    "reason": package.blocker or package.source_verification_reason or "",
                     "broker_effects": False,
                 },
             )

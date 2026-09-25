@@ -1,4 +1,5 @@
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,7 @@ def _package(source="mike_butler"):
         _batch().packages[0], source_profile=source, symbol="XYZ", structure="short_strangle",
         package_signature="exact-strangle-signature", opportunity_group_id="exact-strangle-opportunity",
         source_published_at="2026-09-08T13:00:00Z", source_valid_until="2026-09-09T13:00:00Z",
+        source_verified=True, source_verification_ref="sv_fixture_independent_match",
         legs=(ObservedLegEvidence(1, EXPIRY, "90", "put", "STO", "sell", "open"),
               ObservedLegEvidence(1, EXPIRY, "110", "call", "STO", "sell", "open")),
     )
@@ -138,6 +140,46 @@ def test_live_source_freshness_survives_feed_roundtrip():
     assert restored.source_published_at == _package().source_published_at
     assert restored.source_valid_until == _package().source_valid_until
     assert restored.source_opening_package_count == 2
+
+
+def test_unverified_exact_package_cannot_enter_live(tmp_path):
+    market = Market()
+    assert _build(tmp_path, package=replace(_package(), source_verified=False), market=market) == []
+    assert market.calls == 0
+
+
+def test_staged_exact_ticket_requires_current_verified_source_revision(tmp_path):
+    from kamandal_v2.intelligence.correspondent_activation import _write_observed_package_feed
+    from kamandal_v2.live.execution import _fresh_exact_evidence_blocker, _fresh_source_route_blocker
+    from kamandal_v2.live.orders import build_open_ticket, ticket_hash
+
+    package = _package()
+    candidate, = _build(tmp_path, package=package)
+    ticket = build_open_ticket(SimpleNamespace(plan_id="verified-plan", plan_rank=1), candidate)
+    root = tmp_path / "research"
+    config = {"source_intelligence": {"correspondents": {
+        "observed_package_feed": str(root / "observed_packages" / "latest.json")
+    }}}
+    _write_observed_package_feed(root, activated_at=NOW, batches=[
+        replace(_batch(), packages=(package,))
+    ], failures=[])
+    assert ticket["source_event_id"] == package.source_event_id
+    assert ticket["source_evidence_revision_id"] == package.evidence_revision_id
+    assert ticket["source_verification_ref"] == package.source_verification_ref
+    assert _fresh_exact_evidence_blocker(config, ticket) == ""
+
+    edited = replace(package, evidence_revision_id="orev_edited")
+    _write_observed_package_feed(root, activated_at=NOW, batches=[
+        replace(_batch(), packages=(edited,))
+    ], failures=[])
+    assert _fresh_exact_evidence_blocker(config, ticket) == "entry_exact_evidence_superseded"
+    assert _fresh_source_route_blocker(config, ticket) == "entry_exact_evidence_superseded"
+    assert ticket_hash({**ticket, "source_evidence_revision_id": edited.evidence_revision_id}) != ticket["ticket_hash"]
+
+    _write_observed_package_feed(root, activated_at=NOW, batches=[
+        replace(_batch(), packages=(replace(package, source_verified=False),))
+    ], failures=[])
+    assert _fresh_exact_evidence_blocker(config, ticket) == "entry_exact_evidence_superseded"
 
 
 def test_exact_strangle_never_resizes_source_quantity(tmp_path):

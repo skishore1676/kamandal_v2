@@ -335,6 +335,91 @@ def test_observed_package_profile_publishes_typed_feed_and_reuses_cache(tmp_path
     assert load_observed_package_feed(result.observed_package_feed_path)[0].packages[0].symbol == "ADSK"
     assert load_ideas([result.active_idea_paths[0]]) == []
 
+    class ImageClient:
+        calls = 0
+
+        def chat_json(self, _system: str, _user: str, *, images: tuple[str, ...] = ()) -> dict:
+            self.calls += 1
+            assert images == (str(image_path),)
+            return fixture["expected_extraction"]
+
+    image_client = ImageClient()
+    live_rows = [
+        {"source_id": "mike_butler", "output_kind": "idea", "mode": "off"},
+        {"source_id": "mike_butler", "output_kind": "exact_package", "mode": "live",
+         "live_structures": "call_calendar"},
+    ]
+    live_result = activate_correspondent_sources(
+        settings, universe_symbols=set(), command_runner=runner,
+        store=LocalStore(tmp_path / "kamandal.db"),
+        source_episode_client=client, observed_package_client=image_client,
+        trade_source_rows=live_rows,
+    )
+    live_package = load_observed_package_feed(live_result.observed_package_feed_path)[0].packages[0]
+    assert live_package.source_verified
+    assert live_package.source_verification_ref.startswith("sv_")
+    assert image_client.calls == 1
+
+    # The independently checked projection survives the feed seam and can be
+    # evaluated by the exact live planner without changing its source legs.
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from kamandal_v2.domain.models import Playbook, PreflightResult
+    from kamandal_v2.intelligence.trade_sources import compile_trade_source_policies
+    from kamandal_v2.planner.observed_package_candidates import build_observed_package_candidates
+    from tests.test_observed_package_planning import _Market, _observed_calendar_row
+
+    live_package = replace(live_package, source_valid_until="2026-08-27T19:00:00Z")
+    row = _observed_calendar_row()
+    row.update({"mode": "live", "csa_stage": "live", "source_mode": "idea",
+                "accepted_inputs": "exact_package", "dte_min": 0, "dte_max": 40,
+                "long_dte_min": 0, "long_dte_max": 40, "max_debit_pct_bpr": 1})
+    playbook = Playbook.from_row(row)
+    policy = SimpleNamespace(playbook_id=playbook.playbook_id, source_mode="idea",
+                             accepted_inputs=("exact_package",), mode=SimpleNamespace(value="live"),
+                             structure="call_calendar")
+    market = _Market(captured_at="2026-08-27T18:00:00Z")
+    market.preflight = lambda _candidate: PreflightResult(
+        True, 500, "broker dry-run", {"broker_bpr_provided": True})
+    source_policies = compile_trade_source_policies(live_rows).by_key()
+    candidates = build_observed_package_candidates(
+        [live_package], policies=(policy,), playbooks=[playbook], market=market,
+        store=LocalStore(tmp_path / "verified-planner.db"),
+        config={"runtime": {"observed_at": "2026-08-27T18:00:00Z"},
+                "live": {"option_submission": {"quote_max_age_minutes": 5}}},
+        trade_source_policies=source_policies, mode="live",
+    )
+    assert len(candidates) == 1 and candidates[0].eligible
+    assert [(leg.side, leg.expiration, leg.strike) for leg in candidates[0].legs] == [
+        ("sell", "2026-08-28", 290), ("buy", "2026-09-04", 290),
+    ]
+
+    class DisagreeingImageClient(ImageClient):
+        def chat_json(self, _system: str, _user: str, *, images: tuple[str, ...] = ()) -> dict:
+            import copy
+
+            raw = copy.deepcopy(super().chat_json(_system, _user, images=images))
+            raw["packages"][0]["legs"][0]["quantity"] = 2
+            return raw
+
+    changed_settings = dict(settings, output_dir=str(tmp_path / "changed-research"))
+    changed = activate_correspondent_sources(
+        changed_settings, universe_symbols=set(), command_runner=runner,
+        store=LocalStore(tmp_path / "changed.db"),
+        source_episode_client=FakeClient(), observed_package_client=DisagreeingImageClient(),
+        trade_source_rows=live_rows,
+    )
+    disagreed = load_observed_package_feed(changed.observed_package_feed_path)[0].packages[0]
+    assert not disagreed.source_verified
+    assert disagreed.source_verification_reason == "source_contracts_disagree_with_image"
+    assert build_observed_package_candidates(
+        [replace(disagreed, source_valid_until="2026-08-27T19:00:00Z")],
+        policies=(policy,), playbooks=[playbook], market=market,
+        store=LocalStore(tmp_path / "disagreed-planner.db"),
+        config={"runtime": {"observed_at": "2026-08-27T18:00:00Z"}},
+        trade_source_policies=source_policies, mode="live",
+    ) == []
+
 
 def test_activation_records_outside_universe_mentions_for_weekly_review(tmp_path: Path) -> None:
     settings = _settings(tmp_path)

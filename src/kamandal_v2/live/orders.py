@@ -105,6 +105,9 @@ def build_csa_live_ticket(ticket: StrategyTicket, *, entry_candidate: Candidate 
             "source_output_kind": "exact_package" if metadata.get("input_kind") == "exact_package" else "idea",
             "source_opportunity_id": str(metadata.get("source_opportunity_id") or ""),
             "source_package_signature": str(metadata.get("package_signature") or ""),
+            "source_event_id": str(metadata.get("source_event_id") or ""),
+            "source_evidence_revision_id": str(metadata.get("evidence_revision_id") or ""),
+            "source_verification_ref": str(metadata.get("source_verification_ref") or ""),
         })
     for key in (
         "decision_observation_id",
@@ -194,7 +197,7 @@ def ticket_hash(ticket: dict[str, Any]) -> str:
             "preflight",
         )
     }
-    for key in ("entry_risk_budget", "source_valid_until", "sleeve_id", "source_id", "source_output_kind", "source_opportunity_id", "source_package_signature"):
+    for key in ("entry_risk_budget", "source_valid_until", "sleeve_id", "source_id", "source_output_kind", "source_opportunity_id", "source_package_signature", "source_event_id", "source_evidence_revision_id", "source_verification_ref"):
         if key in ticket:
             stable[key] = ticket[key]
     return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:24]
@@ -252,6 +255,9 @@ def _build_ticket(
             "source_output_kind": "exact_package" if (getattr(candidate, "metadata", {}) or {}).get("input_kind") == "exact_package" else "idea",
             "source_opportunity_id": str((getattr(candidate, "metadata", {}) or {}).get("source_opportunity_id") or ""),
             "source_package_signature": str((getattr(candidate, "metadata", {}) or {}).get("package_signature") or ""),
+            "source_event_id": str((getattr(candidate, "metadata", {}) or {}).get("source_event_id") or ""),
+            "source_evidence_revision_id": str((getattr(candidate, "metadata", {}) or {}).get("evidence_revision_id") or ""),
+            "source_verification_ref": str((getattr(candidate, "metadata", {}) or {}).get("source_verification_ref") or ""),
         } if intent_type == "open" else {}),
         "legs": [leg.to_dict() for leg in legs],
         "submit_payload": submit_payload,

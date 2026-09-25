@@ -257,6 +257,7 @@ def test_exact_calendar_can_enter_live_only_with_source_permission_and_broker_bp
         _batch().packages[0],
         source_published_at="2026-08-28T13:00:00Z",
         source_valid_until="2026-08-28T16:00:00Z",
+        source_verified=True, source_verification_ref="sv_fixture_independent_match",
     )
     row = _observed_calendar_row()
     row.update({
@@ -299,6 +300,7 @@ def test_multi_package_opening_cannot_partially_enter_live(tmp_path: Path) -> No
         _batch().packages[0],
         source_published_at="2026-08-28T13:00:00Z",
         source_valid_until="2026-08-28T16:00:00Z",
+        source_verified=True, source_verification_ref="sv_fixture_independent_match",
     )
     second = replace(package, package_position=2, package_signature="second-package")
     row = _observed_calendar_row()
@@ -327,6 +329,7 @@ def test_complete_sibling_stays_shadow_evaluable_but_cannot_enter_live(tmp_path:
         source_published_at="2026-08-28T13:00:00Z",
         source_valid_until="2026-08-28T16:00:00Z",
         source_opening_package_count=2,
+        source_verified=True, source_verification_ref="sv_fixture_independent_match",
     )
     row = _observed_calendar_row()
     row.update({"mode": "live", "csa_stage": "live", "source_mode": "idea", "accepted_inputs": "exact_package"})

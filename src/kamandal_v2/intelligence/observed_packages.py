@@ -104,6 +104,9 @@ class ObservedPackageEvidence:
     source_published_at: str | None = None
     source_valid_until: str | None = None
     source_opening_package_count: int = 1
+    source_verified: bool = False
+    source_verification_ref: str | None = None
+    source_verification_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +133,9 @@ class ObservedPackageEvidence:
             "source_published_at": self.source_published_at,
             "source_valid_until": self.source_valid_until,
             "source_opening_package_count": self.source_opening_package_count,
+            "source_verified": self.source_verified,
+            "source_verification_ref": self.source_verification_ref,
+            "source_verification_reason": self.source_verification_reason,
             "provenance": {
                 "image_sha256": self.image_sha256,
                 "prompt_sha256": self.prompt_sha256,
@@ -315,6 +321,13 @@ def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageB
                 or not isinstance(source_opening_package_count, int)
                 or source_opening_package_count < 1):
             raise ObservedPackageValidationError(f"batch package {index} source opening count is invalid")
+        if not isinstance(item.get("source_verified", False), bool):
+            raise ObservedPackageValidationError(f"batch package {index} source verification flag is invalid")
+        if item.get("source_verified") and (
+            not _optional_text(item.get("source_verification_ref"))
+            or _optional_text(item.get("source_verification_reason"))
+        ):
+            raise ObservedPackageValidationError(f"batch package {index} source verification is inconsistent")
         package = ObservedPackageEvidence(
             source_event_id=_required_text(item.get("source_event_id"), f"packages[{index}].source_event_id"),
             source_profile=source_profile,
@@ -340,6 +353,9 @@ def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageB
             source_published_at=_optional_text(item.get("source_published_at")),
             source_valid_until=_optional_text(item.get("source_valid_until")),
             source_opening_package_count=source_opening_package_count,
+            source_verified=item.get("source_verified", False),
+            source_verification_ref=_optional_text(item.get("source_verification_ref")),
+            source_verification_reason=_optional_text(item.get("source_verification_reason")),
         )
         if package.action not in _PACKAGE_ACTIONS or package.media_index <= 0 or package.package_position <= 0:
             raise ObservedPackageValidationError(f"batch package {index} has invalid identity fields")
@@ -618,6 +634,15 @@ def _infer_corpus_structure(legs: tuple[ObservedLegEvidence, ...], *, action: st
     opening_legs = tuple(_as_opening_leg(leg) for leg in legs)
     if len(opening_legs) == 2:
         first, second = opening_legs
+        if (
+            first.expiration == second.expiration
+            and {first.option_type, second.option_type} == {"call", "put"}
+            and first.order_code == second.order_code == "STO"
+            and first.quantity == second.quantity
+            and Decimal(str(next(leg for leg in opening_legs if leg.option_type == "put").strike))
+                < Decimal(str(next(leg for leg in opening_legs if leg.option_type == "call").strike))
+        ):
+            return "short_strangle"
         if (
             first.expiration == second.expiration
             and first.strike == second.strike
