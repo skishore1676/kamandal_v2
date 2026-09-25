@@ -561,3 +561,14 @@ def test_brief_shows_actual_sheet_block_and_separate_position_slot(tmp_path):
         sleeve_policy=policy, max_positions=15,
     )
     assert later_details[0][3] == 'Blocked by preflight'
+
+    store.update_live_order_intent_status('blocked-ticket', 'blocked_source_revision')
+    store.event('live_entry_exact_evidence_blocked', {
+        'ticket_hash': 'blocked-ticket', 'reason': 'entry_exact_evidence_superseded',
+    })
+    _summary, corrected_details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'exact_package'): 'live'},
+        sleeve_policy=policy, max_positions=15,
+    )
+    assert corrected_details[0][3] == 'Needs evidence'
+    assert corrected_details[0][4] == 'Source opening changed; re-evaluate before entry'

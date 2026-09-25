@@ -125,7 +125,8 @@ def test_current_lane_entry_does_not_depend_on_guru_route_sheet(monkeypatch, tmp
     assert _fresh_sheet_entry_blocker({}, Adapter(), LocalStore(tmp_path / "current.db"), ticket, preflight_bpr=500) == ""
 
 
-def test_atomic_exact_reprice_cannot_raise_bpr_above_approved_budget(tmp_path) -> None:
+def test_atomic_exact_reprice_cannot_raise_bpr_above_approved_budget(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("kamandal_v2.live.execution._fresh_source_route_blocker", lambda *_args: "")
     class Adapter:
         replacements = 0
 

@@ -531,6 +531,7 @@ def main() -> None:
             universe_symbols=[entry.symbol for entry in universe if entry.enabled],
             store=active_store,
             source_episode_client=build_llm_client(correspondent_config, actor="source_episode_interpreter"),
+            observed_package_client=build_llm_client(correspondent_config, actor="observed_package_extractor"),
             trade_source_rows=tables["trade_sources"],
         )
         payload = result.to_dict()

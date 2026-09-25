@@ -252,7 +252,7 @@ def chief_of_staff_rows(
     groups = [*store.open_live_position_groups(), *store.closed_live_position_groups(limit=1000)]
     intents = store.live_order_intents_by_type("open")
     policy_blocks: dict[str, dict[str, Any]] = {}
-    for event in store.recent_events(("live_entry_sheet_policy_blocked",), limit=1000):
+    for event in store.recent_events(("live_entry_sheet_policy_blocked", "live_entry_exact_evidence_blocked"), limit=1000):
         ticket_hash = str(event.get("ticket_hash") or "")
         if ticket_hash:
             policy_blocks[ticket_hash] = event
@@ -337,7 +337,7 @@ def chief_of_staff_rows(
             decision = "Blocked by preflight"
             reason = failed_preflights.get(str(blocked_intent.get("ticket_hash") or "")) or str(blocked_intent.get("_ledger_status") or "")
         elif policy_block:
-            decision = "Blocked by policy"
+            decision = "Needs evidence" if str(policy_block.get("reason") or "").startswith("entry_exact_evidence_") else "Blocked by policy"
             reason = str(policy_block.get("reason") or "Sheet or source policy blocked this entry")
         elif blocked_intent:
             decision = "Blocked"
@@ -470,6 +470,14 @@ def _plain_reason(value: str) -> str:
         return "Source image or linked article missing; obtain contract terms"
     if "incomplete" in lower:
         return "Incomplete source contracts; resolve terms before exact entry"
+    if "source verifier" in lower or "source contracts disagree" in lower or "source package count disagrees" in lower or "source structure disagrees" in lower or "source price disagrees" in lower or "source not independently verified" in lower:
+        return "Source image verification has not matched the opening contracts"
+    if "entry exact evidence superseded" in lower:
+        return "Source opening changed; re-evaluate before entry"
+    if "entry exact evidence unavailable" in lower:
+        return "Current source verification feed unavailable; entry paused"
+    if "entry exact evidence identity missing" in lower:
+        return "Approved entry lacks a source verification reference"
     if "source too old" in lower or "stale" in lower:
         return "Opening is stale; await a new confirmed entry"
     quote = re.search(r"bid ask pct above max:([0-9]+(?:\.[0-9]+)?)>([0-9]+(?:\.[0-9]+)?)", lower)
@@ -511,6 +519,10 @@ def _issue_label(reason: str) -> str:
         return "Missing source media/article"
     if "expiration" in lower or "incomplete" in lower:
         return "Incomplete contract terms"
+    if "source verifier" in lower or "source contracts disagree" in lower or "source package count disagrees" in lower or "source structure disagrees" in lower or "source price disagrees" in lower or "source not independently verified" in lower:
+        return "Source contract verification"
+    if "entry exact evidence" in lower:
+        return "Source contract verification"
     if "bid ask" in lower:
         return "Quote spread too wide"
     if "outside configured universe" in lower:
