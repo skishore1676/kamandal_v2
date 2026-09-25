@@ -88,6 +88,12 @@ class VenueAwareMarket:
     def chain_snapshot(self, underlying: str) -> Any:
         return self.inner.chain_snapshot(underlying)
 
+    def chain_snapshot_for_expirations(self, underlying: str, expirations: list[str]) -> Any:
+        targeted = getattr(self.inner, "chain_snapshot_for_expirations", None)
+        if callable(targeted):
+            return targeted(underlying, expirations)
+        return self.inner.chain_snapshot(underlying)
+
     def iv_percentile(self, underlying: str) -> float | None:
         return self.inner.iv_percentile(underlying)
 

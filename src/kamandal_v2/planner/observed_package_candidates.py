@@ -107,7 +107,7 @@ def build_observed_package_candidates(
         if item.action == "open" and item.complete:
             key = (item.source_profile, item.opportunity_group_id or item.source_event_id)
             opening_counts[key] = opening_counts.get(key, 0) + 1
-    chain_cache: dict[str, Any] = {}
+    chain_cache: dict[tuple[str, tuple[str, ...]], Any] = {}
     candidates: list[Candidate] = []
 
     for package in package_list:
@@ -158,12 +158,18 @@ def build_observed_package_candidates(
                 _receipt(store, package, status="parked", blocker=blocker)
                 continue
 
-        if package.symbol not in chain_cache:
+        targeted_chain = getattr(market, "chain_snapshot_for_expirations", None)
+        expirations = tuple(sorted({str(leg.expiration) for leg in package.legs if leg.expiration}))
+        chain_key = (package.symbol, expirations if callable(targeted_chain) else ())
+        if chain_key not in chain_cache:
             try:
-                chain_cache[package.symbol] = market.chain_snapshot(package.symbol)
+                if callable(targeted_chain):
+                    chain_cache[chain_key] = targeted_chain(package.symbol, list(expirations))
+                else:
+                    chain_cache[chain_key] = market.chain_snapshot(package.symbol)
             except Exception as exc:  # noqa: BLE001 - the evidence receipt owns the precise park reason.
-                chain_cache[package.symbol] = exc
-        chain = chain_cache[package.symbol]
+                chain_cache[chain_key] = exc
+        chain = chain_cache[chain_key]
         if isinstance(chain, Exception):
             _receipt(store, package, status="parked", blocker=f"quote_unavailable:{type(chain).__name__}:{chain}")
             continue
@@ -204,6 +210,10 @@ def build_observed_package_candidates(
                     else:
                         hard_rejections.append(reason)
                 rejections = hard_rejections
+            elif mode == "live" and package.structure in {
+                "call_calendar", "put_calendar", "call_diagonal", "put_diagonal",
+            }:
+                rejections.extend(_exact_debit_contract_rejections(candidate, playbook, config))
             package_spread = float(candidate_liquidity_metrics(candidate)["aggregate_spread_to_mid_pct"])
             if playbook.max_bid_ask_pct is not None and package_spread > playbook.max_bid_ask_pct:
                 rejections.append(
@@ -313,6 +323,37 @@ def _exact_strangle_contract_rejections(candidate: Candidate, playbook: Playbook
             reasons.append("exact_strangle_quantity_above_policy")
     if candidate.net_credit <= 0:
         reasons.append("exact_strangle_requires_positive_credit")
+    return reasons
+
+
+def _exact_debit_contract_rejections(candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None) -> list[str]:
+    """Apply the Sheet's contract and cash limits without changing source legs."""
+    observed = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
+    today = datetime.fromisoformat(observed.replace("Z", "+00:00")).date()
+    reasons: list[str] = []
+    near = next(leg for leg in candidate.legs if leg.role == "short_near")
+    far = next(leg for leg in candidate.legs if leg.role == "long_far")
+    near_dte = (date.fromisoformat(near.expiration) - today).days
+    far_dte = (date.fromisoformat(far.expiration) - today).days
+    if near_dte < max(playbook.dte_min, 1) or near_dte > playbook.dte_max:
+        reasons.append("exact_near_dte_outside_policy")
+    if (playbook.long_dte_min is None or playbook.long_dte_max is None
+            or far_dte < playbook.long_dte_min or far_dte > playbook.long_dte_max):
+        reasons.append("exact_far_dte_outside_policy")
+    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
+        reasons.append("exact_quantity_above_policy")
+    for leg, low, high, label in (
+        (near, playbook.short_delta_min, playbook.short_delta_max, "short"),
+        (far, playbook.long_delta_min, playbook.long_delta_max, "long"),
+    ):
+        if ((low is not None and abs(leg.delta) < low)
+                or (high is not None and abs(leg.delta) > high)):
+            reasons.append(f"exact_{label}_delta_outside_policy")
+    if candidate.net_credit >= 0:
+        reasons.append("exact_debit_structure_requires_debit")
+    if (playbook.live_max_bpr_per_order is None or
+            abs(candidate.net_credit) * 100 * near.quantity > playbook.live_max_bpr_per_order):
+        reasons.append("exact_debit_above_order_cap")
     return reasons
 
 

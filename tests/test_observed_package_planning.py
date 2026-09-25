@@ -255,8 +255,8 @@ def test_mike_exact_package_uses_existing_playbook_under_source_shadow_ceiling(
 def test_exact_calendar_can_enter_live_only_with_source_permission_and_broker_bpr(tmp_path: Path) -> None:
     package = replace(
         _batch().packages[0],
-        source_published_at="2026-08-28T13:00:00Z",
-        source_valid_until="2026-08-28T16:00:00Z",
+        source_published_at="2026-08-27T13:00:00Z",
+        source_valid_until="2026-08-27T16:00:00Z",
         source_verified=True, source_verification_ref="sv_fixture_independent_match",
     )
     row = _observed_calendar_row()
@@ -272,9 +272,10 @@ def test_exact_calendar_can_enter_live_only_with_source_permission_and_broker_bp
         accepted_inputs=("exact_package",), mode=SimpleNamespace(value="live"),
         structure="call_calendar",
     )
-    market = _Market(captured_at="2026-08-28T14:00:00Z")
+    market = _Market(captured_at="2026-08-27T14:00:00Z")
     market.preflight = lambda _candidate: PreflightResult(
-        True, 500, "broker quote accepted", {"broker_bpr_provided": True},
+        True, 500, "broker quote accepted",
+        {"broker_bpr_provided": True, "response": {"buyingPowerRequirement": 500}},
     )
     source_policies = compile_trade_source_policies([{
         "source_id": "mike_butler", "output_kind": "exact_package",
@@ -283,7 +284,7 @@ def test_exact_calendar_can_enter_live_only_with_source_permission_and_broker_bp
     candidates = build_observed_package_candidates(
         [package], policies=(policy,), playbooks=[playbook], market=market,
         store=LocalStore(tmp_path / "live-calendar.db"),
-        config={"runtime": {"observed_at": "2026-08-28T14:00:00Z"},
+        config={"runtime": {"observed_at": "2026-08-27T14:00:00Z"},
                 "live": {"option_submission": {"quote_max_age_minutes": 5}}},
         trade_source_policies=source_policies, mode="live",
     )
@@ -293,6 +294,227 @@ def test_exact_calendar_can_enter_live_only_with_source_permission_and_broker_bp
         ("sell", "2026-08-28", 290), ("buy", "2026-09-04", 290),
     ]
     assert candidates[0].estimated_bpr == 500
+
+
+@pytest.mark.parametrize("change,expected", [
+    ({"dte_min": 2, "dte_max": 3}, "exact_near_dte_outside_policy"),
+    ({"long_dte_min": 10, "long_dte_max": 40}, "exact_far_dte_outside_policy"),
+    ({"max_contracts": 0}, "exact_quantity_above_policy"),
+    ({"short_delta_min": 0.7}, "exact_short_delta_outside_policy"),
+    ({"live_max_bpr_per_order": 100}, "exact_debit_above_order_cap"),
+])
+def test_live_exact_calendar_honors_contract_and_cash_policy(
+    tmp_path: Path, change: dict[str, object], expected: str
+) -> None:
+    package = replace(
+        _batch().packages[0], source_published_at="2026-08-27T13:00:00Z",
+        source_valid_until="2026-08-27T16:00:00Z", source_verified=True,
+        source_verification_ref="sv_fixture_independent_match",
+    )
+    row = _observed_calendar_row()
+    row.update({
+        "mode": "live", "csa_stage": "live", "source_mode": "idea",
+        "accepted_inputs": "exact_package", "dte_min": 0, "dte_max": 40,
+        "long_dte_min": 0, "long_dte_max": 40, "max_contracts": 1,
+        "live_max_bpr_per_order": 1200,
+    })
+    row.update(change)
+    playbook = Playbook.from_row(row)
+    policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, accepted_inputs=("exact_package",),
+        mode=SimpleNamespace(value="live"), structure="call_calendar",
+    )
+    source = compile_trade_source_policies([{
+        "source_id": "mike_butler", "output_kind": "exact_package",
+        "mode": "live", "live_structures": "call_calendar",
+    }]).by_key()
+    market = _Market(captured_at="2026-08-27T14:00:00Z")
+    called = []
+    market.preflight = lambda candidate: called.append(candidate) or PreflightResult(
+        True, 500, "broker quote accepted", {"broker_bpr_provided": True},
+    )
+    candidate, = build_observed_package_candidates(
+        [package], policies=(policy,), playbooks=[playbook], market=market,
+        store=LocalStore(tmp_path / "live-policy.db"),
+        config={"runtime": {"observed_at": "2026-08-27T14:00:00Z"}},
+        trade_source_policies=source, mode="live",
+    )
+    assert candidate.rejection_reason == expected
+    assert called == []
+
+
+def test_exact_candidate_requests_source_expirations_only(tmp_path: Path) -> None:
+    package = _batch().packages[0]
+    market = _Market()
+    requested: list[tuple[str, ...]] = []
+    market.chain_snapshot_for_expirations = lambda symbol, expirations: (
+        requested.append(tuple(expirations)) or market.chain_snapshot(symbol)
+    )
+    row = _observed_calendar_row()
+    playbook = Playbook.from_row(row)
+    policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, accepted_inputs=("exact_package",),
+        mode=SimpleNamespace(value="shadow"), structure="call_calendar",
+    )
+    assert build_observed_package_candidates(
+        [package], policies=(policy,), playbooks=[playbook], market=market,
+        store=LocalStore(tmp_path / "targeted.db"), mode="shadow",
+    )
+    assert requested == [("2026-08-28", "2026-09-04")]
+
+
+def test_source_verified_calendar_reaches_live_ticket_with_close_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from kamandal_v2.strategy_engine import planning
+    from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, policy_tables_hash
+    from kamandal_v2.strategy_lanes.operator_policy import OperatorPolicyBundle
+
+    now = "2026-08-27T14:00:00Z"
+    row = _observed_calendar_row()
+    row.update({
+        "playbook_id": "guru_exact_call_calendar", "mode": "live", "csa_stage": "live",
+        "source_mode": "idea", "accepted_inputs": "exact_package",
+        "dte_min": 1, "dte_max": 60, "long_dte_min": 2, "long_dte_max": 180,
+        "max_contracts": 1, "sizing_method": "fixed_contracts", "sizing_value": 1,
+        "exit_dte_min": 0, "half_time_exit": "FALSE", "avoid_earnings": "FALSE",
+        "live_max_bpr_per_order": 1200,
+    })
+    sources = [
+        {"source_id": source, "output_kind": kind,
+         "mode": "live" if kind == "exact_package" else "off",
+         "live_structures": "call_calendar" if kind == "exact_package" else ""}
+        for source in ("greg_harmon", "mike_butler") for kind in ("idea", "exact_package")
+    ]
+    tables = {"universe": [], "playbooks": [row], "trade_sources": sources}
+    snapshot = DailyPolicySnapshot(
+        now[:10], now, policy_tables_hash(tables), tables, tmp_path / "policy.json",
+        OperatorPolicyBundle((), (), (), now, source="fixture"),
+    )
+    control = load_control()
+    control["portfolio"]["sleeves_source"] = ""
+    control["runtime"]["observed_at"] = now
+    control["risk_manager"]["enabled"] = False
+    market = _Market(captured_at=now)
+    market.account_state = lambda: PortfolioState(100000, 100000, 0, 0)
+    market.preflight = lambda _candidate: PreflightResult(
+        True, 500, "broker quote accepted",
+        {"broker_bpr_provided": True, "response": {"buyingPowerRequirement": 500}},
+    )
+    monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: market)
+    package = replace(
+        _batch().packages[0], source_published_at="2026-08-27T13:00:00Z",
+        source_valid_until="2026-08-27T16:00:00Z", source_verified=True,
+        source_verification_ref="sv_fixture_independent_match",
+    )
+    store = _migrated_store(tmp_path)
+    result = planning.run_unified_books(
+        control, universe_rows=[], playbook_rows=[row], idea_paths=[], provider="fixture",
+        store=store, audit_root=tmp_path / "audit", daily_policy_snapshot=snapshot,
+        trade_source_rows=sources,
+        observed_package_batches=(replace(_batch(), packages=(package,)),),
+    )
+    assert result.compilation.ok
+    assert result.live.errors == ()
+    assert len(result.live.handoffs) == 1, [(c.rejection_reason, c.reasons) for c in result.live.result.candidates]
+    ticket, = store.live_order_intents_by_type("open")
+    assert ticket["structure"] == "call_calendar"
+    assert ticket["source_output_kind"] == "exact_package"
+    assert ticket["source_evidence_revision_id"] == package.evidence_revision_id
+    assert [(leg["side"], leg["expiration"], leg["strike"]) for leg in ticket["legs"]] == [
+        ("sell", "2026-08-28", 290.0), ("buy", "2026-09-04", 290.0),
+    ]
+    lifecycle = CsaStore(store.sqlite_path).lifecycle(result.live.handoffs[0]["lifecycle_id"])
+    assert lifecycle.status == "pending_live_submission"
+    assert lifecycle.metadata["compiled_management_policy"]["resolved_fields"]["exit_dte_min"] == 0
+
+    from kamandal_v2.live.execution import _adopt_csa_live_fill, _source_route_blocker
+    from kamandal_v2.strategy_lanes.management_runtime import run_live_lifecycle_management
+
+    assert _source_route_blocker(ticket, sources) == ""
+    disabled = [dict(item) for item in sources]
+    next(item for item in disabled if item["source_id"] == "mike_butler"
+         and item["output_kind"] == "exact_package")["mode"] = "off"
+    assert _source_route_blocker(ticket, disabled) == "entry_source_route_not_live"
+    adopted = _adopt_csa_live_fill(store, ticket, {
+        "averagePrice": "1.40", "filledAt": "2026-08-27T14:01:00Z",
+    })
+    assert adopted["status"] == "open"
+    first = run_live_lifecycle_management(
+        control, sqlite_path=str(store.sqlite_path), provider="fixture", tables=tables,
+        market=_Market(captured_at=now), observed_at="2026-08-27T14:05:00Z",
+    )
+    assert first.ok, first.errors
+    assert first.selected_actions == {"hold": 1}
+    due = run_live_lifecycle_management(
+        control, sqlite_path=str(store.sqlite_path), provider="fixture", tables=tables,
+        market=_Market(captured_at="2026-08-28T14:00:00Z"), observed_at="2026-08-28T14:00:00Z",
+    )
+    assert due.ok, due.errors
+    assert due.selected_actions == {"close": 1}
+    close_tickets = [item for item in store.live_order_intents_by_type("close")
+                     if item.get("csa_lifecycle_id") == lifecycle.lifecycle_id]
+    assert len(close_tickets) == 1
+    assert len(close_tickets[0]["legs"]) == 2
+    closed = _adopt_csa_live_fill(store, close_tickets[0], {
+        "averagePrice": "0.50", "filledAt": "2026-08-28T14:05:00Z",
+    })
+    assert closed["status"] == "closed"
+    assert CsaStore(store.sqlite_path).lifecycle(lifecycle.lifecycle_id).status == "closed"
+
+
+def test_source_verified_diagonal_keeps_pair_and_blocks_out_of_range_dte(tmp_path: Path) -> None:
+    package = replace(
+        _batch(2).packages[0], source_published_at="2026-08-24T13:00:00Z",
+        source_valid_until="2026-08-24T16:00:00Z", source_verified=True,
+        source_verification_ref="sv_fixture_independent_match",
+    )
+    playbook = Playbook(
+        playbook_id="guru_exact_call_diagonal", enabled=True,
+        strategy_family="call_diagonal", structure="call_diagonal",
+        variant="source_exact", leg_count=2, profiles=[],
+        dte_min=1, dte_max=60, long_dte_min=2, long_dte_max=180,
+        max_contracts=1, live_max_bpr_per_order=1500,
+        max_debit_to_width_ratio=0.75, max_bid_ask_pct=0.5, min_option_oi=10,
+    )
+    policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, accepted_inputs=("exact_package",),
+        mode=SimpleNamespace(value="live"), structure="call_diagonal",
+    )
+    source = compile_trade_source_policies([{
+        "source_id": "mike_butler", "output_kind": "exact_package",
+        "mode": "live", "live_structures": "call_diagonal",
+    }]).by_key()
+
+    class Market:
+        def chain_snapshot(self, symbol: str) -> ChainSnapshot:
+            return ChainSnapshot("ups-exact", symbol, "2026-08-24T14:00:00Z", 105, [
+                OptionQuote(symbol, "2026-10-16", "call", 110, 2.0, 2.1, 0.3, 0.01, -0.05, 0.05, 0.3, 500),
+                OptionQuote(symbol, "2026-12-18", "call", 100, 5.95, 6.05, 0.6, 0.02, -0.03, 0.10, 0.35, 500),
+            ], "fixture_exact")
+
+        def preflight(self, _candidate: object) -> PreflightResult:
+            return PreflightResult(True, 500, "broker quote accepted", {
+                "broker_bpr_provided": True, "response": {"buyingPowerRequirement": 500},
+            })
+
+    def build(book: Playbook, suffix: str) -> Candidate:
+        result = build_observed_package_candidates(
+            [package], policies=(policy,), playbooks=[book], market=Market(),
+            store=LocalStore(tmp_path / f"diag-{suffix}.db"),
+            config={"runtime": {"observed_at": "2026-08-24T14:00:00Z"}},
+            trade_source_policies=source, mode="live",
+        )
+        assert len(result) == 1
+        return result[0]
+
+    candidate = build(playbook, "allowed")
+    assert candidate.eligible
+    assert [(leg.role, leg.side, leg.strike) for leg in candidate.legs] == [
+        ("short_near", "sell", 110), ("long_far", "buy", 100),
+    ]
+    blocked = build(replace(playbook, dte_max=30), "blocked")
+    assert blocked.rejection_reason == "exact_near_dte_outside_policy"
 
 
 def test_multi_package_opening_cannot_partially_enter_live(tmp_path: Path) -> None:
