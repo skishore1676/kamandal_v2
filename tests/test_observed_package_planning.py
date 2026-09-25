@@ -321,6 +321,45 @@ def test_multi_package_opening_cannot_partially_enter_live(tmp_path: Path) -> No
     ) == []
 
 
+def test_complete_sibling_stays_shadow_evaluable_but_cannot_enter_live(tmp_path: Path) -> None:
+    package = replace(
+        _batch().packages[0],
+        source_published_at="2026-08-28T13:00:00Z",
+        source_valid_until="2026-08-28T16:00:00Z",
+        source_opening_package_count=2,
+    )
+    row = _observed_calendar_row()
+    row.update({"mode": "live", "csa_stage": "live", "source_mode": "idea", "accepted_inputs": "exact_package"})
+    playbook = Playbook.from_row(row)
+    policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, source_mode="idea", accepted_inputs=("exact_package",),
+        mode=SimpleNamespace(value="live"), structure="call_calendar",
+    )
+    source_policies = compile_trade_source_policies([{
+        "source_id": "mike_butler", "output_kind": "exact_package",
+        "mode": "live", "live_structures": "call_calendar",
+    }]).by_key()
+    assert build_observed_package_candidates(
+        [package], policies=(policy,), playbooks=[playbook],
+        market=_Market(captured_at="2026-08-28T14:00:00Z"),
+        store=LocalStore(tmp_path / "single-sibling-live.db"),
+        config={"runtime": {"observed_at": "2026-08-28T14:00:00Z"}},
+        trade_source_policies=source_policies, mode="live",
+    ) == []
+    shadow_policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, source_mode="idea", accepted_inputs=("exact_package",),
+        mode=SimpleNamespace(value="shadow"), structure="call_calendar",
+    )
+    shadow_candidates = build_observed_package_candidates(
+        [package], policies=(shadow_policy,), playbooks=[playbook],
+        market=_Market(captured_at="2026-08-28T14:00:00Z"),
+        store=LocalStore(tmp_path / "single-sibling-shadow.db"),
+        config={"runtime": {"observed_at": "2026-08-28T14:00:00Z"}},
+        trade_source_policies=source_policies, mode="shadow",
+    )
+    assert len(shadow_candidates) == 1
+
+
 def test_stale_chain_parks_before_candidate_or_fill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from kamandal_v2.strategy_engine import planning
 

@@ -103,6 +103,7 @@ class ObservedPackageEvidence:
     prompt_version: str = PROMPT_VERSION
     source_published_at: str | None = None
     source_valid_until: str | None = None
+    source_opening_package_count: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -128,6 +129,7 @@ class ObservedPackageEvidence:
             "opportunity_group_id": self.opportunity_group_id,
             "source_published_at": self.source_published_at,
             "source_valid_until": self.source_valid_until,
+            "source_opening_package_count": self.source_opening_package_count,
             "provenance": {
                 "image_sha256": self.image_sha256,
                 "prompt_sha256": self.prompt_sha256,
@@ -308,6 +310,11 @@ def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageB
         displayed_price = item.get("displayed_price")
         if displayed_price is not None and not isinstance(displayed_price, Mapping):
             raise ObservedPackageValidationError(f"batch package {index} displayed_price is invalid")
+        source_opening_package_count = item.get("source_opening_package_count", 1)
+        if (isinstance(source_opening_package_count, bool)
+                or not isinstance(source_opening_package_count, int)
+                or source_opening_package_count < 1):
+            raise ObservedPackageValidationError(f"batch package {index} source opening count is invalid")
         package = ObservedPackageEvidence(
             source_event_id=_required_text(item.get("source_event_id"), f"packages[{index}].source_event_id"),
             source_profile=source_profile,
@@ -332,6 +339,7 @@ def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageB
             prompt_version=_optional_text(provenance.get("prompt_version")) or PROMPT_VERSION,
             source_published_at=_optional_text(item.get("source_published_at")),
             source_valid_until=_optional_text(item.get("source_valid_until")),
+            source_opening_package_count=source_opening_package_count,
         )
         if package.action not in _PACKAGE_ACTIONS or package.media_index <= 0 or package.package_position <= 0:
             raise ObservedPackageValidationError(f"batch package {index} has invalid identity fields")

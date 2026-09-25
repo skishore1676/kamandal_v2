@@ -350,6 +350,7 @@ def _exact_package_projections(
                         "symbol": str(event.get("symbol") or "").upper(),
                         "structure": event.get("structure_hint"),
                         "displayed_price": raw.get("displayed_price"),
+                        "source_opening_package_count": len(event.get("exact_packages") or []),
                     }
                 )
             )[:24]
@@ -376,6 +377,7 @@ def _exact_package_projections(
                     output_sha256="pending",
                     opportunity_group_id=_opportunity_id(str(event.get("opportunity_group_id") or "")),
                     prompt_version=PROMPT_VERSION,
+                    source_opening_package_count=len(event.get("exact_packages") or []),
                 )
             )
         except (TypeError, ValueError) as exc:
