@@ -20,9 +20,9 @@ from pydantic import TypeAdapter
 
 from kamandal_v2.intelligence.llm_client import JsonLlmClient
 
-from kamandal_v2.intelligence.exact_entry_review import possible_edit_duplicates
+from kamandal_v2.intelligence.exact_entry_review import LEG_COUNTS, possible_edit_duplicates
 
-INTERPRETATION_RULES_VERSION = "source-evidence-v2"
+INTERPRETATION_RULES_VERSION = "source-evidence-v3"
 
 EPISODE_COMPILATION_SCHEMA = "kamandal.source_episode_compilation.v1"
 EPISODE_SCHEMA = "kamandal.source_episode.v1"
@@ -96,6 +96,8 @@ def compile_source_episode_packet(
     records = packet.get("records")
     if not isinstance(records, list):
         raise ValueError("source episode packet records must be an array")
+    history_items = tuple(history)
+    current_post_refs = {str(item.get("signal_id") or "") for item in records if isinstance(item, Mapping)}
     source_packet_sha256 = _sha256(_stable_json(packet))
     compiled_at = str(packet.get("generated_at") or "")
     _TIMESTAMP.validate_python(compiled_at)
@@ -103,7 +105,7 @@ def compile_source_episode_packet(
     deterministic: dict[str, dict[str, Any]] = {}
     reusable = {
         str(item.get("post_ref") or ""): dict(item)
-        for item in history
+        for item in history_items
         if isinstance(item, Mapping)
         and item.get("schema") == EPISODE_SCHEMA
         and str(item.get("profile_version") or "") == profile_version
@@ -126,7 +128,11 @@ def compile_source_episode_packet(
             continue
         model_records.append(record)
 
-    history_context = _bounded_history(history, profile)
+    history_context = _bounded_history(
+        (item for item in history_items if isinstance(item, Mapping)
+         and str(item.get("post_ref") or "") not in current_post_refs),
+        profile,
+    )
     system_prompt = _system_prompt(profile)
     prompt_material: list[str] = []
     model_receipts: list[dict[str, Any]] = []
@@ -516,12 +522,24 @@ def _finalize_episode(
             _localize_package_image_refs(item, image_numbers)
             for item in event["exact_packages"]
         ]
+        for package in exact_packages:
+            if not package["complete"]:
+                continue
+            expected = LEG_COUNTS.get(structure)
+            if expected is not None and len(package["legs"]) != expected:
+                package["complete"] = False
+                package["blocker"] = "structure_leg_count_mismatch"
+            elif _source_quantity_conflicts(record, event, package):
+                package["complete"] = False
+                package["blocker"] = "source_quantity_conflicts_with_displayed_package"
         incomplete_packages = [item for item in exact_packages if not item["complete"]]
         complete_packages = [item for item in exact_packages if item["complete"]]
         if incomplete_packages:
             blockers.append("exact_package_incomplete")
-            if not complete_packages:
-                projections = [item for item in projections if item != "exact_package"]
+            # A source post can show alternatives or parts of one atomic
+            # opening. Never submit the surviving leg set when a sibling is
+            # unresolved.
+            projections = [item for item in projections if item != "exact_package"]
             if not complete_packages and not any(
                 item in projections for item in {"idea", "residual"}
             ):
@@ -652,6 +670,23 @@ def _localize_package_image_refs(package: Mapping[str, Any], image_numbers: list
     return localized
 
 
+def _source_quantity_conflicts(
+    record: Mapping[str, Any], event: Mapping[str, Any], package: Mapping[str, Any]
+) -> bool:
+    """Hold an explicit source multiplier when a one-leg image shows fewer contracts."""
+
+    structure = str(event.get("structure_hint") or "")
+    symbol = str(event.get("symbol") or "")
+    legs = package.get("legs") or []
+    if structure not in {"long_call", "long_put"} or not symbol or len(legs) != 1:
+        return False
+    text = str((record.get("literal") or {}).get("text") or "")
+    option_type = structure.removeprefix("long_")
+    pattern = rf"\b(\d+)\s*x\s+long\s+{option_type}s?\b[^$]{{0,80}}\${re.escape(symbol)}\b"
+    match = re.search(pattern, text, flags=re.IGNORECASE)
+    return bool(match and int(match.group(1)) != legs[0].get("quantity"))
+
+
 def _projection_dispositions(
     *,
     action: str,
@@ -708,7 +743,12 @@ def _canonicalize_event(
     result = dict(event)
     config = profile.get("episode_interpreter") or {}
     text = str((record.get("literal") or {}).get("text") or "")
-    for rule in config.get("action_overrides") or []:
+    research_hold = result.get("action") in _ENTRY_ACTIONS and _research_announcement_without_fill(
+        text, str(result.get("symbol") or ""), profile
+    )
+    if research_hold:
+        result["action"] = "discovery"
+    for rule in ([] if research_hold else config.get("action_overrides") or []):
         if rule.get("action") in _ENTRY_ACTIONS and not result.get("symbol"):
             continue
         if re.search(str(rule["regex"]), text, flags=re.IGNORECASE):
@@ -756,6 +796,29 @@ def _canonicalize_event(
         ):
             result["evidence_status"] = "complete"
     return result
+
+
+def _research_announcement_without_fill(text: str, symbol: str, profile: Mapping[str, Any]) -> bool:
+    if profile.get("profile_id") != "greg_harmon" or not re.search(
+        r"^(?:5 Trade Ideas for Monday:|This went live .*opening it for all to see)",
+        text, re.IGNORECASE,
+    ):
+        return False
+    if not symbol:
+        return True
+    # A headline may later report an actual fill. Require this event's ticker
+    # in that explicit execution clause, rather than exempting every listed
+    # ticker because one different symbol was bought.
+    for clause in re.split(r"(?<=[.!?])\s+|\n+", text):
+        for verb in re.finditer(r"\b(?:opened|bought|sold|entered|added|put on|took the trade)\b", clause, re.IGNORECASE):
+            following = re.findall(r"\$([A-Z][A-Z0-9.]{0,19})\b", clause[verb.end():], re.IGNORECASE)
+            if following and symbol.upper() in {item.upper() for item in following}:
+                return False
+            if not following:
+                preceding = list(re.finditer(r"\$([A-Z][A-Z0-9.]{0,19})\b", clause[:verb.start()], re.IGNORECASE))
+                if preceding and preceding[-1].group(1).upper() == symbol.upper() and verb.start() - preceding[-1].end() <= 30:
+                    return False
+    return True
 
 
 def _merge_equivalent_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -834,6 +897,10 @@ supports an idea but the image legs are unavailable, keep the idea complete and
 mark only exact_package incomplete with its blocker. One event may contain
 several exact_packages when the post shows variants of the same action, symbol,
 direction, and structure; do not repeat the idea projection for each variant.
+If source text and image disagree about contract quantity, mark the exact
+package incomplete and explain the conflict. A double calendar is a four-leg
+structure, not a two-leg calendar. A trade idea list or article announcement is
+not a confirmed opening by the author.
 
 Opaque blockchain identifiers in provider text are not equity symbols. Do not
 infer their ticker from familiarity. Resolve a security only from independent

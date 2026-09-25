@@ -34,8 +34,24 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
             output_id = str(event.get("output_id") or "")
             if not output_id:
                 continue
-            by_output[output_id] = dict(event)
-            planner_idea_id = str(event.get("planner_idea_id") or "")
+            previous = by_output.get(output_id)
+            current = dict(event)
+            current["_source_observation"] = {
+                field: event.get(field)
+                for field in ("classification", "action", "symbol", "structure", "normalized_output",
+                              "reason", "evidence_status", "acquisition_status", "capability_support")
+            }
+            # Polling may re-observe one revision after its planner decision.
+            # Carry that decision only while both the route and the source
+            # interpretation are unchanged. Edited posts can reuse an event id.
+            if (previous and previous.get("effective_mode") == current.get("effective_mode")
+                and previous.get("_source_observation") == current["_source_observation"]
+                and previous.get("_terminal_receipt_id")):
+                for field in ("planner_disposition", "reason", "capability_support"):
+                    current[field] = previous.get(field, current.get(field))
+                current["_terminal_receipt_id"] = previous["_terminal_receipt_id"]
+            by_output[output_id] = current
+            planner_idea_id = str(current.get("planner_idea_id") or "")
             if planner_idea_id:
                 idea_to_output[planner_idea_id] = output_id
             continue
@@ -56,6 +72,7 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
             current["capability_support"] = "ambiguous"
         if event.get("mode"):
             current["effective_mode"] = str(event["mode"])
+        current["_terminal_receipt_id"] = event.get("_event_id")
         current["_created_at"] = str(event.get("_created_at") or current.get("_created_at") or "")
         current["_event_id"] = event.get("_event_id", current.get("_event_id", 0))
 
@@ -249,7 +266,7 @@ def chief_of_staff_rows(
             failure = str((attempt.get("response_payload") or {}).get("message") or "")
             failed_preflights.setdefault(str(attempt.get("ticket_hash") or ""), failure)
     decisions: list[list[Any]] = []
-    confirmed = templates = complete_packages = entered = held = 0
+    opening_candidates = templates = complete_packages = entered = held = 0
     issues: Counter[str] = Counter()
     opening_groups: dict[tuple[str, str], list[tuple[dict[str, Any], dict[str, Any]]]] = {}
     for item in records:
@@ -276,7 +293,7 @@ def chief_of_staff_rows(
 
     for (source_id, opportunity), members in opening_groups.items():
         item, raw = max(members, key=lambda pair: (_timestamp(str(pair[0].get("last_update") or "")), str(pair[0].get("output_id") or "")))
-        confirmed += 1
+        opening_candidates += 1
         matched_groups = [
             group for group in groups
             if opportunity and str(group.get("source_opportunity_id") or group.get("idea_id") or "") == opportunity
@@ -296,6 +313,11 @@ def chief_of_staff_rows(
             or any(package.get("legs") and package.get("complete") is True and not package.get("blocker")
                    for package in evidence.get("exact_packages") or [] if isinstance(package, dict))
             for member, evidence in members
+        ) and not any(
+            package.get("complete") is not True or package.get("blocker")
+            for _member, evidence in members
+            for package in evidence.get("exact_packages") or []
+            if isinstance(package, dict)
         )
         complete_packages += int(has_complete_package)
         reason = str(item.get("reason") or item.get("evidence_status") or "")
@@ -413,7 +435,7 @@ def chief_of_staff_rows(
         ["Guru trade brief", observed.isoformat(timespec="seconds"), "Window", "Last 35 calendar days"],
         ["Route switches", modes],
         ["BPR used / ceiling", capacity, "Account receipt", snapshot_id],
-        ["Opening decisions", f"{confirmed} openings; {templates} templates excluded; {complete_packages} model-complete (source verification unmeasured); {entered} entered; {held} exceptions"],
+        ["Opening decisions", f"{opening_candidates} interpreted opening candidates; {templates} templates excluded; {complete_packages} model-complete (source verification unmeasured); {entered} entered; {held} exceptions"],
         ["Needs attention", attention],
     ]
     return summary, decisions
@@ -432,6 +454,13 @@ def _post_published_at(value: str) -> datetime | None:
 
 
 def _plain_reason(value: str) -> str:
+    route_parts = [part.strip() for part in value.split(" | ")]
+    if len(route_parts) > 1 and all(part.startswith(("Idea: ", "Exact: ")) for part in route_parts):
+        by_route = {label: detail for label, detail in (part.split(": ", 1) for part in route_parts)}
+        return "; ".join(
+            f"{label}: {_plain_reason(by_route[label])}"
+            for label in ("Exact", "Idea") if by_route.get(label)
+        )
     lower = value.lower().replace("_", " ")
     if "possible edit duplicate" in lower:
         return "Possible edited-post duplicate; resolve source lineage"
@@ -450,6 +479,11 @@ def _plain_reason(value: str) -> str:
         return "Symbol outside configured universe; review eligibility"
     if "multi package opening" in lower:
         return "Multiple packages require one atomic source opening"
+    match = re.search(r"exact contract match count:(\d+):0", lower)
+    if match:
+        return f"Exact leg {match[1]} absent from broker option chain"
+    if "allowance below valid tick" in lower:
+        return "Entry price allowance below a valid broker tick"
     if "unsupported" in lower or "no playbook match" in lower:
         return "Structure lacks a live path; add broker and exit proof"
     if "bpr cap" in lower or "bpr_cap" in value:
