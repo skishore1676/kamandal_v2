@@ -55,6 +55,22 @@ def test_activity_projection_joins_output_to_planner_disposition(tmp_path) -> No
     assert projected["effective_mode"] == "shadow"
 
 
+def test_retained_greg_confirmation_explains_missing_exact_contracts(tmp_path) -> None:
+    store = LocalStore(tmp_path / "greg.db")
+    store.event("trade_source_output_observed", {
+        "source_id": "greg_harmon", "post_ref": "x-post:2103189107153223782",
+        "output_id": "confirmed-cost", "classification": "residual",
+        "planner_disposition": "parked", "effective_mode": "off",
+        "normalized_output": {
+            "action": "open", "symbol": "COST", "structure_hint": "short_strangle",
+            "template_number": 4, "links_to": ["earlier-cost-template"],
+            "exact_packages": [], "evidence_status": "complete",
+        },
+    })
+    row, = activity_rows(store)
+    assert dict(zip(TRADE_SOURCE_ACTIVITY_HEADER, row))["reason"] == "confirmed_template_lacks_exact_contracts"
+
+
 def test_activity_reads_matching_closed_lifecycles_without_crossing_idea_and_exact(tmp_path):
     import json
     import sqlite3
@@ -249,7 +265,7 @@ def test_chief_brief_counts_confirmed_openings_without_template_inflation(tmp_pa
 
     store = LocalStore(tmp_path / 'brief.db')
     post_id = str((int(datetime.now(UTC).timestamp() * 1000) - 1288834974657) << 22)
-    for suffix, template in [('confirmed', None), ('menu', 2)]:
+    for suffix, template in [('confirmed', 4), ('menu', 2)]:
         store.event('trade_source_output_observed', {
             'source_id': 'greg_harmon', 'post_ref': 'x-post:' + post_id,
             'output_id': suffix, 'classification': 'idea', 'effective_mode': 'live',
@@ -257,7 +273,7 @@ def test_chief_brief_counts_confirmed_openings_without_template_inflation(tmp_pa
             'normalized_output': {
                 'event_id': suffix, 'action': 'open', 'symbol': 'XYZ',
                 'structure_hint': 'call_spread', 'opportunity_group_id': suffix,
-                'template_number': template,
+                'template_number': template, 'links_to': ['earlier-template'] if suffix == 'confirmed' else [],
             },
         })
     policy = compile_sleeve_policy([

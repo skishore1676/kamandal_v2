@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -111,10 +112,12 @@ class PublicAdapter:
         return positions
 
     def chain_snapshot(self, underlying: str) -> ChainSnapshot:
-        return self.chain_snapshot_for_expirations(underlying, self.expiration_dates)
+        return self.chain_snapshot_for_expirations(
+            underlying, self.expiration_dates, require_all=False,
+        )
 
     def chain_snapshot_for_expirations(
-        self, underlying: str, expiration_dates: Sequence[str]
+        self, underlying: str, expiration_dates: Sequence[str], *, require_all: bool = True,
     ) -> ChainSnapshot:
         """Quote only the expirations needed to match source-exact contracts."""
         self._require_available()
@@ -122,7 +125,9 @@ class PublicAdapter:
         underlying_price = self._underlying_price(symbol)
         quotes: list[OptionQuote] = []
         seen: set[str] = set()
+        missing_expirations: list[str] = []
         for expiration in dict.fromkeys(expiration_dates):
+            before = len(quotes)
             try:
                 chain = self._post(
                     f"/userapigateway/marketdata/{self._account_id()}/option-chain",
@@ -132,15 +137,26 @@ class PublicAdapter:
                     },
                 )
             except Exception:
+                missing_expirations.append(expiration)
                 continue
             quotes.extend(self._parse_chain_items(chain.get("calls", []) or [], seen))
             quotes.extend(self._parse_chain_items(chain.get("puts", []) or [], seen))
+            if len(quotes) == before:
+                missing_expirations.append(expiration)
+        if require_all and missing_expirations:
+            raise RuntimeError(
+                f"Public option quotes missing for {symbol} expirations: {','.join(missing_expirations)}"
+            )
         if not quotes:
             raise RuntimeError(f"Public returned no option quotes for {symbol}")
+        captured_at = utc_now()
+        expiry_key = hashlib.sha256("|".join(sorted(set(expiration_dates))).encode()).hexdigest()[:10]
         return ChainSnapshot(
-            chain_snapshot_id=f"public_chain_{symbol}_{date.today().isoformat()}",
+            chain_snapshot_id=(
+                f"public_chain_{symbol}_{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}_{expiry_key}"
+            ),
             underlying=symbol,
-            captured_at=utc_now(),
+            captured_at=captured_at,
             underlying_price=underlying_price,
             quotes=quotes,
             source="public",

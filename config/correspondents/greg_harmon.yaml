@@ -54,7 +54,10 @@ episode_interpreter:
     trade-journal shorthand. Premium Earnings announcements deterministically
     expand to Ideas 1 through 4 for every named symbol; they are ideas, not exact
     packages. A later "took idea" post confirms a prior source opportunity and
-    must link to it rather than create a duplicate. "Looks to expire", close,
+    must link to it rather than create a duplicate. If that confirmation has
+    its own public image showing every opening contract, transcribe those legs
+    as an exact package for independent verification. A text-only confirmation
+    cannot inherit exact contracts from the earlier idea template. "Looks to expire", close,
     trim, roll, and management language are follow-ups, never fresh entries.
     Standard shorthand such as call-spread risk reversal and broken-wing call
     fly may supply normalized leg ratios when every strike and expiration is

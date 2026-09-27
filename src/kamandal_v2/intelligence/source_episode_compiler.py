@@ -120,7 +120,9 @@ def compile_source_episode_packet(
             raise ValueError("source episode record must be an object")
         signal_id = _required_text(record.get("signal_id"), "signal_id")
         prior = reusable.get(signal_id)
-        if prior is not None and prior.get("source_record_sha256") == _sha256(_stable_json(record)):
+        if (prior is not None and prior.get("source_record_sha256") == _sha256(_stable_json(record))
+                and (not _has_confirmation_text(record, profile)
+                     or prior.get("confirmation_contract_handling_version") == "2")):
             reused[signal_id] = prior
             continue
         result = _deterministic_episode(record, profile)
@@ -186,6 +188,12 @@ def compile_source_episode_packet(
         item for item in history_context
         if str(item.get("post_ref") or "") not in current_post_refs
     )
+    opportunity_by_event_id = {
+        str(event.get("event_id") or ""): str(event.get("opportunity_group_id") or "")
+        for episode in history_context
+        for event in episode.get("events") or []
+        if isinstance(event, Mapping) and event.get("event_id") and event.get("opportunity_group_id")
+    }
     episodes: list[dict[str, Any]] = []
     for record in ordered_records:
         signal_id = str(record["signal_id"])
@@ -193,6 +201,7 @@ def compile_source_episode_packet(
             episode = _hold_possible_edits(reused[signal_id], duplicate_peers.get(signal_id, []))
             episodes.append(episode)
             _advance_active_from_episode(active, episode)
+            _remember_opportunities(opportunity_by_event_id, episode)
             continue
         normalized = by_signal.get(signal_id)
         if normalized is None:
@@ -203,11 +212,13 @@ def compile_source_episode_packet(
             profile_id=profile_id,
             profile_version=profile_version,
             active=active,
+            opportunity_by_event_id=opportunity_by_event_id,
             media_available=bool(image_map.get(signal_id)),
             image_numbers=image_map.get(signal_id, []),
             profile=profile,
         )
         episodes.append(_hold_possible_edits(episode, duplicate_peers.get(signal_id, [])))
+        _remember_opportunities(opportunity_by_event_id, episode)
 
     return SourceEpisodeCompilation(
         profile_id=profile_id,
@@ -303,7 +314,12 @@ def _deterministic_episode(record: Mapping[str, Any], profile: Mapping[str, Any]
         return {"signal_id": signal_id, "events": events}
 
     confirmation_regex = str(((profile.get("episode_interpreter") or {}).get("open_confirmation_regex") or ""))
-    if confirmation_regex and re.search(confirmation_regex, text, flags=re.IGNORECASE):
+    if (confirmation_regex and re.search(confirmation_regex, text, flags=re.IGNORECASE)
+            and not _verified_public_images(record)
+            and not re.search(r"\b(?:opened|bought|sold|entered|added)\b", text, re.IGNORECASE)
+            and len(_record_symbols(record, profile)) <= 1):
+        # A confirmation with a source image must be interpreted for its own
+        # displayed contracts; a bare text confirmation has no exact legs.
         symbols = _record_symbols(record, profile)
         number_match = re.search(r"(?:idea|#)\s*#?\s*(\d+)", text, flags=re.IGNORECASE)
         number = int(number_match.group(1)) if number_match else None
@@ -506,6 +522,7 @@ def _finalize_episode(
     profile_id: str,
     profile_version: str,
     active: dict[tuple[str, str], list[str]],
+    opportunity_by_event_id: dict[str, str],
     media_available: bool,
     image_numbers: list[int],
     profile: Mapping[str, Any],
@@ -524,6 +541,27 @@ def _finalize_episode(
         structure = event["structure_hint"] or "unknown"
         blockers = list(event["blockers"])
         projections = list(event["projections"])
+        is_confirmation = action == "open" and _confirms_symbol(record, profile, symbol)
+        if is_confirmation and "source_open_confirmation_requires_prior_opportunity" not in blockers:
+            blockers.append("source_open_confirmation_requires_prior_opportunity")
+        if is_confirmation:
+            text_number = re.search(
+                r"(?:idea|#)\s*#?\s*(\d+)",
+                str((record.get("literal") or {}).get("text") or ""), re.IGNORECASE,
+            )
+            number = int(text_number.group(1)) if text_number else None
+            mapped_structures = {
+                str(rule.get("strategy_family") or "")
+                for family in (profile.get("families") or {}).values()
+                for key, rule in ((family or {}).get("idea_number_map") or {}).items()
+                if number is not None and key == str(number)
+            }
+            if (number is None or not mapped_structures or structure not in mapped_structures
+                    or event.get("template_number") not in (None, number)):
+                blockers.append("confirmation_template_structure_conflict")
+                event["evidence_status"] = "ambiguous"
+            else:
+                event["template_number"] = number
 
         exact_packages = [
             _localize_package_image_refs(item, image_numbers)
@@ -590,6 +628,8 @@ def _finalize_episode(
                         if item != "source_open_confirmation_requires_prior_opportunity"
                     ]
                     event["evidence_status"] = "complete"
+                    if not complete_packages:
+                        blockers.append("confirmed_template_lacks_exact_contracts")
             elif len(candidates) > 1:
                 link_state = "ambiguous"
                 blockers.append("ambiguous_lifecycle_link")
@@ -599,8 +639,18 @@ def _finalize_episode(
                 blockers.append("lifecycle_link_missing")
                 event["evidence_status"] = "needs_history"
 
+        if "confirmation_template_structure_conflict" in blockers:
+            event["evidence_status"] = "ambiguous"
+
         event_id = "sevt_" + _sha256(f"{profile_id}|{profile_version}|{signal_id}|{ordinal}")[:24]
         opportunity_group_id = "sopp_" + _sha256(f"{profile_id}|{signal_id}|{ordinal}")[:24]
+        if confirmation_requires_prior and link_state == "linked":
+            original_group = opportunity_by_event_id.get(links_to[0], "")
+            if original_group:
+                opportunity_group_id = original_group
+            else:
+                blockers.append("confirmation_prior_opportunity_identity_missing")
+                event["evidence_status"] = "needs_history"
         projection_dispositions = _projection_dispositions(
             action=action,
             projections=projections,
@@ -647,6 +697,7 @@ def _finalize_episode(
         "profile_version": profile_version,
         "source_record_sha256": _sha256(_stable_json(record)),
         "interpretation_rules_version": INTERPRETATION_RULES_VERSION,
+        **({"confirmation_contract_handling_version": "2"} if _has_confirmation_text(record, profile) else {}),
         "events": events,
         "effects": _effects(),
     }
@@ -1054,6 +1105,44 @@ def _verified_public_images(record: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(paths)
 
 
+def _has_confirmation_text(record: Mapping[str, Any], profile: Mapping[str, Any]) -> bool:
+    pattern = str(((profile.get("episode_interpreter") or {}).get("open_confirmation_regex") or ""))
+    return bool(pattern and re.search(
+        pattern, str((record.get("literal") or {}).get("text") or ""), re.IGNORECASE,
+    ))
+
+
+def _confirms_symbol(record: Mapping[str, Any], profile: Mapping[str, Any], symbol: str | None) -> bool:
+    if not symbol:
+        return False
+    pattern = str(((profile.get("episode_interpreter") or {}).get("open_confirmation_regex") or ""))
+    text = str((record.get("literal") or {}).get("text") or "")
+    for clause in re.split(r"[;\n]|(?<=[.!?])\s+", text):
+        for match in re.finditer(pattern.replace(".*", ".*?"), clause, re.IGNORECASE) if pattern else ():
+            # A source may write "took trade idea #4 in $AVGO". Include the
+            # following phrase up to the next separate opening verb.
+            tail = re.split(
+                r"\b(?:opened|bought|sold|entered|added|took)\b",
+                clause[match.end():], maxsplit=1, flags=re.IGNORECASE,
+            )[0]
+            named = {
+                item.upper() for item in re.findall(
+                    r"\$([A-Z][A-Z0-9.]*)\b", match.group() + tail,
+                )
+            }
+            if named and symbol.upper() in named:
+                return True
+            if not named and _record_symbols(record, profile) == [symbol.upper()]:
+                return True
+    return False
+
+
+def _remember_opportunities(mapping: dict[str, str], episode: Mapping[str, Any]) -> None:
+    for event in episode.get("events") or []:
+        if isinstance(event, Mapping) and event.get("event_id") and event.get("opportunity_group_id"):
+            mapping[str(event["event_id"])] = str(event["opportunity_group_id"])
+
+
 def _bounded_history(
     history: Iterable[Mapping[str, Any]], profile: Mapping[str, Any]
 ) -> tuple[dict[str, Any], ...]:
@@ -1098,7 +1187,7 @@ def _advance_active_from_episode(
         structure = str(event.get("structure_hint") or "unknown")
         event_id = str(event.get("event_id") or "")
         key = (symbol, structure)
-        if event.get("action") in _ENTRY_ACTIONS and symbol and event_id:
+        if event.get("action") in _ENTRY_ACTIONS and symbol and event_id and not event.get("links_to"):
             entries = active.setdefault(key, [])
             if event_id not in entries:
                 entries.append(event_id)

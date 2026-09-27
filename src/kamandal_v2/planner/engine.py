@@ -278,6 +278,17 @@ class _SnapshottingFixtureMarket:
         self.store.save_chain_snapshot(snapshot)
         return snapshot
 
+    def chain_snapshot_for_expirations(
+        self, underlying: str, expirations: list[str]
+    ) -> ChainSnapshot:
+        targeted = getattr(self.inner, "chain_snapshot_for_expirations", None)
+        snapshot = (
+            targeted(underlying, expirations)
+            if callable(targeted) else self.inner.chain_snapshot(underlying)
+        )
+        self.store.save_chain_snapshot(snapshot)
+        return snapshot
+
     def iv_percentile(self, underlying: str) -> float | None:
         return self.inner.iv_percentile(underlying)
 

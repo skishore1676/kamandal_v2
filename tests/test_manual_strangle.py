@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from dataclasses import replace
 import subprocess
@@ -84,6 +84,12 @@ def test_manual_sheet_row_reaches_selected_typed_ticket_with_reserved_cap(tmp_pa
     from kamandal_v2.domain.models import PreflightResult
     from tests.test_unified_planning import _daily_snapshot, _migrated_store
     from tests.test_exact_strangle_routing import Market
+    from tests import test_exact_strangle_routing as exact_fixture
+
+    # This cross-lane fixture uses a synthetic chain. Keep its quote time and
+    # expiration inside the playbook window as the calendar advances.
+    monkeypatch.setattr(exact_fixture, "NOW", datetime.now(UTC).isoformat())
+    monkeypatch.setattr(exact_fixture, "EXPIRY", (date.today() + timedelta(days=35)).isoformat())
 
     control = load_control()
     control["portfolio"]["sleeves_source"] = ""
