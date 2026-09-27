@@ -348,6 +348,8 @@ def chief_of_staff_rows(
         if active_route:
             decision_reason = route_reasons.get(active_route, "" if route_reasons else reason)
             decision_mode = "live"
+        elif route_modes:
+            decision_mode = "shadow" if "shadow" in route_modes.values() else "off"
         source_reason = reason
         if matched_groups:
             lane = str(matched_groups[0].get("source_output_kind") or "idea")
