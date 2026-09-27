@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
+from kamandal_v2.domain.models import ChainSnapshot, OptionQuote, Playbook
 from kamandal_v2.intelligence.source_episode_compiler import (
     EPISODE_SCHEMA,
     PROMPT_SCHEMA,
@@ -17,6 +19,8 @@ from kamandal_v2.intelligence.source_episode_compiler import (
 from kamandal_v2.intelligence.source_episode_projection import (
     project_source_episode_compilation,
 )
+from kamandal_v2.planner.observed_package_candidates import build_observed_package_candidates
+from kamandal_v2.stores.sqlite import LocalStore
 
 
 class FakeClient:
@@ -681,6 +685,81 @@ def test_cross_post_image_reference_cannot_project_an_exact_package(tmp_path: Pa
     )
     assert len(projection.observed_batches) == 1
     assert [item.symbol for item in projection.observed_batches[0].packages] == ["SNOW"]
+
+
+@pytest.mark.parametrize("option_type", ["call", "put"])
+def test_named_butterfly_projects_to_exact_shadow_subtype(
+    tmp_path: Path, option_type: str,
+) -> None:
+    image = tmp_path / "butterfly.jpg"
+    image.write_bytes(b"verified public butterfly image fixture")
+    record = _record(
+        f"{option_type}-fly", f"New $LULU {option_type} butterfly", ["LULU"],
+        classification="observed_package_open",
+        published_at="2026-09-25T14:00:00Z",
+        media=[{
+            "media_index": 1, "type": "photo", "cache_status": "cached",
+            "artifact_path": str(image), "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+        }],
+    )
+    package = {
+        "complete": True, "blocker": None,
+        "displayed_price": {"amount": "2.00", "effect": "debit"},
+        "legs": [
+            {"quantity": quantity, "expiration": "Oct 16 2026", "strike": str(strike),
+             "option_type": option_type, "order_code": code}
+            for strike, quantity, code in ((90, 1, "BTO"), (100, 2, "STO"), (110, 1, "BTO"))
+        ],
+        "field_provenance": ["image:1"],
+    }
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{
+        "signal_id": record["signal_id"], "events": [_event(
+            action="open", symbol="LULU", structure_hint="butterfly",
+            projections=["exact_package"], exact_packages=[package],
+        )],
+    }]}
+    packet = _packet([record])
+    packet["generated_at"] = "2026-09-25T15:00:00Z"
+    profile = _profile("mike_butler")
+    compilation = compile_source_episode_packet(packet, profile, FakeClient(response))
+    projected = project_source_episode_compilation(compilation, packet, profile, universe_symbols=("LULU",))
+    assert projected.failures == ()
+    assert len(projected.observed_batches) == 1
+    observed = projected.observed_batches[0].packages[0]
+    structure = f"{option_type}_butterfly"
+    assert observed.structure == structure
+
+    mids = (12.0, 6.0, 2.0) if option_type == "call" else (2.0, 6.0, 12.0)
+
+    class Market:
+        def chain_snapshot(self, symbol: str) -> ChainSnapshot:
+            assert symbol == "LULU"
+            return ChainSnapshot("fly-quote", symbol, "2026-09-25T14:05:00Z", 100, [
+                OptionQuote(symbol, "2026-10-16", option_type, strike, mid - 0.1, mid + 0.1,
+                            0.5, 0.02, -0.1, 0.08, 0.4, 500, 100)
+                for strike, mid in zip((90, 100, 110), mids, strict=True)
+            ], "fixture_exact")
+
+        def preflight(self, _candidate: object) -> object:
+            raise AssertionError("shadow shape must never call broker preflight")
+
+    playbook = Playbook(
+        playbook_id=f"guru_exact_{structure}_shadow", enabled=True,
+        strategy_family=structure, structure=structure, variant="source_exact_shadow",
+        leg_count=3, profiles=[], dte_min=1, dte_max=120, max_contracts=2,
+        live_max_bpr_per_order=1200, max_bid_ask_pct=0.5, min_option_oi=25,
+    )
+    policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, accepted_inputs=("exact_package",),
+        mode=SimpleNamespace(value="shadow"), structure=structure,
+    )
+    candidates = build_observed_package_candidates(
+        [observed], policies=(policy,), playbooks=[playbook], market=Market(),
+        store=LocalStore(tmp_path / "butterfly.db"),
+        config={"runtime": {"observed_at": "2026-09-25T14:05:00Z"}}, mode="shadow",
+    )
+    assert len(candidates) == 1
+    assert candidates[0].eligible, candidates[0].rejection_reason
 
 
 def test_mixed_followup_post_gives_only_its_new_exact_opening_a_source_window(tmp_path: Path) -> None:

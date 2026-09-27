@@ -555,6 +555,9 @@ def _candidate(
             "chain_snapshot_id": chain_snapshot.chain_snapshot_id,
             "chain_captured_at": chain_snapshot.captured_at,
             "broker_effects": False,
+            "shadow_research_observation": package.structure in {
+                "long_call", "call_butterfly", "put_butterfly", "call_crab",
+            },
             "risk_bound_basis": (
                 "near_expiry_intrinsic_floor_shadow_only"
                 if package.structure in {"call_butterfly", "put_butterfly", "call_crab"} else ""
