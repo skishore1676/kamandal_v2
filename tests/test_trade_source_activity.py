@@ -413,6 +413,37 @@ def test_brief_prefers_live_exact_block_over_shadow_idea_route(tmp_path):
     assert decisions['SPY'][3] == 'Held'
 
 
+def test_brief_keeps_shadow_when_other_route_is_off(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'brief.db')
+    for output_id, classification, mode in [
+        ('idea', 'idea', 'shadow'), ('exact', 'exact_package', 'off'),
+    ]:
+        store.event('trade_source_output_observed', {
+            'source_id': 'mike_butler', 'post_ref': 'x-post:2103159907973239124',
+            'output_id': output_id, 'classification': classification,
+            'effective_mode': mode, 'action': 'open', 'symbol': 'SPY',
+            'normalized_output': {'source_event_id': 'idea',
+                                  'opportunity_group_id': 'corr_opp_mixed',
+                                  'package_signature': 'spy' if classification == 'exact_package' else '',
+                                  'action': 'open'},
+        })
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    _summary, details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'idea'): 'shadow',
+                              ('mike_butler', 'exact_package'): 'off'},
+        sleeve_policy=policy,
+    )
+    assert details[0][3] == 'Shadow'
+    assert details[0][5] == 'Idea: shadow | Exact: off'
+
+
 def test_source_revision_and_off_switch_do_not_inherit_old_planner_rejection(tmp_path):
     from kamandal_v2.intelligence.trade_source_activity import activity_rows
     from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER
