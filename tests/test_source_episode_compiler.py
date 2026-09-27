@@ -264,6 +264,95 @@ def test_greg_bundle_and_confirmation_are_deterministic_and_deduplicated() -> No
     assert confirmed["projections"] == ["residual"]
     assert confirmed["link_state"] == "linked"
     assert confirmed["links_to"] == [bundle["events"][3]["event_id"]]
+    assert confirmed["opportunity_group_id"] == bundle["events"][3]["opportunity_group_id"]
+    assert "confirmed_template_lacks_exact_contracts" in confirmed["blockers"]
+
+
+def test_greg_confirmation_with_its_own_exact_image_can_reach_source_verification(tmp_path: Path) -> None:
+    image = tmp_path / "confirmation.jpg"
+    image.write_bytes(b"retained source photo fixture")
+    bundle = _record(
+        "bundle", "Premium Earnings 9-3-26: Broadcom, on the blog and here $AVGO",
+        ["AVGO"], classification="earnings_bundle", published_at="2026-09-03T14:00:00Z",
+    )
+    confirmation = _record(
+        "confirm", "took $AVGO trade idea #4", ["AVGO"],
+        classification="earnings_idea", published_at="2026-09-03T14:05:00Z",
+        media=[{"media_index": 1, "type": "photo", "cache_status": "cached",
+                "artifact_path": str(image), "sha256": hashlib.sha256(image.read_bytes()).hexdigest()}],
+    )
+    package = {
+        "complete": True, "blocker": None, "displayed_price": {"amount": "3.00", "effect": "credit"},
+        "field_provenance": ["image:1"],
+        "legs": [
+            {"quantity": 1, "expiration": "2026-10-16", "strike": "140", "option_type": "put", "order_code": "STO"},
+            {"quantity": 1, "expiration": "2026-10-16", "strike": "180", "option_type": "call", "order_code": "STO"},
+        ],
+    }
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": confirmation["signal_id"], "events": [
+        _event(symbol="AVGO", direction="neutral", structure_hint="short_strangle",
+               projections=["idea", "exact_package"], exact_packages=[package], template_number=4)
+    ]}]}
+    packet = _packet([confirmation, bundle])
+    compilation = compile_source_episode_packet(packet, _profile("greg_harmon"), FakeClient(response))
+    event = compilation.episodes[1]["events"][0]
+    assert event["link_state"] == "linked"
+    assert event["opportunity_group_id"] == compilation.episodes[0]["events"][3]["opportunity_group_id"]
+    assert event["projections"] == ["exact_package", "residual"]
+    assert event["planner_new_entry"] is True
+    projected = project_source_episode_compilation(
+        compilation, packet, _profile("greg_harmon"), universe_symbols=("AVGO",),
+    )
+    assert len(projected.observed_batches) == 1
+    assert projected.observed_batches[0].packages[0].canonical_post_id == confirmation["signal_id"]
+    from kamandal_v2.intelligence.source_episode_projection import _opportunity_id
+    assert (projected.observed_batches[0].packages[0].opportunity_group_id
+            == _opportunity_id(compilation.episodes[0]["events"][3]["opportunity_group_id"]))
+
+
+@pytest.mark.parametrize("text", [
+    "Took $AVGO trade idea #4; opened $XYZ call diagonal today",
+    "Took trade idea #4 in $AVGO; opened $XYZ call diagonal today",
+    "Took $AVGO trade idea #4; $XYZ Oct 16 call diagonal",
+])
+def test_greg_confirmation_in_mixed_post_does_not_park_separate_opening(text: str) -> None:
+    bundle = _record("bundle", "Premium Earnings 9-3-26: Broadcom, on the blog and here $AVGO",
+                     ["AVGO"], classification="earnings_bundle", published_at="2026-09-03T14:00:00Z")
+    mixed = _record("mixed", text,
+                    ["AVGO", "XYZ"], classification="earnings_idea",
+                    published_at="2026-09-03T14:05:00Z")
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": mixed["signal_id"], "events": [
+        _event(symbol="AVGO", direction="neutral", structure_hint="short_strangle",
+               template_number=4, projections=["residual"]),
+        _event(symbol="XYZ", direction="bullish", structure_hint="call_diagonal",
+               projections=["idea"]),
+    ]}]}
+    client = FakeClient(response)
+    compilation = compile_source_episode_packet(_packet([bundle, mixed]), _profile("greg_harmon"), client)
+    confirmation, independent = compilation.episodes[1]["events"]
+    assert len(client.calls) == 1
+    assert confirmation["link_state"] == "linked"
+    assert confirmation["planner_new_entry"] is False
+    assert independent["link_state"] == "not_needed"
+    assert independent["planner_new_entry"] is True
+    assert independent["opportunity_group_id"] != confirmation["opportunity_group_id"]
+
+
+def test_legacy_cached_greg_confirmation_recompiled_once_for_contract_handling() -> None:
+    bundle = _record("bundle", "Premium Earnings 9-3-26: Broadcom, on the blog and here $AVGO",
+                     ["AVGO"], classification="earnings_bundle", published_at="2026-09-03T14:00:00Z")
+    confirmation = _record("confirm", "took $AVGO trade idea #4", ["AVGO"],
+                           classification="earnings_idea", published_at="2026-09-03T14:05:00Z")
+    packet = _packet([bundle, confirmation])
+    first = compile_source_episode_packet(packet, _profile("greg_harmon"), None)
+    old = dict(first.episodes[1])
+    old.pop("confirmation_contract_handling_version")
+    old["events"] = [dict(first.episodes[1]["events"][0])]
+    old["events"][0]["blockers"] = []
+    replay = compile_source_episode_packet(packet, _profile("greg_harmon"), None,
+                                           history=[first.episodes[0], old])
+    assert "confirmed_template_lacks_exact_contracts" in replay.episodes[1]["events"][0]["blockers"]
+    assert replay.episodes[1]["confirmation_contract_handling_version"] == "2"
 
 
 def test_mixed_post_decomposes_events_and_follow_up_cannot_become_entry() -> None:

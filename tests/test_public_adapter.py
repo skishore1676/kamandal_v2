@@ -121,6 +121,28 @@ def test_public_exact_chain_requests_near_expiration_outside_default_window() ->
     assert {quote.expiration for quote in snapshot.quotes} == set(requested)
 
 
+def test_public_exact_chain_reports_missing_requested_expiration_without_weakening_normal_chain() -> None:
+    import pytest
+
+    adapter = PublicAdapter({"broker": {"public": {"secret_token": "fixture", "account_id": "acct"}}})
+    adapter._underlying_price = lambda _symbol: 1000
+    adapter._greeks_batch = lambda _symbols: {}
+    adapter.expiration_dates = ["2026-12-18", "2027-01-15"]
+
+    def post(_endpoint, payload):  # noqa: ANN001, ANN202
+        if payload["expirationDate"] == "2027-01-15":
+            return {"calls": [], "puts": []}
+        return {"calls": [{
+            "instrument": {"symbol": "COST261218C01000000"},
+            "bid": 3.0, "ask": 3.1, "openInterest": 100,
+        }]}
+
+    adapter._post = post
+    with pytest.raises(RuntimeError, match="COST expirations: 2027-01-15"):
+        adapter.chain_snapshot_for_expirations("COST", ["2026-12-18", "2027-01-15"])
+    assert {quote.expiration for quote in adapter.chain_snapshot("COST").quotes} == {"2026-12-18"}
+
+
 def test_venue_market_forwards_exact_expirations_without_changing_normal_chain() -> None:
     from kamandal_v2.market.venue_router import VenueAwareMarket
 

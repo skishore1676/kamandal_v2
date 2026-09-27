@@ -363,6 +363,68 @@ def test_exact_candidate_requests_source_expirations_only(tmp_path: Path) -> Non
     assert requested == [("2026-08-28", "2026-09-04")]
 
 
+@pytest.mark.parametrize("primary_iv", [False, True])
+def test_exact_calendar_expiration_request_crosses_full_live_market_stack(tmp_path: Path, primary_iv: bool) -> None:
+    from kamandal_v2.events.earnings import EarningsOverlayMarket, EarningsStore
+    from kamandal_v2.market.venue_router import VenueAwareMarket
+    from kamandal_v2.planner.engine import _SnapshottingFixtureMarket
+    from kamandal_v2.planner.market_cache import PlanningMarketCache
+    from kamandal_v2.volatility.iv import IvOverlayMarket, PrimaryIvOverlayMarket
+    from kamandal_v2.volatility.iv_store import IvStore
+
+    package = replace(
+        _batch().packages[0], source_published_at="2026-08-27T13:00:00Z",
+        source_valid_until="2026-08-27T16:00:00Z", source_verified=True,
+        source_verification_ref="sv_fixture_independent_match",
+    )
+    raw = _Market(captured_at="2026-08-27T14:00:00Z")
+    complete_chain = raw.chain_snapshot("ADSK")
+    normal_calls: list[str] = []
+    targeted_calls: list[tuple[str, tuple[str, ...]]] = []
+    raw.chain_snapshot = lambda symbol: (
+        normal_calls.append(symbol) or replace(complete_chain, quotes=complete_chain.quotes[:1])
+    )
+    raw.chain_snapshot_for_expirations = lambda symbol, expirations: (
+        targeted_calls.append((symbol, tuple(expirations))) or complete_chain
+    )
+    raw.preflight = lambda _candidate: PreflightResult(
+        True, 500, "broker preview accepted", {"broker_bpr_provided": True},
+    )
+    store = LocalStore(tmp_path / "full-market-stack.db")
+    iv_store = IvStore(tmp_path / "iv.db")
+    iv_market = (PrimaryIvOverlayMarket(raw, iv_store, primary=raw) if primary_iv
+                 else IvOverlayMarket(raw, iv_store))
+    layered = PlanningMarketCache(_SnapshottingFixtureMarket(
+        EarningsOverlayMarket(iv_market, EarningsStore(tmp_path / "earnings.db")),
+        store,
+    ))
+    market = VenueAwareMarket(
+        layered, raw, {}, mode="live", venues={"public_primary"}, provider="public",
+    )
+    row = _observed_calendar_row()
+    row.update({"mode": "live", "csa_stage": "live", "source_mode": "idea",
+                "accepted_inputs": "exact_package", "dte_min": 0, "dte_max": 40,
+                "long_dte_min": 0, "long_dte_max": 40, "max_debit_pct_bpr": 1})
+    playbook = Playbook.from_row(row)
+    policy = SimpleNamespace(
+        playbook_id=playbook.playbook_id, accepted_inputs=("exact_package",),
+        mode=SimpleNamespace(value="live"), structure="call_calendar",
+    )
+    source = compile_trade_source_policies([{
+        "source_id": "mike_butler", "output_kind": "exact_package", "mode": "live",
+        "live_structures": "call_calendar",
+    }]).by_key()
+    candidates = build_observed_package_candidates(
+        [package], policies=(policy,), playbooks=[playbook], market=market, store=store,
+        config={"runtime": {"observed_at": "2026-08-27T14:00:00Z"}},
+        trade_source_policies=source, mode="live",
+    )
+    assert len(candidates) == 1 and candidates[0].eligible
+    assert targeted_calls == [("ADSK", ("2026-08-28", "2026-09-04"))]
+    assert normal_calls == []
+    assert candidates[0].preflight.message == "broker preview accepted"
+
+
 def test_source_verified_calendar_reaches_live_ticket_with_close_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

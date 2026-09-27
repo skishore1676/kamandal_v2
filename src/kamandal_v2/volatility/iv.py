@@ -64,6 +64,10 @@ class IvOverlayMarket:
     def chain_snapshot(self, underlying: str):
         return self.inner.chain_snapshot(underlying)
 
+    def chain_snapshot_for_expirations(self, underlying: str, expirations: list[str]):
+        targeted = getattr(self.inner, "chain_snapshot_for_expirations", None)
+        return targeted(underlying, expirations) if callable(targeted) else self.inner.chain_snapshot(underlying)
+
     def iv_percentile(self, underlying: str) -> float | None:
         daily = self.iv_store.latest_metric_value(underlying, DAILY_IV_PERCENTILE_METRIC)
         if daily is not None:
@@ -137,6 +141,10 @@ class PrimaryIvOverlayMarket:
 
     def chain_snapshot(self, underlying: str):
         return self.inner.chain_snapshot(underlying)
+
+    def chain_snapshot_for_expirations(self, underlying: str, expirations: list[str]):
+        targeted = getattr(self.inner, "chain_snapshot_for_expirations", None)
+        return targeted(underlying, expirations) if callable(targeted) else self.inner.chain_snapshot(underlying)
 
     def iv_percentile(self, underlying: str) -> float | None:
         primary = self._primary_iv("iv_percentile", underlying)

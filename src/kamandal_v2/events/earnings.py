@@ -197,6 +197,10 @@ class EarningsOverlayMarket:
     def chain_snapshot(self, underlying: str):
         return self.inner.chain_snapshot(underlying)
 
+    def chain_snapshot_for_expirations(self, underlying: str, expirations: list[str]):
+        targeted = getattr(self.inner, "chain_snapshot_for_expirations", None)
+        return targeted(underlying, expirations) if callable(targeted) else self.inner.chain_snapshot(underlying)
+
     def iv_percentile(self, underlying: str) -> float | None:
         return self.inner.iv_percentile(underlying)
 

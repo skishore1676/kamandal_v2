@@ -93,6 +93,13 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
         # Render that evidence faithfully without reinterpreting old decisions.
         if isinstance(raw.get("record"), dict):
             raw = raw["record"]
+        reason = str(item.get("reason") or "")
+        if (not reason and item.get("source_id") == "greg_harmon"
+                and raw.get("action") == "open" and raw.get("template_number") is not None
+                and raw.get("links_to") and not raw.get("exact_packages")):
+            # Older retained confirmations were linked but did not carry an
+            # explicit evidence blocker. The linked template has no contracts.
+            reason = "confirmed_template_lacks_exact_contracts"
         matched = []
         for lifecycle in lifecycles:
             identity = (lifecycle.get("metadata") or {}).get("source_identity") or {}
@@ -125,7 +132,7 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
             "capability_support": item.get("capability_support") or "unknown",
             "planner_disposition": item.get("planner_disposition") or "observed",
             "effective_mode": item.get("effective_mode") or "observe",
-            "reason": item.get("reason") or "",
+            "reason": reason,
             "source_url": f"https://x.com/i/status/{post_id}" if post_id.isdigit() else "",
             "interpretation": _interpretation(raw),
             "lifecycle_status": "; ".join(
@@ -281,7 +288,7 @@ def chief_of_staff_rows(
             raw = {}
         if not isinstance(raw, dict):
             raw = {}
-        if raw.get("template_number"):
+        if raw.get("template_number") and not raw.get("links_to"):
             templates += 1
             continue  # A proposed menu item is not a confirmed guru opening.
         source_id = str(item.get("source_id") or "")
@@ -347,7 +354,8 @@ def chief_of_staff_rows(
             reason = "Entry has not been submitted"
         elif any(token in reason for token in ("duplicate", "already_open", "superseded")):
             decision = "Duplicate"
-        elif "incomplete" in reason or str(item.get("evidence_status") or "") in {"needs_media", "needs_history", "ambiguous"}:
+        elif ("incomplete" in reason or "lacks_exact_contracts" in reason
+              or str(item.get("evidence_status") or "") in {"needs_media", "needs_history", "ambiguous"}):
             decision = "Needs evidence"
         elif "stale" in reason or "source_too_old" in reason or "source too old" in reason:
             decision = "Stale"
@@ -517,7 +525,7 @@ def _issue_label(reason: str) -> str:
     lower = reason.lower().replace("_", " ")
     if "media" in lower or "linked article" in lower:
         return "Missing source media/article"
-    if "expiration" in lower or "incomplete" in lower:
+    if "expiration" in lower or "incomplete" in lower or "lacks exact contracts" in lower:
         return "Incomplete contract terms"
     if "source verifier" in lower or "source contracts disagree" in lower or "source package count disagrees" in lower or "source structure disagrees" in lower or "source price disagrees" in lower or "source not independently verified" in lower:
         return "Source contract verification"
