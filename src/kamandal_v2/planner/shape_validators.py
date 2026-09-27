@@ -19,6 +19,9 @@ SUPPORTED_VALIDATOR_STRUCTURES = {
     "jade_lizard",
     "long_call",
     "long_put",
+    "call_butterfly",
+    "put_butterfly",
+    "call_crab",
 }
 
 
@@ -33,6 +36,9 @@ def validate_structure(structure: str, legs: list[OptionLeg], underlying_price: 
         "short_put": _short_put,
         "long_call": _long_call,
         "long_put": _long_put,
+        "call_butterfly": lambda legs, price: _butterfly(legs, option_type="call"),
+        "put_butterfly": lambda legs, price: _butterfly(legs, option_type="put"),
+        "call_crab": _call_crab,
         "put_spread": _put_spread,
         "call_spread": _call_spread,
         "iron_condor": _iron_condor,
@@ -75,6 +81,39 @@ def _long_put(legs: list[OptionLeg], underlying_price: float) -> ValidationResul
     leg = legs[0]
     if leg.option_type != "put" or leg.side != "buy":
         return ValidationResult(False, "long_put_requires_long_put")
+    return ValidationResult(True)
+
+
+def _butterfly(legs: list[OptionLeg], *, option_type: str) -> ValidationResult:
+    if len(legs) != 3 or {leg.option_type for leg in legs} != {option_type}:
+        return ValidationResult(False, f"{option_type}_butterfly_requires_three_{option_type}s")
+    if len({leg.expiration for leg in legs}) != 1:
+        return ValidationResult(False, "butterfly_requires_same_expiry")
+    lower, body, upper = sorted(legs, key=lambda leg: leg.strike)
+    if ([(leg.side, leg.quantity) for leg in (lower, body, upper)]
+            != [("buy", 1), ("sell", 2), ("buy", 1)]):
+        return ValidationResult(False, "butterfly_requires_long_short2_long")
+    if not (lower.strike < body.strike < upper.strike
+            and abs((body.strike - lower.strike) - (upper.strike - body.strike)) < 1e-8):
+        return ValidationResult(False, "butterfly_requires_symmetric_wings")
+    return ValidationResult(True)
+
+
+def _call_crab(legs: list[OptionLeg], underlying_price: float) -> ValidationResult:
+    if len(legs) != 3 or {leg.option_type for leg in legs} != {"call"}:
+        return ValidationResult(False, "call_crab_requires_three_calls")
+    expirations = sorted({leg.expiration for leg in legs})
+    if len(expirations) != 2:
+        return ValidationResult(False, "call_crab_requires_near_and_far_expiry")
+    near = [leg for leg in legs if leg.expiration == expirations[0]]
+    far = [leg for leg in legs if leg.expiration == expirations[1]]
+    if len(near) != 2 or len(far) != 1:
+        return ValidationResult(False, "call_crab_requires_two_near_one_far")
+    shorts = [leg for leg in near if (leg.side, leg.quantity) == ("sell", 2)]
+    near_longs = [leg for leg in near if (leg.side, leg.quantity) == ("buy", 1)]
+    if (len(shorts) != 1 or len(near_longs) != 1 or far[0].side != "buy" or far[0].quantity != 1
+            or not far[0].strike < shorts[0].strike < near_longs[0].strike):
+        return ValidationResult(False, "call_crab_ratio_or_strikes_invalid")
     return ValidationResult(True)
 
 

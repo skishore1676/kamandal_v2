@@ -2,8 +2,8 @@
 
 The source ledger and planner are intentionally separate.  Every evidence
 revision is retained, but only complete ``open`` packages authorized by a
-source policy and one compatible existing playbook become candidates. This module never
-chooses substitute expirations or strikes and never calls broker preflight.
+source policy and one compatible existing playbook become candidates. It never
+chooses substitute expirations or strikes. Live candidates require broker preflight.
 """
 
 from __future__ import annotations
@@ -193,6 +193,10 @@ def build_observed_package_candidates(
                 continue
             candidate = _candidate(package, playbook, legs, chain_snapshot=chain)
             rejections = _filter_rejections(candidate, playbook, config)
+            if mode == "shadow" and package.structure in {
+                "long_call", "call_butterfly", "put_butterfly", "call_crab",
+            }:
+                rejections.extend(_shadow_structure_contract_rejections(candidate, playbook, config))
             if package.structure == "short_strangle":
                 entry = next((entry for entry in (universe or []) if entry.symbol == package.symbol and entry.enabled), None)
                 if entry is None:
@@ -288,6 +292,10 @@ def _evidence_blocker(package: ObservedPackageEvidence) -> str:
         return "observed_package_signature_missing"
     if package.product_type == "futures_option":
         return "unsupported_product:futures_option"
+    if package.product_type == "index_option" and package.structure in {
+        "long_call", "call_butterfly", "put_butterfly", "call_crab",
+    }:
+        return "unsupported_product:index_option"
     if any(leg.effect != "open" for leg in package.legs):
         return "opening_package_contains_non_open_leg"
     return ""
@@ -357,6 +365,30 @@ def _exact_debit_contract_rejections(candidate: Candidate, playbook: Playbook, c
     return reasons
 
 
+def _shadow_structure_contract_rejections(
+    candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None,
+) -> list[str]:
+    """Keep new exact shapes bounded while they collect broker-inert evidence."""
+    observed = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
+    today = datetime.fromisoformat(observed.replace("Z", "+00:00")).date()
+    near_dte = min((date.fromisoformat(leg.expiration) - today).days for leg in candidate.legs)
+    reasons: list[str] = []
+    if near_dte < playbook.dte_min or near_dte > playbook.dte_max:
+        reasons.append("exact_near_dte_outside_policy")
+    if candidate.structure == "call_crab":
+        far_dte = max((date.fromisoformat(leg.expiration) - today).days for leg in candidate.legs)
+        if (playbook.long_dte_min is None or playbook.long_dte_max is None
+                or far_dte < playbook.long_dte_min or far_dte > playbook.long_dte_max):
+            reasons.append("exact_far_dte_outside_policy")
+    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
+        reasons.append("exact_quantity_above_policy")
+    if candidate.structure in {"long_call", "call_butterfly", "put_butterfly"} and candidate.net_credit >= 0:
+        reasons.append("exact_debit_structure_requires_debit")
+    if playbook.live_max_bpr_per_order is None or candidate.estimated_bpr > playbook.live_max_bpr_per_order:
+        reasons.append("exact_shadow_risk_above_order_cap")
+    return reasons
+
+
 def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> list[OptionLeg]:
     roles = _canonical_roles(package)
     legs: list[OptionLeg] = []
@@ -387,6 +419,28 @@ def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> 
 def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
     """Assign manager roles without changing a source-observed contract."""
 
+    if package.structure == "long_call":
+        if len(package.legs) != 1 or package.legs[0].option_type != "call" or package.legs[0].side != "buy":
+            raise ValueError("exact_long_call_requires_one_long_call")
+        return ["long_call"]
+    if package.structure in {"call_butterfly", "put_butterfly"}:
+        if len(package.legs) != 3:
+            raise ValueError("exact_butterfly_requires_three_legs")
+        order = sorted(range(3), key=lambda index: float(package.legs[index].strike))
+        roles = ["", "", ""]
+        for index, role in zip(order, ("long_lower", "short_body", "long_upper"), strict=True):
+            roles[index] = role
+        return roles
+    if package.structure == "call_crab":
+        if len(package.legs) != 3:
+            raise ValueError("exact_call_crab_requires_three_legs")
+        expirations = sorted({leg.expiration for leg in package.legs})
+        if len(expirations) != 2:
+            raise ValueError("exact_call_crab_requires_near_and_far_expiry")
+        return [
+            "long_far" if leg.expiration == expirations[1] else "short_body" if leg.side == "sell" else "long_near_wing"
+            for leg in package.legs
+        ]
     if package.structure == "short_strangle":
         if len(package.legs) != 2 or {leg.option_type for leg in package.legs} != {"put", "call"}:
             raise ValueError("exact_strangle_requires_one_put_and_one_call")
@@ -418,6 +472,22 @@ def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
     return roles
 
 
+def _near_expiry_intrinsic_loss_bound(legs: list[OptionLeg], net_credit: float) -> float:
+    """Conservative shadow loss mark; later-dated long legs retain at least intrinsic value."""
+    strikes = sorted({leg.strike for leg in legs})
+    spot_probes = [0.0, *strikes, strikes[-1] + max(strikes[-1] - strikes[0], 1.0)]
+    minimum = min(
+        net_credit + sum(
+            (1 if leg.side == "buy" else -1) * leg.quantity
+            * (max(spot - leg.strike, 0.0) if leg.option_type == "call"
+               else max(leg.strike - spot, 0.0))
+            for leg in legs
+        )
+        for spot in spot_probes
+    )
+    return round(max(-minimum * 100, 1.0), 2)
+
+
 def _candidate(
     package: ObservedPackageEvidence,
     playbook: Playbook,
@@ -432,6 +502,8 @@ def _candidate(
     metrics = candidate_liquidity_metrics({"legs": legs, "net_credit": net_credit})
     liquidity_score = max(0.0, min(1.0, 1.0 - float(metrics["avg_bid_ask_pct"])))
     bpr = _estimate_bpr(playbook.structure, legs, net_credit)
+    if package.structure in {"call_butterfly", "put_butterfly", "call_crab"}:
+        bpr = _near_expiry_intrinsic_loss_bound(legs, net_credit)
     opportunity_id = package.opportunity_group_id or f"observed:{package.source_event_id}"
     identity = [opportunity_id, playbook.playbook_id, package.package_signature]
     candidate = Candidate(
@@ -483,6 +555,10 @@ def _candidate(
             "chain_snapshot_id": chain_snapshot.chain_snapshot_id,
             "chain_captured_at": chain_snapshot.captured_at,
             "broker_effects": False,
+            "risk_bound_basis": (
+                "near_expiry_intrinsic_floor_shadow_only"
+                if package.structure in {"call_butterfly", "put_butterfly", "call_crab"} else ""
+            ),
             "source_published_at": package.source_published_at,
             "source_valid_until": package.source_valid_until,
         },
