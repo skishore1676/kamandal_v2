@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from dataclasses import replace
 
 from kamandal_v2.domain.models import OptionLeg
 from kamandal_v2.planner.shape_validators import validate_structure
@@ -85,3 +86,36 @@ def test_long_option_shapes_accept_single_long_leg() -> None:
 
     assert validate_structure("long_call", [_leg("long_call", "buy", "call", 110, expiry)], 100).valid
     assert validate_structure("long_put", [_leg("long_put", "buy", "put", 90, expiry)], 100).valid
+
+
+def test_exact_butterfly_requires_symmetric_one_two_one_same_expiry() -> None:
+    expiry = (date.today() + timedelta(days=45)).isoformat()
+    legs = [
+        _leg("long_lower", "buy", "call", 90, expiry),
+        replace(_leg("short_body", "sell", "call", 100, expiry), quantity=2),
+        _leg("long_upper", "buy", "call", 110, expiry),
+    ]
+    assert validate_structure("call_butterfly", legs, 100).valid
+    assert validate_structure("call_butterfly", [*legs[:2], replace(legs[2], strike=115)], 100).reason == (
+        "butterfly_requires_symmetric_wings"
+    )
+    assert validate_structure("call_butterfly", [legs[0], replace(legs[1], quantity=1), legs[2]], 100).reason == (
+        "butterfly_requires_long_short2_long"
+    )
+
+
+def test_call_crab_requires_two_near_shorts_and_later_lower_long() -> None:
+    near = (date.today() + timedelta(days=30)).isoformat()
+    far = (date.today() + timedelta(days=90)).isoformat()
+    legs = [
+        _leg("long_far", "buy", "call", 90, far),
+        replace(_leg("short_body", "sell", "call", 100, near), quantity=2),
+        _leg("long_near_wing", "buy", "call", 110, near),
+    ]
+    assert validate_structure("call_crab", legs, 100).valid
+    assert validate_structure("call_crab", [replace(legs[0], expiration=near), *legs[1:]], 100).reason == (
+        "call_crab_requires_near_and_far_expiry"
+    )
+    assert validate_structure("call_crab", [replace(legs[0], strike=105), *legs[1:]], 100).reason == (
+        "call_crab_ratio_or_strikes_invalid"
+    )

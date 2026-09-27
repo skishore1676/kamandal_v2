@@ -62,6 +62,9 @@ def capability_registry() -> CapabilityRegistry:
         ("narrative_ignition", {"call_diagonal", "put_diagonal"}),
         ("long_call", {"long_call"}),
         ("long_put", {"long_put"}),
+        ("call_butterfly", {"call_butterfly"}),
+        ("put_butterfly", {"put_butterfly"}),
+        ("call_crab", {"call_crab"}),
     ):
         registry.register(Capability(key, frozenset(structures), close_only))
     registry.register(
