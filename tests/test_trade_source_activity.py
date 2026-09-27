@@ -345,6 +345,74 @@ def test_brief_retains_both_route_decisions_after_source_reobservation(tmp_path)
     assert 'Idea: Entry price allowance below a valid broker tick' in details[0][4]
 
 
+def test_brief_prefers_live_exact_block_over_shadow_idea_route(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'brief.db')
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    for suffix, blocker in [('cost', 'exact_contract_match_count:2:0'),
+                            ('wmt', 'live_exact_source_freshness_missing')]:
+        post = 'x-post:2103159907973239124'
+        opportunity = f'corr_opp_{suffix}'
+        store.event('trade_source_output_observed', {
+            'source_id': 'mike_butler', 'post_ref': post, 'output_id': f'{suffix}-idea',
+            'classification': 'idea', 'effective_mode': 'shadow',
+            'action': 'open', 'symbol': suffix.upper(),
+            'reason': 'planner_structure_unsupported',
+            'normalized_output': {'source_event_id': f'{suffix}-idea',
+                                  'opportunity_group_id': opportunity, 'action': 'open'},
+        })
+        store.event('trade_source_output_observed', {
+            'source_id': 'mike_butler', 'post_ref': post, 'output_id': f'{suffix}-exact',
+            'classification': 'exact_package', 'effective_mode': 'live',
+            'action': 'open', 'symbol': suffix.upper(), 'reason': blocker,
+            'normalized_output': {'source_event_id': f'{suffix}-idea',
+                                  'opportunity_group_id': opportunity,
+                                  'package_signature': suffix, 'action': 'open',
+                                  'complete': True, 'legs': [{'strike': 1000}]},
+        })
+    _summary, details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'idea'): 'shadow',
+                              ('mike_butler', 'exact_package'): 'live'},
+        sleeve_policy=policy,
+    )
+    decisions = {row[2].split()[0]: row for row in details}
+    assert decisions['COST'][3] == 'Blocked by quote'
+    assert decisions['WMT'][3] == 'Needs evidence'
+    assert all('Exact: live' in row[5] for row in details)
+    assert all('Idea:' in row[4] for row in details)
+
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:2103159907973239124',
+        'output_id': 'idea-live', 'classification': 'idea', 'effective_mode': 'live',
+        'action': 'open', 'symbol': 'SPY', 'reason': 'outside_configured_universe',
+        'normalized_output': {'source_event_id': 'idea-live',
+                              'opportunity_group_id': 'corr_opp_idea', 'action': 'open'},
+    })
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:2103159907973239124',
+        'output_id': 'exact-shadow', 'classification': 'exact_package',
+        'effective_mode': 'shadow', 'action': 'open', 'symbol': 'SPY',
+        'reason': 'planner_structure_unsupported',
+        'normalized_output': {'source_event_id': 'idea-live',
+                              'opportunity_group_id': 'corr_opp_idea',
+                              'package_signature': 'spy', 'action': 'open',
+                              'complete': True, 'legs': [{'strike': 100}]},
+    })
+    _summary, details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'idea'): 'live',
+                              ('mike_butler', 'exact_package'): 'shadow'},
+        sleeve_policy=policy,
+    )
+    decisions = {row[2].split()[0]: row for row in details}
+    assert decisions['SPY'][3] == 'Held'
+
+
 def test_source_revision_and_off_switch_do_not_inherit_old_planner_rejection(tmp_path):
     from kamandal_v2.intelligence.trade_source_activity import activity_rows
     from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER

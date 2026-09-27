@@ -332,6 +332,23 @@ def chief_of_staff_rows(
         if len(signatures) > 1 and not matched_groups:
             reason = "multi_package_opening_requires_atomic_group"
         mode = str(item.get("effective_mode") or "observe")
+        if raw.get("links_to") and raw.get("template_number") and not any(
+            evidence.get("exact_packages") or evidence.get("legs") for _member, evidence in members
+        ):
+            # A linked confirmation can be an opening even when the source
+            # omitted the contracts. Show the operator's exact route switch.
+            mode = f"Exact: {source_modes.get((source_id, 'exact_package'), 'off')}"
+        decision_reason = reason
+        decision_mode = mode.lower()
+        route_modes = dict(part.split(": ", 1) for part in mode.split(" | ") if ": " in part)
+        route_reasons = dict(part.split(": ", 1) for part in reason.split(" | ") if ": " in part)
+        active_route = next(
+            (route for route in ("Exact", "Idea") if route_modes.get(route) == "live"), None,
+        )
+        if active_route:
+            decision_reason = route_reasons.get(active_route, "" if route_reasons else reason)
+            decision_mode = "live"
+        source_reason = reason
         if matched_groups:
             lane = str(matched_groups[0].get("source_output_kind") or "idea")
             decision = "Entered exact" if lane == "exact_package" else "Entered idea"
@@ -352,31 +369,35 @@ def chief_of_staff_rows(
         elif any(str(ticket.get("_ledger_status") or "") in {"pending_approval", "stage_approved_pending_submit", "waiting_entry_window"} for ticket in matched_intents):
             decision = "Queued"
             reason = "Entry has not been submitted"
-        elif any(token in reason for token in ("duplicate", "already_open", "superseded")):
+        elif any(token in decision_reason for token in ("duplicate", "already_open", "superseded")):
             decision = "Duplicate"
-        elif ("incomplete" in reason or "lacks_exact_contracts" in reason
+        elif ("incomplete" in decision_reason or "lacks_exact_contracts" in decision_reason
+              or "source_freshness_missing" in decision_reason
               or str(item.get("evidence_status") or "") in {"needs_media", "needs_history", "ambiguous"}):
             decision = "Needs evidence"
-        elif "stale" in reason or "source_too_old" in reason or "source too old" in reason:
+        elif "stale" in decision_reason or "source_too_old" in decision_reason or "source too old" in decision_reason:
             decision = "Stale"
-        elif "bid_ask_pct_above_max" in reason or "bid ask pct above max" in reason:
+        elif ("bid_ask_pct_above_max" in decision_reason or "bid ask pct above max" in decision_reason
+              or "exact_contract_match_count" in decision_reason):
             decision = "Blocked by quote"
-        elif any(token in reason for token in ("risk", "bpr_cap", "health_gate")):
+        elif any(token in decision_reason for token in ("risk", "bpr_cap", "health_gate")):
             decision = "Blocked by risk"
-        elif "unsupported" in reason:
+        elif "unsupported" in decision_reason:
             decision = "Unsupported"
-        elif "shadow" in mode.lower():
+        elif decision_mode == "shadow" or decision_mode.endswith(": shadow"):
             decision = "Shadow"
-        elif "off" in mode.lower() or "observe" in mode.lower():
+        elif decision_mode == "off" or decision_mode.endswith(": off") or "observe" in decision_mode:
             decision = "Observed only"
         elif "selected" in str(item.get("planner_disposition") or ""):
             decision = "Selected"
         else:
             decision = "Held"
+        if reason != source_reason:
+            decision_reason = reason
         if decision in {"Unsupported", "Needs evidence", "Stale", "Held", "Blocked by risk", "Blocked by quote", "Blocked by policy", "Blocked by preflight", "Blocked", "Duplicate"}:
             held += 1
             if decision != "Stale":
-                issues[_issue_label(reason or str(item.get("evidence_status") or "unresolved"))] += 1
+                issues[_issue_label(decision_reason or str(item.get("evidence_status") or "unresolved"))] += 1
         package_terms = []
         for _member, evidence in members:
             packages = evidence.get("exact_packages") or []
@@ -488,6 +509,8 @@ def _plain_reason(value: str) -> str:
         return "Approved entry lacks a source verification reference"
     if "source too old" in lower or "stale" in lower:
         return "Opening is stale; await a new confirmed entry"
+    if "source freshness missing" in lower:
+        return "Source freshness was unavailable when this opening was evaluated"
     quote = re.search(r"bid ask pct above max:([0-9]+(?:\.[0-9]+)?)>([0-9]+(?:\.[0-9]+)?)", lower)
     if quote:
         return f"Quote spread {float(quote[1]) * 100:.1f}% exceeds {float(quote[2]) * 100:.1f}% limit"
@@ -533,6 +556,10 @@ def _issue_label(reason: str) -> str:
         return "Source contract verification"
     if "bid ask" in lower:
         return "Quote spread too wide"
+    if "exact contract match count" in lower:
+        return "Exact contract quote missing"
+    if "source freshness missing" in lower:
+        return "Source freshness evidence"
     if "outside configured universe" in lower:
         return "Universe eligibility"
     if "unsupported" in lower or "no playbook match" in lower:
