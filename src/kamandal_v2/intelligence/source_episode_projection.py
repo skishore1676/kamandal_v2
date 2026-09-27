@@ -361,7 +361,11 @@ def _exact_package_projections(
             declared_structure = str(raw.get("deterministic_structure") or event.get("structure_hint") or "")
             if action == "open" and (expected_shapes := _SHAPE_ALIASES.get(declared_structure)):
                 inferred_structure = infer_observed_structure(legs, action=action)
-                if (declared_structure == "butterfly"
+                if declared_structure == "butterfly" and inferred_structure in expected_shapes:
+                    # The source names the family; exact legs identify the
+                    # call or put subtype consumed by the bounded playbook.
+                    declared_structure = inferred_structure
+                elif (declared_structure == "butterfly"
                         and inferred_structure == "put_butterfly_with_call_vertical"):
                     declared_structure = inferred_structure
                 elif inferred_structure not in expected_shapes:

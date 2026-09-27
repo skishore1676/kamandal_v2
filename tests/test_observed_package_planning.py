@@ -386,7 +386,6 @@ def test_new_guru_shapes_make_bounded_shadow_candidates_only(
     monkeypatch.setattr(planning, "_market_provider", lambda *_args, **_kwargs: market)
     control = load_control()
     control["runtime"]["observed_at"] = "2026-09-25T14:05:00Z"
-    control.setdefault("shadow", {}).setdefault("basket", {})["min_marginal_score"] = -10000
     shadow_dir = tmp_path / "shadow-lifecycle"
     shadow_dir.mkdir()
     shadow_store = _migrated_store(shadow_dir)

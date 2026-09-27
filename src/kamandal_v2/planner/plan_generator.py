@@ -69,7 +69,18 @@ def generate_plans(
                     continue
                 marginal_score = _score(next_plan, portfolio, control) - _score(partial, portfolio, control)
                 if basket_policy.min_marginal_score is not None and marginal_score < basket_policy.min_marginal_score:
-                    continue
+                    # A bounded, source-exact shadow opening needs a singleton
+                    # paper lifecycle even when the income-oriented score is
+                    # unfavorable. Its score and rank remain unchanged.
+                    shadow_research_singleton = (
+                        not partial
+                        and str((control.get("runtime") or {}).get("mode") or "").lower() == "shadow"
+                        and candidate.structure in {"long_call", "call_butterfly", "put_butterfly", "call_crab"}
+                        and candidate.metadata.get("input_kind") == "exact_package"
+                        and candidate.metadata.get("shadow_research_observation") is True
+                    )
+                    if not shadow_research_singleton:
+                        continue
                 expanded.append(next_plan)
         if not expanded:
             break
