@@ -23,6 +23,22 @@ SHADOW_SHAPES = (
     ("put_butterfly", 3, 2),
     ("call_crab", 3, 2),
 )
+PLACEHOLDER_DEFAULTS = {"range_gate_required": "FALSE", "resting_profit_enabled": "FALSE"}
+
+
+def shadow_row_indices(rows: list[dict[str, str]]) -> list[int]:
+    active_indices = [index for index, row in enumerate(rows) if row.get("playbook_id")]
+    if not active_indices:
+        raise ValueError("playbooks has no active rows")
+    first = max(active_indices) + 1
+    indices = list(range(first, first + len(SHADOW_SHAPES)))
+    if indices[-1] >= len(rows):
+        raise ValueError("not enough prepared Sheet rows beside existing playbooks")
+    for index in indices:
+        populated = {key: value for key, value in rows[index].items() if str(value).strip()}
+        if populated != PLACEHOLDER_DEFAULTS:
+            raise ValueError(f"prepared playbooks row {index + 2} contains operator data")
+    return indices
 
 
 def proposed_playbooks(rows: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -32,6 +48,7 @@ def proposed_playbooks(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     if any(f"guru_exact_{shape}_shadow" in by_id for shape, _, _ in SHADOW_SHAPES):
         raise ValueError("shadow shape rows already exist; inspect them before retrying")
     proposed = [dict(row) for row in rows]
+    destinations = shadow_row_indices(rows)
     for row in proposed:
         if row.get("playbook_id") in CALENDARS:
             if str(row.get("dte_max")) != "60":
@@ -40,7 +57,7 @@ def proposed_playbooks(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             row["notes"] = str(row.get("notes") or "") + " Near-leg DTE cap: 90 days."
 
     template = by_id["guru_exact_call_calendar"]
-    for shape, leg_count, max_contracts in SHADOW_SHAPES:
+    for destination, (shape, leg_count, max_contracts) in zip(destinations, SHADOW_SHAPES, strict=True):
         row = dict(template)
         row.update({
             "playbook_id": f"guru_exact_{shape}_shadow",
@@ -73,7 +90,7 @@ def proposed_playbooks(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             "rationale": "Observe exact Guru opening and close as a bounded paper package; no live submission.",
             "notes": "Shadow only. Exact contracts and quoted package required. No broker order.",
         })
-        proposed.append(row)
+        proposed[destination] = row
     return proposed
 
 
@@ -138,15 +155,13 @@ def main() -> None:
                 {"range": f"{dte_col}{row_number}", "values": [["90"]]},
                 {"range": f"{notes_col}{row_number}", "values": [[by_id[playbook_id]["notes"]]]},
             ))
-    first_new = len(matrix) + 1
+    destinations = shadow_row_indices(rows)
+    first_new = destinations[0] + 2
     last_new = first_new + len(SHADOW_SHAPES) - 1
     last_col = column_letter(len(header))
-    physical_rows, physical_cols = client.tab_dimensions("playbooks")
-    if physical_rows < last_new:
-        client.resize_tab("playbooks", rows=last_new, cols=physical_cols)
     updates.append({
         "range": f"A{first_new}:{last_col}{last_new}",
-        "values": [[row.get(column, "") for column in header] for row in proposed[-len(SHADOW_SHAPES):]],
+        "values": [[proposed[index].get(column, "") for column in header] for index in destinations],
     })
     client.batch_update_tab("playbooks", updates)
     observed = client.read_tab("playbooks")
