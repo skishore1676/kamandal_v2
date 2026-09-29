@@ -122,7 +122,7 @@ def test_same_day_policy_requires_explicit_intraday_exit():
     from kamandal_v2.strategy_engine.policy import compile_playbook_policy, PolicyError
     row = condor_row()
     assert compile_playbook_policy(row).structure == 'iron_condor'
-    for changes in ({'management_policy_json': '{}'}, {'half_time_exit': 'TRUE'}, {'exit_dte_min': 1}):
+    for changes in ({'management_policy_json': '{}'}, {'half_time_exit': 'TRUE'}, {'exit_dte_min': 1}, {'max_contracts': 2}):
         with pytest.raises(PolicyError):
             compile_playbook_policy({**row, **changes})
 

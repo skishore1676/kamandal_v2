@@ -89,11 +89,22 @@ def main():
                 changes.append({'tab':tab, 'row':i+1, 'column':column})
                 requests.append({'updateCells': {
                     'range': {'sheetId':worksheet.id,'startRowIndex':i,'endRowIndex':i+1,'startColumnIndex':j,'endColumnIndex':j+1},
-                    'rows':[{'values':[{'userEnteredValue':{'stringValue':str(new.get(column,''))}}]}],
+                    'rows':[{'values':[{'userEnteredValue':(
+                        {'boolValue':str(new[column]) == 'TRUE'} if str(new.get(column,'')) in {'TRUE','FALSE'}
+                        else {'stringValue':str(new.get(column,''))})}]}],
                     'fields':'userEnteredValue',
                 }})
     # Inspect the exact writable row and source-control cells, preserving native metadata.
     row_number = next(i+2 for i,r in enumerate(proposed['playbooks']) if r.get('playbook_id') == PLAYBOOK_ID)
+    accepted_column = client.read_tab_values('playbooks')[0].index('accepted_inputs')
+    if requests:
+        requests.append({'setDataValidation': {
+            'range': {'sheetId':sheet_ids['playbooks'], 'startRowIndex':row_number-1,
+                      'endRowIndex':row_number, 'startColumnIndex':accepted_column,
+                      'endColumnIndex':accepted_column+1},
+            'rule': {'condition': {'type':'ONE_OF_LIST','values':[{'userEnteredValue':'exact_package'}]},
+                     'strict':True,'showCustomUi':True},
+        }})
     metadata = client._spreadsheet.fetch_sheet_metadata(params={'includeGridData':True,
         'ranges':[f"playbooks!A{row_number}:CC{row_number}", 'trade_sources!A1:F5']})
     for sheet in metadata.get('sheets',[]):

@@ -346,7 +346,7 @@ def _exact_condor_contract_rejections(candidate: Candidate, playbook: Playbook, 
     reasons = []
     if not playbook.dte_min <= dte <= playbook.dte_max:
         reasons.append("exact_condor_dte_outside_policy")
-    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
+    if playbook.max_contracts != 1 or any(leg.quantity != 1 for leg in candidate.legs):
         reasons.append("exact_condor_quantity_above_policy")
     if candidate.net_credit <= 0:
         reasons.append("exact_condor_requires_positive_credit")

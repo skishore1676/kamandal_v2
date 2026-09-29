@@ -140,6 +140,8 @@ def compile_playbook_policy(
     fields = {str(key): value for key, value in sorted(row.items()) if value not in (None, "")}
     fields.setdefault("execution_venue", execution_venue)
     management = _management(row, playbook_id)
+    if structure == "iron_condor" and "exact_package" in accepted_inputs and float(row.get("max_contracts") or 0) != 1:
+        raise PolicyError(f"{playbook_id}: exact condor currently requires max_contracts=1")
     if structure == "iron_condor" and "exact_package" in accepted_inputs and float(row.get("dte_min") or 0) == 0:
         from kamandal_v2.live.expiry_day import expiry_day_buffers
         try:
