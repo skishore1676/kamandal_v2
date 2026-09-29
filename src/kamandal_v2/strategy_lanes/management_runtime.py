@@ -434,11 +434,15 @@ def _frozen_lifecycle_policy(lifecycle: LifecycleState) -> CsaPolicy:
 
 
 def _active_option_legs(lifecycle: LifecycleState, snapshot: Any) -> tuple[OptionLeg, ...]:
-    quotes = {(quote.expiration, quote.option_type, float(quote.strike)): quote for quote in snapshot.quotes}
     result = []
     for item in lifecycle.active_legs:
         key = (str(item["expiration"]), str(item["option_type"]), float(item["strike"]))
-        quote = quotes.get(key)
+        matches = [quote for quote in snapshot.quotes
+                   if (quote.expiration, quote.option_type, float(quote.strike)) == key
+                   and (not item.get("broker_symbol") or quote.broker_symbol == item["broker_symbol"])]
+        if len(matches) > 1:
+            raise ValueError("Ambiguous management contract quote")
+        quote = matches[0] if matches else None
         if quote is None:
             result.append(
                 OptionLeg(
@@ -460,8 +464,6 @@ def _active_option_legs(lifecycle: LifecycleState, snapshot: Any) -> tuple[Optio
                 )
             )
         else:
-            if item.get("broker_symbol") and quote.broker_symbol != item["broker_symbol"]:
-                raise ValueError("Management quote does not match the owned broker contract")
             result.append(OptionLeg.from_quote(quote, role=str(item["role"]), side=str(item["side"]), quantity=int(item["quantity"])))
     return tuple(result)
 

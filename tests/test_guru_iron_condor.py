@@ -166,3 +166,20 @@ def test_sheet_migration_preserves_existing_policies_and_source_switches():
     assert all(r['mode']=='off' and r['live_structures']=='short_strangle,iron_condor' for r in result['trade_sources'])
     assert propose(result) == result
     assert tables['playbooks'][1] == {}
+
+
+def test_management_selects_owned_weekly_contract_among_same_strike_roots():
+    from types import SimpleNamespace
+    from kamandal_v2.domain.models import OptionLeg
+    from kamandal_v2.strategy_lanes.management_runtime import _active_option_legs
+    weekly = OptionQuote('SPX','2026-10-16','put',7655,2,2.1,.2,.01,-.02,.03,.2,500,
+                         broker_symbol='SPXW261016P07655000')
+    monthly = replace(weekly, broker_symbol='SPX261016P07655000', bid=5, ask=5.1)
+    owned = OptionLeg.from_quote(weekly,role='short_put',side='sell',quantity=1)
+    lifecycle = SimpleNamespace(active_legs=[owned.to_dict()])
+    legs = _active_option_legs(lifecycle, SimpleNamespace(quotes=[weekly,monthly]))
+    assert legs[0].broker_symbol == weekly.broker_symbol
+    assert legs[0].bid == 2
+    missing = _active_option_legs(lifecycle, SimpleNamespace(quotes=[monthly]))
+    assert missing[0].broker_symbol == weekly.broker_symbol
+    assert missing[0].bid == 0
