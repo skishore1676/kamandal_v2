@@ -8,7 +8,7 @@ profiles:
   source_interpreter:
     provider: codex
     options:
-      model: gpt-6.1-sol
+      model: gpt-6-astra
       reasoning_effort: low
       verbosity: low
       sandbox: read-only

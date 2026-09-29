@@ -47,5 +47,5 @@ def test_interpreter_route_preserves_fleet_and_other_actor(tmp_path):
     after=yaml.safe_load(path.read_text())
     assert after['active_profile']=='terra'
     assert after['routes']['other::actor']==payload['routes']['other::actor'] or after['routes']['other::actor']['binding']==payload['routes']['other::actor']['binding']
-    assert result['readback']['options']['model']=='gpt-6.1-sol'
+    assert result['readback']['options']['model']=='gpt-6-astra'
     assert result['readback']['options']['reasoning_effort']=='low'
