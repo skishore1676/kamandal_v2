@@ -39,10 +39,15 @@ run_x_bookmark_extraction() {
     # profile-declared Cartographer questions, and then publishes planner ideas.
     # The exchange is generic; this X job does not contain Greg-specific chart logic.
     log "Activating configured correspondent signals for the planner."
-    activation_json="$("$KAMANDAL_BIN" activate-correspondent-signals \
+    if activation_json="$("$KAMANDAL_BIN" activate-correspondent-signals \
       --config-source sheet \
-      --active-ideas-dir "$ideas_dir")"
-    log "$activation_json"
+      --active-ideas-dir "$ideas_dir" 2>&1)"; then
+      log "$activation_json"
+    else
+      log "Guru intake failed; source failure receipt follows."
+      log "$activation_json"
+      return 1
+    fi
   fi
 
   if [[ -z "$source_doc_dir" || ! -d "$source_doc_dir" ]]; then

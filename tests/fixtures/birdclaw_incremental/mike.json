@@ -1,0 +1,141 @@
+{
+  "schema": "birdclaw.correspondent_signals.v1",
+  "generated_at": "2026-09-29T11:54:24Z",
+  "profile": {
+    "schema": "birdclaw.correspondent_profile.v1",
+    "profile_id": "mike_butler",
+    "version": "1",
+    "author_handles": [
+      "tradermikeyb"
+    ],
+    "profile_sha256": "603a2eb25a8d5d0bf7e505adc368629833a275a652fd1a77ddfdd307cd2ae0da"
+  },
+  "records": [
+    {
+      "schema": "birdclaw.correspondent_signal.v1",
+      "signal_id": "x-post:2104591155346419717",
+      "profile_id": "mike_butler",
+      "source": {
+        "kind": "public_x_post",
+        "source_id": "x-post:2104591155346419717",
+        "source_url": "https://x.com/TraderMikeyB/status/2104591155346419717",
+        "published_at": "2026-09-28T15:16:47.000Z",
+        "author_handle": "tradermikeyb",
+        "expanded_urls": [
+          "https://x.com/TraderMikeyB/status/2104591155346419717/photo/1"
+        ],
+        "media": [],
+        "observation_sources": [
+          "bookmarks",
+          "correspondent:mike_butler:tradermikeyb"
+        ]
+      },
+      "classification": {
+        "type": "observed_package_open",
+        "rule_id": "explicit_new_package",
+        "interpretation_status": "deterministic_profile"
+      },
+      "literal": {
+        "text": "New $BA call diagonal fading this price extreme New $MU 2x call calendar 1x put calendar for earnings: https://t.co/zcfU4vfuZA",
+        "symbols": [
+          {
+            "symbol": "BA",
+            "origin": "literal_cashtag"
+          },
+          {
+            "symbol": "MU",
+            "origin": "literal_cashtag"
+          }
+        ],
+        "idea_number": null
+      }
+    },
+    {
+      "schema": "birdclaw.correspondent_signal.v1",
+      "signal_id": "x-post:2104660416928632950",
+      "profile_id": "mike_butler",
+      "source": {
+        "kind": "public_x_post",
+        "source_id": "x-post:2104660416928632950",
+        "source_url": "https://x.com/TraderMikeyB/status/2104660416928632950",
+        "published_at": "2026-09-28T19:52:00.000Z",
+        "author_handle": "tradermikeyb",
+        "expanded_urls": [
+          "https://x.com/TraderMikeyB/status/2098490199198015996?s=20"
+        ],
+        "media": [],
+        "observation_sources": [
+          "correspondent:mike_butler:tradermikeyb"
+        ]
+      },
+      "classification": {
+        "type": "unknown",
+        "rule_id": "profile_relevance_fallback",
+        "interpretation_status": "deterministic_profile"
+      },
+      "literal": {
+        "text": "@Steal_Away_ You may be thinking of the /MES year-long trade where I just sell premium and maintain a neutral / bullish bias regardless of sentiment - that has been a good one! https://t.co/9UjcxlLDWt",
+        "symbols": [],
+        "idea_number": null
+      }
+    }
+  ],
+  "counts": {},
+  "acquisition": {
+    "schema": "birdclaw.correspondent_acquisition_reference.v1",
+    "status": "succeeded",
+    "receipt_generated_at": "2026-09-29T10:30:04.807Z",
+    "receipt_run_id": "20260929-103000",
+    "attempts": [
+      {
+        "incremental": {
+          "watermark_id": "2104660416928632950",
+          "pending_until_id": null,
+          "pending_newest_id": null,
+          "last_caught_up_at": "2026-09-29T10:30:03.590Z",
+          "history_gap": false
+        },
+        "incremental_coverage": "caught_up",
+        "page_count": 1,
+        "key": "mike_butler:tradermikeyb",
+        "profile_id": "mike_butler",
+        "profile_version": "1",
+        "profile_sha256": "603a2eb25a8d5d0bf7e505adc368629833a275a652fd1a77ddfdd307cd2ae0da",
+        "author_handle": "tradermikeyb",
+        "source_lane": "correspondent:mike_butler:tradermikeyb",
+        "command": "xurl GET /2/tweets/search/recent since_id=<saved-id>",
+        "query": "from:tradermikeyb -is:retweet",
+        "requested_limit": 10,
+        "returned_count": 1,
+        "accepted_count": 1,
+        "cached_media_count": 0,
+        "enriched_media_post_count": 0,
+        "live_media_read_count": 0,
+        "indexed_media_hit_count": 0,
+        "earliest_post_id": "2104660416928632950",
+        "earliest_published_at": "2026-09-28T19:52:00.000Z",
+        "latest_post_id": "2104660416928632950",
+        "latest_published_at": "2026-09-28T19:52:00.000Z",
+        "expected_poll_interval_hours": 24,
+        "started_at": "2026-09-29T10:30:03.586Z",
+        "finished_at": "2026-09-29T10:30:04.483Z",
+        "status": "succeeded",
+        "error_stage": null,
+        "error": null,
+        "continuity": "continuous",
+        "limit_reached": false,
+        "coverage_status": "caught_up",
+        "last_successful_at": "2026-09-29T10:30:04.483Z"
+      }
+    ]
+  },
+  "safety": {
+    "visibility": "public",
+    "sanitization": "sanitized",
+    "read_only": true,
+    "network_call_performed": false,
+    "x_mutation_performed": false,
+    "raw_payload_returned": false,
+    "database_handle_exposed": false
+  }
+}

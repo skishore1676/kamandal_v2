@@ -563,3 +563,100 @@ def test_activation_asks_current_packet_then_publishes_bearish_diagonal(tmp_path
     assert ideas[0].allowed_structures == ["put_diagonal"]
     receipt = json.loads(result.receipt_path.read_text(encoding="utf-8"))
     assert receipt["profiles"][0]["market_questions"]["status"] == "succeeded"
+
+
+def test_intake_health_distinguishes_failed_empty_feed_from_no_signals(tmp_path: Path) -> None:
+    from kamandal_v2.intelligence.correspondent_activation import correspondent_intake_health
+    settings = _settings(tmp_path)
+    assert correspondent_intake_health(settings)["status"] == "unknown"
+    receipt = Path(settings["output_dir"]) / "activation/latest.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(json.dumps({"schema": "kamandal.correspondent_activation.v1", "status": "degraded", "source_failures": [{"profile_id": "mike_butler", "error": "schema mismatch"}]}))
+    health = correspondent_intake_health(settings)
+    assert health["status"] == "degraded"
+    assert health["source_failures"][0]["profile_id"] == "mike_butler"
+    assert health["warning"]
+    receipt.write_text(json.dumps({"schema": "kamandal.correspondent_activation.v1", "status": "succeeded", "record_count": 0}))
+    assert correspondent_intake_health(settings)["warning"] is None
+
+
+@pytest.mark.parametrize("restore_media", [False, True])
+def test_saved_monday_incremental_packets_reach_episode_compiler(tmp_path: Path, restore_media: bool) -> None:
+    settings = _settings(tmp_path)
+    settings["profiles"].append({
+        "profile_id": "mike_butler", "source_profile_id": "mike_butler",
+        "profile_path": str(Path("config/correspondents/mike_butler.yaml").resolve()), "enabled": True,
+    })
+    packets = {
+        name + suffix: json.loads(Path(f"tests/fixtures/birdclaw_incremental/{name}.json").read_text())
+        for name, suffix in (("greg", "_harmon"), ("mike", "_butler"))
+    }
+    if restore_media:
+        image = Path("tests/fixtures/birdclaw_incremental/mike-ba-mu.jpg").resolve()
+        assert hashlib.sha256(image.read_bytes()).hexdigest() == "ed4355676d265df1ce429188c73e7f64567ed800a0fa811e1acab3c47e12b5ff"
+        post = next(r for r in packets["mike_butler"]["records"] if r["signal_id"] == "x-post:2104591155346419717")
+        post["source"]["media"] = [{
+            "media_index": 1, "media_key": "3_2104591124224409600", "type": "photo",
+            "source_url": "https://pbs.twimg.com/media/HTUCehTWAAAQab-.jpg",
+            "cache_status": "cached", "sha256": hashlib.sha256(image.read_bytes()).hexdigest(),
+            "content_type": "image/jpeg", "byte_count": image.stat().st_size,
+            "artifact_path": str(image),
+        }]
+    def runner(args: list[str], _cwd: Path) -> str:
+        return json.dumps(packets[args[args.index("--profile") + 1]])
+    class RecordingInterpreter:
+        # Transport/contract replay only: no fabricated trade interpretation.
+        def __init__(self):
+            self.posts = []
+
+        def chat_json(self, _system, user, *, images=()):
+            posts = json.loads(user)["posts"]
+            self.posts.extend(posts)
+            return {"schema": "kamandal.source_episode_interpretation.v1", "episodes": [
+                {"signal_id": post["signal_id"], "events": []} for post in posts
+            ]}
+
+    client = RecordingInterpreter()
+    result = activate_correspondent_sources(
+        settings, universe_symbols={"JPM", "CCL", "ISRG", "BA", "MU"},
+        command_runner=runner, store=LocalStore(tmp_path / "replay.db"),
+        source_episode_client=client,
+    )
+    assert {"x-post:2104591155346419717", "x-post:2104627103568375986"}.issubset(
+        {post["signal_id"] for post in client.posts}
+    )
+    mike_post = next(p for p in client.posts if p["signal_id"] == "x-post:2104591155346419717")
+    assert mike_post["media_expected_but_unavailable"] is (not restore_media)
+    assert bool(mike_post["attached_image_numbers"]) is restore_media
+    receipt = json.loads(result.receipt_path.read_text())
+    assert result.status == "succeeded", receipt
+    assert result.source_failure_count == 0
+    assert result.record_count == sum(len(p["records"]) for p in packets.values())
+    assert len(receipt["profiles"]) == 2
+    assert list((Path(settings["output_dir"]) / "source_episodes").rglob("*.json"))
+    assert all(receipt["effects"][key] is False for key in ("broker", "orders", "sheet_write", "live_admission"))
+
+
+def test_x_job_logs_activation_failure_and_stops_before_extraction(tmp_path: Path) -> None:
+    import subprocess
+    fake = tmp_path / "kamandal"
+    fake.write_text('#!/bin/bash\nif [[ "$1" == "import-x-digest" ]]; then echo \'{"source_doc_dir":"/tmp"}\'; exit 0; fi\nif [[ "$1" == "activate-correspondent-signals" ]]; then echo \'{"status":"degraded","source_failure_count":2}\'; exit 1; fi\necho UNEXPECTED_EXTRACTION; exit 9\n')
+    fake.chmod(0o755)
+    stub = tmp_path / "common.sh"
+    stub.write_text(f'''REPO_ROOT="{Path.cwd()}"
+KAMANDAL_BIN="{fake}"
+KAMANDAL_MARKET_TZ=America/Chicago
+KAMANDAL_X_SOURCE_DOC_DIR="{tmp_path}/sources"
+KAMANDAL_X_BOOKMARK_DIGEST_DIR="{tmp_path}/digest"
+KAMANDAL_ACTIVE_IDEAS_DIR="{tmp_path}/ideas"
+require_trading_day() {{ :; }}
+log() {{ printf '%s\\n' "$*"; }}
+with_lock() {{ shift; "$@"; }}
+''')
+    script = tmp_path / "run.sh"
+    script.write_text(Path("scripts/run_x_bookmark_extraction.sh").read_text())
+    result = subprocess.run(["bash", str(script)], capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "Guru intake failed" in result.stdout
+    assert '"source_failure_count":2' in result.stdout
+    assert "UNEXPECTED_EXTRACTION" not in result.stdout

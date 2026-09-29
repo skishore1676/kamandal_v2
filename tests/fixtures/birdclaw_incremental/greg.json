@@ -1,0 +1,174 @@
+{
+  "schema": "birdclaw.correspondent_signals.v1",
+  "generated_at": "2026-09-29T11:54:24Z",
+  "profile": {
+    "schema": "birdclaw.correspondent_profile.v1",
+    "profile_id": "greg_harmon",
+    "version": "1",
+    "author_handles": [
+      "harmongreg"
+    ],
+    "profile_sha256": "68bd279268a88d960cecaef84e1e875f0d9fd8421370af5da293ce8356bd7026"
+  },
+  "records": [
+    {
+      "schema": "birdclaw.correspondent_signal.v1",
+      "signal_id": "x-post:2104559498287612283",
+      "profile_id": "greg_harmon",
+      "source": {
+        "kind": "public_x_post",
+        "source_id": "x-post:2104559498287612283",
+        "source_url": "https://x.com/harmongreg/status/2104559498287612283",
+        "published_at": "2026-09-28T13:10:59.000Z",
+        "author_handle": "harmongreg",
+        "expanded_urls": [
+          "https://dragonflycap.com/4-trade-ideas-for-jp-morgan-bonus-idea-11/",
+          "https://x.com/harmongreg/status/2104559498287612283/photo/1"
+        ],
+        "media": [],
+        "observation_sources": [
+          "correspondent:greg_harmon:harmongreg"
+        ]
+      },
+      "classification": {
+        "type": "earnings_bundle",
+        "rule_id": "earnings_trade_idea_bundle",
+        "interpretation_status": "deterministic_profile"
+      },
+      "literal": {
+        "text": "4 Trade Ideas for JP Morgan: Bonus Idea $JPM https://t.co/sWPJC064j4 https://t.co/U2EUqrNHyH",
+        "symbols": [
+          {
+            "symbol": "JPM",
+            "origin": "literal_cashtag"
+          }
+        ],
+        "idea_number": null
+      }
+    },
+    {
+      "schema": "birdclaw.correspondent_signal.v1",
+      "signal_id": "x-post:2104584654535754185",
+      "profile_id": "greg_harmon",
+      "source": {
+        "kind": "public_x_post",
+        "source_id": "x-post:2104584654535754185",
+        "source_url": "https://x.com/harmongreg/status/2104584654535754185",
+        "published_at": "2026-09-28T14:50:57.000Z",
+        "author_handle": "harmongreg",
+        "expanded_urls": [
+          "https://dragonflycap.com/premium-earnings-9-28-26-carnival/"
+        ],
+        "media": [],
+        "observation_sources": [
+          "correspondent:greg_harmon:harmongreg"
+        ]
+      },
+      "classification": {
+        "type": "earnings_bundle",
+        "rule_id": "earnings_trade_idea_bundle",
+        "interpretation_status": "deterministic_profile"
+      },
+      "literal": {
+        "text": "Premium Earnings 9-28-26: Carnival, on the blog and here https://t.co/fJpcMVDTZE $CCL",
+        "symbols": [
+          {
+            "symbol": "CCL",
+            "origin": "literal_cashtag"
+          }
+        ],
+        "idea_number": null
+      }
+    },
+    {
+      "schema": "birdclaw.correspondent_signal.v1",
+      "signal_id": "x-post:2104627103568375986",
+      "profile_id": "greg_harmon",
+      "source": {
+        "kind": "public_x_post",
+        "source_id": "x-post:2104627103568375986",
+        "source_url": "https://x.com/harmongreg/status/2104627103568375986",
+        "published_at": "2026-09-28T17:39:38.000Z",
+        "author_handle": "harmongreg",
+        "expanded_urls": [],
+        "media": [],
+        "observation_sources": [
+          "correspondent:greg_harmon:harmongreg"
+        ]
+      },
+      "classification": {
+        "type": "trade_journal",
+        "rule_id": "explicit_trade_journal",
+        "interpretation_status": "deterministic_profile"
+      },
+      "literal": {
+        "text": "added $ISRG Oct 417.50/435 call spreads",
+        "symbols": [
+          {
+            "symbol": "ISRG",
+            "origin": "literal_cashtag"
+          }
+        ],
+        "idea_number": null
+      }
+    }
+  ],
+  "counts": {},
+  "acquisition": {
+    "schema": "birdclaw.correspondent_acquisition_reference.v1",
+    "status": "succeeded",
+    "receipt_generated_at": "2026-09-29T10:30:04.807Z",
+    "receipt_run_id": "20260929-103000",
+    "attempts": [
+      {
+        "incremental": {
+          "watermark_id": "2104627103568375986",
+          "pending_until_id": null,
+          "pending_newest_id": null,
+          "last_caught_up_at": "2026-09-29T10:30:03.175Z",
+          "history_gap": false
+        },
+        "incremental_coverage": "caught_up",
+        "page_count": 1,
+        "key": "greg_harmon:harmongreg",
+        "profile_id": "greg_harmon",
+        "profile_version": "1",
+        "profile_sha256": "68bd279268a88d960cecaef84e1e875f0d9fd8421370af5da293ce8356bd7026",
+        "author_handle": "harmongreg",
+        "source_lane": "correspondent:greg_harmon:harmongreg",
+        "command": "xurl GET /2/tweets/search/recent since_id=<saved-id>",
+        "query": "from:harmongreg -is:retweet",
+        "requested_limit": 10,
+        "returned_count": 0,
+        "accepted_count": 0,
+        "cached_media_count": 0,
+        "enriched_media_post_count": 0,
+        "live_media_read_count": 0,
+        "indexed_media_hit_count": 0,
+        "earliest_post_id": null,
+        "earliest_published_at": null,
+        "latest_post_id": null,
+        "latest_published_at": null,
+        "expected_poll_interval_hours": 24,
+        "started_at": "2026-09-29T10:30:03.171Z",
+        "finished_at": "2026-09-29T10:30:03.586Z",
+        "status": "succeeded",
+        "error_stage": null,
+        "error": null,
+        "continuity": "continuous",
+        "limit_reached": false,
+        "coverage_status": "caught_up",
+        "last_successful_at": "2026-09-29T10:30:03.586Z"
+      }
+    ]
+  },
+  "safety": {
+    "visibility": "public",
+    "sanitization": "sanitized",
+    "read_only": true,
+    "network_call_performed": false,
+    "x_mutation_performed": false,
+    "raw_payload_returned": false,
+    "database_handle_exposed": false
+  }
+}
