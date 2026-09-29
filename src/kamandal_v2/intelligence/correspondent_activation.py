@@ -75,6 +75,28 @@ class CorrespondentActivationResult:
         }
 
 
+
+def correspondent_intake_health(settings: dict[str, Any]) -> dict[str, Any]:
+    """Project the source owner's receipt separately from planner success."""
+    if settings.get("enabled") is not True:
+        return {"status": "disabled", "warning": None}
+    path = resolve_path(settings.get("output_dir") or "data/research/correspondent_signals") / "activation/latest.json"
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        if receipt.get("schema") != ACTIVATION_SCHEMA:
+            raise ValueError("invalid activation receipt schema")
+        status = receipt.get("status", "unknown")
+        failures = receipt.get("source_failures") or []
+        return {
+            "status": status,
+            "activated_at": receipt.get("activated_at"),
+            "receipt_path": str(path),
+            "source_failures": failures,
+            "warning": None if status == "succeeded" else "Guru intake is unhealthy; an empty feed does not mean no signals.",
+        }
+    except (OSError, ValueError, AttributeError) as exc:
+        return {"status": "unknown", "receipt_path": str(path), "warning": f"Guru intake receipt unavailable: {type(exc).__name__}"}
+
 def activate_correspondent_sources(
     settings: dict[str, Any],
     *,

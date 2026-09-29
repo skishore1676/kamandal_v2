@@ -12,7 +12,7 @@ from kamandal_v2.config import load_control
 from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Plan, PortfolioState, PreflightResult, UniverseEntry
 from kamandal_v2.events.earnings import EarningsStore, capture_earnings_snapshots, earnings_event_status
 from kamandal_v2.intelligence.chart_seeds import import_chart_seed_evaluation
-from kamandal_v2.intelligence.correspondent_activation import activate_correspondent_sources
+from kamandal_v2.intelligence.correspondent_activation import activate_correspondent_sources, correspondent_intake_health
 from kamandal_v2.intelligence.correspondent_signals import import_correspondent_signals
 from kamandal_v2.intelligence.llm_extractor import extract_ideas_llm
 from kamandal_v2.intelligence.reviewer import review_rejections
@@ -651,6 +651,7 @@ def main() -> None:
             trade_source_rows=daily_policy_snapshot.tables.get("trade_sources"),
         )
         output = {
+            "guru_intake": correspondent_intake_health(correspondent_settings),
             "policy_errors": result.compilation.errors,
             "observed_package_feed": {
                 "path": str(feed_path),

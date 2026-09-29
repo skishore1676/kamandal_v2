@@ -544,3 +544,34 @@ def test_profile_revision_replaces_latest_lifecycle_projection_without_duplicate
     lifecycle = json.loads(revised.lifecycle_path.read_text(encoding="utf-8"))
     assert len(lifecycle["lifecycles"]) == 1
     assert len(lifecycle["lifecycles"][0]["events"]) == 1
+
+
+def test_incremental_acquisition_contract_preserved(tmp_path: Path) -> None:
+    packet = _packet([])
+    cursor = {
+        "watermark_id": "2104660416928632950", "pending_until_id": None,
+        "pending_newest_id": None, "last_caught_up_at": AS_OF, "history_gap": False,
+    }
+    packet["acquisition"] = {
+        "schema": "birdclaw.correspondent_acquisition_reference.v1",
+        "status": "succeeded",
+        "attempts": [{"incremental": cursor, "incremental_coverage": "caught_up", "page_count": 1}],
+    }
+    assert validate_correspondent_packet(packet)["acquisition"] == packet["acquisition"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"page_count": True}, {"page_count": -1}, {"page_count": "1"},
+    {"incremental_coverage": "magic"}, {"incremental": {"private": "secret"}},
+    {"incremental": {"watermark_id": 123}}, {"incremental": {"watermark_id": "abc"}},
+    {"incremental": {"history_gap": "false"}},
+    {"incremental": {"last_caught_up_at": "yesterday"}},
+])
+def test_incremental_acquisition_rejects_malformed_metadata(changes: dict) -> None:
+    packet = _packet([])
+    packet["acquisition"] = {
+        "schema": "birdclaw.correspondent_acquisition_reference.v1",
+        "status": "succeeded", "attempts": [changes],
+    }
+    with pytest.raises(ValueError):
+        validate_correspondent_packet(packet)

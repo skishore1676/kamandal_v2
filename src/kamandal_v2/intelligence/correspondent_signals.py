@@ -383,16 +383,40 @@ def validate_correspondent_packet(payload: object) -> dict[str, Any]:
             "started_at", "finished_at", "status", "error_stage", "error", "continuity", "limit_reached",
             "coverage_status", "last_successful_at", "cached_media_count", "enriched_media_post_count",
             "live_media_read_count", "indexed_media_hit_count",
+            "incremental", "incremental_coverage", "page_count",
         }
         media_count_fields = {
             "cached_media_count",
             "enriched_media_post_count",
             "live_media_read_count",
             "indexed_media_hit_count",
+            "page_count",
         }
         for attempt in acquisition["attempts"]:
             if not isinstance(attempt, dict) or not set(attempt).issubset(allowed_attempt_keys):
                 raise ValueError("correspondent packet acquisition attempt contains unsupported fields")
+            if "incremental_coverage" in attempt and attempt["incremental_coverage"] not in {
+                "caught_up", "backlog_pending", "gap_possible", "failed",
+            }:
+                raise ValueError("correspondent packet incremental_coverage is invalid")
+            cursor = attempt.get("incremental")
+            if cursor is not None:
+                cursor_keys = {
+                    "watermark_id", "pending_until_id", "pending_newest_id",
+                    "last_caught_up_at", "history_gap",
+                }
+                if not isinstance(cursor, dict) or not set(cursor).issubset(cursor_keys):
+                    raise ValueError("correspondent packet incremental cursor is invalid")
+                for key in ("watermark_id", "pending_until_id", "pending_newest_id"):
+                    value = cursor.get(key)
+                    if value is not None and (
+                        not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,25}", value)
+                    ):
+                        raise ValueError(f"correspondent packet incremental {key} is invalid")
+                if cursor.get("last_caught_up_at") is not None:
+                    _timestamp(cursor["last_caught_up_at"], "incremental.last_caught_up_at")
+                if "history_gap" in cursor and not isinstance(cursor["history_gap"], bool):
+                    raise ValueError("correspondent packet incremental history_gap is invalid")
             for field in media_count_fields:
                 count = attempt.get(field)
                 if count is not None and (
