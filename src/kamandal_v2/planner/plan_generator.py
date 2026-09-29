@@ -79,12 +79,12 @@ def generate_plans(
                         and candidate.metadata.get("input_kind") == "exact_package"
                         and candidate.metadata.get("shadow_research_observation") is True
                     )
-                    if not shadow_research_singleton:
+                    if not shadow_research_singleton and not _verified_live_copy(candidate, control):
                         continue
                 expanded.append(next_plan)
         if not expanded:
             break
-        ranked = sorted(expanded, key=lambda plan: _score(plan, portfolio, control), reverse=True)
+        ranked = sorted(expanded, key=lambda plan: (_copy_count(plan, control), _score(plan, portfolio, control)), reverse=True)
         completed.extend(ranked[:beam_width])
         partials = ranked[:beam_width]
 
@@ -95,7 +95,7 @@ def generate_plans(
     rank_context = _rank_context(list(unique.values()), portfolio, control)
     ranked_plans = sorted(
         unique.values(),
-        key=lambda plan: _rank_score(plan, portfolio, control, rank_context),
+        key=lambda plan: (_copy_count(plan, control), _rank_score(plan, portfolio, control, rank_context)),
         reverse=True,
     )[:top_n]
     return [
@@ -588,3 +588,19 @@ def _reasons(
 
 def _reason_value(value: float | None) -> str:
     return "none" if value is None else f"{value:.2f}"
+
+
+def _verified_live_copy(candidate: Candidate, control: dict) -> bool:
+    """Copy eligibility is source/broker/risk based, not an income alpha score."""
+    metadata = candidate.metadata or {}
+    preflight = candidate.preflight
+    return (str((control.get('runtime') or {}).get('mode') or '').lower() == 'live'
+            and metadata.get('input_kind') == 'exact_package'
+            and metadata.get('source_verified') is True
+            and bool(metadata.get('source_verification_ref'))
+            and preflight is not None and preflight.ok
+            and preflight.raw.get('broker_bpr_provided') is True)
+
+
+def _copy_count(plan: list[Candidate], control: dict) -> int:
+    return sum(_verified_live_copy(candidate, control) for candidate in plan)

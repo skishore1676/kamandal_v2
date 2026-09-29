@@ -124,14 +124,14 @@ def occupied_source_opportunities(
         source = str(group.get("source_id") or metadata.get("source_profile") or "").lower()
         opportunity = str(group.get("source_opportunity_id") or metadata.get("source_opportunity_id") or "")
         if source and opportunity:
-            occupied.add((source, opportunity))
+            occupied.update((source, str(value)) for value in {opportunity, *group.get("source_opportunity_ids", metadata.get("source_opportunity_ids", []))} if value)
     for ticket in store.live_order_intents_by_type("open", PENDING_ENTRY_STATUSES):
         if str(ticket.get("ticket_hash") or "") == exclude_ticket_hash:
             continue
         source = str(ticket.get("source_id") or "").lower()
         opportunity = str(ticket.get("source_opportunity_id") or "")
         if source and opportunity:
-            occupied.add((source, opportunity))
+            occupied.update((source, str(value)) for value in {opportunity, *ticket.get("source_opportunity_ids", [])} if value)
     return occupied
 
 

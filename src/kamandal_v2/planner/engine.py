@@ -157,7 +157,7 @@ def run_plan(
         for candidate in candidates:
             source = str(candidate.metadata.get("source_profile") or "").lower()
             opportunity = str(candidate.metadata.get("source_opportunity_id") or "")
-            if not candidate.rejection_reason and source and opportunity and (source, opportunity) in occupied:
+            if not candidate.rejection_reason and source and any((source, value) in occupied for value in {opportunity, *candidate.metadata.get("source_opportunity_ids", [])} if value):
                 candidate.rejection_reason = "source_opportunity_already_open_or_pending"
     _reject_open_shadow_candidates(candidates, store, config)
     idea_diagnostics = [

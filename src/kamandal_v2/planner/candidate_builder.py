@@ -21,6 +21,7 @@ SUPPORTED_STRUCTURES = {
     "call_butterfly",
     "put_butterfly",
     "call_crab",
+    "calendar_bundle",
     "put_spread",
     "call_spread",
     "iron_condor",

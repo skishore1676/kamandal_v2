@@ -27,6 +27,7 @@ class TradeSourceMode(StrEnum):
 # permission only within this set; broker and exit readback are still required
 # before promoting a new name in the operator Sheet.
 LIVE_EXACT_STRUCTURES = frozenset({
+    "long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle",
     "iron_condor", "short_strangle", "call_calendar", "put_calendar", "call_diagonal", "put_diagonal",
 })
 
@@ -104,6 +105,9 @@ def compile_trade_source_policies(
         ))
         if live_structures and (output_kind is not TradeSourceOutputKind.EXACT_PACKAGE or set(live_structures) - LIVE_EXACT_STRUCTURES):
             errors.append(f"trade_sources: {source_id} live_structures contains unsupported exact structure")
+            continue
+        if "calendar_bundle" in live_structures and not {"call_calendar", "put_calendar"}.issubset(live_structures):
+            errors.append(f"trade_sources: {source_id} calendar_bundle requires live call_calendar and put_calendar")
             continue
         if output_kind is TradeSourceOutputKind.EXACT_PACKAGE and mode is TradeSourceMode.LIVE and not live_structures:
             errors.append(f"trade_sources: {source_id}/exact_package live requires explicit live_structures")
