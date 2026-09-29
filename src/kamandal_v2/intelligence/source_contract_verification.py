@@ -139,11 +139,42 @@ def _disagreement(package: ObservedPackageEvidence, independent: ObservedPackage
     if len(matches) != 1:
         return "source_contracts_disagree_with_image"
     match = matches[0]
-    if match.structure != package.structure:
+    if _verified_image_structure(match) != package.structure:
         return "source_structure_disagrees_with_image"
     if not _same_price(match.displayed_price, package.displayed_price):
         return "source_price_disagrees_with_image"
     return ""
+
+
+def _verified_image_structure(package: ObservedPackageEvidence) -> str | None:
+    """Recover a missing legacy condor label from independently read contracts.
+
+    Keep cached transcription and its reference immutable. Do not invalidate all
+    image caches (or pay to transcribe them again) for a deterministic shape label.
+    Explicit conflicting labels still fail the comparison.
+    """
+    if package.structure is not None:
+        return package.structure
+    legs = package.legs
+    if (package.action != "open" or not package.complete or len(legs) != 4
+            or any(leg.quantity != 1 or leg.effect != "open" for leg in legs)
+            or len({leg.expiration for leg in legs}) != 1
+            or not all(leg.expiration for leg in legs)):
+        return None
+    try:
+        puts = sorted((leg for leg in legs if leg.option_type == "put"), key=lambda leg: Decimal(str(leg.strike)))
+        calls = sorted((leg for leg in legs if leg.option_type == "call"), key=lambda leg: Decimal(str(leg.strike)))
+        if len(puts) != 2 or len(calls) != 2:
+            return None
+        ordered = [*puts, *calls]
+        strikes = [Decimal(str(leg.strike)) for leg in ordered]
+        if (all(strike.is_finite() and strike > 0 for strike in strikes)
+                and all(a < b for a, b in zip(strikes, strikes[1:]))
+                and [leg.side for leg in ordered] == ["buy", "sell", "sell", "buy"]):
+            return "iron_condor"
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return None
 
 
 def _same_price(first: Mapping[str, str] | None, second: Mapping[str, str] | None) -> bool:

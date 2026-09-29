@@ -225,3 +225,51 @@ def test_unknown_ratio_package_does_not_hide_supported_sibling() -> None:
         prompt_sha256="fixture",
     )
     assert [package.structure for package in batch.packages] == [None, "short_strangle"]
+
+
+def _condor_case():
+    signal, raw, _ = _case()
+    raw['packages'] = [dict(raw['packages'][0], symbol='SPX',
+        displayed_price={'amount':'2.00','effect':'credit'},
+        legs=[{'quantity':1,'expiration':'2026-09-29','strike':str(strike),'option_type':kind,'order_code':code}
+              for kind,strike,code in [('put',7650,'BTO'),('put',7655,'STO'),('call',7700,'STO'),('call',7705,'BTO')]])]
+    independent=normalize_observed_package_output(raw,source_profile='mike_butler',canonical_post_id=signal['signal_id'],
+        published_at=signal['source']['published_at'],image_sha256=(signal['source']['media'][0]['sha256'],),prompt_sha256='fixture')
+    assert independent.packages[0].structure is None  # Legacy extractor label, not unreadable contracts.
+    proposal=replace(independent,packages=(replace(independent.packages[0],structure='iron_condor'),))
+    return signal,raw,proposal
+
+
+def test_legacy_condor_transcription_verifies_without_cache_rewrite_or_second_call(tmp_path):
+    signal,raw,proposal=_condor_case()
+    client=_Client(raw)
+    saved=None
+    for _ in range(2):
+        verified,failures=verify_live_source_contracts([proposal],{'records':[signal]},live_structures={'iron_condor'},client=client,cache_root=tmp_path)
+        assert not failures
+        assert verified[0].packages[0].source_verified
+        paths=list(tmp_path.glob('*/*.json'))
+        assert len(paths)==1
+        content=paths[0].read_bytes()
+        if saved is not None: assert content==saved
+        saved=content
+        assert json.loads(content)['packages'][0]['structure'] is None
+    assert client.calls==1
+
+
+@pytest.mark.parametrize('mutation',['quantity','expiry','side','crossed_strikes','explicit_label','price'])
+def test_missing_condor_label_does_not_bypass_contract_or_price_validation(mutation):
+    from kamandal_v2.intelligence.source_contract_verification import _disagreement
+    _,_,proposal=_condor_case()
+    proposed=proposal.packages[0]
+    legs=list(proposed.legs)
+    if mutation=='quantity': legs[0]=replace(legs[0],quantity=2)
+    if mutation=='expiry': legs[0]=replace(legs[0],expiration='2026-09-30')
+    if mutation=='side': legs[0]=replace(legs[0],side='sell')
+    if mutation=='crossed_strikes': legs[0]=replace(legs[0],strike='7660')
+    # Equal signatures alone cannot authorize an invalid shape.
+    proposed=replace(proposed,legs=tuple(legs))
+    independent=replace(proposed,structure='call_calendar' if mutation=='explicit_label' else None)
+    if mutation=='price': independent=replace(independent,displayed_price={'amount':'3','effect':'credit'})
+    assert _disagreement(proposed,replace(proposal,packages=(independent,))) == (
+        'source_price_disagrees_with_image' if mutation=='price' else 'source_structure_disagrees_with_image')
