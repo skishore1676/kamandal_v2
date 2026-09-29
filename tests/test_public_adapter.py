@@ -360,3 +360,33 @@ def test_public_level_four_entitlement_error_is_structured() -> None:
             "message": "Naked strategies require Level 4",
         }
     }
+
+
+def test_spx_index_chain_preserves_weekly_root_and_rejects_identity_changes() -> None:
+    from dataclasses import replace
+    import pytest
+
+    adapter = PublicAdapter({'broker': {'public': {'secret_token': 'fixture', 'account_id': 'acct'}}})
+    adapter._greeks_batch = lambda _symbols: {}
+    calls = []
+
+    def post(endpoint, payload):
+        calls.append(payload)
+        if 'instruments' in payload:
+            assert payload['instruments'] == [{'symbol': 'SPX', 'type': 'INDEX'}]
+            return {'quotes': [{'instrument': {'symbol':'SPX', 'type':'INDEX'}, 'last': 7675}]}
+        assert payload['instrument'] == {'symbol': 'SPX', 'type': 'INDEX'}
+        return {'puts': [{'instrument': {'symbol': 'SPXW260929P07655000'},
+                          'bid': 3, 'ask': 3.1, 'openInterest': 100}]}
+
+    adapter._post = post
+    snapshot = adapter.chain_snapshot_for_expirations('SPX', ['2026-09-29'])
+    quote, = snapshot.quotes
+    assert quote.underlying == 'SPX'
+    leg = OptionLeg.from_quote(quote, role='short_put', side='sell', quantity=1)
+    assert occ_symbol('SPX', leg) == 'SPXW260929P07655000'
+    with pytest.raises(ValueError, match='identity disagrees'):
+        occ_symbol('SPX', replace(leg, strike=7650))
+    with pytest.raises(ValueError, match='broker-resolved'):
+        occ_symbol('SPX', replace(leg, broker_symbol=''))
+    assert len(calls) == 2

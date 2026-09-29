@@ -147,6 +147,8 @@ def project_source_episode_compilation(
                         # envelope may be classified as a follow-up, but the
                         # opening still needs the configured exact-entry age.
                         maximum_age = (families.get("observed_package_open") or {}).get("max_age_hours")
+                    if maximum_age is None and event.get("action") == "open" and event.get("structure_hint") == "iron_condor":
+                        maximum_age = (families.get("observed_package_open") or {}).get("max_age_hours")
                     published_at = str((record.get("source") or {}).get("published_at") or "")
                     valid_until = (
                         (datetime.fromisoformat(published_at.replace("Z", "+00:00")) + timedelta(hours=float(maximum_age))).isoformat()

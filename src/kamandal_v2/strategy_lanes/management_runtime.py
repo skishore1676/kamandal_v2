@@ -442,6 +442,7 @@ def _active_option_legs(lifecycle: LifecycleState, snapshot: Any) -> tuple[Optio
         if quote is None:
             result.append(
                 OptionLeg(
+                    broker_symbol=str(item.get("broker_symbol") or ""),
                     role=str(item["role"]),
                     side=str(item["side"]),
                     option_type=str(item["option_type"]),
@@ -459,6 +460,8 @@ def _active_option_legs(lifecycle: LifecycleState, snapshot: Any) -> tuple[Optio
                 )
             )
         else:
+            if item.get("broker_symbol") and quote.broker_symbol != item["broker_symbol"]:
+                raise ValueError("Management quote does not match the owned broker contract")
             result.append(OptionLeg.from_quote(quote, role=str(item["role"]), side=str(item["side"]), quantity=int(item["quantity"])))
     return tuple(result)
 
@@ -567,6 +570,13 @@ def _management_context(
         }
     elif lifecycle.lane in {LaneId.CALL_VERTICAL, LaneId.GENERIC_CLOSE_ONLY}:
         context = {**common, "dte": min(dtes)}
+        if (policy.resolved_fields.get("structure") == "iron_condor"
+                and int(policy.resolved_fields.get("dte_min", 1)) == 0
+                and min(leg.expiration for leg in legs) == observed_date.isoformat()):
+            from kamandal_v2.live.expiry_day import expiry_day_window
+            window = expiry_day_window(config, policy.management, snapshot.underlying, observed_at)
+            context["time_exit_due_override"] = window["exit_due"]
+            context["half_time_exit_due"] = False
     elif lifecycle.lane is LaneId.DIRECTIONAL_DIAGONAL:
         short = next((leg for leg in legs if leg.role == "short_near"), None)
         long = next(leg for leg in legs if leg.role == "long_far")

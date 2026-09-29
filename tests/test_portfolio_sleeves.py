@@ -188,3 +188,16 @@ def test_off_switch_blocks_entry_post_but_does_not_block_exit(monkeypatch, tmp_p
     exit_result = _execute_ticket(config, adapter, store, exit_ticket, submit=True, close=True)
     assert exit_result["status"] == "submitted"
     assert adapter.posts == 1
+
+
+def test_last_mile_keeps_approved_defined_risk_floor_when_broker_bpr_is_smaller(monkeypatch, tmp_path):
+    monkeypatch.setattr('kamandal_v2.live.execution.pull_portfolio_sleeves', lambda _config: ROWS)
+
+    class Adapter:
+        def account_state(self):
+            return PortfolioState(1000, 1000, 0, 0)
+
+    ticket = {'ticket_hash': 'risk-floor', 'intent_type': 'open', 'sleeve_id': CURRENT_IDEA,
+              'source_id': '', 'entry_risk_budget': 425}
+    blocker = _fresh_sheet_entry_blocker({}, Adapter(), LocalStore(tmp_path/'floor.db'), ticket, preflight_bpr=71.35)
+    assert blocker == 'sleeve_bpr_cap:current_idea'

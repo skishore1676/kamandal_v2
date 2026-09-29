@@ -140,6 +140,14 @@ def compile_playbook_policy(
     fields = {str(key): value for key, value in sorted(row.items()) if value not in (None, "")}
     fields.setdefault("execution_venue", execution_venue)
     management = _management(row, playbook_id)
+    if structure == "iron_condor" and "exact_package" in accepted_inputs and float(row.get("dte_min") or 0) == 0:
+        from kamandal_v2.live.expiry_day import expiry_day_buffers
+        try:
+            expiry_day_buffers(management)
+        except ValueError as exc:
+            raise PolicyError(f"{playbook_id}: {exc}") from exc
+        if float(row.get("exit_dte_min") or 0) != 0 or _as_bool(row.get("half_time_exit")):
+            raise PolicyError(f"{playbook_id}: same-day condor requires exit_dte_min=0 and half_time_exit=FALSE")
     management = _normalize_legacy_management(capability, management, compatibility)
     _reject_live_approval_branch(mode, management, playbook_id)
     _validate_directional_diagonal(capability, row, management, playbook_id)
