@@ -346,7 +346,7 @@ def _exact_condor_contract_rejections(candidate: Candidate, playbook: Playbook, 
     reasons = []
     if not playbook.dte_min <= dte <= playbook.dte_max:
         reasons.append("exact_condor_dte_outside_policy")
-    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
+    if playbook.max_contracts != 1 or any(leg.quantity != 1 for leg in candidate.legs):
         reasons.append("exact_condor_quantity_above_policy")
     if candidate.net_credit <= 0:
         reasons.append("exact_condor_requires_positive_credit")
@@ -385,7 +385,7 @@ def _exact_debit_contract_rejections(candidate: Candidate, playbook: Playbook, c
     if (playbook.long_dte_min is None or playbook.long_dte_max is None
             or far_dte < playbook.long_dte_min or far_dte > playbook.long_dte_max):
         reasons.append("exact_far_dte_outside_policy")
-    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
+    if playbook.max_contracts != 1 or any(leg.quantity != 1 for leg in candidate.legs):
         reasons.append("exact_quantity_above_policy")
     for leg, low, high, label in (
         (near, playbook.short_delta_min, playbook.short_delta_max, "short"),
@@ -417,7 +417,7 @@ def _shadow_structure_contract_rejections(
         if (playbook.long_dte_min is None or playbook.long_dte_max is None
                 or far_dte < playbook.long_dte_min or far_dte > playbook.long_dte_max):
             reasons.append("exact_far_dte_outside_policy")
-    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
+    if playbook.max_contracts != 1 or any(leg.quantity != 1 for leg in candidate.legs):
         reasons.append("exact_quantity_above_policy")
     if candidate.structure in {"long_call", "call_butterfly", "put_butterfly"} and candidate.net_credit >= 0:
         reasons.append("exact_debit_structure_requires_debit")
