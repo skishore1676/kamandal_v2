@@ -77,7 +77,7 @@ def main() -> None:
                         help='Stop before another call once reported usage reaches this threshold; one call may overshoot.')
     args = parser.parse_args()
     records = load_records()
-    binding = ProviderBinding('codex', {'model': 'gpt-6-astra', 'reasoning_effort': 'low',
+    binding = ProviderBinding('codex', {'model': 'gpt-6.1-sol', 'reasoning_effort': 'low',
         'binary': args.codex_binary, 'sandbox': 'read-only', 'approval_policy': 'never',
         'ignore_user_config': True, 'ephemeral': True, 'verbosity': 'low'})
     client = LimitedClient(BrokerJsonClient(actor='source_episode_interpreter', lane_id='kamandal_evaluation',
@@ -108,7 +108,7 @@ def main() -> None:
     labels = json.loads((CORPUS / 'labels.json').read_text())
     fixtures = json.loads((CORPUS / 'opening-packages.json').read_text())
     openings = [{**e, 'events': [v for v in e.get('events', []) if v.get('action') == 'open']} for e in episodes]
-    result = {'schema': 'kamandal.guru_history_evaluation.v1', 'model': 'gpt-6-astra', 'reasoning_effort': 'low',
+    result = {'schema': 'kamandal.guru_history_evaluation.v1', 'model': 'gpt-6.1-sol', 'reasoning_effort': 'low',
         'idea_score': score_ideas(labels, episodes), 'opening_package_score': score_packages(fixtures, openings),
         'episodes': episodes, 'model_turns': client.turns, 'usage': _usage_summary(client.turns), 'failures': failures,
         'profile_sha256': profile_hashes, 'corpus_manifest': json.loads((CORPUS / 'manifest.json').read_text()),
