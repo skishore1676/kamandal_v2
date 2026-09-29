@@ -22,6 +22,7 @@ SUPPORTED_VALIDATOR_STRUCTURES = {
     "call_butterfly",
     "put_butterfly",
     "call_crab",
+    "calendar_bundle",
 }
 
 
@@ -39,6 +40,7 @@ def validate_structure(structure: str, legs: list[OptionLeg], underlying_price: 
         "call_butterfly": lambda legs, price: _butterfly(legs, option_type="call"),
         "put_butterfly": lambda legs, price: _butterfly(legs, option_type="put"),
         "call_crab": _call_crab,
+        "calendar_bundle": _calendar_bundle,
         "put_spread": _put_spread,
         "call_spread": _call_spread,
         "iron_condor": _iron_condor,
@@ -248,4 +250,22 @@ def _jade_lizard(legs: list[OptionLeg], underlying_price: float) -> ValidationRe
         return ValidationResult(False, "jade_lizard_call_spread_invalid")
     if not (puts[0].strike < underlying_price < calls[0].strike < calls[1].strike):
         return ValidationResult(False, "jade_lizard_strike_order_invalid")
+    return ValidationResult(True)
+
+
+def _calendar_bundle(legs: list[OptionLeg], underlying_price: float) -> ValidationResult:
+    if len(legs) not in {4, 6} or any(leg.quantity != 1 for leg in legs):
+        return ValidationResult(False, "calendar_bundle_requires_two_or_three_unit_calendars")
+    expiries = sorted({leg.expiration for leg in legs})
+    if len(expiries) != 2:
+        return ValidationResult(False, "calendar_bundle_requires_two_expirations")
+    pairs = {}
+    for leg in legs:
+        pairs.setdefault((leg.option_type, leg.strike), []).append(leg)
+    if len(pairs) != len(legs) // 2:
+        return ValidationResult(False, "calendar_bundle_duplicate_contract")
+    for pair in pairs.values():
+        if (len(pair) != 2 or sorted((l.expiration,l.side) for l in pair)
+                != [(expiries[0],'sell'),(expiries[1],'buy')]):
+            return ValidationResult(False, "calendar_bundle_requires_paired_short_near_long_far")
     return ValidationResult(True)

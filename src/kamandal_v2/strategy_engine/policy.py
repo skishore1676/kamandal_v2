@@ -134,15 +134,19 @@ def compile_playbook_policy(
         if not _text_list(row.get("source_profiles")):
             raise PolicyError(f"{playbook_id}: observed_package source mode requires source_profiles")
     accepted_inputs = _compile_accepted_inputs(row, source_mode=source_mode, playbook_id=playbook_id)
+    if structure == "calendar_bundle" and accepted_inputs != ("exact_package",):
+        raise PolicyError(f"{playbook_id}: calendar_bundle requires exact_package input only")
     execution_venue = str(row.get("execution_venue") or "public_primary").strip().lower()
     if execution_venue not in {"public_primary", "tasty_primary"}:
         raise PolicyError(f"{playbook_id}: unsupported execution_venue={execution_venue!r}")
     fields = {str(key): value for key, value in sorted(row.items()) if value not in (None, "")}
     fields.setdefault("execution_venue", execution_venue)
     management = _management(row, playbook_id)
+    if mode is ExecutionMode.LIVE and structure == "long_call" and "exact_package" in accepted_inputs and float(row.get("max_contracts") or 0) != 1:
+        raise PolicyError(f"{playbook_id}: exact long call currently requires max_contracts=1")
     if structure == "iron_condor" and "exact_package" in accepted_inputs and float(row.get("max_contracts") or 0) != 1:
         raise PolicyError(f"{playbook_id}: exact condor currently requires max_contracts=1")
-    if structure == "iron_condor" and "exact_package" in accepted_inputs and float(row.get("dte_min") or 0) == 0:
+    if structure in {"iron_condor", "call_butterfly", "put_butterfly"} and "exact_package" in accepted_inputs and float(row.get("dte_min") or 0) == 0:
         from kamandal_v2.live.expiry_day import expiry_day_buffers
         try:
             expiry_day_buffers(management)

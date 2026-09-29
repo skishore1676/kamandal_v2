@@ -212,9 +212,9 @@ def _live_candidate_policy(
         elif candidate.underlying.upper() in cluster_capped:
             cluster = cluster_for_symbol(config, candidate.underlying) or "unknown"
             candidate.rejection_reason = f"live_risk_cluster_cap:{cluster}"
-        elif len(candidate.legs) < min_entry_legs:
+        elif len(candidate.legs) < min_entry_legs and not _verified_exact_single_call(candidate):
             candidate.rejection_reason = f"live_leg_count_below_min:{len(candidate.legs)}<{min_entry_legs}"
-        elif any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs):
+        elif any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs) and not _verified_exact_ratio_package(candidate, max_contracts):
             candidate.rejection_reason = "live_contract_limit"
         elif candidate.idea_id in open_ids:
             candidate.rejection_reason = "live_idea_already_open"
@@ -350,3 +350,23 @@ def _loads(raw: Any) -> dict[str, Any]:
         return parsed if isinstance(parsed, dict) else {}
     except Exception:
         return {}
+
+
+def _verified_exact_single_call(candidate: Candidate) -> bool:
+    return (candidate.metadata.get("input_kind") == "exact_package"
+            and candidate.metadata.get("source_verified") is True
+            and bool(candidate.metadata.get("source_verification_ref"))
+            and candidate.structure == "long_call" and len(candidate.legs) == 1
+            and candidate.legs[0].side == "buy" and candidate.legs[0].option_type == "call"
+            and candidate.legs[0].quantity == 1)
+
+
+def _verified_exact_ratio_package(candidate: Candidate, max_packages: int) -> bool:
+    # One 1:2:1 package contains four contracts, not two trade units.
+    from kamandal_v2.planner.shape_validators import validate_structure
+    return (max_packages >= 1 and candidate.metadata.get("input_kind") == "exact_package"
+            and candidate.metadata.get("source_verified") is True
+            and bool(candidate.metadata.get("source_verification_ref"))
+            and candidate.structure in {"call_butterfly", "put_butterfly", "call_crab"}
+            and sorted(leg.quantity for leg in candidate.legs) == [1, 1, 2]
+            and validate_structure(candidate.structure, candidate.legs, 0).valid)

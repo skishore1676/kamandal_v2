@@ -101,7 +101,10 @@ def build_observed_package_candidates(
             ("exact_package",) if getattr(policy, "source_mode", "") == "observed_package" else (),
         )
     )
-    package_list = tuple(packages)
+    original_packages = package_list = tuple(packages)
+    if mode == "live":
+        from kamandal_v2.intelligence.atomic_packages import combine_calendar_openings
+        package_list = combine_calendar_openings(package_list)
     opening_counts: dict[tuple[str, str], int] = {}
     for item in package_list:
         if item.action == "open" and item.complete:
@@ -119,10 +122,10 @@ def build_observed_package_candidates(
             source_policy is None or source_policy.mode not in {TradeSourceMode.SHADOW, TradeSourceMode.LIVE}
         ):
             source_mode = source_policy.mode.value if source_policy is not None else "missing"
-            _receipt(store, package, status="observed", blocker=f"source_mode_{source_mode}")
+            _group_receipt(store, package, original_packages, status="observed", blocker=f"source_mode_{source_mode}")
             continue
         if mode == "live" and source_policy is None:
-            _receipt(store, package, status="not_authorized", blocker="live_exact_source_policy_required")
+            _group_receipt(store, package, original_packages, status="not_authorized", blocker="live_exact_source_policy_required")
             continue
         matching = [
             policy
@@ -130,13 +133,13 @@ def build_observed_package_candidates(
             if policy.structure == package.structure
         ]
         if blocker:
-            _receipt(store, package, status="parked", blocker=blocker)
+            _group_receipt(store, package, original_packages, status="parked", blocker=blocker)
             continue
         if not matching:
-            _receipt(store, package, status="parked", blocker="unsupported")
+            _group_receipt(store, package, original_packages, status="parked", blocker="unsupported")
             continue
         if len(matching) > 1:
-            _receipt(store, package, status="parked", blocker="ambiguous_playbook_match")
+            _group_receipt(store, package, original_packages, status="parked", blocker="ambiguous_playbook_match")
             continue
         effective_mode = matching[0].mode.value
         if source_policy is not None and source_policy.mode_for_structure(str(package.structure)) is TradeSourceMode.SHADOW:
@@ -145,17 +148,17 @@ def build_observed_package_candidates(
             continue
         if mode == "live":
             if not package.source_verified or not package.source_verification_ref or package.source_verification_reason:
-                _receipt(store, package, status="parked", blocker="source_not_independently_verified")
+                _group_receipt(store, package, original_packages, status="parked", blocker="source_not_independently_verified")
                 continue
             if (package.source_opening_package_count > 1 or
                     opening_counts.get((package.source_profile, package.opportunity_group_id or package.source_event_id), 0) > 1):
-                _receipt(store, package, status="parked", blocker="multi_package_opening_requires_atomic_group")
+                _group_receipt(store, package, original_packages, status="parked", blocker="multi_package_opening_requires_atomic_group")
                 continue
             if package.structure not in LIVE_EXACT_STRUCTURES:
-                _receipt(store, package, status="parked", blocker="unsupported_live_exact_structure")
+                _group_receipt(store, package, original_packages, status="parked", blocker="unsupported_live_exact_structure")
                 continue
             if blocker := _live_source_freshness_blocker(package, config):
-                _receipt(store, package, status="parked", blocker=blocker)
+                _group_receipt(store, package, original_packages, status="parked", blocker=blocker)
                 continue
 
         targeted_chain = getattr(market, "chain_snapshot_for_expirations", None)
@@ -171,32 +174,39 @@ def build_observed_package_candidates(
                 chain_cache[chain_key] = exc
         chain = chain_cache[chain_key]
         if isinstance(chain, Exception):
-            _receipt(store, package, status="parked", blocker=f"quote_unavailable:{type(chain).__name__}:{chain}")
+            _group_receipt(store, package, original_packages, status="parked", blocker=f"quote_unavailable:{type(chain).__name__}:{chain}")
             continue
         if not _chain_is_fresh(chain.captured_at, config):
-            _receipt(store, package, status="parked", blocker="quote_snapshot_stale")
+            _group_receipt(store, package, original_packages, status="parked", blocker="quote_snapshot_stale")
             continue
 
         for policy in matching:
             playbook = playbook_by_id.get(policy.playbook_id)
             if playbook is None:
-                _receipt(store, package, status="parked", blocker=f"playbook_missing:{policy.playbook_id}")
+                _group_receipt(store, package, original_packages, status="parked", blocker=f"playbook_missing:{policy.playbook_id}")
                 continue
             try:
                 legs = _hydrate_exact_legs(package, chain.quotes)
             except ValueError as exc:
-                _receipt(store, package, status="parked", blocker=str(exc), playbook_id=policy.playbook_id)
+                _group_receipt(store, package, original_packages, status="parked", blocker=str(exc), playbook_id=policy.playbook_id)
                 continue
             shape = validate_structure(str(package.structure), legs, float(chain.underlying_price))
             if not shape.valid:
-                _receipt(store, package, status="parked", blocker=shape.reason, playbook_id=policy.playbook_id)
+                _group_receipt(store, package, original_packages, status="parked", blocker=shape.reason, playbook_id=policy.playbook_id)
                 continue
             candidate = _candidate(package, playbook, legs, chain_snapshot=chain)
+            if package.structure == "calendar_bundle":
+                from kamandal_v2.intelligence.atomic_packages import calendar_group_members
+                members = calendar_group_members(package, original_packages)
+                candidate.metadata["source_opportunity_ids"] = sorted({package.opportunity_group_id, *(p.opportunity_group_id for p in members)})
+                candidate.metadata["source_component_event_ids"] = sorted(p.source_event_id for p in members)
             rejections = _filter_rejections(candidate, playbook, config)
-            if mode == "shadow" and package.structure in {
-                "long_call", "call_butterfly", "put_butterfly", "call_crab",
+            if package.structure in {
+                "long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle",
             }:
                 rejections.extend(_shadow_structure_contract_rejections(candidate, playbook, config))
+                if mode == "live" and package.structure == "long_call" and any(leg.quantity != 1 for leg in legs):
+                    rejections.append("exact_long_call_requires_one_contract")
             if package.structure == "short_strangle":
                 entry = next((entry for entry in (universe or []) if entry.symbol == package.symbol and entry.enabled), None)
                 if entry is None:
@@ -228,6 +238,16 @@ def build_observed_package_candidates(
                 rejections.append(
                     f"package_bid_ask_pct_above_max:{package_spread:.4f}>{playbook.max_bid_ask_pct}"
                 )
+            if mode == "live" and package.structure in {"long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle"}:
+                if candidate.underlying == "SPX" and any(not leg.broker_symbol.startswith("SPXW") for leg in legs):
+                    rejections.append("exact_package_requires_pm_settled_spxw")
+                exit_dte = int(getattr(policy, "fields", {}).get("exit_dte_min", 0))
+                observed_date = datetime.fromisoformat(str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now()).replace("Z", "+00:00")).date()
+                remaining_dte = min((date.fromisoformat(leg.expiration)-observed_date).days for leg in legs)
+                if remaining_dte == 0 and package.structure in {"call_butterfly", "put_butterfly"}:
+                    rejections.extend(_intraday_rejections(candidate, config, policy.management))
+                elif remaining_dte <= exit_dte:
+                    rejections.append("exact_entry_at_or_inside_exit_window")
             quote_rejections = [reason for reason in rejections if _is_quote_actionability_rejection(reason)]
             if not quote_rejections:
                 first_mark = store.first_observed_package_mark(
@@ -255,6 +275,8 @@ def build_observed_package_candidates(
                         candidate.rejection_reason = candidate.preflight.message or "preflight_failed"
                     else:
                         _apply_preflight_bpr(candidate, candidate.preflight)
+                        if playbook.live_max_bpr_per_order is None or candidate.estimated_bpr > playbook.live_max_bpr_per_order:
+                            candidate.rejection_reason = "exact_broker_risk_above_order_cap"
             # An exact short strangle and a neutral market-scan short strangle
             # start with the same structure-fit baseline. Source preference is
             # a separate, bounded portfolio-score component.
@@ -272,9 +294,7 @@ def build_observed_package_candidates(
             candidate.score = _candidate_score(candidate, thesis_fit=structure_fit)
             candidate.reasons.append(f"thesis_fit={structure_fit}")
             candidates.append(candidate)
-            _receipt(
-                store,
-                package,
+            _group_receipt(store, package, original_packages,
                 status="candidate_generated" if candidate.eligible else "candidate_rejected",
                 blocker=candidate.rejection_reason,
                 playbook_id=policy.playbook_id,
@@ -298,8 +318,8 @@ def _evidence_blocker(package: ObservedPackageEvidence) -> str:
     if package.product_type == "futures_option":
         return "unsupported_product:futures_option"
     if package.product_type == "index_option" and package.structure in {
-        "long_call", "call_butterfly", "put_butterfly", "call_crab",
-    }:
+        "long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle",
+    } and package.symbol != "SPX":
         return "unsupported_product:index_option"
     if any(leg.effect != "open" for leg in package.legs):
         return "opening_package_contains_non_open_leg"
@@ -358,18 +378,26 @@ def _exact_condor_contract_rejections(candidate: Candidate, playbook: Playbook, 
     if candidate.underlying == "SPX" and any(not leg.broker_symbol.startswith("SPXW") for leg in candidate.legs):
         reasons.append("exact_condor_requires_pm_settled_spxw")
     if dte == 0:
-        from kamandal_v2.live.expiry_day import expiry_day_window
-        try:
-            window = expiry_day_window(config or {}, management, candidate.underlying, now.isoformat())
-            if not window["entry_allowed"]:
-                reasons.append("exact_condor_expiry_day_entry_window_closed")
-            source_until = datetime.fromisoformat(str(candidate.metadata["source_valid_until"]).replace("Z", "+00:00"))
-            cutoff = datetime.fromisoformat(window["entry_until"])
-            candidate.metadata["source_valid_until"] = min(source_until, cutoff).isoformat()
-            candidate.metadata["expiry_day_exit_at"] = window["exit_at"]
-        except (ValueError, TypeError, KeyError):
-            reasons.append("exact_condor_intraday_policy_not_validated")
+        reasons.extend(_intraday_rejections(candidate, config, management, prefix="exact_condor"))
     return reasons
+
+
+def _intraday_rejections(candidate, config, management, *, prefix="exact_package"):
+    from kamandal_v2.live.expiry_day import expiry_day_window
+    now = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
+    reasons = []
+    try:
+        window = expiry_day_window(config or {}, management, candidate.underlying, now)
+        if not window["entry_allowed"]:
+            reasons.append(f"{prefix}_expiry_day_entry_window_closed")
+        source_until = datetime.fromisoformat(str(candidate.metadata["source_valid_until"]).replace("Z", "+00:00"))
+        cutoff = datetime.fromisoformat(window["entry_until"])
+        candidate.metadata["source_valid_until"] = min(source_until, cutoff).isoformat()
+        candidate.metadata["expiry_day_exit_at"] = window["exit_at"]
+    except (ValueError, TypeError, KeyError):
+        reasons.append(f"{prefix}_intraday_policy_not_validated")
+    return reasons
+
 
 def _exact_debit_contract_rejections(candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None) -> list[str]:
     """Apply the Sheet's contract and cash limits without changing source legs."""
@@ -405,21 +433,21 @@ def _exact_debit_contract_rejections(candidate: Candidate, playbook: Playbook, c
 def _shadow_structure_contract_rejections(
     candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None,
 ) -> list[str]:
-    """Keep new exact shapes bounded while they collect broker-inert evidence."""
+    """Apply source-exact contract, expiry, debit, and risk limits in both lanes."""
     observed = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
     today = datetime.fromisoformat(observed.replace("Z", "+00:00")).date()
     near_dte = min((date.fromisoformat(leg.expiration) - today).days for leg in candidate.legs)
     reasons: list[str] = []
     if near_dte < playbook.dte_min or near_dte > playbook.dte_max:
         reasons.append("exact_near_dte_outside_policy")
-    if candidate.structure == "call_crab":
+    if candidate.structure in {"call_crab", "calendar_bundle"}:
         far_dte = max((date.fromisoformat(leg.expiration) - today).days for leg in candidate.legs)
         if (playbook.long_dte_min is None or playbook.long_dte_max is None
                 or far_dte < playbook.long_dte_min or far_dte > playbook.long_dte_max):
             reasons.append("exact_far_dte_outside_policy")
     if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
         reasons.append("exact_quantity_above_policy")
-    if candidate.structure in {"long_call", "call_butterfly", "put_butterfly"} and candidate.net_credit >= 0:
+    if candidate.structure in {"long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle"} and candidate.net_credit >= 0:
         reasons.append("exact_debit_structure_requires_debit")
     if playbook.live_max_bpr_per_order is None or candidate.estimated_bpr > playbook.live_max_bpr_per_order:
         reasons.append("exact_shadow_risk_above_order_cap")
@@ -456,6 +484,9 @@ def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> 
 def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
     """Assign manager roles without changing a source-observed contract."""
 
+    if package.structure == "calendar_bundle":
+        expirations = sorted({leg.expiration for leg in package.legs})
+        return ["short_near" if leg.expiration == expirations[0] else "long_far" for leg in package.legs]
     if package.structure == "long_call":
         if len(package.legs) != 1 or package.legs[0].option_type != "call" or package.legs[0].side != "buy":
             raise ValueError("exact_long_call_requires_one_long_call")
@@ -516,7 +547,7 @@ def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
 
 
 def _near_expiry_intrinsic_loss_bound(legs: list[OptionLeg], net_credit: float) -> float:
-    """Conservative shadow loss mark; later-dated long legs retain at least intrinsic value."""
+    """Conservative local loss floor; later-dated long legs retain at least intrinsic value."""
     strikes = sorted({leg.strike for leg in legs})
     spot_probes = [0.0, *strikes, strikes[-1] + max(strikes[-1] - strikes[0], 1.0)]
     minimum = min(
@@ -602,7 +633,7 @@ def _candidate(
                 "long_call", "call_butterfly", "put_butterfly", "call_crab",
             },
             "risk_bound_basis": (
-                "near_expiry_intrinsic_floor_shadow_only"
+                "near_expiry_intrinsic_floor"
                 if package.structure in {"call_butterfly", "put_butterfly", "call_crab"} else ""
             ),
             "source_published_at": package.source_published_at,
@@ -617,6 +648,9 @@ def _candidate(
         net_credit=net_credit,
     )
     candidate.entry_credit_floor = floor
+    if package.structure in {"call_butterfly", "put_butterfly", "call_crab"} and ceiling is not None:
+        intrinsic_risk = max(candidate.estimated_bpr - abs(net_credit) * 100, 0.0)
+        ceiling = min(ceiling, max(float(playbook.live_max_bpr_per_order or 0) - intrinsic_risk, 0.0) / 100)
     candidate.entry_debit_ceiling = ceiling
     candidate.entry_economic_bound_source = source
     return candidate
@@ -687,3 +721,12 @@ def _is_quote_actionability_rejection(reason: str) -> bool:
             "package_bid_ask_pct_above_max:",
         )
     )
+
+
+def _group_receipt(store, package, originals, **kwargs):
+    _receipt(store, package, **kwargs)
+    if package.structure == "calendar_bundle":
+        from kamandal_v2.intelligence.atomic_packages import calendar_group_members
+        for member in calendar_group_members(package, originals):
+            _receipt(store, member, atomic_group_event_id=package.source_event_id,
+                     atomic_group_structure=package.structure, **kwargs)

@@ -585,9 +585,8 @@ def _fresh_sheet_entry_blocker(
     try:
         source = str(ticket.get("source_id") or "").lower()
         opportunity = str(ticket.get("source_opportunity_id") or "")
-        if source and opportunity and (source, opportunity) in occupied_source_opportunities(
-            store, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""),
-        ):
+        occupied = occupied_source_opportunities(store, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""))
+        if source and any((source, value) in occupied for value in {opportunity, *ticket.get("source_opportunity_ids", [])} if value):
             return "source_opportunity_already_open_or_pending"
         sleeve_policy = compile_sleeve_policy(pull_portfolio_sleeves(config))
         if str(ticket.get("source_id") or ""):
@@ -615,18 +614,18 @@ def _fresh_exact_evidence_blocker(config: dict[str, Any], ticket: dict[str, Any]
         batches = load_observed_package_feed(path)
     except (OSError, ValueError, TypeError):
         return "entry_exact_evidence_unavailable"
-    for batch in batches:
-        for package in batch.packages:
-            opportunity = package.opportunity_group_id or f"observed:{package.source_event_id}"
-            if (package.source_profile == str(ticket["source_id"])
-                    and package.source_event_id == str(ticket["source_event_id"])
-                    and opportunity == str(ticket["source_opportunity_id"])
-                    and package.package_signature == str(ticket["source_package_signature"])
-                    and package.evidence_revision_id == str(ticket["source_evidence_revision_id"])
-                    and package.source_verified
-                    and not package.source_verification_reason
-                    and package.source_verification_ref == str(ticket["source_verification_ref"])):
-                return ""
+    from kamandal_v2.intelligence.atomic_packages import combine_calendar_openings
+    for package in combine_calendar_openings(p for batch in batches for p in batch.packages):
+        opportunity = package.opportunity_group_id or f"observed:{package.source_event_id}"
+        if (package.source_profile == str(ticket["source_id"])
+                and package.source_event_id == str(ticket["source_event_id"])
+                and opportunity == str(ticket["source_opportunity_id"])
+                and package.package_signature == str(ticket["source_package_signature"])
+                and package.evidence_revision_id == str(ticket["source_evidence_revision_id"])
+                and package.source_verified
+                and not package.source_verification_reason
+                and package.source_verification_ref == str(ticket["source_verification_ref"])):
+            return ""
     return "entry_exact_evidence_superseded"
 
 
@@ -2684,6 +2683,7 @@ def _save_live_position_from_ticket(
         "source_id": canonical.get("source_id") or "",
         "source_output_kind": canonical.get("source_output_kind") or "",
         "source_opportunity_id": canonical.get("source_opportunity_id") or "",
+        "source_opportunity_ids": canonical.get("source_opportunity_ids") or [],
         "source_package_signature": canonical.get("source_package_signature") or "",
         "csa_lifecycle_id": canonical.get("csa_lifecycle_id") or "",
         "execution_venue": ticket_execution_venue({}, canonical),

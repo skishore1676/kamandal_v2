@@ -65,6 +65,7 @@ def capability_registry() -> CapabilityRegistry:
         ("call_butterfly", {"call_butterfly"}),
         ("put_butterfly", {"put_butterfly"}),
         ("call_crab", {"call_crab"}),
+        ("calendar_bundle", {"calendar_bundle"}),
     ):
         registry.register(Capability(key, frozenset(structures), close_only))
     registry.register(

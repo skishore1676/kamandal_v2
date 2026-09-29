@@ -147,7 +147,7 @@ def project_source_episode_compilation(
                         # envelope may be classified as a follow-up, but the
                         # opening still needs the configured exact-entry age.
                         maximum_age = (families.get("observed_package_open") or {}).get("max_age_hours")
-                    if maximum_age is None and event.get("action") == "open" and event.get("structure_hint") == "iron_condor":
+                    if maximum_age is None and classification not in {"unknown", ""} and event.get("action") == "open" and event.get("structure_hint") in {"iron_condor", "long_call", "call_butterfly", "put_butterfly", "call_crab", "call_calendar", "put_calendar", "call_diagonal", "put_diagonal"}:
                         maximum_age = (families.get("observed_package_open") or {}).get("max_age_hours")
                     published_at = str((record.get("source") or {}).get("published_at") or "")
                     valid_until = (
