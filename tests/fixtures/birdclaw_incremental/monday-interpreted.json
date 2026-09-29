@@ -1,0 +1,505 @@
+{
+  "compilation": {
+    "compiled_at": "2026-09-29T13:16:04Z",
+    "compiler_version": "source-episode-compiler-v1",
+    "effects": {
+      "active_idea_publication": false,
+      "broker_effects": false,
+      "external_send": false,
+      "live_admission": false,
+      "order_effects": false,
+      "planner_run": false,
+      "shadow_admission": false,
+      "sheet_write": false
+    },
+    "episodes": [
+      {
+        "effects": {
+          "active_idea_publication": false,
+          "broker_effects": false,
+          "external_send": false,
+          "live_admission": false,
+          "order_effects": false,
+          "planner_run": false,
+          "shadow_admission": false,
+          "sheet_write": false
+        },
+        "episode_id": "sepi_041048c40380dee48865f65f",
+        "events": [
+          {
+            "action": "open",
+            "blockers": [],
+            "direction": "bullish",
+            "event_id": "sevt_83a310d9077ecdf32af9541b",
+            "evidence_status": "complete",
+            "exact_packages": [
+              {
+                "blocker": null,
+                "complete": true,
+                "displayed_price": {
+                  "amount": "12.28",
+                  "effect": "debit"
+                },
+                "field_provenance": [
+                  "text",
+                  "image:1"
+                ],
+                "legs": [
+                  {
+                    "expiration": "Oct 16 2026",
+                    "option_type": "call",
+                    "order_code": "STO",
+                    "quantity": 1,
+                    "strike": "205"
+                  },
+                  {
+                    "expiration": "Dec 18 2026",
+                    "option_type": "call",
+                    "order_code": "BTO",
+                    "quantity": 1,
+                    "strike": "190"
+                  }
+                ]
+              }
+            ],
+            "link_state": "not_needed",
+            "links_to": [],
+            "opportunity_group_id": "sopp_69b7876ad3b5ffa9dd6d139a",
+            "planner_new_entry": true,
+            "projection_dispositions": [
+              {
+                "disposition": "ready_for_source_policy",
+                "projection": "idea",
+                "reason": "idea_evidence_complete"
+              },
+              {
+                "disposition": "ready_for_source_policy",
+                "projection": "exact_package",
+                "reason": "exact_package_complete"
+              }
+            ],
+            "projections": [
+              "idea",
+              "exact_package"
+            ],
+            "semantic_confidence": 1.0,
+            "structure_hint": "call_diagonal",
+            "symbol": "BA",
+            "template_number": null,
+            "thesis": "Opens a bullish BA call diagonal fading the stated price extreme, buying the December 190 call and selling the October 205 call."
+          },
+          {
+            "action": "open",
+            "blockers": [],
+            "direction": "bullish",
+            "event_id": "sevt_d7f6e4b43ea440563259272e",
+            "evidence_status": "complete",
+            "exact_packages": [
+              {
+                "blocker": null,
+                "complete": true,
+                "displayed_price": {
+                  "amount": "2.20",
+                  "effect": "debit"
+                },
+                "field_provenance": [
+                  "text",
+                  "image:1"
+                ],
+                "legs": [
+                  {
+                    "expiration": "Oct 2 2026",
+                    "option_type": "call",
+                    "order_code": "STO",
+                    "quantity": 1,
+                    "strike": "1100"
+                  },
+                  {
+                    "expiration": "Oct 5 2026",
+                    "option_type": "call",
+                    "order_code": "BTO",
+                    "quantity": 1,
+                    "strike": "1100"
+                  }
+                ]
+              },
+              {
+                "blocker": null,
+                "complete": true,
+                "displayed_price": {
+                  "amount": "1.83",
+                  "effect": "debit"
+                },
+                "field_provenance": [
+                  "text",
+                  "image:1"
+                ],
+                "legs": [
+                  {
+                    "expiration": "Oct 2 2026",
+                    "option_type": "call",
+                    "order_code": "STO",
+                    "quantity": 1,
+                    "strike": "1150"
+                  },
+                  {
+                    "expiration": "Oct 5 2026",
+                    "option_type": "call",
+                    "order_code": "BTO",
+                    "quantity": 1,
+                    "strike": "1150"
+                  }
+                ]
+              }
+            ],
+            "link_state": "not_needed",
+            "links_to": [],
+            "opportunity_group_id": "sopp_8b166f122775802aa6cd958c",
+            "planner_new_entry": true,
+            "projection_dispositions": [
+              {
+                "disposition": "ready_for_source_policy",
+                "projection": "idea",
+                "reason": "idea_evidence_complete"
+              },
+              {
+                "disposition": "ready_for_source_policy",
+                "projection": "exact_package",
+                "reason": "exact_package_complete"
+              }
+            ],
+            "projections": [
+              "idea",
+              "exact_package"
+            ],
+            "semantic_confidence": 0.99,
+            "structure_hint": "call_calendar",
+            "symbol": "MU",
+            "template_number": null,
+            "thesis": "Opens two upside call-calendar variants for MU earnings at 1100 and 1150. The image shows one contract per leg in each variant, consistent with two distinct call calendars."
+          },
+          {
+            "action": "open",
+            "blockers": [],
+            "direction": "bearish",
+            "event_id": "sevt_1d662c46b1c90c6e54c40efc",
+            "evidence_status": "complete",
+            "exact_packages": [
+              {
+                "blocker": null,
+                "complete": true,
+                "displayed_price": {
+                  "amount": "1.64",
+                  "effect": "debit"
+                },
+                "field_provenance": [
+                  "text",
+                  "image:1"
+                ],
+                "legs": [
+                  {
+                    "expiration": "Oct 2 2026",
+                    "option_type": "put",
+                    "order_code": "STO",
+                    "quantity": 1,
+                    "strike": "950"
+                  },
+                  {
+                    "expiration": "Oct 5 2026",
+                    "option_type": "put",
+                    "order_code": "BTO",
+                    "quantity": 1,
+                    "strike": "950"
+                  }
+                ]
+              }
+            ],
+            "link_state": "not_needed",
+            "links_to": [],
+            "opportunity_group_id": "sopp_9eed937ae037d9be3edf3f4b",
+            "planner_new_entry": true,
+            "projection_dispositions": [
+              {
+                "disposition": "ready_for_source_policy",
+                "projection": "idea",
+                "reason": "idea_evidence_complete"
+              },
+              {
+                "disposition": "ready_for_source_policy",
+                "projection": "exact_package",
+                "reason": "exact_package_complete"
+              }
+            ],
+            "projections": [
+              "idea",
+              "exact_package"
+            ],
+            "semantic_confidence": 0.99,
+            "structure_hint": "put_calendar",
+            "symbol": "MU",
+            "template_number": null,
+            "thesis": "Opens a downside 950-strike MU put calendar for earnings alongside the two upside call calendars."
+          }
+        ],
+        "interpretation_rules_version": "source-evidence-v3",
+        "post_ref": "x-post:2104591155346419717",
+        "profile_version": "3",
+        "published_at": "2026-09-28T15:16:47.000Z",
+        "schema": "kamandal.source_episode.v1",
+        "source_id": "mike_butler",
+        "source_record_sha256": "95e2a1ee10d682d99b686827c67cd69cf223bb7164544446f237384f7a9b7fdb"
+      }
+    ],
+    "model_receipts": [],
+    "profile_id": "mike_butler",
+    "profile_version": "3",
+    "prompt_sha256": "a8af149f433f6e36252de873e380bed26ab37e3f98c4ba64fca74e45beaeccab",
+    "schema": "kamandal.source_episode_compilation.v1",
+    "source_packet_sha256": "c74d33760fa77e7ef8403e341482222f1cf09f9dbf1098b20207527e90e01532"
+  },
+  "independent": [
+    {
+      "canonical_post_id": "x-post:2104591155346419717",
+      "effects": {
+        "broker_effects": false,
+        "fill_created": false,
+        "idea_created": false,
+        "lifecycle_created": false,
+        "plan_created": false,
+        "ticket_created": false
+      },
+      "output_sha256": "71282cdac52cae77589380d16a8b2e7ecbbc0e70f82a73cf9bd90dcb01875893",
+      "packages": [
+        {
+          "action": "open",
+          "blocker": null,
+          "canonical_post_id": "x-post:2104591155346419717",
+          "complete": true,
+          "displayed_price": {
+            "amount": "2.2",
+            "effect": "debit"
+          },
+          "displayed_trade_time": "9:44a today",
+          "evidence_revision_id": "orev_a4cbc7bd6920b64b34eb1602",
+          "legs": [
+            {
+              "effect": "open",
+              "expiration": "2026-10-02",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 1,
+              "side": "sell",
+              "strike": "1100"
+            },
+            {
+              "effect": "open",
+              "expiration": "2026-10-05",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1,
+              "side": "buy",
+              "strike": "1100"
+            }
+          ],
+          "opportunity_group_id": null,
+          "package_signature": "opkg_f3efcdf8162fe67107f17c8a",
+          "product_type": "equity_or_etf_option",
+          "provenance": {
+            "image_sha256": "ed4355676d265df1ce429188c73e7f64567ed800a0fa811e1acab3c47e12b5ff",
+            "output_sha256": "71282cdac52cae77589380d16a8b2e7ecbbc0e70f82a73cf9bd90dcb01875893",
+            "prompt_sha256": "ee19b633776d880e6cfff1e5486894acd380b169261a62de52a1cbf8fb85ed89",
+            "prompt_version": "observed-package-extractor-v1"
+          },
+          "schema": "kamandal.observed_package_evidence.v1",
+          "source_event_id": "ose_fc51c2462f722b11cd52fe31",
+          "source_locator": {
+            "media_index": 1,
+            "package_position": 1
+          },
+          "source_opening_package_count": 1,
+          "source_profile": "mike_butler",
+          "source_published_at": null,
+          "source_valid_until": null,
+          "source_verification_reason": null,
+          "source_verification_ref": null,
+          "source_verified": false,
+          "structure": "call_calendar",
+          "symbol": "MU"
+        },
+        {
+          "action": "open",
+          "blocker": null,
+          "canonical_post_id": "x-post:2104591155346419717",
+          "complete": true,
+          "displayed_price": {
+            "amount": "1.83",
+            "effect": "debit"
+          },
+          "displayed_trade_time": "9:44a today",
+          "evidence_revision_id": "orev_ba3f21430c6d0f3f9ecb451b",
+          "legs": [
+            {
+              "effect": "open",
+              "expiration": "2026-10-02",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 1,
+              "side": "sell",
+              "strike": "1150"
+            },
+            {
+              "effect": "open",
+              "expiration": "2026-10-05",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1,
+              "side": "buy",
+              "strike": "1150"
+            }
+          ],
+          "opportunity_group_id": null,
+          "package_signature": "opkg_afcef92ae6972933bf7fc6e9",
+          "product_type": "equity_or_etf_option",
+          "provenance": {
+            "image_sha256": "ed4355676d265df1ce429188c73e7f64567ed800a0fa811e1acab3c47e12b5ff",
+            "output_sha256": "71282cdac52cae77589380d16a8b2e7ecbbc0e70f82a73cf9bd90dcb01875893",
+            "prompt_sha256": "ee19b633776d880e6cfff1e5486894acd380b169261a62de52a1cbf8fb85ed89",
+            "prompt_version": "observed-package-extractor-v1"
+          },
+          "schema": "kamandal.observed_package_evidence.v1",
+          "source_event_id": "ose_f1a61f2c2b69cabdffc9b9d3",
+          "source_locator": {
+            "media_index": 1,
+            "package_position": 2
+          },
+          "source_opening_package_count": 1,
+          "source_profile": "mike_butler",
+          "source_published_at": null,
+          "source_valid_until": null,
+          "source_verification_reason": null,
+          "source_verification_ref": null,
+          "source_verified": false,
+          "structure": "call_calendar",
+          "symbol": "MU"
+        },
+        {
+          "action": "open",
+          "blocker": null,
+          "canonical_post_id": "x-post:2104591155346419717",
+          "complete": true,
+          "displayed_price": {
+            "amount": "1.64",
+            "effect": "debit"
+          },
+          "displayed_trade_time": "9:44a today",
+          "evidence_revision_id": "orev_798a228d51b15392eceb523c",
+          "legs": [
+            {
+              "effect": "open",
+              "expiration": "2026-10-02",
+              "option_type": "put",
+              "order_code": "STO",
+              "quantity": 1,
+              "side": "sell",
+              "strike": "950"
+            },
+            {
+              "effect": "open",
+              "expiration": "2026-10-05",
+              "option_type": "put",
+              "order_code": "BTO",
+              "quantity": 1,
+              "side": "buy",
+              "strike": "950"
+            }
+          ],
+          "opportunity_group_id": null,
+          "package_signature": "opkg_8636fb28a0d7932cf436fcf4",
+          "product_type": "equity_or_etf_option",
+          "provenance": {
+            "image_sha256": "ed4355676d265df1ce429188c73e7f64567ed800a0fa811e1acab3c47e12b5ff",
+            "output_sha256": "71282cdac52cae77589380d16a8b2e7ecbbc0e70f82a73cf9bd90dcb01875893",
+            "prompt_sha256": "ee19b633776d880e6cfff1e5486894acd380b169261a62de52a1cbf8fb85ed89",
+            "prompt_version": "observed-package-extractor-v1"
+          },
+          "schema": "kamandal.observed_package_evidence.v1",
+          "source_event_id": "ose_8a67e94434c0dee09a8163d6",
+          "source_locator": {
+            "media_index": 1,
+            "package_position": 3
+          },
+          "source_opening_package_count": 1,
+          "source_profile": "mike_butler",
+          "source_published_at": null,
+          "source_valid_until": null,
+          "source_verification_reason": null,
+          "source_verification_ref": null,
+          "source_verified": false,
+          "structure": "put_calendar",
+          "symbol": "MU"
+        },
+        {
+          "action": "open",
+          "blocker": null,
+          "canonical_post_id": "x-post:2104591155346419717",
+          "complete": true,
+          "displayed_price": {
+            "amount": "12.28",
+            "effect": "debit"
+          },
+          "displayed_trade_time": "8:36a today",
+          "evidence_revision_id": "orev_021b30c5a8e28d591e380a3d",
+          "legs": [
+            {
+              "effect": "open",
+              "expiration": "2026-10-16",
+              "option_type": "call",
+              "order_code": "STO",
+              "quantity": 1,
+              "side": "sell",
+              "strike": "205"
+            },
+            {
+              "effect": "open",
+              "expiration": "2026-12-18",
+              "option_type": "call",
+              "order_code": "BTO",
+              "quantity": 1,
+              "side": "buy",
+              "strike": "190"
+            }
+          ],
+          "opportunity_group_id": null,
+          "package_signature": "opkg_131d5906bdc1bdc91359f008",
+          "product_type": "equity_or_etf_option",
+          "provenance": {
+            "image_sha256": "ed4355676d265df1ce429188c73e7f64567ed800a0fa811e1acab3c47e12b5ff",
+            "output_sha256": "71282cdac52cae77589380d16a8b2e7ecbbc0e70f82a73cf9bd90dcb01875893",
+            "prompt_sha256": "ee19b633776d880e6cfff1e5486894acd380b169261a62de52a1cbf8fb85ed89",
+            "prompt_version": "observed-package-extractor-v1"
+          },
+          "schema": "kamandal.observed_package_evidence.v1",
+          "source_event_id": "ose_b8d8d9e4120d5c490264d584",
+          "source_locator": {
+            "media_index": 1,
+            "package_position": 4
+          },
+          "source_opening_package_count": 1,
+          "source_profile": "mike_butler",
+          "source_published_at": null,
+          "source_valid_until": null,
+          "source_verification_reason": null,
+          "source_verification_ref": null,
+          "source_verified": false,
+          "structure": "call_diagonal",
+          "symbol": "BA"
+        }
+      ],
+      "post_blocker": null,
+      "post_disposition": "packages",
+      "prompt_sha256": "ee19b633776d880e6cfff1e5486894acd380b169261a62de52a1cbf8fb85ed89",
+      "schema": "kamandal.observed_package_batch.v1",
+      "source_profile": "mike_butler"
+    }
+  ]
+}

@@ -1262,3 +1262,36 @@ def test_performance_added_does_not_create_scale_in():
     result=compile_source_episode_packet(_packet([record]),_profile('greg_harmon'),FakeClient(response))
     assert result.episodes[0]['events'][0]['action']=='commentary'
     assert result.episodes[0]['events'][0]['planner_new_entry'] is False
+
+
+@pytest.mark.parametrize('extra_unreadable', [False, True])
+def test_post_wide_opening_count_matches_independent_image_transcription(extra_unreadable):
+    from types import SimpleNamespace
+    from kamandal_v2.intelligence.source_episode_projection import project_source_episode_compilation
+    from kamandal_v2.intelligence.source_contract_verification import _disagreement
+    from kamandal_v2.intelligence.observed_packages import observed_package_batch_from_dict
+    root = Path('tests/fixtures/birdclaw_incremental')
+    saved = json.loads((root / 'monday-interpreted.json').read_text())
+    packet = json.loads((root / 'mike.json').read_text())
+    record = next(r for r in packet['records'] if r['signal_id'] == 'x-post:2104591155346419717')
+    image = (root / 'mike-ba-mu.jpg').resolve()
+    record['source']['media'] = [{'media_index': 1, 'type': 'photo', 'cache_status': 'cached',
+        'artifact_path': str(image), 'sha256': hashlib.sha256(image.read_bytes()).hexdigest()}]
+    compilation = saved['compilation']
+    if extra_unreadable:
+        compilation['episodes'][0]['events'][1]['exact_packages'].append(
+            {'complete': False, 'blocker': 'unreadable extra opening', 'legs': []})
+    result = project_source_episode_compilation(SimpleNamespace(**compilation), packet,
+        _profile('mike_butler'), universe_symbols={'MU', 'BA'})
+    packages = result.observed_batches[0].packages
+    assert len(packages) == 4
+    independent = observed_package_batch_from_dict(saved['independent'][0])
+    for package in packages:
+        if package.symbol == 'MU':
+            assert package.source_opening_package_count == (4 if extra_unreadable else 3)
+            assert _disagreement(package, independent) == (
+                'source_package_count_disagrees_with_image' if extra_unreadable else '')
+        else:
+            assert package.symbol == 'BA'
+            assert package.source_opening_package_count == 1
+            assert _disagreement(package, independent) == ''

@@ -89,6 +89,13 @@ def project_source_episode_compilation(
         if record is None:
             failures.append({"source_id": post_ref, "reason": "source_record_missing"})
             continue
+        # The independent extractor counts openings per symbol across the post,
+        # not per semantic event (e.g. two MU calls plus one MU put calendar).
+        opening_counts: dict[str, int] = {}
+        for item in episode.get("events") or []:
+            if isinstance(item, Mapping) and item.get("action") == "open":
+                symbol = str(item.get("symbol") or "").upper()
+                opening_counts[symbol] = opening_counts.get(symbol, 0) + len(item.get("exact_packages") or [])
         exact_packages: list[ObservedPackageEvidence] = []
         for event in episode.get("events") or []:
             if not isinstance(event, Mapping):
@@ -128,6 +135,8 @@ def project_source_episode_compilation(
                         event,
                         record,
                         compilation=compilation,
+                        source_opening_package_count=(opening_counts.get(str(event.get("symbol") or "").upper(), 0)
+                                                      if event.get("action") == "open" else None),
                     )
                     classification = str((record.get("classification") or {}).get("type") or "")
                     families = profile.get("families") or {}
@@ -313,7 +322,10 @@ def _exact_package_projections(
     record: Mapping[str, Any],
     *,
     compilation: SourceEpisodeCompilation,
+    source_opening_package_count: int | None = None,
 ) -> tuple[list[ObservedPackageEvidence], list[dict[str, str]]]:
+    package_count = (len(event.get("exact_packages") or [])
+                     if source_opening_package_count is None else source_opening_package_count)
     action = str(event.get("action") or "")
     if action not in {"open", "close", "roll", "adjust"}:
         return [], [{"source_id": str(event.get("event_id") or ""), "reason": f"exact_action_unsupported:{action}"}]
@@ -386,7 +398,7 @@ def _exact_package_projections(
                         "symbol": str(event.get("symbol") or "").upper(),
                         "structure": declared_structure,
                         "displayed_price": raw.get("displayed_price"),
-                        "source_opening_package_count": len(event.get("exact_packages") or []),
+                        "source_opening_package_count": package_count,
                     }
                 )
             )[:24]
@@ -413,7 +425,7 @@ def _exact_package_projections(
                     output_sha256="pending",
                     opportunity_group_id=_opportunity_id(str(event.get("opportunity_group_id") or "")),
                     prompt_version=PROMPT_VERSION,
-                    source_opening_package_count=len(event.get("exact_packages") or []),
+                    source_opening_package_count=package_count,
                 )
             )
         except (TypeError, ValueError) as exc:
