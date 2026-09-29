@@ -19,6 +19,15 @@ from kamandal_v2.paths import resolve_path
 
 
 def occ_symbol(underlying: str, leg: OptionLeg) -> str:
+    broker_symbol = str(getattr(leg, "broker_symbol", "") or "").upper()
+    if broker_symbol:
+        parsed = parse_occ_symbol(broker_symbol)
+        if (parsed["underlying"] != underlying.upper() or parsed["expiration"] != leg.expiration
+                or parsed["option_type"] != leg.option_type or abs(parsed["strike"] - leg.strike) > 1e-8):
+            raise ValueError("Broker option identity disagrees with source contract")
+        return broker_symbol
+    if underlying.upper() == "SPX":
+        raise ValueError("SPX requires a broker-resolved option symbol")
     expiration = leg.expiration.replace("-", "")
     if len(expiration) != 8:
         raise ValueError(f"Invalid option expiration: {leg.expiration}")
@@ -33,7 +42,7 @@ def parse_occ_symbol(symbol: str) -> dict[str, Any]:
         raise ValueError(f"Unsupported OCC option symbol: {symbol}")
     root, yymmdd, flag, strike = match.groups()
     return {
-        "underlying": root,
+        "underlying": "SPX" if root == "SPXW" else root,
         "expiration": f"20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}",
         "option_type": "call" if flag == "C" else "put",
         "strike": int(strike) / 1000.0,
@@ -132,7 +141,7 @@ class PublicAdapter:
                 chain = self._post(
                     f"/userapigateway/marketdata/{self._account_id()}/option-chain",
                     {
-                        "instrument": {"symbol": symbol, "type": "EQUITY"},
+                        "instrument": {"symbol": symbol, "type": "INDEX" if symbol == "SPX" else "EQUITY"},
                         "expirationDate": expiration,
                     },
                 )
@@ -374,6 +383,7 @@ class PublicAdapter:
             parsed_symbol = parse_occ_symbol(option_symbol)
             quote = OptionQuote(
                 underlying=parsed_symbol["underlying"],
+                broker_symbol=option_symbol,
                 expiration=parsed_symbol["expiration"],
                 option_type=parsed_symbol["option_type"],
                 strike=_as_float(details.get("strikePrice"), parsed_symbol["strike"]),
@@ -401,6 +411,7 @@ class PublicAdapter:
                 quote = parsed[index]
                 parsed[index] = OptionQuote(
                     underlying=quote.underlying,
+                    broker_symbol=quote.broker_symbol,
                     expiration=quote.expiration,
                     option_type=quote.option_type,
                     strike=quote.strike,
@@ -419,7 +430,7 @@ class PublicAdapter:
     def _underlying_price(self, symbol: str) -> float:
         payload = self._post(
             f"/userapigateway/marketdata/{self._account_id()}/quotes",
-            {"instruments": [{"symbol": symbol, "type": "EQUITY"}]},
+            {"instruments": [{"symbol": symbol, "type": "INDEX" if symbol == "SPX" else "EQUITY"}]},
         )
         for item in payload.get("quotes", []) or []:
             instrument = item.get("instrument") or {}

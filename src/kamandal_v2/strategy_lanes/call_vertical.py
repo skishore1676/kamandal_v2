@@ -30,6 +30,8 @@ def propose_call_vertical_actions(
     if _number(context, "profit_pct") >= sheet_number(policy, "profit_target_pct"):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "profit_target", arbiter_class="executable_profit", proposed_at=proposed_at))
     time_exit_due = _number(context, "dte") <= sheet_number(policy, "exit_dte_min")
+    if "time_exit_due_override" in context:
+        time_exit_due = bool(context["time_exit_due_override"])
     if time_exit_due:
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "time_exit", arbiter_class="time_decision", proposed_at=proposed_at))
     elif bool(context.get("half_time_exit_due")):

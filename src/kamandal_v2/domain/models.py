@@ -289,6 +289,7 @@ class OptionQuote:
     iv: float
     open_interest: int = 0
     volume: int = 0
+    broker_symbol: str = ""
 
     @property
     def mid(self) -> float:
@@ -329,6 +330,7 @@ class OptionLeg:
     theta: float
     vega: float
     open_interest: int
+    broker_symbol: str = ""
 
     @classmethod
     def from_quote(cls, quote: OptionQuote, *, role: str, side: str, quantity: int = 1) -> "OptionLeg":
@@ -347,6 +349,7 @@ class OptionLeg:
             theta=quote.theta,
             vega=quote.vega,
             open_interest=quote.open_interest,
+            broker_symbol=quote.broker_symbol,
         )
 
     @property

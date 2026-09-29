@@ -434,14 +434,19 @@ def _frozen_lifecycle_policy(lifecycle: LifecycleState) -> CsaPolicy:
 
 
 def _active_option_legs(lifecycle: LifecycleState, snapshot: Any) -> tuple[OptionLeg, ...]:
-    quotes = {(quote.expiration, quote.option_type, float(quote.strike)): quote for quote in snapshot.quotes}
     result = []
     for item in lifecycle.active_legs:
         key = (str(item["expiration"]), str(item["option_type"]), float(item["strike"]))
-        quote = quotes.get(key)
+        matches = [quote for quote in snapshot.quotes
+                   if (quote.expiration, quote.option_type, float(quote.strike)) == key
+                   and (not item.get("broker_symbol") or quote.broker_symbol == item["broker_symbol"])]
+        if len(matches) > 1:
+            raise ValueError("Ambiguous management contract quote")
+        quote = matches[0] if matches else None
         if quote is None:
             result.append(
                 OptionLeg(
+                    broker_symbol=str(item.get("broker_symbol") or ""),
                     role=str(item["role"]),
                     side=str(item["side"]),
                     option_type=str(item["option_type"]),
@@ -567,6 +572,13 @@ def _management_context(
         }
     elif lifecycle.lane in {LaneId.CALL_VERTICAL, LaneId.GENERIC_CLOSE_ONLY}:
         context = {**common, "dte": min(dtes)}
+        if (policy.resolved_fields.get("structure") == "iron_condor"
+                and int(policy.resolved_fields.get("dte_min", 1)) == 0
+                and min(leg.expiration for leg in legs) == observed_date.isoformat()):
+            from kamandal_v2.live.expiry_day import expiry_day_window
+            window = expiry_day_window(config, policy.management, snapshot.underlying, observed_at)
+            context["time_exit_due_override"] = window["exit_due"]
+            context["half_time_exit_due"] = False
     elif lifecycle.lane is LaneId.DIRECTIONAL_DIAGONAL:
         short = next((leg for leg in legs if leg.role == "short_near"), None)
         long = next(leg for leg in legs if leg.role == "long_far")

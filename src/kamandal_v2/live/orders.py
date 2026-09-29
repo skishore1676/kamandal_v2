@@ -386,6 +386,7 @@ def _closing_leg(leg_payload: dict[str, Any]) -> OptionLeg:
     side = "buy" if str(leg_payload.get("side") or "").lower() == "sell" else "sell"
     return OptionLeg(
         role=str(leg_payload.get("role") or ""),
+        broker_symbol=str(leg_payload.get("broker_symbol") or ""),
         side=side,
         option_type=str(leg_payload.get("option_type") or ""),
         strike=float(leg_payload.get("strike") or 0.0),

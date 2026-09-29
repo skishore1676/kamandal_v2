@@ -597,7 +597,7 @@ def _fresh_sheet_entry_blocker(
         usage = live_sleeve_usage(
             store, account, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""),
         )
-        return sleeve_entry_blocker(sleeve_policy, usage, [(ticket_lane(ticket), preflight_bpr)])
+        return sleeve_entry_blocker(sleeve_policy, usage, [(ticket_lane(ticket), max(budget, preflight_bpr))])
     except Exception as exc:  # noqa: BLE001 - unavailable Sheet or broker account fails closed.
         return f"entry_sheet_policy_unavailable:{type(exc).__name__}"
 

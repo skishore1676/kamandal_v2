@@ -1295,3 +1295,27 @@ def test_post_wide_opening_count_matches_independent_image_transcription(extra_u
             assert package.symbol == 'BA'
             assert package.source_opening_package_count == 1
             assert _disagreement(package, independent) == ''
+
+
+def test_exact_condor_opening_gets_age_limit_even_when_envelope_is_hedge(tmp_path):
+    image = tmp_path/'condor.jpg'
+    image.write_bytes(b'public condor fixture')
+    record = _record('condor', 'Opened SPX iron condor', ['SPX'], classification='hedge',
+                     published_at='2026-09-29T15:15:33Z', media=[{
+                         'media_index':1, 'type':'photo', 'cache_status':'cached',
+                         'artifact_path':str(image), 'sha256':hashlib.sha256(image.read_bytes()).hexdigest()}])
+    opening = {'event_id':'condor-open', 'opportunity_group_id':'condor-opportunity', 'action':'open',
+               'symbol':'SPX', 'structure_hint':'iron_condor', 'projections':['exact_package'],
+               'projection_dispositions':[{'projection':'exact_package','disposition':'ready_for_source_policy'}],
+               'exact_packages':[{'complete':True,'blocker':None,'field_provenance':['image:1'],
+                  'displayed_price':{'amount':'2.00','effect':'credit'},
+                  'legs':[{'order_code':code,'quantity':1,'expiration':'2026-09-29','strike':str(strike),'option_type':kind}
+                          for code,strike,kind in [('BTO',7650,'put'),('STO',7655,'put'),('STO',7700,'call'),('BTO',7705,'call')]]}]}
+    compilation = SimpleNamespace(profile_id='mike_butler',prompt_sha256='fixture',
+                                  compiled_at='2026-09-29T16:00:00Z',
+                                  episodes=[{'post_ref':record['signal_id'],'events':[opening]}])
+    projection = project_source_episode_compilation(compilation, _packet([record]), _profile('mike_butler'), universe_symbols=())
+    package, = projection.observed_batches[0].packages
+    assert package.source_published_at == '2026-09-29T15:15:33Z'
+    assert package.source_valid_until == '2026-09-30T15:15:33+00:00'
+    assert package.structure == 'iron_condor'

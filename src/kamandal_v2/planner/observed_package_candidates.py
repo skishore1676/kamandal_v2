@@ -214,6 +214,11 @@ def build_observed_package_candidates(
                     else:
                         hard_rejections.append(reason)
                 rejections = hard_rejections
+            elif mode == "live" and package.structure == "iron_condor":
+                event_status = market.event_status(package.symbol)
+                if playbook.avoid_earnings and event_status not in {"clear", "unknown"}:
+                    rejections.append(f"event_status_blocked:{event_status}")
+                rejections.extend(_exact_condor_contract_rejections(candidate, playbook, config, management=policy.management))
             elif mode == "live" and package.structure in {
                 "call_calendar", "put_calendar", "call_diagonal", "put_diagonal",
             }:
@@ -334,6 +339,38 @@ def _exact_strangle_contract_rejections(candidate: Candidate, playbook: Playbook
     return reasons
 
 
+
+def _exact_condor_contract_rejections(candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None, *, management: dict[str, Any]) -> list[str]:
+    now = datetime.fromisoformat(str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now()).replace("Z", "+00:00"))
+    dte = (date.fromisoformat(candidate.legs[0].expiration) - now.date()).days
+    reasons = []
+    if not playbook.dte_min <= dte <= playbook.dte_max:
+        reasons.append("exact_condor_dte_outside_policy")
+    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
+        reasons.append("exact_condor_quantity_above_policy")
+    if candidate.net_credit <= 0:
+        reasons.append("exact_condor_requires_positive_credit")
+    width = max(abs(a.strike - b.strike) for a in candidate.legs for b in candidate.legs if a.option_type == b.option_type)
+    if candidate.net_credit >= width:
+        reasons.append("exact_condor_credit_exceeds_width")
+    if playbook.live_max_bpr_per_order is None or candidate.estimated_bpr > playbook.live_max_bpr_per_order:
+        reasons.append("exact_condor_risk_above_order_cap")
+    if candidate.underlying == "SPX" and any(not leg.broker_symbol.startswith("SPXW") for leg in candidate.legs):
+        reasons.append("exact_condor_requires_pm_settled_spxw")
+    if dte == 0:
+        from kamandal_v2.live.expiry_day import expiry_day_window
+        try:
+            window = expiry_day_window(config or {}, management, candidate.underlying, now.isoformat())
+            if not window["entry_allowed"]:
+                reasons.append("exact_condor_expiry_day_entry_window_closed")
+            source_until = datetime.fromisoformat(str(candidate.metadata["source_valid_until"]).replace("Z", "+00:00"))
+            cutoff = datetime.fromisoformat(window["entry_until"])
+            candidate.metadata["source_valid_until"] = min(source_until, cutoff).isoformat()
+            candidate.metadata["expiry_day_exit_at"] = window["exit_at"]
+        except (ValueError, TypeError, KeyError):
+            reasons.append("exact_condor_intraday_policy_not_validated")
+    return reasons
+
 def _exact_debit_contract_rejections(candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None) -> list[str]:
     """Apply the Sheet's contract and cash limits without changing source legs."""
     observed = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
@@ -441,6 +478,12 @@ def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
             "long_far" if leg.expiration == expirations[1] else "short_body" if leg.side == "sell" else "long_near_wing"
             for leg in package.legs
         ]
+    if package.structure == "iron_condor":
+        if len(package.legs) != 4 or len({leg.quantity for leg in package.legs}) != 1:
+            raise ValueError("exact_condor_requires_four_equal_quantity_legs")
+        if len({leg.expiration for leg in package.legs}) != 1 or any(leg.effect != "open" for leg in package.legs):
+            raise ValueError("exact_condor_requires_same_expiry_opening_legs")
+        return [f"{'short' if leg.side == 'sell' else 'long'}_{leg.option_type}" for leg in package.legs]
     if package.structure == "short_strangle":
         if len(package.legs) != 2 or {leg.option_type for leg in package.legs} != {"put", "call"}:
             raise ValueError("exact_strangle_requires_one_put_and_one_call")
