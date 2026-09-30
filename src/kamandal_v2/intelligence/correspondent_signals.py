@@ -287,10 +287,13 @@ def load_correspondent_profile(path: str | Path) -> tuple[dict[str, Any], str]:
             "action_overrides",
             "composite_structure_rules",
             "scale_in_creates_idea",
+            "text_contract_convention",
             "source_guidance",
         }
         if not set(episode).issubset(allowed_episode_keys):
             raise ValueError("episode_interpreter contains unsupported fields")
+        if episode.get("text_contract_convention") not in {None, "equity_monthly_v1"}:
+            raise ValueError("unsupported text_contract_convention")
         limit = episode.get("max_history_episodes", 12)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 0 <= limit <= 40:
             raise ValueError("episode_interpreter.max_history_episodes must be 0..40")

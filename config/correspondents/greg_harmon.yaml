@@ -10,6 +10,7 @@ episode_interpreter:
   max_history_episodes: 20
   max_records_per_turn: 20
   scale_in_creates_idea: true
+  text_contract_convention: equity_monthly_v1
   open_confirmation_regex: "\\btook\\b.*\\btrade idea\\s*#?\\s*\\d+"
   symbol_aliases:
     Broadcom: AVGO
@@ -143,7 +144,7 @@ strategy_rules:
   - {id: call_spread_risk_reversal, regex: "\\bcall spread risk reversals?\\b", strategy_family: call_spread_risk_reversal, direction: bullish, allowed_structures: []}
   - {id: broken_wing_call_fly, regex: "\\b(?:bw|broken[- ]wing) call fl(?:y|ys|ies)\\b", strategy_family: broken_wing_call_fly, direction: bullish, allowed_structures: []}
   - id: call_spread
-    regex: "\\bcall (?:vertical|spread)\\b"
+    regex: "\\bcall (?:verticals?|spreads?)\\b"
     strategy_family: call_spread
     direction: bullish
     allowed_structures: [call_spread]
@@ -151,7 +152,7 @@ strategy_rules:
       - {id: bought_call_spread, regex: "\\b(?:bought|buying|long)\\b", direction: bullish}
       - {id: sold_call_spread, regex: "\\b(?:sold|selling|short)\\b", direction: bearish}
   - id: put_spread
-    regex: "\\bput (?:vertical|spread)\\b"
+    regex: "\\bput (?:verticals?|spreads?)\\b"
     strategy_family: put_spread
     direction: bearish
     allowed_structures: [put_spread]

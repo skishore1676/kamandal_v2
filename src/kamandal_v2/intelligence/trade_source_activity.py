@@ -277,7 +277,7 @@ def chief_of_staff_rows(
     issues: Counter[str] = Counter()
     opening_groups: dict[tuple[str, str], list[tuple[dict[str, Any], dict[str, Any]]]] = {}
     for item in records:
-        if str(item.get("action") or "") != "open":
+        if str(item.get("action") or "") not in {"open", "scale_in"}:
             continue
         published = _post_published_at(str(item.get("post_ref") or item.get("source_url") or ""))
         if published is not None and published < cutoff:
@@ -288,6 +288,8 @@ def chief_of_staff_rows(
             raw = {}
         if not isinstance(raw, dict):
             raw = {}
+        if item.get("action") == "scale_in" and not raw.get("planner_new_entry"):
+            continue
         if raw.get("template_number") and not raw.get("links_to"):
             templates += 1
             continue  # A proposed menu item is not a confirmed guru opening.
@@ -374,6 +376,7 @@ def chief_of_staff_rows(
         elif any(token in decision_reason for token in ("duplicate", "already_open", "superseded")):
             decision = "Duplicate"
         elif ("incomplete" in decision_reason or "lacks_exact_contracts" in decision_reason
+              or "requires_verified_image" in decision_reason
               or "source_freshness_missing" in decision_reason
               or str(item.get("evidence_status") or "") in {"needs_media", "needs_history", "ambiguous"}):
             decision = "Needs evidence"
@@ -497,6 +500,8 @@ def _plain_reason(value: str) -> str:
         return "Possible edited-post duplicate; resolve source lineage"
     if "monthly expiration date unresolved" in lower:
         return "Resolve the exact expiration date from the source"
+    if "requires verified image" in lower:
+        return "Text contracts resolved; exact entry still requires verified source image"
     if "needs media" in lower or "expected media" in lower:
         return "Source image or linked article missing; obtain contract terms"
     if "incomplete" in lower:
@@ -548,6 +553,8 @@ def _plain_reason(value: str) -> str:
 
 def _issue_label(reason: str) -> str:
     lower = reason.lower().replace("_", " ")
+    if "requires verified image" in lower:
+        return "Source contract verification"
     if "media" in lower or "linked article" in lower:
         return "Missing source media/article"
     if "expiration" in lower or "incomplete" in lower or "lacks exact contracts" in lower:

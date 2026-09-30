@@ -628,6 +628,37 @@ def test_brief_marks_unresolved_contract_as_evidence_and_summarizes_action(tmp_p
     assert 'Incomplete contract terms (1)' in summary[4][1]
 
 
+def test_brief_keeps_confirmed_scale_in_and_resolved_text_image_gate(tmp_path):
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import compile_sleeve_policy
+
+    store = LocalStore(tmp_path / 'state.db')
+    for entry in (True, False):
+        store.event('trade_source_output_observed', {
+            'source_id': 'greg_harmon', 'post_ref': 'x-post:2105017598937043176',
+            'output_id': 'amat-entry' if entry else 'amat-management',
+            'classification': 'idea', 'effective_mode': 'live',
+            'action': 'scale_in', 'symbol': 'AMAT', 'structure': 'call_spread',
+            'reason': 'exact_package_requires_verified_image',
+            'normalized_output': {'event_id': 'amat-entry' if entry else 'amat-management',
+                                  'planner_new_entry': entry, 'action': 'scale_in',
+                                  'symbol': 'AMAT', 'exact_packages': [{
+                                      'complete': True, 'blocker': None,
+                                      'legs': [{'quantity': 1, 'expiration': '2026-10-16',
+                                                'strike': 510, 'order_code': 'BTO', 'option_type': 'call'}],
+                                  }]},
+        })
+    policy = compile_sleeve_policy([
+        {'lane': 'current_idea', 'max_bpr_pct': '40'},
+        {'lane': 'guru_exact', 'max_bpr_pct': '40'},
+        {'lane': 'portfolio_total', 'max_bpr_pct': '80'},
+    ])
+    _summary, details = chief_of_staff_rows(store, source_modes={}, sleeve_policy=policy)
+    assert len(details) == 1
+    assert details[0][3] == 'Needs evidence'
+    assert details[0][4] == 'Text contracts resolved; exact entry still requires verified source image'
+
+
 def test_brief_shows_actual_sheet_block_and_separate_position_slot(tmp_path):
     from kamandal_v2.domain.models import PortfolioState
     from kamandal_v2.intelligence.source_episode_projection import _opportunity_id
