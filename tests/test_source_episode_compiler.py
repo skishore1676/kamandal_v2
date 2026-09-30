@@ -1264,6 +1264,94 @@ def test_performance_added_does_not_create_scale_in():
     assert result.episodes[0]['events'][0]['planner_new_entry'] is False
 
 
+def _monthly_spread_fixture(text="added some $AMAT Oct 510/550 call spreads", published="2026-09-29T19:31:19Z"):
+    record = _record("2105017598937043176", text, ["AMAT"],
+                     classification="trade_journal", published_at=published)
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(action="open" if text.startswith("bought") else "scale_in", symbol="AMAT", direction="bullish", structure_hint="call_spread",
+               projections=["idea"], exact_packages=[{
+                   "complete": False, "blocker": "Exact monthly expiration date unresolved",
+                   "displayed_price": None, "legs": [], "field_provenance": ["text"],
+               }])
+    ]}]}
+    packet = _packet([record])
+    packet["generated_at"] = "2026-09-30T13:15:00Z"
+    return record, packet, response
+
+
+def test_greg_monthly_shorthand_repairs_cached_episode_without_model_or_live_authority():
+    import copy
+    record, packet, response = _monthly_spread_fixture()
+    profile = _profile("greg_harmon")
+    old_profile = copy.deepcopy(profile)
+    old_profile["episode_interpreter"].pop("text_contract_convention")
+    old = compile_source_episode_packet(packet, old_profile, FakeClient(response))
+    original = copy.deepcopy(old.episodes)
+    client = FakeClient()
+    repaired = compile_source_episode_packet(packet, profile, client, history=old.episodes)
+    event = repaired.episodes[0]["events"][0]
+    package = event["exact_packages"][0]
+    assert client.calls == []
+    assert old.episodes == original  # Retained historical evidence is immutable.
+    assert repaired.episodes[0]["published_at"] == record["source"]["published_at"]
+    assert event["event_id"] == old.episodes[0]["events"][0]["event_id"]
+    assert event["opportunity_group_id"] == old.episodes[0]["events"][0]["opportunity_group_id"]
+    assert [(leg["order_code"], leg["strike"], leg["expiration"]) for leg in package["legs"]] == [
+        ("BTO", "510", "2026-10-16"), ("STO", "550", "2026-10-16"),
+    ]
+    assert package["displayed_price"] is None
+    assert package["complete"] is True
+    assert event["blockers"] == ["exact_package_requires_verified_image"]
+    projection = project_source_episode_compilation(repaired, packet, profile, universe_symbols=["AMAT"])
+    assert len(projection.planner_ideas) == 1
+    assert projection.observed_batches == ()  # Text cannot bypass independent image verification.
+    assert repaired.episodes == compile_source_episode_packet(
+        packet, profile, FakeClient(), history=repaired.episodes).episodes
+
+
+def test_monthly_vertical_repairs_legacy_plural_long_call_label_without_paid_reinterpretation():
+    import copy
+    _record_value, packet, response = _monthly_spread_fixture("bought $AMAT Oct 510/550 call spreads")
+    old_profile = copy.deepcopy(_profile("greg_harmon"))
+    old_profile["episode_interpreter"].pop("text_contract_convention")
+    for rule in old_profile["strategy_rules"]:
+        if rule["id"] == "call_spread":
+            rule["regex"] = r"\bcall (?:vertical|spread)\b"
+    old = compile_source_episode_packet(packet, old_profile, FakeClient(response))
+    assert old.episodes[0]["events"][0]["structure_hint"] == "long_call"
+    client = FakeClient()
+    fixed = compile_source_episode_packet(packet, _profile("greg_harmon"), client, history=old.episodes)
+    assert fixed.episodes[0]["events"][0]["structure_hint"] == "call_spread"
+    assert fixed.episodes[0]["events"][0]["exact_packages"][0]["complete"] is True
+    assert client.calls == []
+
+
+@pytest.mark.parametrize("text,published,expiry", [
+    ("bought $AMAT December 510/550 call spreads", "2026-09-29T19:31:19Z", "2026-12-18"),
+    ("added $AMAT Jan 510/550 call spreads", "2026-12-29T19:31:19Z", "2027-01-15"),
+    ("added $AMAT Jun 2027 510/550 call spreads", "2026-09-29T19:31:19Z", "2027-06-17"),
+])
+def test_monthly_shorthand_uses_publication_year_and_holiday_calendar(text, published, expiry):
+    _record_value, packet, response = _monthly_spread_fixture(text, published)
+    compiled = compile_source_episode_packet(packet, _profile("greg_harmon"), FakeClient(response))
+    legs = compiled.episodes[0]["events"][0]["exact_packages"][0]["legs"]
+    assert {leg["expiration"] for leg in legs} == {expiry}
+
+
+@pytest.mark.parametrize("text", [
+    "added some $AMAT Sep 510/550 call spreads",  # Already expired in publication month.
+    "added some $AMAT Oct 2028 510/550 call spreads",  # Calendar not maintained for 2028.
+    "added some $AMAT Oct 550/510 call spreads",  # Wrong bullish vertical order.
+    "added some $AMAT Oct 510/550 call spreads and sold puts",
+    "added some $AMAT Oct 23 510/550 call spreads",  # Explicit weekly date is not monthly grammar.
+    "yesterday I added some $AMAT Oct 510/550 call spreads",
+])
+def test_monthly_shorthand_never_fills_ambiguous_or_conflicting_terms(text):
+    _record_value, packet, response = _monthly_spread_fixture(text)
+    compiled = compile_source_episode_packet(packet, _profile("greg_harmon"), FakeClient(response))
+    assert compiled.episodes[0]["events"][0]["exact_packages"][0]["complete"] is False
+
+
 @pytest.mark.parametrize('extra_unreadable', [False, True])
 def test_post_wide_opening_count_matches_independent_image_transcription(extra_unreadable):
     from types import SimpleNamespace

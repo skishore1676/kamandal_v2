@@ -560,7 +560,7 @@ def test_scheduled_job_health_suppresses_missing_log_when_installed_after_due(tm
     launchd_dir.mkdir()
     plist = launchd_dir / "com.kamandal.v2.x_bookmarks.plist"
     plist.write_text("plist")
-    installed_after_due = datetime(2026, 6, 30, 15, 0, tzinfo=launchd_job.CENTRAL).timestamp()
+    installed_after_due = datetime(2026, 6, 30, 15, 30, tzinfo=launchd_job.CENTRAL).timestamp()
     os.utime(plist, (installed_after_due, installed_after_due))
 
     report = launchd_job.scheduled_job_health(
@@ -641,12 +641,12 @@ def test_scheduled_job_health_keeps_newer_x_bookmarks_failure(tmp_path, monkeypa
     artifact = tmp_path / "data" / "digest" / "x_bookmarks" / "2026-07-02" / "llm" / "2026-07-02_llm_raw.json"
     artifact.parent.mkdir(parents=True)
     artifact.write_text('[{"ideas": []}]', encoding="utf-8")
-    old_success_at = datetime(2026, 7, 2, 14, 5, tzinfo=launchd_job.CENTRAL).timestamp()
+    old_success_at = datetime(2026, 7, 2, 15, 20, tzinfo=launchd_job.CENTRAL).timestamp()
     os.utime(artifact, (old_success_at, old_success_at))
     label = "com.kamandal.v2.x_bookmarks"
     log_path = log_dir / f"{label}.out.log"
     log_path.write_text(launchd_job.RESULT_PREFIX + json.dumps({"job": "x-bookmarks", "status": "failed"}) + "\n")
-    failed_at = datetime(2026, 7, 2, 14, 10, tzinfo=launchd_job.CENTRAL).timestamp()
+    failed_at = datetime(2026, 7, 2, 15, 25, tzinfo=launchd_job.CENTRAL).timestamp()
     os.utime(log_path, (failed_at, failed_at))
 
     report = launchd_job.scheduled_job_health(
@@ -654,7 +654,7 @@ def test_scheduled_job_health_keeps_newer_x_bookmarks_failure(tmp_path, monkeypa
         log_dir=log_dir,
         launchd_dir=tmp_path / "LaunchAgents",
         label_prefix="com.kamandal.v2",
-        now=datetime(2026, 7, 2, 15, 30, tzinfo=launchd_job.CENTRAL),
+        now=datetime(2026, 7, 2, 16, 0, tzinfo=launchd_job.CENTRAL),
     )
 
     assert report["issues"] == [{"job": "x-bookmarks", "reason": "last_run_failed", "detail": str(log_path)}]

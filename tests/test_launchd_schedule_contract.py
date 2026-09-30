@@ -21,6 +21,7 @@ def test_late_day_sequence_preserves_dependency_order_and_submission_window() ->
     assert JOB_SCHEDULES["youtube"].fixed_times[-1] == time(14, 0)
     assert JOB_SCHEDULES["live-reconciliation"].fixed_times[-1] == time(14, 10)
     assert JOB_SCHEDULES["unified-planning"].fixed_times[-1] == time(14, 15)
+    assert JOB_SCHEDULES["x-bookmarks"].fixed_times[-1] == time(15, 15)
     assert JOB_SCHEDULES["daily-report"].fixed_times[-1] == time(15, 25)
     assert JOB_SCHEDULES["daily-report"].fixed_times[-1] > JOB_SCHEDULES["unified-lifecycle-management"].window_end
     lifecycle = JOB_SCHEDULES["unified-lifecycle-management"]
@@ -86,7 +87,7 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
 
     assert weekday_one_times("iv_afternoon") == {(13, 45)}
     assert weekday_one_times("youtube") == {(9, 15), (11, 45), (14, 0)}
-    assert weekday_one_times("x_bookmarks") == {(8, 15), (9, 15), (11, 45), (14, 0)}
+    assert weekday_one_times("x_bookmarks") == {(8, 15), (9, 15), (11, 45), (14, 0), (15, 15)}
     assert weekday_one_times("live_reconciliation") == {(8, 35), (10, 30), (12, 30), (14, 10)}
     assert weekday_one_times("unified_planning") == {
         (8, 50),

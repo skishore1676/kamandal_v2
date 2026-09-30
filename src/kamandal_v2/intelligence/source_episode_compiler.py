@@ -22,6 +22,7 @@ from pydantic import TypeAdapter
 from kamandal_v2.intelligence.llm_client import JsonLlmClient
 
 from kamandal_v2.intelligence.exact_entry_review import LEG_COUNTS, possible_edit_duplicates
+from kamandal_v2.intelligence.source_shorthand import resolve_declared_text_contracts
 
 INTERPRETATION_RULES_VERSION = "source-evidence-v3"
 
@@ -199,6 +200,7 @@ def compile_source_episode_packet(
         signal_id = str(record["signal_id"])
         if signal_id in reused:
             episode = _hold_possible_edits(reused[signal_id], duplicate_peers.get(signal_id, []))
+            episode = resolve_declared_text_contracts(record, episode, profile)
             episodes.append(episode)
             _advance_active_from_episode(active, episode)
             _remember_opportunities(opportunity_by_event_id, episode)
@@ -217,7 +219,8 @@ def compile_source_episode_packet(
             image_numbers=image_map.get(signal_id, []),
             profile=profile,
         )
-        episodes.append(_hold_possible_edits(episode, duplicate_peers.get(signal_id, [])))
+        episode = _hold_possible_edits(episode, duplicate_peers.get(signal_id, []))
+        episodes.append(resolve_declared_text_contracts(record, episode, profile))
         _remember_opportunities(opportunity_by_event_id, episode)
 
     return SourceEpisodeCompilation(

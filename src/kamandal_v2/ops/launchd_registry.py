@@ -73,7 +73,9 @@ JOB_LABEL_SUFFIXES = {
 
 JOB_SCHEDULES = {
     "x-bookmarks": JobSchedule(
-        fixed_times=(time(8, 15), time(9, 15), time(11, 45), time(14, 0))
+        # Closing intake follows Birdclaw's 15:05 collection. It prepares late
+        # source posts for the next natural planner; it cannot submit orders.
+        fixed_times=(time(8, 15), time(9, 15), time(11, 45), time(14, 0), time(15, 15))
     ),
     "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 0))),
     "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
