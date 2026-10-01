@@ -155,6 +155,10 @@ def run_plan(
         candidates.extend(supplemental_candidate_factory(market, playbooks, portfolio, store))
     source_by_idea = {idea.idea_id: source_id_from_idea_source(idea.source) for idea in loaded_ideas}
     for candidate in candidates:
+        if mode == "live" and (venues := (config.get("runtime") or {}).get("venue_portfolios")):
+            # Freeze the account scope used for these sleeve decisions, not its
+            # balances. Submission must refresh every account in this scope.
+            candidate.metadata["capital_scope_venues"] = sorted(venues)
         if candidate.metadata.get("input_kind") != "exact_package":
             source_id = source_by_idea.get(candidate.idea_id)
             if source_id:

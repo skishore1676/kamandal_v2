@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -248,6 +249,43 @@ def project_trade_source_activity(
     return write_trade_source_brief(config, summary, decisions)
 
 
+def refresh_trade_source_outcomes(config: dict[str, Any], store: LocalStore) -> dict[str, Any]:
+    """Refresh the existing brief after an entry/fill/close state changes.
+
+    Called by existing execution/management jobs, never an execution gate.
+    An unchanged outcome costs no Sheet read/write; failed publication retries
+    on the next natural job because only success records the fingerprint.
+    """
+    try:
+        intents = [ticket for ticket in store.live_order_intents_by_type("open") if ticket.get("source_id")]
+        groups = [group for group in [*store.open_live_position_groups(), *store.closed_live_position_groups(limit=1000)]
+                  if group.get("source_id")]
+        if not intents and not groups:
+            return {"status": "no_source_outcomes"}
+        ticket_ids = {str(ticket["ticket_hash"]) for ticket in intents}
+        reasons = {}
+        for event in store.recent_events(("live_entry_sheet_policy_blocked", "live_entry_exact_evidence_blocked"), limit=1000):
+            identity = str(event.get("ticket_hash") or "")
+            if identity in ticket_ids:
+                reasons[identity] = str(event.get("reason") or "")
+        payload = {
+            "intents": sorted((str(ticket["ticket_hash"]), str(ticket.get("_ledger_status") or "")) for ticket in intents),
+            "groups": sorted((str(group.get("group_id") or ""), str(group.get("_status") or "open")) for group in groups),
+            "policy_reasons": reasons,
+        }
+        fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        previous = store.latest_event("trade_source_outcome_projection") or {}
+        if previous.get("fingerprint") == fingerprint:
+            return {"status": "unchanged"}
+        rows = project_trade_source_activity(config, store)
+        store.event("trade_source_outcome_projection", {
+            "fingerprint": fingerprint, "rows": rows, "broker_effects": False,
+        })
+        return {"status": "succeeded", "rows": rows}
+    except Exception as exc:  # noqa: BLE001 - passive publication cannot block execution or management.
+        return {"status": "failed_non_blocking", "error": f"{type(exc).__name__}: {exc}"}
+
+
 def chief_of_staff_rows(
     store: LocalStore,
     *,
@@ -363,6 +401,9 @@ def chief_of_staff_rows(
             lane = str(matched_groups[0].get("source_output_kind") or "idea")
             decision = "Entered exact" if lane == "exact_package" else "Entered idea"
             reason = "Kamandal manages the position"
+            if all(group.get("_status") == "closed" for group in matched_groups):
+                decision = "Closed"
+                reason = "Kamandal position is closed; retained in the ledger"
             entered += 1
         elif any(str(ticket.get("_ledger_status") or "") in {"submitted", "partially_filled", "submit_uncertain"} for ticket in matched_intents):
             decision = "Submitted; awaiting fill"
@@ -370,6 +411,8 @@ def chief_of_staff_rows(
         elif blocked_intent and "preflight" in str(blocked_intent.get("_ledger_status") or ""):
             decision = "Blocked by preflight"
             reason = failed_preflights.get(str(blocked_intent.get("ticket_hash") or "")) or str(blocked_intent.get("_ledger_status") or "")
+            if reason == "exact_source_expired_before_submission":
+                decision = "Expired before submission"
         elif policy_block:
             decision = "Needs evidence" if str(policy_block.get("reason") or "").startswith("entry_exact_evidence_") else "Blocked by policy"
             reason = str(policy_block.get("reason") or "Sheet or source policy blocked this entry")
@@ -405,7 +448,7 @@ def chief_of_staff_rows(
             decision = "Held"
         if reason != source_reason:
             decision_reason = reason
-        if decision in {"Unsupported", "Needs evidence", "Stale", "Held", "Blocked by risk", "Blocked by quote", "Blocked by policy", "Blocked by preflight", "Blocked", "Duplicate"}:
+        if decision in {"Unsupported", "Needs evidence", "Stale", "Expired before submission", "Held", "Blocked by risk", "Blocked by quote", "Blocked by policy", "Blocked by preflight", "Blocked", "Duplicate"}:
             held += 1
             if decision != "Stale":
                 issues[_issue_label(decision_reason or str(item.get("evidence_status") or "unresolved"))] += 1

@@ -29,6 +29,13 @@ percentages of account equity. These are ceilings, not utilization targets.
 Unknown broker exposure and pending/uncertain commitments consume capacity;
 neither pathway can borrow capacity by dropping those commitments.
 
+Planning records the participating live broker venues on each new entry ticket.
+Submission refreshes all those accounts for the same sleeve/account denominator,
+then checks the destination broker's own buying power and 80% ceiling separately.
+Balances are never frozen into permission to spend. Tickets staged before this
+scope field existed retain their original single-account check; a fresh scheduled
+plan is required to use the corrected scope.
+
 The ideas optimizer uses only ideas-sleeve positions for delta fit, portfolio
 preferences, concentration and candidate ranking. Guru positions remain in the
 real account capital and broker constraints. They do not become an input to the
@@ -101,6 +108,9 @@ filled and managed, or closed. A decision receipt contains the rule, measured
 value and limit where meaningful, source, sleeve and planning run. A successful
 job and the phrase `portfolio_optimizer` are not sufficient outcome records.
 Use the existing ledger and `trade_source_activity` operator surface.
+Existing execution and management jobs refresh that brief when a source-linked
+entry, fill or close changes state. Unchanged outcomes do not republish the Sheet;
+publication failures are non-blocking and retry on the next natural cycle.
 
 ## Acceptance and rollout
 

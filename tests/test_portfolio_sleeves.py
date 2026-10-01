@@ -201,3 +201,51 @@ def test_last_mile_keeps_approved_defined_risk_floor_when_broker_bpr_is_smaller(
               'source_id': '', 'entry_risk_budget': 425}
     blocker = _fresh_sheet_entry_blocker({}, Adapter(), LocalStore(tmp_path/'floor.db'), ticket, preflight_bpr=71.35)
     assert blocker == 'sleeve_bpr_cap:current_idea'
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("combined", ""),
+    ("legacy", "sleeve_bpr_cap:current_idea"),
+    ("shared_cap", "sleeve_bpr_cap:current_idea"),
+    ("venue_cash", "execution_venue_buying_power:tasty_primary"),
+    ("venue_cap", "execution_venue_bpr_cap:tasty_primary"),
+    ("unavailable", "entry_capital_scope_unavailable:public_primary"),
+    ("invalid_scope", "entry_capital_scope_invalid"),
+])
+def test_submission_uses_planned_account_scope_and_keeps_venue_limits(monkeypatch, tmp_path, case, expected):
+    from types import SimpleNamespace
+    monkeypatch.setattr('kamandal_v2.live.execution.pull_portfolio_sleeves', lambda _config: ROWS)
+    peer = PortfolioState(12_000, 9800, 2200, 1)
+    destination = PortfolioState(15_000, 9100, 5900, 1)
+    if case == 'shared_cap':
+        peer.bpr_used = 5000
+    elif case == 'venue_cash':
+        destination.buying_power = 2000
+    elif case == 'venue_cap':
+        peer.account_size, peer.bpr_used = 100_000, 0
+        destination.bpr_used, destination.buying_power = 11_500, 3500
+    calls = []
+
+    def other_adapter(_config, *, execution_venue):
+        calls.append(execution_venue)
+        return SimpleNamespace(account_state=lambda: peer, available=lambda: case != 'unavailable')
+
+    monkeypatch.setattr('kamandal_v2.live.execution.broker_adapter', other_adapter)
+    ticket = {'ticket_hash': 'ntap', 'intent_type': 'open', 'sleeve_id': CURRENT_IDEA,
+              'source_id': '', 'entry_risk_budget': 2500, 'execution_venue': 'tasty_primary',
+              'capital_scope_venues': ['public_primary', 'tasty_primary']}
+    if case == 'legacy':
+        ticket.pop('capital_scope_venues')
+    elif case == 'invalid_scope':
+        ticket['capital_scope_venues'] = ['public_primary']
+    store = LocalStore(tmp_path / 'scopes.db')
+    blocker = _fresh_sheet_entry_blocker({}, SimpleNamespace(account_state=lambda: destination), store, ticket, preflight_bpr=2122)
+    assert blocker == expected
+    if case == 'combined':
+        receipt = store.latest_event('live_entry_capital_checked')
+        assert receipt['usage']['account_size'] == 27000
+        assert receipt['usage']['current_idea_bpr'] == 8100
+        assert receipt['required_bpr'] == 2500
+        assert calls == ['public_primary']
+    if case == 'legacy':
+        assert calls == []  # A prior staged ticket cannot silently gain another account's capital.

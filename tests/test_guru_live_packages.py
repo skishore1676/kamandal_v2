@@ -163,6 +163,9 @@ def test_live_handoff_and_full_package_exit(tmp_path, monkeypatch, structure, ex
     tables={'universe':[],'playbooks':[row],'trade_sources':sources}
     snapshot=DailyPolicySnapshot(now[:10],now,policy_tables_hash(tables),tables,tmp_path/'policy.json',OperatorPolicyBundle((),(),(),now,source='fixture'))
     config=load_control();config['portfolio']['sleeves_source']='';config['runtime']['observed_at']=now;config['risk_manager']['enabled']=False
+    config['runtime']['venue_portfolios'] = {
+        venue: PortfolioState(50000, 50000, 0, 0).to_dict() for venue in ('public_primary', 'tasty_primary')
+    }
     class Market:
         def __init__(self,when): self.when=when
         def chain_snapshot(self,_):
@@ -179,6 +182,7 @@ def test_live_handoff_and_full_package_exit(tmp_path, monkeypatch, structure, ex
     assert not result.live.errors, result.live.errors
     assert len(result.live.handoffs)==1, [(c.rejection_reason,c.reasons) for c in result.live.result.candidates]
     ticket,=store.live_order_intents_by_type('open')
+    assert ticket['capital_scope_venues'] == ['public_primary', 'tasty_primary']
     assert len(ticket['legs'])==len(specs)
     assert [l['quantity'] for l in ticket['legs']]==[q for e,k,side,q,mid,t in specs]
     assert _adopt_csa_live_fill(store,ticket,{'averagePrice':str(abs(result.live.result.candidates[0].net_credit)),'filledAt':now})['status']=='open'

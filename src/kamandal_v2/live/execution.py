@@ -592,11 +592,45 @@ def _fresh_sheet_entry_blocker(
         if str(ticket.get("source_id") or ""):
             if blocker := _source_route_blocker(ticket, pull_trade_sources(config)):
                 return blocker
-        account = adapter.account_state()
+        from kamandal_v2.market.venue_router import _aggregate_portfolios
+
+        venue = ticket_execution_venue(config, ticket)
+        scope = ticket.get("capital_scope_venues") or [venue]
+        if (not isinstance(scope, list) or not all(isinstance(value, str) for value in scope)
+                or venue not in scope or len(set(scope)) != len(scope)):
+            return "entry_capital_scope_invalid"
+        states = {}
+        for name in scope:
+            scoped_adapter = adapter if name == venue else broker_adapter(config, execution_venue=name)
+            if hasattr(scoped_adapter, "available") and not scoped_adapter.available():
+                return f"entry_capital_scope_unavailable:{name}"
+            readiness = scoped_adapter.live_readiness() if hasattr(scoped_adapter, "live_readiness") else {"ready": True}
+            if not readiness.get("ready", True):
+                return f"entry_capital_scope_unavailable:{name}"
+            state = scoped_adapter.account_state()
+            if (not all(math.isfinite(value) for value in (state.account_size, state.buying_power, state.bpr_used))
+                    or state.account_size <= 0 or state.bpr_used < 0):
+                return f"entry_capital_scope_invalid:{name}"
+            states[name] = state
+        account = _aggregate_portfolios(states)
         usage = live_sleeve_usage(
             store, account, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""),
         )
-        return sleeve_entry_blocker(sleeve_policy, usage, [(ticket_lane(ticket), max(budget, preflight_bpr))])
+        required = max(budget, preflight_bpr)
+        blocker = sleeve_entry_blocker(sleeve_policy, usage, [(ticket_lane(ticket), required)])
+        venue_account = states[venue]
+        if not blocker and required > venue_account.buying_power:
+            blocker = f"execution_venue_buying_power:{venue}"
+        if not blocker and (venue_account.bpr_used + required) / venue_account.account_size * 100 > sleeve_policy.portfolio_total_pct:
+            blocker = f"execution_venue_bpr_cap:{venue}"
+        store.event("live_entry_capital_checked", {
+            "ticket_hash": ticket.get("ticket_hash"), "sleeve_id": ticket_lane(ticket),
+            "capital_scope_venues": scope, "execution_venue": venue,
+            "usage": usage.to_dict(), "limits_pct": sleeve_policy.to_dict(),
+            "required_bpr": required, "venue_account": venue_account.to_dict(),
+            "blocker": blocker, "broker_effects": False,
+        })
+        return blocker
     except Exception as exc:  # noqa: BLE001 - unavailable Sheet or broker account fails closed.
         return f"entry_sheet_policy_unavailable:{type(exc).__name__}"
 
