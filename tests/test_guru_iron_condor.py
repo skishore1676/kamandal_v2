@@ -128,8 +128,9 @@ def test_same_day_policy_requires_explicit_intraday_exit():
 
 
 def test_exact_condor_safety_gates_reject_expired_oversized_and_wrong_root():
+    from types import SimpleNamespace
     from kamandal_v2.domain.models import Candidate, Greeks, OptionLeg, Playbook
-    from kamandal_v2.planner.observed_package_candidates import _exact_condor_contract_rejections
+    from kamandal_v2.planner.observed_package_candidates import _exact_execution_rejections
     legs = [OptionLeg.from_quote(OptionQuote('SPX','2026-09-29', kind, strike, 2, 2.1,
               .2,.01,-.02,.03,.2,500,broker_symbol=f'SPXW260929{kind[0].upper()}{strike*1000:08d}'),
               role=('short' if side=='sell' else 'long')+'_'+kind, side=side, quantity=1)
@@ -138,13 +139,13 @@ def test_exact_condor_safety_gates_reject_expired_oversized_and_wrong_root():
     base = Candidate('test','test','SPX',book.playbook_id,'iron_condor',legs,2,300,Greeks(),1,0,
                      metadata={'source_valid_until':'2026-09-30T15:00:00Z'})
     def reject(candidate=base, when='2026-09-29T16:00:00Z'):
-        return _exact_condor_contract_rejections(candidate,book,{'runtime':{'observed_at':when}},management=MANAGEMENT)
+        return _exact_execution_rejections(candidate, book, {'runtime': {'observed_at': when}}, SimpleNamespace(fields={'exit_dte_min': 0}, management=MANAGEMENT))
     assert reject() == []
-    assert 'exact_condor_expiry_day_entry_window_closed' in reject(when='2026-09-29T19:00:00Z')
-    assert 'exact_condor_dte_outside_policy' in reject(when='2026-09-30T16:00:00Z')
-    assert 'exact_condor_quantity_above_policy' in reject(replace(base,legs=[replace(l,quantity=2) for l in legs]))
-    assert 'exact_condor_requires_pm_settled_spxw' in reject(replace(base,legs=[replace(l,broker_symbol=l.broker_symbol.replace('SPXW','SPX')) for l in legs]))
-    assert 'exact_condor_risk_above_order_cap' in reject(replace(base,estimated_bpr=1300))
+    assert 'exact_package_expiry_day_entry_window_closed' in reject(when='2026-09-29T19:00:00Z')
+    assert 'exact_contract_expired' in reject(when='2026-09-30T16:00:00Z')
+    assert 'exact_quantity_above_policy' in reject(replace(base,legs=[replace(l,quantity=2) for l in legs]))
+    assert 'exact_package_requires_pm_settled_spxw' in reject(replace(base,legs=[replace(l,broker_symbol=l.broker_symbol.replace('SPXW','SPX')) for l in legs]))
+    assert 'exact_risk_above_order_cap:1300>1200.0' in reject(replace(base,estimated_bpr=1300))
 
 
 def test_sheet_migration_preserves_existing_policies_and_source_switches():

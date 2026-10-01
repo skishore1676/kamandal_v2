@@ -30,7 +30,7 @@ def resolve_declared_text_contracts(
     """Repair only an unambiguous standalone, profile-declared monthly vertical.
 
     Retain the original timestamp and identities. Normalized unit ratios do not
-    claim source size. Text evidence cannot satisfy the existing live image gate.
+    claim source size. The normal provenance, contract and execution gates apply.
     """
     convention = (profile.get("episode_interpreter") or {}).get("text_contract_convention")
     if convention != "equity_monthly_v1":
@@ -59,7 +59,7 @@ def resolve_declared_text_contracts(
     event = events[0]
     if (event.get("symbol") != symbol or event.get("structure_hint") not in {"call_spread", "long_call"}
             or event.get("direction") != "bullish" or event.get("evidence_status") != "complete"
-            or event.get("action") not in {"open", "scale_in"} or not event.get("planner_new_entry")
+            or event.get("action") not in {"open", "scale_in"}
             or event.get("template_number") is not None or event.get("links_to")
             or set(event.get("blockers") or []) - {"exact_package_incomplete", "exact_package_missing",
                                                     "exact_package_requires_verified_image"}):
@@ -85,8 +85,11 @@ def resolve_declared_text_contracts(
         ],
         "field_provenance": ["text", "source_grammar:equity_monthly_v1"],
     }]
-    event["blockers"] = ["exact_package_requires_verified_image"]
-    event["projections"] = [item for item in event.get("projections", []) if item != "exact_package"]
+    event["blockers"] = []
+    event["projections"] = ["exact_package"]
+    event["projection_dispositions"] = [{"projection": "exact_package",
+        "disposition": "ready_for_source_policy", "reason": "declared_text_contracts_complete"}]
+    event["planner_new_entry"] = True
     return updated
 
 

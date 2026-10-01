@@ -38,7 +38,8 @@ def test_atomic_group_spans_opportunities_and_revokes_on_member_change(monkeypat
     assert len(combine_calendar_openings((*members[:2], replace(members[2], source_verified=False)))) == 3
     ticket = dict(source_id=combined.source_profile, source_event_id=combined.source_event_id,
                   source_opportunity_id=combined.opportunity_group_id, source_package_signature=combined.package_signature,
-                  source_evidence_revision_id=combined.evidence_revision_id, source_verification_ref=combined.source_verification_ref)
+                  source_evidence_revision_id=combined.evidence_revision_id, source_verification_ref=combined.source_verification_ref,
+                  underlying=combined.symbol, legs=[leg.to_dict() for leg in combined.legs])
     import kamandal_v2.live.execution as execution
     monkeypatch.setattr(execution, 'load_observed_package_feed', lambda _: [SimpleNamespace(packages=members[:2]), SimpleNamespace(packages=members[2:])])
     assert _fresh_exact_evidence_blocker({}, ticket) == ''
@@ -120,7 +121,7 @@ def test_verified_copy_bypasses_income_score_but_never_risk_limits():
     c.estimated_bpr=100000
     assert not generate_plans([c],_portfolio(),control)
 
-@pytest.mark.parametrize('structure,expiry_day', [(s,False) for s in ['long_call','call_butterfly','put_butterfly','call_crab','calendar_bundle']] + [('call_butterfly',True),('put_butterfly',True)])
+@pytest.mark.parametrize('structure,expiry_day', [(s,False) for s in ['long_call','call_butterfly','put_butterfly','call_crab','calendar_bundle','call_spread','put_spread']] + [('call_butterfly',True),('put_butterfly',True)])
 def test_live_handoff_and_full_package_exit(tmp_path, monkeypatch, structure, expiry_day):
     from kamandal_v2.config import load_control
     from kamandal_v2.domain.models import PortfolioState
@@ -132,12 +133,14 @@ def test_live_handoff_and_full_package_exit(tmp_path, monkeypatch, structure, ex
     from test_observed_package_planning import _migrated_store
     now='2026-08-27T14:00:00Z'
     near,far=('2026-08-27' if expiry_day else '2026-08-28'),'2026-09-04'
-    kind='put' if structure=='put_butterfly' else 'call'
+    kind='put' if structure in {'put_butterfly','put_spread'} else 'call'
     terms={
         'long_call':[(near,90,'buy',1,3)],
         'call_butterfly':[(near,90,'buy',1,12),(near,100,'sell',2,6),(near,110,'buy',1,2)],
         'put_butterfly':[(near,90,'buy',1,2),(near,100,'sell',2,6),(near,110,'buy',1,12)],
         'call_crab':[(far,90,'buy',1,15),(near,100,'sell',2,8),(near,110,'buy',1,3)],
+        'call_spread':[(near,90,'buy',1,12),(near,100,'sell',1,6)],
+        'put_spread':[(near,110,'buy',1,12),(near,100,'sell',1,6)],
     }.get(structure,[])
     if structure=='calendar_bundle':
         packages=calendars()

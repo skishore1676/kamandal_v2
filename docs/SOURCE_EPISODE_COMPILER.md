@@ -169,12 +169,12 @@ evidence or authorizes an effect. Exact-package completeness, lifecycle linkage,
 shape support, Sheet mode, portfolio gates, and broker safety remain hard,
 deterministic decisions.
 
-When one source event produces both an `idea` and one or more `exact_package`
-projections, all carry
-the same `opportunity_group_id`. They are alternative representations of one
-opportunity. The portfolio planner may select at most one candidate from that
-group. This prevents the richer interpreter from creating two positions for
-one source trade.
+Confirmed `open` and complete opening `scale_in` events belong exclusively to
+`exact_package`. An incomplete, unsupported or disabled opening cannot fall back
+to an adapted idea. General commentary can still produce ideas. Every projection
+retains a stable opportunity identity for duplicate control and outcome receipts.
+The [October 1 entry contract](TWO_ENTRY_PATHWAYS.md) supersedes older mixed
+idea/exact selection and mandatory image verification rules.
 
 ## Interpretation corrections from the operator review
 
@@ -190,9 +190,9 @@ architectural corrections:
   a second planner opportunity.
 - A close, hold, roll, or expiry comment is ignored for **new entry**, but is
   retained as benchmark/lifecycle evidence rather than discarded.
-- A Mike image post may yield a thesis idea and an exact package for the same
-  opening. They share one opportunity group. A management post yields linked
-  benchmark events, not fresh entries.
+- A Mike opening in text or an image yields exact evidence only. Complete text
+  does not require an image. A management post yields linked benchmark events,
+  not fresh entries.
 - A complete but unsupported structure, such as a crab or a three-leg diagonal
   plus short put, remains exact evidence and an explicit unsupported residual;
   it is not forced into the nearest Kamandal playbook.
@@ -276,9 +276,8 @@ the frozen text-corpus portion of phase 6 are complete locally:
    validator/linker without connecting outputs to planner effects.
 4. **Built locally:** add bounded model/repair orchestration through Agent Broker.
 5. **Built locally:** project events into the existing `idea`, `exact_package`, and
-   `residual` routes. Both executable projections use one opportunity identity,
-   so the existing optimizer's one-candidate-per-idea rule supplies mutual
-   exclusion without a second selection mechanism. Unchanged source records are
+   `residual` routes. Confirmed openings are exclusively exact; commentary can project ideas.
+   Stable opportunity identities supply duplicate control. Unchanged source records are
    reused from the episode store while model-visible history remains bounded.
 6. **Partially complete:** replay the text corpus, compare Luna and Terra, and
    produce a review report. Cached public-media and held-out historical replay

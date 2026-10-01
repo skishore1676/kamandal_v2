@@ -68,7 +68,8 @@ def test_greg_call_vertical_synonym_preserves_source_idea(synonym):
     compilation = compile_source_episode_packet(_packet([record]), _profile("greg_harmon"), FakeClient(response))
     event = compilation.episodes[0]["events"][0]
     assert event["structure_hint"] == "call_spread"
-    assert event["planner_new_entry"] is True
+    assert event["planner_new_entry"] is False
+
 
 
 @pytest.mark.parametrize("text", [
@@ -106,7 +107,8 @@ def test_greg_research_headline_does_not_suppress_explicit_fill_in_same_post(tex
 
     assert [event["action"] for event in events] == ["discovery", "open"]
     assert events[0]["planner_new_entry"] is False
-    assert events[1]["planner_new_entry"] is True
+    assert events[1]["planner_new_entry"] is False
+
 
 
 def test_reinterpreted_post_does_not_link_to_its_old_revision_as_history():
@@ -261,7 +263,7 @@ def test_greg_bundle_and_confirmation_are_deterministic_and_deduplicated() -> No
         False,
         False,
         False,
-        True,
+        False,
     ]
     confirmed = confirmation["events"][0]
     assert confirmed["planner_new_entry"] is False
@@ -338,8 +340,9 @@ def test_greg_confirmation_in_mixed_post_does_not_park_separate_opening(text: st
     assert confirmation["link_state"] == "linked"
     assert confirmation["planner_new_entry"] is False
     assert independent["link_state"] == "not_needed"
-    assert independent["planner_new_entry"] is True
+    assert independent["planner_new_entry"] is False
     assert independent["opportunity_group_id"] != confirmation["opportunity_group_id"]
+
 
 
 def test_legacy_cached_greg_confirmation_recompiled_once_for_contract_handling() -> None:
@@ -396,7 +399,7 @@ def test_mixed_post_decomposes_events_and_follow_up_cannot_become_entry() -> Non
     assert close["projections"] == ["residual"]
     assert close["planner_new_entry"] is False
     assert close["link_state"] == "needs_history"
-    assert opening["planner_new_entry"] is True
+    assert opening["planner_new_entry"] is False
     assert opening["opportunity_group_id"] != close["opportunity_group_id"]
     assert compilation.to_dict()["effects"] == {
         "sheet_write": False,
@@ -408,6 +411,7 @@ def test_mixed_post_decomposes_events_and_follow_up_cannot_become_entry() -> Non
         "order_effects": False,
         "external_send": False,
     }
+
 
 
 def test_invalid_model_shape_gets_exactly_one_repair_pass() -> None:
@@ -479,15 +483,16 @@ def test_incomplete_exact_package_is_parked_before_projection() -> None:
     event = compilation.episodes[0]["events"][0]
     assert event["projections"] == ["idea"]
     assert event["evidence_status"] == "complete"
-    assert event["planner_new_entry"] is True
+    assert event["planner_new_entry"] is False
     assert event["projection_dispositions"] == [
         {
             "projection": "idea",
-            "disposition": "ready_for_source_policy",
-            "reason": "idea_evidence_complete",
+            "disposition": "owned_by_exact",
+            "reason": "confirmed_opening_owned_by_guru_exact",
         }
     ]
     assert "exact_package_incomplete" in event["blockers"]
+
 
 
 def test_four_leg_double_calendar_cannot_become_two_leg_exact_calendar() -> None:
@@ -508,7 +513,8 @@ def test_four_leg_double_calendar_cannot_become_two_leg_exact_calendar() -> None
     assert event["exact_packages"][0]["blocker"] == "structure_leg_count_mismatch"
     assert event["exact_packages"][0]["complete"] is False
     assert "exact_package" not in event["projections"]
-    assert event["planner_new_entry"] is True  # Adapted idea remains independent.
+    assert event["planner_new_entry"] is False  # Incomplete opening cannot fall back to an adapted idea.
+
 
 
 def test_source_quantity_conflict_holds_exact_long_call() -> None:
@@ -1020,7 +1026,8 @@ def test_greg_added_trade_remains_a_new_idea_without_prior_position_history() ->
     assert event["structure_hint"] == "call_diagonal_with_short_put"
     assert event["evidence_status"] == "complete"
     assert "idea" in event["projections"]
-    assert event["planner_new_entry"] is True
+    assert event["planner_new_entry"] is False
+
 
 
 def test_greg_quoted_entry_inside_management_post_cannot_reopen_trade() -> None:
@@ -1113,11 +1120,11 @@ def test_super_bull_is_not_relabelled_as_one_component_spread():
     assert result.episodes[0]['events'][0]['structure_hint'] == 'super_bull'
 
 
-def test_crab_thesis_enters_existing_idea_path_with_original_shape_retained():
+def test_directional_crab_commentary_can_be_adapted_without_a_source_opening():
     record = _record('crab', 'Call CRAB trade in $GOOGL', ['GOOGL'], classification='observed_package_open')
     profile = _profile('mike_butler')
     response = {'schema': PROMPT_SCHEMA, 'episodes': [{'signal_id': record['signal_id'], 'events': [
-        _event(symbol='GOOGL', action='open', direction='bullish', structure_hint='call_crab', projections=['idea'])]}]}
+        _event(symbol='GOOGL', action='commentary', direction='bullish', structure_hint='call_crab', projections=['idea'])]}]}
     packet = _packet([record])
     result = compile_source_episode_packet(packet, profile, FakeClient(response))
     projection = project_source_episode_compilation(result, packet, profile, universe_symbols=('GOOGL',))
@@ -1279,7 +1286,7 @@ def _monthly_spread_fixture(text="added some $AMAT Oct 510/550 call spreads", pu
     return record, packet, response
 
 
-def test_greg_monthly_shorthand_repairs_cached_episode_without_model_or_live_authority():
+def test_greg_monthly_shorthand_repairs_cached_episode_for_exact_text_path():
     import copy
     record, packet, response = _monthly_spread_fixture()
     profile = _profile("greg_harmon")
@@ -1301,10 +1308,11 @@ def test_greg_monthly_shorthand_repairs_cached_episode_without_model_or_live_aut
     ]
     assert package["displayed_price"] is None
     assert package["complete"] is True
-    assert event["blockers"] == ["exact_package_requires_verified_image"]
+    assert event["blockers"] == []
     projection = project_source_episode_compilation(repaired, packet, profile, universe_symbols=["AMAT"])
-    assert len(projection.planner_ideas) == 1
-    assert projection.observed_batches == ()  # Text cannot bypass independent image verification.
+    assert projection.planner_ideas == ()
+    assert len(projection.observed_batches) == 1
+    assert projection.observed_batches[0].packages[0].evidence_basis == "text"
     assert repaired.episodes == compile_source_episode_packet(
         packet, profile, FakeClient(), history=repaired.episodes).episodes
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+from dataclasses import replace
 from collections.abc import Iterable
 from datetime import UTC, datetime, date
 from typing import Any
@@ -31,11 +33,10 @@ from kamandal_v2.planner.candidate_builder import (  # shared deterministic econ
     _estimate_bpr,
     _filter_rejections,
     _risk_width,
-    _market_match_rejections,
     _apply_preflight_bpr,
     _low_oi_price_through_enabled,
 )
-from kamandal_v2.planner.shape_validators import validate_structure
+from kamandal_v2.planner.shape_validators import validate_exact_structure
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_engine.policy import PlaybookPolicy
 
@@ -148,7 +149,7 @@ def build_observed_package_candidates(
             continue
         if mode == "live":
             if not package.source_verified or not package.source_verification_ref or package.source_verification_reason:
-                _group_receipt(store, package, original_packages, status="parked", blocker="source_not_independently_verified")
+                _group_receipt(store, package, original_packages, status="parked", blocker="source_contract_validation_required")
                 continue
             if (package.source_opening_package_count > 1 or
                     opening_counts.get((package.source_profile, package.opportunity_group_id or package.source_event_id), 0) > 1):
@@ -190,7 +191,9 @@ def build_observed_package_candidates(
             except ValueError as exc:
                 _group_receipt(store, package, original_packages, status="parked", blocker=str(exc), playbook_id=policy.playbook_id)
                 continue
-            shape = validate_structure(str(package.structure), legs, float(chain.underlying_price))
+            divisor = math.gcd(*(leg.quantity for leg in legs))
+            legs = [replace(leg, quantity=leg.quantity // divisor) for leg in legs]
+            shape = validate_exact_structure(str(package.structure), legs, float(chain.underlying_price))
             if not shape.valid:
                 _group_receipt(store, package, original_packages, status="parked", blocker=shape.reason, playbook_id=policy.playbook_id)
                 continue
@@ -200,54 +203,15 @@ def build_observed_package_candidates(
                 members = calendar_group_members(package, original_packages)
                 candidate.metadata["source_opportunity_ids"] = sorted({package.opportunity_group_id, *(p.opportunity_group_id for p in members)})
                 candidate.metadata["source_component_event_ids"] = sorted(p.source_event_id for p in members)
-            rejections = _filter_rejections(candidate, playbook, config)
-            if package.structure in {
-                "long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle",
-            }:
-                rejections.extend(_shadow_structure_contract_rejections(candidate, playbook, config))
-                if mode == "live" and package.structure == "long_call" and any(leg.quantity != 1 for leg in legs):
-                    rejections.append("exact_long_call_requires_one_contract")
-            if package.structure == "short_strangle":
-                entry = next((entry for entry in (universe or []) if entry.symbol == package.symbol and entry.enabled), None)
-                if entry is None:
-                    rejections.append("universe_symbol_not_enabled")
-                else:
-                    rejections.extend(_market_match_rejections(
-                        entry, playbook, market.iv_percentile(package.symbol), market.iv_rank(package.symbol),
-                        market.iv_abs(package.symbol), market.event_status(package.symbol), underlying_price=chain.underlying_price,
-                    ))
-                rejections.extend(_exact_strangle_contract_rejections(candidate, playbook, config))
-                hard_rejections = []
-                for reason in rejections:
-                    if _low_oi_price_through_enabled(reason, config):
-                        candidate.reasons.extend([f"filter_warning={reason}", "low_oi_price_through=true"])
-                    else:
-                        hard_rejections.append(reason)
-                rejections = hard_rejections
-            elif mode == "live" and package.structure == "iron_condor":
-                event_status = market.event_status(package.symbol)
-                if playbook.avoid_earnings and event_status not in {"clear", "unknown"}:
-                    rejections.append(f"event_status_blocked:{event_status}")
-                rejections.extend(_exact_condor_contract_rejections(candidate, playbook, config, management=policy.management))
-            elif mode == "live" and package.structure in {
-                "call_calendar", "put_calendar", "call_diagonal", "put_diagonal",
-            }:
-                rejections.extend(_exact_debit_contract_rejections(candidate, playbook, config))
+            execution_policy = _exact_execution_policy(playbook)
+            rejections = _filter_rejections(candidate, execution_policy, config)
+            rejections.extend(_exact_execution_rejections(candidate, playbook, config, policy))
+            rejections = [reason for reason in rejections if not _low_oi_price_through_enabled(reason, config)]
             package_spread = float(candidate_liquidity_metrics(candidate)["aggregate_spread_to_mid_pct"])
             if playbook.max_bid_ask_pct is not None and package_spread > playbook.max_bid_ask_pct:
                 rejections.append(
                     f"package_bid_ask_pct_above_max:{package_spread:.4f}>{playbook.max_bid_ask_pct}"
                 )
-            if mode == "live" and package.structure in {"long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle"}:
-                if candidate.underlying == "SPX" and any(not leg.broker_symbol.startswith("SPXW") for leg in legs):
-                    rejections.append("exact_package_requires_pm_settled_spxw")
-                exit_dte = int(getattr(policy, "fields", {}).get("exit_dte_min", 0))
-                observed_date = datetime.fromisoformat(str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now()).replace("Z", "+00:00")).date()
-                remaining_dte = min((date.fromisoformat(leg.expiration)-observed_date).days for leg in legs)
-                if remaining_dte == 0 and package.structure in {"call_butterfly", "put_butterfly"}:
-                    rejections.extend(_intraday_rejections(candidate, config, policy.management))
-                elif remaining_dte <= exit_dte:
-                    rejections.append("exact_entry_at_or_inside_exit_window")
             quote_rejections = [reason for reason in rejections if _is_quote_actionability_rejection(reason)]
             if not quote_rejections:
                 first_mark = store.first_observed_package_mark(
@@ -340,46 +304,49 @@ def _live_source_freshness_blocker(package: ObservedPackageEvidence, config: dic
     return ""
 
 
-def _exact_strangle_contract_rejections(candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None) -> list[str]:
-    """Validate reported contracts; never move strikes, expiry, or quantity."""
-    observed = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
-    today = datetime.fromisoformat(observed.replace("Z", "+00:00")).date()
-    reasons: list[str] = []
-    for leg in candidate.legs:
-        dte = (date.fromisoformat(leg.expiration) - today).days
-        if dte < playbook.dte_min or dte > playbook.dte_max:
-            reasons.append("exact_strangle_dte_outside_policy")
-        low, high = playbook.short_delta_min, playbook.short_delta_max
-        if not low <= abs(leg.delta) <= high:
-            reasons.append("exact_strangle_delta_outside_policy")
-        if leg.quantity > playbook.max_contracts:
-            reasons.append("exact_strangle_quantity_above_policy")
-    if candidate.net_credit <= 0:
-        reasons.append("exact_strangle_requires_positive_credit")
-    return reasons
+def _exact_execution_policy(playbook: Playbook) -> Playbook:
+    """Retain quote/cash limits; remove ideas-only price-yield preferences."""
+    return replace(playbook, min_credit_to_width_ratio=None, max_debit_to_width_ratio=None)
 
 
-
-def _exact_condor_contract_rejections(candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None, *, management: dict[str, Any]) -> list[str]:
+def _exact_execution_rejections(candidate: Candidate, playbook: Playbook, config, policy) -> list[str]:
     now = datetime.fromisoformat(str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now()).replace("Z", "+00:00"))
-    dte = (date.fromisoformat(candidate.legs[0].expiration) - now.date()).days
+    remaining_dte = min((date.fromisoformat(leg.expiration) - now.date()).days for leg in candidate.legs)
     reasons = []
-    if not playbook.dte_min <= dte <= playbook.dte_max:
-        reasons.append("exact_condor_dte_outside_policy")
-    if playbook.max_contracts != 1 or any(leg.quantity != 1 for leg in candidate.legs):
-        reasons.append("exact_condor_quantity_above_policy")
-    if candidate.net_credit <= 0:
-        reasons.append("exact_condor_requires_positive_credit")
-    width = max(abs(a.strike - b.strike) for a in candidate.legs for b in candidate.legs if a.option_type == b.option_type)
-    if candidate.net_credit >= width:
-        reasons.append("exact_condor_credit_exceeds_width")
+    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
+        reasons.append("exact_quantity_above_policy")
     if playbook.live_max_bpr_per_order is None or candidate.estimated_bpr > playbook.live_max_bpr_per_order:
-        reasons.append("exact_condor_risk_above_order_cap")
+        reasons.append(f"exact_risk_above_order_cap:{candidate.estimated_bpr}>{playbook.live_max_bpr_per_order}")
     if candidate.underlying == "SPX" and any(not leg.broker_symbol.startswith("SPXW") for leg in candidate.legs):
-        reasons.append("exact_condor_requires_pm_settled_spxw")
-    if dte == 0:
-        reasons.extend(_intraday_rejections(candidate, config, management, prefix="exact_condor"))
+        reasons.append("exact_package_requires_pm_settled_spxw")
+    exit_dte = int(getattr(policy, "fields", {}).get("exit_dte_min") or 0)
+    if remaining_dte < 0:
+        reasons.append("exact_contract_expired")
+    elif remaining_dte == 0 and candidate.structure in {"iron_condor", "call_butterfly", "put_butterfly"}:
+        reasons.extend(_intraday_rejections(candidate, config, getattr(policy, "management", {})))
+    elif remaining_dte <= exit_dte:
+        reasons.append("exact_entry_at_or_inside_exit_window")
+    if candidate.structure in {"short_strangle", "iron_condor"}:
+        if candidate.net_credit <= 0:
+            reasons.append("exact_credit_structure_requires_positive_credit")
+        if candidate.structure == "iron_condor":
+            width = max(abs(a.strike - b.strike) for a in candidate.legs for b in candidate.legs if a.option_type == b.option_type)
+            if candidate.net_credit >= width:
+                reasons.append("exact_condor_credit_exceeds_width")
+    elif candidate.structure in {"call_spread", "put_spread"}:
+        long = next(leg for leg in candidate.legs if leg.side == "buy")
+        short = next(leg for leg in candidate.legs if leg.side == "sell")
+        debit = (long.strike < short.strike) if long.option_type == "call" else (long.strike > short.strike)
+        if (candidate.net_credit >= 0 if debit else candidate.net_credit <= 0):
+            reasons.append("exact_vertical_quote_effect_invalid")
+        if abs(candidate.net_credit) >= abs(long.strike - short.strike):
+            reasons.append("exact_vertical_price_exceeds_width")
+    elif candidate.net_credit >= 0:
+        reasons.append("exact_debit_structure_requires_debit")
     return reasons
+
+
+
 
 
 def _intraday_rejections(candidate, config, management, *, prefix="exact_package"):
@@ -399,59 +366,8 @@ def _intraday_rejections(candidate, config, management, *, prefix="exact_package
     return reasons
 
 
-def _exact_debit_contract_rejections(candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None) -> list[str]:
-    """Apply the Sheet's contract and cash limits without changing source legs."""
-    observed = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
-    today = datetime.fromisoformat(observed.replace("Z", "+00:00")).date()
-    reasons: list[str] = []
-    near = next(leg for leg in candidate.legs if leg.role == "short_near")
-    far = next(leg for leg in candidate.legs if leg.role == "long_far")
-    near_dte = (date.fromisoformat(near.expiration) - today).days
-    far_dte = (date.fromisoformat(far.expiration) - today).days
-    if near_dte < max(playbook.dte_min, 1) or near_dte > playbook.dte_max:
-        reasons.append("exact_near_dte_outside_policy")
-    if (playbook.long_dte_min is None or playbook.long_dte_max is None
-            or far_dte < playbook.long_dte_min or far_dte > playbook.long_dte_max):
-        reasons.append("exact_far_dte_outside_policy")
-    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
-        reasons.append("exact_quantity_above_policy")
-    for leg, low, high, label in (
-        (near, playbook.short_delta_min, playbook.short_delta_max, "short"),
-        (far, playbook.long_delta_min, playbook.long_delta_max, "long"),
-    ):
-        if ((low is not None and abs(leg.delta) < low)
-                or (high is not None and abs(leg.delta) > high)):
-            reasons.append(f"exact_{label}_delta_outside_policy")
-    if candidate.net_credit >= 0:
-        reasons.append("exact_debit_structure_requires_debit")
-    if (playbook.live_max_bpr_per_order is None or
-            abs(candidate.net_credit) * 100 * near.quantity > playbook.live_max_bpr_per_order):
-        reasons.append("exact_debit_above_order_cap")
-    return reasons
 
 
-def _shadow_structure_contract_rejections(
-    candidate: Candidate, playbook: Playbook, config: dict[str, Any] | None,
-) -> list[str]:
-    """Apply source-exact contract, expiry, debit, and risk limits in both lanes."""
-    observed = str(((config or {}).get("runtime") or {}).get("observed_at") or utc_now())
-    today = datetime.fromisoformat(observed.replace("Z", "+00:00")).date()
-    near_dte = min((date.fromisoformat(leg.expiration) - today).days for leg in candidate.legs)
-    reasons: list[str] = []
-    if near_dte < playbook.dte_min or near_dte > playbook.dte_max:
-        reasons.append("exact_near_dte_outside_policy")
-    if candidate.structure in {"call_crab", "calendar_bundle"}:
-        far_dte = max((date.fromisoformat(leg.expiration) - today).days for leg in candidate.legs)
-        if (playbook.long_dte_min is None or playbook.long_dte_max is None
-                or far_dte < playbook.long_dte_min or far_dte > playbook.long_dte_max):
-            reasons.append("exact_far_dte_outside_policy")
-    if playbook.max_contracts is None or any(leg.quantity > playbook.max_contracts for leg in candidate.legs):
-        reasons.append("exact_quantity_above_policy")
-    if candidate.structure in {"long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle"} and candidate.net_credit >= 0:
-        reasons.append("exact_debit_structure_requires_debit")
-    if playbook.live_max_bpr_per_order is None or candidate.estimated_bpr > playbook.live_max_bpr_per_order:
-        reasons.append("exact_shadow_risk_above_order_cap")
-    return reasons
 
 
 def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> list[OptionLeg]:
@@ -484,6 +400,8 @@ def _hydrate_exact_legs(package: ObservedPackageEvidence, quotes: list[Any]) -> 
 def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
     """Assign manager roles without changing a source-observed contract."""
 
+    if package.structure in {"call_spread", "put_spread"}:
+        return [f"{'short' if leg.side == 'sell' else 'long'}_{leg.option_type}" for leg in package.legs]
     if package.structure == "calendar_bundle":
         expirations = sorted({leg.expiration for leg in package.legs})
         return ["short_near" if leg.expiration == expirations[0] else "long_far" for leg in package.legs]
@@ -576,6 +494,8 @@ def _candidate(
     metrics = candidate_liquidity_metrics({"legs": legs, "net_credit": net_credit})
     liquidity_score = max(0.0, min(1.0, 1.0 - float(metrics["avg_bid_ask_pct"])))
     bpr = _estimate_bpr(playbook.structure, legs, net_credit)
+    if package.structure in {"call_spread", "put_spread"} and net_credit < 0:
+        bpr = abs(net_credit) * 100
     if package.structure in {"call_butterfly", "put_butterfly", "call_crab"}:
         bpr = _near_expiry_intrinsic_loss_bound(legs, net_credit)
     opportunity_id = package.opportunity_group_id or f"observed:{package.source_event_id}"
@@ -624,6 +544,10 @@ def _candidate(
             "evidence_revision_id": package.evidence_revision_id,
             "source_verified": package.source_verified,
             "source_verification_ref": package.source_verification_ref,
+            "source_verification_method": package.source_verification_method,
+            "evidence_basis": package.evidence_basis,
+            "source_quantities": [leg.quantity for leg in package.legs],
+            "local_quantities": [leg.quantity for leg in legs],
             "displayed_price": dict(package.displayed_price) if package.displayed_price else None,
             "displayed_trade_time": package.displayed_trade_time,
             "chain_snapshot_id": chain_snapshot.chain_snapshot_id,
@@ -642,7 +566,7 @@ def _candidate(
     )
     width = _risk_width(candidate)
     floor, ceiling, source = _entry_economic_bounds(
-        playbook,
+        _exact_execution_policy(playbook),
         structure=playbook.structure,
         width=width,
         net_credit=net_credit,

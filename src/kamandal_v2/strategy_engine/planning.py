@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kamandal_v2.domain.models import ChainSnapshot, Idea, OptionLeg, Playbook, PortfolioState, UniverseEntry
+from kamandal_v2.domain.models import ChainSnapshot, Greeks, Idea, OptionLeg, Playbook, PortfolioState, UniverseEntry
 from kamandal_v2.intelligence.observed_packages import ObservedPackageBatch, ObservedPackageEvidence
 from kamandal_v2.intelligence.trade_sources import (
     TradeSourceMode,
@@ -467,6 +467,7 @@ def _record_short_strangle_source_comparison(
         candidate
         for candidate in result.candidates
         if candidate.playbook_id == "short_strangle_high_iv" and candidate.structure == "short_strangle"
+        and candidate.metadata.get("input_kind") != "exact_package"
     ]
     if not candidates:
         return
@@ -480,6 +481,10 @@ def _record_short_strangle_source_comparison(
                 plan.plan_rank,
             )
     portfolio = rank_one.portfolio_before if rank_one is not None else None
+    if raw := result.metrics.get("ideas_portfolio"):
+        portfolio = PortfolioState(**{key: value for key, value in raw.items()
+                                      if key not in {"greeks", "bpr_used_pct"}},
+                                   greeks=Greeks(**raw.get("greeks", {})))
     rows: list[dict[str, Any]] = []
     for candidate in sorted(candidates, key=lambda item: (item.underlying, source_lane_label(item), item.candidate_id)):
         priority = candidate_source_priority(candidate, control)

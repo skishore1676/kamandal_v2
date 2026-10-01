@@ -33,6 +33,48 @@ def generate_plans(
     beam_width: int = 20,
     top_n: int = 5,
     max_new_positions: int | None = None,
+    idea_portfolio: PortfolioState | None = None,
+) -> list[Plan]:
+    """Two entry decisions approved by Suman on October 1, 2026.
+
+    Guru copies retain verification, preflight and shared capital gates in
+    admit_guru_openings. Ideas retain their existing optimizer and filters.
+    """
+    from kamandal_v2.planner.guru_admission import admit_guru_openings
+
+    ideas_state = idea_portfolio or portfolio
+    policy = _basket_policy(control, max_new_positions=max_new_positions)
+    limit = policy.max_new_positions_per_plan
+    copies = admit_guru_openings(
+        candidates, portfolio, control, limit=limit,
+        capital_check=lambda selected: _capital_violation(selected, portfolio, control),
+    )
+    ideas = [candidate for candidate in candidates if candidate_lane(candidate) != "guru_exact"]
+    idea_plans = _generate_idea_plans(
+        ideas, ideas_state, control, beam_width=beam_width, top_n=top_n,
+        max_new_positions=None if limit is None else max(limit - len(copies), 0),
+        reserved=copies, capital_portfolio=portfolio,
+    )
+    if not copies:
+        return idea_plans
+    selections = [plan.candidates for plan in idea_plans] or [[]]
+    context = _rank_context(selections, ideas_state, control)
+    results = []
+    for index, selected in enumerate(selections):
+        plan = _materialize(copies + selected, rank=index + 1, portfolio=portfolio,
+                            control=control, rank_context=context)
+        plan.score = _score(selected, ideas_state, control) if selected else 0.0
+        plan.reasons = ["entry_pathways=guru_fifo+ideas_optimizer",
+                        f"guru_admitted={len(copies)}", f"ideas_selected={len(selected)}",
+                        f"ideas_score={plan.score}"]
+        results.append(plan)
+    return results
+
+
+def _generate_idea_plans(
+    candidates: list[Candidate], portfolio: PortfolioState, control: dict, *,
+    beam_width: int, top_n: int, max_new_positions: int | None,
+    reserved: list[Candidate], capital_portfolio: PortfolioState,
 ) -> list[Plan]:
     eligible = [candidate for candidate in candidates if candidate.eligible]
     basket_policy = _basket_policy(control, max_new_positions=max_new_positions)
@@ -64,27 +106,18 @@ def generate_plans(
                     max_underlying_pct,
                     basket_policy.hard_new_bpr_pct,
                     control,
+                    reserved=reserved,
+                    capital_portfolio=capital_portfolio,
                 )
                 if violation:
                     continue
                 marginal_score = _score(next_plan, portfolio, control) - _score(partial, portfolio, control)
                 if basket_policy.min_marginal_score is not None and marginal_score < basket_policy.min_marginal_score:
-                    # A bounded, source-exact shadow opening needs a singleton
-                    # paper lifecycle even when the income-oriented score is
-                    # unfavorable. Its score and rank remain unchanged.
-                    shadow_research_singleton = (
-                        not partial
-                        and str((control.get("runtime") or {}).get("mode") or "").lower() == "shadow"
-                        and candidate.structure in {"long_call", "call_butterfly", "put_butterfly", "call_crab"}
-                        and candidate.metadata.get("input_kind") == "exact_package"
-                        and candidate.metadata.get("shadow_research_observation") is True
-                    )
-                    if not shadow_research_singleton and not _verified_live_copy(candidate, control):
-                        continue
+                    continue
                 expanded.append(next_plan)
         if not expanded:
             break
-        ranked = sorted(expanded, key=lambda plan: (_copy_count(plan, control), _score(plan, portfolio, control)), reverse=True)
+        ranked = sorted(expanded, key=lambda plan: _score(plan, portfolio, control), reverse=True)
         completed.extend(ranked[:beam_width])
         partials = ranked[:beam_width]
 
@@ -95,11 +128,12 @@ def generate_plans(
     rank_context = _rank_context(list(unique.values()), portfolio, control)
     ranked_plans = sorted(
         unique.values(),
-        key=lambda plan: (_copy_count(plan, control), _rank_score(plan, portfolio, control, rank_context)),
+        key=lambda plan: _rank_score(plan, portfolio, control, rank_context),
         reverse=True,
     )[:top_n]
     return [
-        _materialize(plan, rank=index + 1, portfolio=portfolio, control=control, rank_context=rank_context)
+        _materialize(plan, rank=index + 1, portfolio=capital_portfolio, control=control, rank_context=rank_context,
+                     scoring_portfolio=portfolio)
         for index, plan in enumerate(ranked_plans)
     ]
 
@@ -121,7 +155,27 @@ def _constraint_violation(
     max_underlying_pct: float,
     hard_new_bpr_pct: float | None,
     control: dict,
+    *,
+    reserved: list[Candidate] | None = None,
+    capital_portfolio: PortfolioState | None = None,
 ) -> str:
+    total_bpr = sum(candidate.estimated_bpr for candidate in plan)
+    if violation := _capital_violation((reserved or []) + plan, capital_portfolio or portfolio, control):
+        return violation
+    if _bpr_capacity_enforced(control):
+        if hard_new_bpr_pct is not None and (total_bpr / max(portfolio.account_size, 1.0)) * 100 > hard_new_bpr_pct:
+            return "new_bpr_cap"
+        per_underlying: dict[str, float] = dict(portfolio.per_underlying_bpr)
+        for candidate in plan:
+            per_underlying[candidate.underlying] = per_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
+        for value in per_underlying.values():
+            if (value / max(portfolio.account_size, 1.0)) * 100 > max_underlying_pct:
+                return "underlying_bpr_cap"
+    return _delta_guard_violation(plan, portfolio, control)
+
+
+def _capital_violation(plan: list[Candidate], portfolio: PortfolioState, control: dict) -> str:
+    """Shared real-account checks for both explicitly authorized pathways."""
     total_bpr = sum(candidate.estimated_bpr for candidate in plan)
     if _bpr_capacity_enforced(control):
         sleeve_policy = control.get("_live_sleeve_policy")
@@ -135,20 +189,13 @@ def _constraint_violation(
                 ((candidate_lane(candidate), candidate.estimated_bpr) for candidate in plan),
             ):
                 return blocker
-        if hard_new_bpr_pct is not None and (total_bpr / max(portfolio.account_size, 1.0)) * 100 > hard_new_bpr_pct:
-            return "new_bpr_cap"
+        if total_bpr > portfolio.buying_power:
+            return "account_buying_power"
+        max_bpr_pct = float((control.get("portfolio") or {}).get("hard_max_bpr_utilization_pct") or 90)
         if ((portfolio.bpr_used + total_bpr) / max(portfolio.account_size, 1.0)) * 100 > max_bpr_pct:
             return "portfolio_bpr_cap"
         if violation := _venue_bpr_violation(plan, control):
             return violation
-        per_underlying: dict[str, float] = dict(portfolio.per_underlying_bpr)
-        for candidate in plan:
-            per_underlying[candidate.underlying] = per_underlying.get(candidate.underlying, 0.0) + candidate.estimated_bpr
-        for value in per_underlying.values():
-            if (value / max(portfolio.account_size, 1.0)) * 100 > max_underlying_pct:
-                return "underlying_bpr_cap"
-    if violation := _delta_guard_violation(plan, portfolio, control):
-        return violation
     return ""
 
 
@@ -480,7 +527,8 @@ def _slippage_penalty(plan: list[Candidate]) -> float:
     return min(avg_penalty, 35.0)
 
 
-def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState, control: dict, rank_context: _RankContext) -> Plan:
+def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState, control: dict, rank_context: _RankContext,
+                 scoring_portfolio: PortfolioState | None = None) -> Plan:
     total_bpr = round(sum(candidate.estimated_bpr for candidate in plan), 2)
     greeks = _plan_greeks(plan)
     after = PortfolioState(
@@ -491,7 +539,8 @@ def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState,
         greeks=portfolio.greeks + greeks,
         per_underlying_bpr=_after_underlying_bpr(portfolio, plan),
     )
-    score = _score(plan, portfolio, control)
+    scoring_portfolio = scoring_portfolio or portfolio
+    score = _score(plan, scoring_portfolio, control)
     plan_id = "plan_" + hashlib.sha256("|".join(candidate.candidate_id for candidate in plan).encode("utf-8")).hexdigest()[:12]
     approval_mode = str((control.get("execution") or {}).get("approval_mode") or "")
     operator_action = "approve" if approval_mode == "shadow_auto_top_plan" and rank == 1 else ""
@@ -510,11 +559,11 @@ def _materialize(plan: list[Candidate], *, rank: int, portfolio: PortfolioState,
             plan,
             greeks,
             total_bpr,
-            _score_components(plan, portfolio, control),
+            _score_components(plan, scoring_portfolio, control),
             _basket_policy(control),
-            _marginal_scores(plan, portfolio, control),
-            _rank_adjustment(plan, portfolio, control, rank_context),
-            _rank_score(plan, portfolio, control, rank_context),
+            _marginal_scores(plan, scoring_portfolio, control),
+            _rank_adjustment(plan, scoring_portfolio, control, rank_context),
+            _rank_score(plan, scoring_portfolio, control, rank_context),
             capacity_mode="enforced" if _bpr_capacity_enforced(control) else "observe_only",
         ),
         blocked_by=[],
@@ -588,19 +637,3 @@ def _reasons(
 
 def _reason_value(value: float | None) -> str:
     return "none" if value is None else f"{value:.2f}"
-
-
-def _verified_live_copy(candidate: Candidate, control: dict) -> bool:
-    """Copy eligibility is source/broker/risk based, not an income alpha score."""
-    metadata = candidate.metadata or {}
-    preflight = candidate.preflight
-    return (str((control.get('runtime') or {}).get('mode') or '').lower() == 'live'
-            and metadata.get('input_kind') == 'exact_package'
-            and metadata.get('source_verified') is True
-            and bool(metadata.get('source_verification_ref'))
-            and preflight is not None and preflight.ok
-            and preflight.raw.get('broker_bpr_provided') is True)
-
-
-def _copy_count(plan: list[Candidate], control: dict) -> int:
-    return sum(_verified_live_copy(candidate, control) for candidate in plan)

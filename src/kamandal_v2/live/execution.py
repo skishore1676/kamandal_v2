@@ -272,7 +272,7 @@ def execute_live_approved(
                 ),
                 "",
             )
-            if submit and (underlying_cap or cluster_cap):
+            if submit and ticket.get("source_output_kind") != "exact_package" and (underlying_cap or cluster_cap):
                 reason = "blocked_risk_underlying_cap" if underlying_cap else f"blocked_risk_cluster_cap:{cluster_cap}"
                 return {
                     "action": action,
@@ -335,7 +335,7 @@ def execute_live_approved(
             continue
         for ticket in tickets:
             capped_underlying = underlying_capped.get(str(ticket.get("underlying") or "").upper())
-            if capped_underlying and submit and not close:
+            if capped_underlying and submit and not close and ticket.get("source_output_kind") != "exact_package":
                 store.event(
                     "live_entry_blocked_by_underlying_cap",
                     {
@@ -354,7 +354,7 @@ def execute_live_approved(
                 )
                 continue
             capped_cluster = cluster_capped.get(str(ticket.get("underlying") or "").upper())
-            if capped_cluster and submit and not close:
+            if capped_cluster and submit and not close and ticket.get("source_output_kind") != "exact_package":
                 store.event("live_entry_blocked_by_cluster_cap", {"ticket_hash": ticket.get("ticket_hash"), "underlying": ticket.get("underlying"), "cluster": capped_cluster})
                 results.append({"status": "blocked", "reason": f"blocked_risk_cluster_cap:{capped_cluster}", "underlying": ticket.get("underlying"), "ticket_hash": ticket.get("ticket_hash")})
                 continue
@@ -625,8 +625,23 @@ def _fresh_exact_evidence_blocker(config: dict[str, Any], ticket: dict[str, Any]
                 and package.source_verified
                 and not package.source_verification_reason
                 and package.source_verification_ref == str(ticket["source_verification_ref"])):
-            return ""
+            return "" if _ticket_preserves_source_contracts(ticket, package) else "entry_exact_contracts_changed"
     return "entry_exact_evidence_superseded"
+
+
+def _ticket_preserves_source_contracts(ticket: dict[str, Any], package: Any) -> bool:
+    """The approved local unit package keeps every source contract and ratio."""
+    import math
+    try:
+        divisor = math.gcd(*(int(leg.quantity) for leg in package.legs))
+        expected = sorted((leg.expiration, leg.option_type, float(leg.strike), leg.side,
+                           int(leg.quantity) // divisor) for leg in package.legs)
+        actual = sorted((str(leg["expiration"]), str(leg["option_type"]), float(leg["strike"]),
+                         str(leg["side"]), int(leg["quantity"])) for leg in ticket["legs"])
+        return (str(ticket.get("underlying") or "") == package.symbol and actual == expected
+                and all(str(leg.get("effect") or "open") == "open" for leg in ticket["legs"]))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return False
 
 
 def _source_route_blocker(ticket: dict[str, Any], rows: list[dict[str, Any]]) -> str:

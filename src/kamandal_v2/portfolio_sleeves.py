@@ -100,11 +100,11 @@ def compile_sleeve_policy(rows: Iterable[dict[str, Any]]) -> SleevePolicy:
 
 def candidate_lane(candidate: Candidate | dict[str, Any]) -> str:
     metadata = (candidate.get("metadata") or {}) if isinstance(candidate, dict) else candidate.metadata
+    if str(metadata.get("input_kind") or "") == "exact_package":
+        return GURU_EXACT
     explicit = str(metadata.get("sleeve_id") or "")
     if explicit in {CURRENT_IDEA, GURU_EXACT}:
         return explicit
-    if str(metadata.get("input_kind") or "") == "exact_package" and metadata.get("source_profile"):
-        return GURU_EXACT
     return CURRENT_IDEA
 
 

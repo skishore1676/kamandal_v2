@@ -180,6 +180,7 @@ def _live_candidate_policy(
     exclude_candidate_ids: set[str] | None = None,
     exclude_contract_keys: set[str] | None = None,
 ) -> None:
+    from kamandal_v2.portfolio_sleeves import candidate_lane
     live_cfg = config.get("live") or {}
     max_contracts = int((config.get("execution") or {}).get("max_contracts_per_order") or 1)
     min_entry_legs = int(live_cfg.get("min_entry_legs") or 1)
@@ -207,9 +208,9 @@ def _live_candidate_policy(
             candidate.rejection_reason = "live_fallback_contract_overlap"
         elif risk_block_reason:
             candidate.rejection_reason = risk_block_reason
-        elif candidate.underlying.upper() in underlying_capped:
+        elif candidate_lane(candidate) == "current_idea" and candidate.underlying.upper() in underlying_capped:
             candidate.rejection_reason = f"live_risk_underlying_cap:{candidate.underlying.upper()}"
-        elif candidate.underlying.upper() in cluster_capped:
+        elif candidate_lane(candidate) == "current_idea" and candidate.underlying.upper() in cluster_capped:
             cluster = cluster_for_symbol(config, candidate.underlying) or "unknown"
             candidate.rejection_reason = f"live_risk_cluster_cap:{cluster}"
         elif len(candidate.legs) < min_entry_legs and not _verified_exact_single_call(candidate):

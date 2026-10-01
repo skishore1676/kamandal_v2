@@ -56,7 +56,7 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
                 idea_to_output[planner_idea_id] = output_id
             continue
         if event_type == "trade_source_planner_disposition":
-            output_id = idea_to_output.get(str(event.get("idea_id") or ""), "")
+            output_id = str(event.get("evidence_revision_id") or "") or idea_to_output.get(str(event.get("idea_id") or ""), "")
         else:
             output_id = str(event.get("evidence_revision_id") or "")
         if not output_id or output_id not in by_output:
@@ -64,6 +64,12 @@ def activity_rows(store: LocalStore, *, limit: int = 500) -> list[list[Any]]:
         current = by_output[output_id]
         current["planner_disposition"] = str(event.get("status") or current.get("planner_disposition") or "")
         current["reason"] = str(event.get("blocker") or event.get("reason") or current.get("reason") or "")
+        if event.get("pathway") == "guru_exact":
+            measured = [f"{name}={event[name]}" for name in
+                        ("candidate_bpr", "reserved_bpr", "sleeve_used_bpr", "sleeve_limit_bpr",
+                         "total_used_bpr", "total_limit_bpr", "buying_power", "submission_limit")
+                        if event.get(name) is not None]
+            current["reason"] += "; " + "; ".join(measured)
         if event.get("playbook_id"):
             current["capability_support"] = "supported"
         elif current["reason"] == "unsupported":

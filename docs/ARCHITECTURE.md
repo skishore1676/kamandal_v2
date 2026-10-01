@@ -1,7 +1,14 @@
 # Kamandal V2 Architecture
 
-Date: 2026-09-10
-Status: one-engine, source routing, and source-episode interpretation deployed; first natural source-episode execution pending
+Date: 2026-10-01
+Status: two entry pathways approved; implementation and deployment tracked separately from natural execution proof
+
+The current entry contract is [Two entry pathways](TWO_ENTRY_PATHWAYS.md).
+One shared execution and management engine receives decisions from an ideas
+optimizer and a separate Guru copying admission path. Portfolio preferences
+belong to the ideas sleeve; exact Guru entries do not enter that optimization.
+The earlier unified-selection descriptions below are historical context where
+they conflict with this October 1 contract.
 
 ## Purpose
 
@@ -251,28 +258,24 @@ linkage, and projection. This preserves different source languages without
 creating separate schedulers or money paths. See
 [Source Episode Compiler](SOURCE_EPISODE_COMPILER.md).
 
-If the same atomic opportunity yields both an idea and an exact package, the
-two projections share one opportunity group and are mutually exclusive in plan
-selection. Richer extraction must not cause duplicate exposure.
+A confirmed source opening belongs exclusively to the exact pathway. Complete
+opening adds can form new opportunities; missing contracts, unsupported shapes
+or an Off source never cause fallback into adapted ideas. General directional
+commentary remains eligible for the ideas sleeve.
 
-An `idea` enters the ordinary Idea adapter and compatible Sheet playbooks, so a
-Mike call-calendar thesis is constructed and managed by the same Kamandal
-capability as the equivalent Greg, YouTube, or My Ideas thesis. An
-`exact_package` first enters the passive evidence ledger, then quotes and
-validates the source legs without rebuilding them. It reuses exactly one
-existing playbook whose `accepted_inputs` permits exact packages; no Mike or
-generic exact-only playbook is created. Zero matches park as unsupported and
-multiple matches park as ambiguous rather than letting optimizer rank choose a
-management policy.
+An `exact_package` enters the evidence ledger, quotes its source contracts and
+uses exactly one compatible exact-input playbook for bounded sizing and frozen
+management. Source quantities normalize to a local package while ratios, strikes,
+expirations and sides remain intact. Zero matches park as unsupported; multiple
+matches park as ambiguous. Exact packages use FIFO capital admission and bypass
+ideas-only DTE/delta/IV/yield/portfolio-fit preferences. Real quotes, freshness,
+source binding, contract integrity, per-order and sleeve/account capacity,
+reconciliation and broker preflight remain required. See
+[Two entry pathways](TWO_ENTRY_PATHWAYS.md).
 
-Exact calendars and diagonals retain every observed contract term but receive
-the canonical `short_near` and `long_far` roles required by the existing
-lifecycle manager. A `trade_sources.mode` ceiling may allow planner consideration;
-the optimizer may still reject or not select it. Only a selected, supported
-package uses the existing shadow/live adapter and unified manager. During the
-first migration, exact packages remain shadow-only. Close/roll/adjust posts
-remain benchmark facts and cannot manage a Kamandal lifecycle. See [Observed
-Package Evidence](OBSERVED_PACKAGE_EVIDENCE.md).
+Both paths feed the existing execution adapters and lifecycle manager.
+Close/roll/adjust posts remain benchmark facts and cannot manage a Kamandal
+lifecycle. Existing positions retain their frozen entry management policy.
 
 The operator surface contains exactly two `trade_sources` rows per person—one
 for `idea` and one for `exact_package`. `off`, `observe`, `shadow`, and `live`

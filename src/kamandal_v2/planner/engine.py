@@ -110,6 +110,8 @@ def run_plan(
     portfolio = _live_portfolio_with_open_groups(portfolio, store, config)
     if mode == "live" and config.get("_live_sleeve_policy") is not None:
         config["_live_sleeve_usage"] = live_sleeve_usage(store, portfolio)
+    ideas_portfolio = (store.live_portfolio_state(portfolio, sleeve="current_idea") if mode == "live"
+                       else store.shadow_portfolio_state(portfolio, sleeve="current_idea"))
     preflight = _live_overlap_preflight_guard(preflight, store, config)
     match_gate_mode = _match_gate_mode(config)
     candidate_filter_mode = _candidate_filter_mode(config)
@@ -118,8 +120,17 @@ def run_plan(
         raise ValueError(f"runtime.mode must be live or shadow, got {mode!r}")
     preflight = shadow_preflight_client(config, preflight, provider=provider, mode=mode)
 
+    for idea in loaded_ideas:
+        if "source_episode" in idea.thesis_tags and "source_intent:commentary" not in idea.thesis_tags:
+            store.event("trade_source_planner_disposition", {
+                "source_id": source_id_from_idea_source(idea.source), "idea_id": idea.idea_id,
+                "plan_run_id": plan_run_id, "mode": mode, "status": "needs_source_refresh",
+                "reason": "source_opening_cannot_fall_back_to_ideas", "broker_effects": False,
+            })
+    loaded_ideas = [idea for idea in loaded_ideas if "source_episode" not in idea.thesis_tags
+                    or "source_intent:commentary" in idea.thesis_tags]
     source_groups = (
-        source_groups_factory(loaded_ideas, universe, playbooks, portfolio)
+        source_groups_factory(loaded_ideas, universe, playbooks, ideas_portfolio)
         if source_groups_factory is not None
         else [PlanningSourceGroup("idea", loaded_ideas, playbooks)]
     )
@@ -172,7 +183,17 @@ def run_plan(
             config=config,
         )
     ]
-    plans = generate_plans(candidates, portfolio, config, top_n=plan_top_n, max_new_positions=plan_max_new_positions)
+    plans = generate_plans(candidates, portfolio, config, top_n=plan_top_n,
+                           max_new_positions=plan_max_new_positions, idea_portfolio=ideas_portfolio)
+    for candidate in candidates:
+        if receipt := candidate.metadata.get("entry_decision"):
+            store.event("trade_source_planner_disposition", {
+                **receipt, "plan_run_id": plan_run_id, "candidate_id": candidate.candidate_id,
+                "evidence_revision_id": candidate.metadata.get("evidence_revision_id"),
+                "playbook_id": candidate.playbook_id,
+                "idea_id": candidate.idea_id, "mode": mode,
+                "reason": receipt["rule"], "broker_effects": False,
+            })
     rejection_summary = _rejection_summary(ideas, candidates, idea_diagnostics)
     metrics = _plan_metrics(
         ideas,
@@ -186,6 +207,7 @@ def run_plan(
         candidate_filter_mode,
     )
     metrics["planning_market"] = market.metrics()
+    metrics["ideas_portfolio"] = ideas_portfolio.to_dict()
     rows = render_daily_plan_rows(plans, mode=mode)
 
     store.save_candidates(plan_run_id, candidates)

@@ -93,7 +93,7 @@ def project_source_episode_compilation(
         # not per semantic event (e.g. two MU calls plus one MU put calendar).
         opening_counts: dict[str, int] = {}
         for item in episode.get("events") or []:
-            if isinstance(item, Mapping) and item.get("action") == "open":
+            if isinstance(item, Mapping) and item.get("action") in {"open", "scale_in"}:
                 symbol = str(item.get("symbol") or "").upper()
                 opening_counts[symbol] = opening_counts.get(symbol, 0) + len(item.get("exact_packages") or [])
         exact_packages: list[ObservedPackageEvidence] = []
@@ -109,7 +109,12 @@ def project_source_episode_compilation(
             idea_disposition = dispositions.get("idea") or {}
             exact_disposition = dispositions.get("exact_package") or {}
 
-            if idea_disposition.get("disposition") == "ready_for_source_policy":
+            # A confirmed source opening belongs to the exact pathway even
+            # when incomplete or Off. It cannot become an adapted trade.
+            source_opening = event.get("action") in {"open", "scale_in"}
+            if source_opening:
+                event_reasons.append("confirmed_opening_owned_by_guru_exact")
+            if not source_opening and idea_disposition.get("disposition") == "ready_for_source_policy":
                 idea, blocker = _idea_projection(
                     event,
                     record,
@@ -136,18 +141,18 @@ def project_source_episode_compilation(
                         record,
                         compilation=compilation,
                         source_opening_package_count=(opening_counts.get(str(event.get("symbol") or "").upper(), 0)
-                                                      if event.get("action") == "open" else None),
+                                                      if source_opening else None),
                     )
                     classification = str((record.get("classification") or {}).get("type") or "")
                     families = profile.get("families") or {}
                     maximum_age = (families.get(classification) or {}).get("max_age_hours")
                     if (maximum_age is None and classification == "observed_package_followup"
-                            and event.get("action") == "open"):
+                            and source_opening):
                         # A post can mix closes or rolls with a new opening. Its
                         # envelope may be classified as a follow-up, but the
                         # opening still needs the configured exact-entry age.
                         maximum_age = (families.get("observed_package_open") or {}).get("max_age_hours")
-                    if maximum_age is None and classification not in {"unknown", ""} and event.get("action") == "open" and event.get("structure_hint") in {"iron_condor", "long_call", "call_butterfly", "put_butterfly", "call_crab", "call_calendar", "put_calendar", "call_diagonal", "put_diagonal"}:
+                    if maximum_age is None and classification not in {"unknown", ""} and source_opening:
                         maximum_age = (families.get("observed_package_open") or {}).get("max_age_hours")
                     published_at = str((record.get("source") or {}).get("published_at") or "")
                     valid_until = (
@@ -168,10 +173,11 @@ def project_source_episode_compilation(
                     "opportunity_group_id": str(event.get("opportunity_group_id") or ""),
                     "action": str(event.get("action") or ""),
                     "symbol": str(event.get("symbol") or ""),
+                    "outside_configured_universe": bool(event.get("symbol") and str(event["symbol"]).upper() not in universe),
                     "structure": str(event.get("structure_hint") or ""),
                     "evidence_status": str(event.get("evidence_status") or ""),
                     "link_state": str(event.get("link_state") or ""),
-                    "classification": ",".join(str(item) for item in event.get("projections") or ["residual"]),
+                    "classification": "exact_package" if source_opening else ",".join(str(item) for item in event.get("projections") or ["residual"]),
                     "planner_disposition": "published" if any(
                         idea["idea_id"] == _opportunity_id(str(event.get("opportunity_group_id") or ""))
                         for idea in ideas
@@ -251,6 +257,7 @@ def _idea_projection(
                 *[str(item) for item in planner.get("thesis_tags") or []],
                 f"correspondent:{profile['profile_id']}",
                 "source_episode",
+                f"source_intent:{event.get('action')}",
                 *(
                     [f"template_number:{event['template_number']}"]
                     if event.get("template_number") is not None
@@ -329,6 +336,8 @@ def _exact_package_projections(
     package_count = (len(event.get("exact_packages") or [])
                      if source_opening_package_count is None else source_opening_package_count)
     action = str(event.get("action") or "")
+    if action == "scale_in":
+        action = "open"
     if action not in {"open", "close", "roll", "adjust"}:
         return [], [{"source_id": str(event.get("event_id") or ""), "reason": f"exact_action_unsupported:{action}"}]
     source = record.get("source") or {}
@@ -352,15 +361,17 @@ def _exact_package_projections(
             for item in raw.get("field_provenance") or []
             if (match := re.fullmatch(r"image:(\d+)", str(item).strip().lower()))
         ]
-        if len(set(image_refs)) != 1:
+        text_evidence = not image_refs and "text" in (raw.get("field_provenance") or [])
+        source_text = str((record.get("literal") or {}).get("text") or "")
+        if not text_evidence and len(set(image_refs)) != 1:
             failures.append({
                 "source_id": str(event.get("event_id") or ""),
                 "reason": "exact_package_requires_one_verified_image_locator",
             })
             continue
-        media_index = image_refs[0]
-        descriptor = media_by_index.get(media_index)
-        if not _verified_media(descriptor):
+        media_index = image_refs[0] if image_refs else 0
+        descriptor = media_by_index.get(media_index) or {}
+        if (text_evidence and not source_text.strip()) or (not text_evidence and not _verified_media(descriptor)):
             failures.append({
                 "source_id": str(event.get("event_id") or ""),
                 "reason": f"media_{media_index}_not_verified_public_photo",
@@ -394,6 +405,8 @@ def _exact_package_projections(
                         "source_event_id": event_id,
                         "package_signature": signature,
                         "image_sha256": image_sha,
+                        "source_text_sha256": _sha(source_text),
+                        "source_published_at": source.get("published_at"),
                         # Batch prompt changes do not revise this source trade.
                         "schema": "source_package_semantics.v1",
                         "action": action,
@@ -428,6 +441,9 @@ def _exact_package_projections(
                     opportunity_group_id=_opportunity_id(str(event.get("opportunity_group_id") or "")),
                     prompt_version=PROMPT_VERSION,
                     source_opening_package_count=package_count,
+                    evidence_basis="text" if text_evidence else "image",
+                    source_text_sha256=_sha(source_text),
+                    source_verification_method="single_pass_contract_validation",
                 )
             )
         except (TypeError, ValueError) as exc:

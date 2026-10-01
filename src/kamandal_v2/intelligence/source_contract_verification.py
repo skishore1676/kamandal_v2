@@ -1,9 +1,8 @@
-"""Independent image transcription gate for source-exact live openings.
+"""Bind one-pass interpreted contracts to original text or image evidence.
 
-The source-episode interpreter proposes an opening. A separate, image-focused
-extractor must agree on its displayed contracts before the live planner sees
-that package as source verified. Disagreement leaves the original evidence
-available for shadow/review and never authorizes an entry.
+The independent image transcription helper remains available for optional
+audits; scheduled intake uses deterministic source binding without a second
+model call. Verification method is retained with every evidence record.
 """
 
 from __future__ import annotations
@@ -24,6 +23,65 @@ from kamandal_v2.intelligence.observed_packages import (
     observed_package_batch_from_dict,
     extract_observed_packages_from_correspondent_signal,
 )
+
+
+def bind_interpreted_source_contracts(
+    batches: Iterable[ObservedPackageBatch], packet: Mapping[str, Any],
+) -> tuple[tuple[ObservedPackageBatch, ...], tuple[dict[str, str], ...]]:
+    """Bind one interpretation to its original source, without another model.
+
+    The compatibility flag source_verified means these deterministic checks
+    passed. source_verification_method explicitly distinguishes this evidence
+    from optional independent-image audits retained below.
+    """
+    from kamandal_v2.intelligence.observed_packages import _package_signature
+    from kamandal_v2.intelligence.source_episode_projection import _verified_media
+
+    records = {str(item.get("signal_id") or ""): item for item in packet.get("records") or []
+               if isinstance(item, Mapping)}
+    bound, failures = [], []
+    for batch in batches:
+        record = records.get(batch.canonical_post_id)
+        updated = []
+        for package in batch.packages:
+            reason = ""
+            text = str(((record or {}).get("literal") or {}).get("text") or "")
+            source = (record or {}).get("source") or {}
+            if record is None:
+                reason = "source_record_missing_for_validation"
+            elif not package.complete or package.blocker or not package.legs:
+                reason = "source_contracts_incomplete"
+            elif package.source_text_sha256 != _sha(text):
+                reason = "source_text_hash_mismatch"
+            elif package.source_published_at != str(source.get("published_at") or ""):
+                reason = "source_publication_mismatch"
+            elif package.package_signature != _package_signature(package.legs):
+                reason = "source_contract_signature_mismatch"
+            elif package.evidence_basis == "image":
+                descriptor = next((item for item in source.get("media") or []
+                                   if int(item.get("media_index") or 0) == package.media_index), None)
+                if not _verified_media(descriptor) or descriptor.get("sha256") != package.image_sha256:
+                    reason = "source_image_hash_mismatch"
+            elif package.evidence_basis != "text" or not text.strip():
+                reason = "source_evidence_basis_invalid"
+            reference = "scv_" + _sha(_stable_json({
+                "post_ref": batch.canonical_post_id, "profile": batch.source_profile,
+                "revision": package.evidence_revision_id, "signature": package.package_signature,
+                "text_sha256": package.source_text_sha256, "image_sha256": package.image_sha256,
+                "published_at": package.source_published_at,
+                "method": "single_pass_contract_validation.v1",
+            }))[:24]
+            updated.append(replace(package, source_verified=not reason,
+                                   source_verification_ref=reference if not reason else None,
+                                   source_verification_reason=reason or None,
+                                   source_verification_method="single_pass_contract_validation"))
+            if reason:
+                failures.append({"source_id": package.source_event_id,
+                                 "post_ref": batch.canonical_post_id, "reason": reason})
+        digest = _sha(_stable_json([item.to_dict() for item in updated]))
+        bound.append(replace(batch, packages=tuple(replace(item, output_sha256=digest) for item in updated),
+                             output_sha256=digest))
+    return tuple(bound), tuple(failures)
 
 
 def verify_live_source_contracts(
