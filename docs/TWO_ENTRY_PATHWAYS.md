@@ -36,6 +36,17 @@ Balances are never frozen into permission to spend. Tickets staged before this
 scope field existed retain their original single-account check; a fresh scheduled
 plan is required to use the corrected scope.
 
+The Sheet's per-package cash cap and sleeve limits are the allocation authority.
+The quote midpoint is a cost estimate, not another operator-imposed ceiling.
+Before selection, both broker adapters check every permitted entry-pricing step
+and reserve the largest buying-power requirement, including broker fees and
+the structural risk of accepting less credit. That reservation must fit the
+Sheet caps and remains frozen on the ticket. Repricing rechecks current risk
+inside that reservation; it does not increase an existing ticket's authority.
+Public previously checked only the first price, which could leave a valid
+midpoint retry unfunded. The October 1 correction applies to newly planned
+tickets and preserves existing orders and positions.
+
 The ideas optimizer uses only ideas-sleeve positions for delta fit, portfolio
 preferences, concentration and candidate ranking. Guru positions remain in the
 real account capital and broker constraints. They do not become an input to the
