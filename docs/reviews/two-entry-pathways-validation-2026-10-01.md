@@ -61,3 +61,8 @@ report retry/deduplication and closed-position reporting. Natural fill and
 management acceptance remains outstanding. A new SPX put butterfly was interpreted
 and source-bound by the natural intake after the planner had loaded its inputs;
 it awaits the next scheduled plan rather than a forced replay.
+
+The 12:50 CT natural executor refreshed the operator Sheet and correctly displayed
+both expired calendars. A final display correction labels a fresh exact package
+without a planning decision as `Awaiting planning`; a concrete blocker takes
+precedence. All 25 activity-report tests passed after that correction.

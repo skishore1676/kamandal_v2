@@ -269,6 +269,7 @@ def refresh_trade_source_outcomes(config: dict[str, Any], store: LocalStore) -> 
             if identity in ticket_ids:
                 reasons[identity] = str(event.get("reason") or "")
         payload = {
+            "projection_version": 2,
             "intents": sorted((str(ticket["ticket_hash"]), str(ticket.get("_ledger_status") or "")) for ticket in intents),
             "groups": sorted((str(group.get("group_id") or ""), str(group.get("_status") or "open")) for group in groups),
             "policy_reasons": reasons,
@@ -444,6 +445,11 @@ def chief_of_staff_rows(
             decision = "Observed only"
         elif "selected" in str(item.get("planner_disposition") or ""):
             decision = "Selected"
+        elif (has_complete_package and decision_mode == "live"
+              and decision_reason in {"", "confirmed_opening_owned_by_guru_exact", "exact_package_complete"}
+              and _timestamp(str(raw.get("source_valid_until") or "")) > observed):
+            decision = "Awaiting planning"
+            reason = "Fresh exact package awaits the next scheduled planning run"
         else:
             decision = "Held"
         if reason != source_reason:

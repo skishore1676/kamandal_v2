@@ -5,6 +5,32 @@ from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER
 from kamandal_v2.stores.sqlite import LocalStore
 
 
+def test_fresh_exact_opening_awaits_planning_until_a_concrete_receipt(tmp_path):
+    from datetime import datetime, UTC
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import SleevePolicy
+    store = LocalStore(tmp_path / 'waiting.db')
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:2105682038947017090',
+        'output_id': 'fresh-revision', 'classification': 'exact_package',
+        'effective_mode': 'live', 'action': 'open', 'symbol': 'SPX', 'structure': 'put_butterfly',
+        'planner_disposition': 'observed_only', 'reason': '',
+        'normalized_output': {'source_event_id': 'fresh-event', 'opportunity_group_id': 'corr_opp_fresh',
+            'source_valid_until': '2026-10-02T15:31:34Z', 'complete': True,
+            'legs': [{'expiration': '2026-10-30', 'option_type': 'put', 'quantity': quantity,
+                      'strike': strike, 'side': side} for strike, side, quantity in
+                     [(7300, 'buy', 1), (7400, 'sell', 2), (7500, 'buy', 1)]]},
+    })
+    def read():
+        return chief_of_staff_rows(store, source_modes={('mike_butler', 'exact_package'): 'live'},
+                                   sleeve_policy=SleevePolicy(40, 40, 80), now=datetime(2026, 10, 1, 18, tzinfo=UTC))[1]
+    assert read()[0][3] == 'Awaiting planning'
+    assert 'next scheduled planning run' in read()[0][4]
+    store.event('trade_source_planner_disposition', {'source_id': 'mike_butler',
+        'evidence_revision_id': 'fresh-revision', 'status': 'blocked', 'reason': 'unsupported', 'mode': 'live'})
+    assert read()[0][3] == 'Unsupported'
+
+
 def test_activity_projection_joins_output_to_planner_disposition(tmp_path) -> None:  # noqa: ANN001
     store = LocalStore(tmp_path / "kamandal.db")
     store.event(
