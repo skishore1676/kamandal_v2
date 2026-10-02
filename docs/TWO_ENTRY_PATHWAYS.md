@@ -98,6 +98,11 @@ exceptions. Source-declared, documented shorthand may resolve terms; missing
 terms cannot be silently invented. A confirmed add with complete opening legs
 is a new opening opportunity; a roll, exit, template, proposed alternative or
 confirmation of an already identified opening cannot create duplicate entry.
+Greg's declared monthly convention also resolves a standalone confirmed call
+calendar such as `added some $MU Oct/Nov 1150 call calendars`: matching text
+legs retain their 1:1 ratio and resolve to the owner calendar's monthly dates.
+Conflicting dates, strikes, sides, ratios and non-opening actions stay blocked.
+The original source publication time and freshness deadline are preserved.
 
 Confirmed Guru opening opportunities are owned by `guru_exact`, even if the
 exact route is Off, waiting for evidence, unsupported or out of capacity. They
