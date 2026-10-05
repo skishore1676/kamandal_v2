@@ -152,3 +152,32 @@ publication failures are non-blocking and retry on the next natural cycle.
 Suman authorized documentation, implementation and deployment on October 1.
 This authorization does not request manual orders, credential changes, forced
 historical entries or changes to existing positions' frozen management rules.
+
+
+## October 5 split-wing repair
+
+Greg's `added some $QQQ Oct 23 Exp 760/775-780/795 split wing butterfly call
+spreads` is one `split_call_fly`, with BTO 760 / STO 775 / STO 780 / BTO 795,
+all October 23, 2026 calls at 1:1:1:1. It must not be reduced to a two-leg
+vertical or split into independent tickets. The exact geometry validator,
+source policy, current quote/broker BPR checks and generic full-package manager
+cover this shape. Unequal wings include their additional terminal loss in the
+local risk bound and debit ceiling. No ideas construction is enabled for it.
+
+The narrow cached-text repair accepts only that explicit grammar with four
+matching retained legs and a leg-count blocker. It preserves original source
+publication/deadline, event identity and history; it does not replay a job or
+extend source eligibility. Conflicting contracts remain blocked.
+
+The operator migration `scripts/apply_split_call_fly_sheet.py` is dry-run by
+default. It adds one exact-only row from the existing managed calendar template
+and Greg's shape permission, preserving existing policy hashes, source switches,
+capital limits and unrelated cells. It uses one package, $1200 maximum BPR and
+the existing full-package close policy.
+
+Timing is a separate acceptance gap: deployed Birdclaw collection is 13:50 then
+15:05 Chicago; Kamandal intake is 14:00 then 15:15, and its last planner is
+14:15. A 14:32 post cannot enter that afternoon. Proposed coordinated late cycle:
+Birdclaw 14:35, Kamandal intake 14:45, planner 14:50, retaining the existing
+closing collection. This requires a separate upstream collection/scheduler gate;
+classification support alone does not prove timely acquisition or a natural fill.

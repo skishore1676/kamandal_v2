@@ -681,6 +681,13 @@ def infer_observed_structure(legs: tuple[ObservedLegEvidence, ...], *, action: s
     if len(opening_legs) == 3 and _is_butterfly(opening_legs):
         return f"{opening_legs[0].option_type}_butterfly"
     if len(opening_legs) == 4:
+        ordered = sorted(opening_legs, key=lambda leg: Decimal(str(leg.strike)))
+        if ({leg.option_type for leg in ordered} == {"call"}
+                and len({leg.expiration for leg in ordered}) == 1
+                and len({leg.strike for leg in ordered}) == 4
+                and [leg.quantity for leg in ordered] == [1, 1, 1, 1]
+                and [leg.order_code for leg in ordered] == ["BTO", "STO", "STO", "BTO"]):
+            return "split_call_fly"
         calendar_type = _double_calendar_type(opening_legs)
         if calendar_type:
             return calendar_type

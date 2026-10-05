@@ -43,7 +43,7 @@ def resolve_declared_text_contracts(
     literal = record.get("literal") or {}
     match = _CALL_SPREAD.fullmatch(" ".join(str(literal.get("text") or "").split()))
     if not match:
-        return _resolve_monthly_call_calendar(record, episode)
+        return _resolve_split_call_fly(record, _resolve_monthly_call_calendar(record, episode))
     symbol = match["symbol"].upper()
     if symbol in {"SPX", "SPXW", "NDX", "NDXP", "RUT", "VIX", "XSP"}:
         return episode  # Index settlement conventions are not equity shorthand.
@@ -182,3 +182,53 @@ def _monthly_expiration(month: str, explicit_year: str | None, published: date) 
     while expiry.weekday() >= 5 or expiry.isoformat() in MARKET_HOLIDAYS:
         expiry -= timedelta(days=1)
     return expiry if expiry >= published else None
+
+
+def _resolve_split_call_fly(record: Mapping[str, Any], episode: dict[str, Any]) -> dict[str, Any]:
+    """Repair only a matching retained four-leg transcription, never conflicting terms."""
+    from kamandal_v2.intelligence.observed_packages import _normalize_expiration
+    text = " ".join(str((record.get("literal") or {}).get("text") or "").split())
+    match = re.fullmatch(
+        r"(?:added|bought) (?:some )?\$(?P<symbol>[A-Z][A-Z0-9.]*) "
+        r"(?P<month>[A-Za-z]+) (?P<day>\d{1,2})(?: (?P<year>20\d{2}))? Exp "
+        r"(?P<a>\d+(?:\.\d+)?)/(?P<b>\d+(?:\.\d+)?)-(?P<c>\d+(?:\.\d+)?)/(?P<d>\d+(?:\.\d+)?) "
+        r"split[- ]wing butterfly call spreads?[.!]?", text, re.IGNORECASE)
+    if not match or len(episode.get("events") or []) != 1:
+        return episode
+    event = episode["events"][0]
+    if (event.get("symbol") != match["symbol"].upper()
+            or event.get("action") not in {"open", "scale_in"}
+            or event.get("structure_hint") not in {"call_spread", "butterfly", "split_call_fly"}
+            or event.get("template_number") is not None or event.get("links_to")
+            or set(event.get("blockers") or []) - {"exact_package_incomplete", "exact_package_missing"}):
+        return episode
+    packages = event.get("exact_packages") or []
+    if len(packages) != 1:
+        return episode
+    package = packages[0]
+    if (package.get("blocker") != "structure_leg_count_mismatch"
+            or set(package.get("field_provenance") or []) != {"text"}
+            or len(package.get("legs") or []) != 4):
+        return episode
+    try:
+        published = datetime.fromisoformat(str((record.get("source") or {}).get("published_at")).replace("Z", "+00:00")).date()
+        expiry = date(int(match["year"] or published.year), _MONTHS[match["month"][:3].lower()], int(match["day"]))
+        strikes = [Decimal(match[name]) for name in ("a", "b", "c", "d")]
+        if not 0 < strikes[0] < strikes[1] < strikes[2] < strikes[3] or expiry < published:
+            return episode
+        legs = sorted(package["legs"], key=lambda leg: Decimal(str(leg.get("strike"))))
+        for leg, strike, code in zip(legs, strikes, ("BTO", "STO", "STO", "BTO"), strict=True):
+            if (Decimal(str(leg.get("strike"))) != strike or leg.get("quantity") != 1
+                    or leg.get("option_type") != "call" or leg.get("order_code") != code
+                    or _normalize_expiration(leg.get("expiration"), published) != expiry.isoformat()):
+                return episode
+    except (ValueError, TypeError, KeyError, ArithmeticError):
+        return episode
+    updated = copy.deepcopy(episode)
+    event = updated["events"][0]
+    event["exact_packages"][0].update(complete=True, blocker=None)
+    event.update(structure_hint="split_call_fly", evidence_status="complete", blockers=[],
+                 projections=["exact_package"], planner_new_entry=True,
+                 projection_dispositions=[{"projection": "exact_package", "disposition": "ready_for_source_policy",
+                                           "reason": "split_call_fly_contract_geometry_verified"}])
+    return updated

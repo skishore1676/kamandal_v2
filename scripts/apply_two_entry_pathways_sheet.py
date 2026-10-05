@@ -64,14 +64,14 @@ def proposed_tables(tables):
     return result
 
 
-def main():
+def main(propose=proposed_tables):
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     config = load_control()
     client = GoogleSheetClient.from_config(config)
     tables = {tab: client.read_tab(tab) for tab in TABS}
-    proposed = proposed_tables(tables)
+    proposed = propose(tables)
     before, after = (compile_playbook_policies(value["playbooks"]) for value in (tables, proposed))
     if not before.ok or not after.ok:
         raise ValueError(f"compilation failed: {before.errors}, {after.errors}")

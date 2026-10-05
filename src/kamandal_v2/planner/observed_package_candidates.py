@@ -282,7 +282,7 @@ def _evidence_blocker(package: ObservedPackageEvidence) -> str:
     if package.product_type == "futures_option":
         return "unsupported_product:futures_option"
     if package.product_type == "index_option" and package.structure in {
-        "long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle",
+        "long_call", "call_butterfly", "put_butterfly", "call_crab", "split_call_fly", "calendar_bundle",
     } and package.symbol != "SPX":
         return "unsupported_product:index_option"
     if any(leg.effect != "open" for leg in package.legs):
@@ -322,7 +322,7 @@ def _exact_execution_rejections(candidate: Candidate, playbook: Playbook, config
     exit_dte = int(getattr(policy, "fields", {}).get("exit_dte_min") or 0)
     if remaining_dte < 0:
         reasons.append("exact_contract_expired")
-    elif remaining_dte == 0 and candidate.structure in {"iron_condor", "call_butterfly", "put_butterfly"}:
+    elif remaining_dte == 0 and candidate.structure in {"iron_condor", "call_butterfly", "put_butterfly", "split_call_fly"}:
         reasons.extend(_intraday_rejections(candidate, config, getattr(policy, "management", {})))
     elif remaining_dte <= exit_dte:
         reasons.append("exact_entry_at_or_inside_exit_window")
@@ -341,6 +341,12 @@ def _exact_execution_rejections(candidate: Candidate, playbook: Playbook, config
             reasons.append("exact_vertical_quote_effect_invalid")
         if abs(candidate.net_credit) >= abs(long.strike - short.strike):
             reasons.append("exact_vertical_price_exceeds_width")
+    elif candidate.structure == "split_call_fly":
+        ordered = sorted(candidate.legs, key=lambda leg: leg.strike)
+        if candidate.net_credit >= 0:
+            reasons.append("exact_debit_structure_requires_debit")
+        if abs(candidate.net_credit) >= ordered[1].strike - ordered[0].strike:
+            reasons.append("exact_split_call_fly_price_exceeds_max_payoff")
     elif candidate.net_credit >= 0:
         reasons.append("exact_debit_structure_requires_debit")
     return reasons
@@ -415,6 +421,15 @@ def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
         order = sorted(range(3), key=lambda index: float(package.legs[index].strike))
         roles = ["", "", ""]
         for index, role in zip(order, ("long_lower", "short_body", "long_upper"), strict=True):
+            roles[index] = role
+        return roles
+    if package.structure == "split_call_fly":
+        # Validate again after quote hydration; never split the package into tickets.
+        if len(package.legs) != 4:
+            raise ValueError("split_call_fly_requires_four_legs")
+        order = sorted(range(4), key=lambda index: float(package.legs[index].strike))
+        roles = ["", "", "", ""]
+        for index, role in zip(order, ("long_lower", "short_lower", "short_upper", "long_upper"), strict=True):
             roles[index] = role
         return roles
     if package.structure == "call_crab":
@@ -496,7 +511,7 @@ def _candidate(
     bpr = _estimate_bpr(playbook.structure, legs, net_credit)
     if package.structure in {"call_spread", "put_spread"} and net_credit < 0:
         bpr = abs(net_credit) * 100
-    if package.structure in {"call_butterfly", "put_butterfly", "call_crab"}:
+    if package.structure in {"call_butterfly", "put_butterfly", "call_crab", "split_call_fly"}:
         bpr = _near_expiry_intrinsic_loss_bound(legs, net_credit)
     opportunity_id = package.opportunity_group_id or f"observed:{package.source_event_id}"
     identity = [opportunity_id, playbook.playbook_id, package.package_signature]
@@ -558,7 +573,7 @@ def _candidate(
             },
             "risk_bound_basis": (
                 "near_expiry_intrinsic_floor"
-                if package.structure in {"call_butterfly", "put_butterfly", "call_crab"} else ""
+                if package.structure in {"call_butterfly", "put_butterfly", "call_crab", "split_call_fly"} else ""
             ),
             "source_published_at": package.source_published_at,
             "source_valid_until": package.source_valid_until,
@@ -572,7 +587,7 @@ def _candidate(
         net_credit=net_credit,
     )
     candidate.entry_credit_floor = floor
-    if package.structure in {"call_butterfly", "put_butterfly", "call_crab"} and ceiling is not None:
+    if package.structure in {"call_butterfly", "put_butterfly", "call_crab", "split_call_fly"} and ceiling is not None:
         intrinsic_risk = max(candidate.estimated_bpr - abs(net_credit) * 100, 0.0)
         ceiling = min(ceiling, max(float(playbook.live_max_bpr_per_order or 0) - intrinsic_risk, 0.0) / 100)
     candidate.entry_debit_ceiling = ceiling

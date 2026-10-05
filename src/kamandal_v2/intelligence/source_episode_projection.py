@@ -49,6 +49,7 @@ _SHAPE_ALIASES = {
     "butterfly": {"call_butterfly", "put_butterfly"},
     "put_butterfly_with_call_vertical": {"put_butterfly_with_call_vertical"},
     "call_crab": {"call_crab"},
+    "split_call_fly": {"split_call_fly"},
     "short_strangle": {"short_strangle"},
     "long_call": {"long_call"},
     "long_put": {"long_put"},

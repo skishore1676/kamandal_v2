@@ -22,6 +22,7 @@ SUPPORTED_VALIDATOR_STRUCTURES = {
     "call_butterfly",
     "put_butterfly",
     "call_crab",
+    "split_call_fly",
     "calendar_bundle",
 }
 
@@ -40,6 +41,7 @@ def validate_structure(structure: str, legs: list[OptionLeg], underlying_price: 
         "call_butterfly": lambda legs, price: _butterfly(legs, option_type="call"),
         "put_butterfly": lambda legs, price: _butterfly(legs, option_type="put"),
         "call_crab": _call_crab,
+        "split_call_fly": _split_call_fly,
         "calendar_bundle": _calendar_bundle,
         "put_spread": _put_spread,
         "call_spread": _call_spread,
@@ -83,6 +85,16 @@ def validate_exact_structure(structure: str, legs: list[OptionLeg], underlying_p
                  and puts[0].strike < puts[1].strike < calls[0].strike < calls[1].strike)
         return ValidationResult(valid, "" if valid else "exact_condor_contract_geometry_invalid")
     return validate_structure(structure, legs, underlying_price)
+
+
+def _split_call_fly(legs: list[OptionLeg], underlying_price: float) -> ValidationResult:
+    ordered = sorted(legs, key=lambda leg: leg.strike)
+    valid = (len(ordered) == 4 and {leg.option_type for leg in ordered} == {"call"}
+             and len({leg.expiration for leg in ordered}) == 1
+             and len({leg.strike for leg in ordered}) == 4
+             and [leg.quantity for leg in ordered] == [1, 1, 1, 1]
+             and [leg.side for leg in ordered] == ["buy", "sell", "sell", "buy"])
+    return ValidationResult(valid, "" if valid else "split_call_fly_contract_geometry_invalid")
 
 
 def _short_put(legs: list[OptionLeg], underlying_price: float) -> ValidationResult:

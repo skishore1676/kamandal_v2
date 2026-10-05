@@ -572,7 +572,7 @@ def _management_context(
         }
     elif lifecycle.lane in {LaneId.CALL_VERTICAL, LaneId.GENERIC_CLOSE_ONLY}:
         context = {**common, "dte": min(dtes)}
-        if (policy.resolved_fields.get("structure") in {"iron_condor", "call_butterfly", "put_butterfly"}
+        if (policy.resolved_fields.get("structure") in {"iron_condor", "call_butterfly", "put_butterfly", "split_call_fly"}
                 and int(policy.resolved_fields.get("dte_min", 1)) == 0
                 and min(leg.expiration for leg in legs) == observed_date.isoformat()):
             from kamandal_v2.live.expiry_day import expiry_day_window

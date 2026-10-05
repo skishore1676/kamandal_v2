@@ -256,7 +256,7 @@ def _lane_from_row(row: dict[str, Any], structure: str) -> LaneId:
         return LaneId.DIRECTIONAL_DIAGONAL
     if structure in {
         "short_put", "long_call", "long_put", "put_spread", "iron_condor", "jade_lizard", "call_calendar", "put_calendar",
-        "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle",
+        "call_butterfly", "put_butterfly", "call_crab", "split_call_fly", "calendar_bundle",
     }:
         return LaneId.GENERIC_CLOSE_ONLY
     raise PolicyError(f"{_row_name(row)}: unsupported CSA structure={structure!r}")
