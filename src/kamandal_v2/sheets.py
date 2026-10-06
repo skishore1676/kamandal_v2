@@ -114,7 +114,8 @@ class GoogleSheetClient:
         worksheet = self._worksheet(title, rows=max(len(rows) + 10, 100), cols=max(len(header), 26))
         previous = self._retry(worksheet.get_all_values, operation=f"read worksheet {title!r}") or []
         values = [list(header)] + [
-            [_cell(value) for value in (list(row) + [""] * len(header))[:len(header)]]
+            [_plan_cell(column, value) for column, value in zip(
+                header, (list(row) + [""] * len(header))[:len(header)], strict=True)]
             for row in rows
         ]
         values.extend([[""] * len(header) for _ in range(max(len(previous) - len(values), 0))])
@@ -648,3 +649,25 @@ def _col_letter(index: int) -> str:
         index, remainder = divmod(index - 1, 26)
         letters = chr(65 + remainder) + letters
     return letters
+
+
+def _plan_cell(column: str, value: Any) -> Any:
+    """Keep executable tickets intact; omit duplicated diagnostic plan payloads."""
+    cell = _cell(value)
+    if not isinstance(cell, str) or len(cell) <= 48000:
+        return cell
+    if column == "plan_detail_json":
+        detail = json.loads(cell)
+        omitted = [key for key in ("candidates", "public_preflight_json") if key in detail]
+        for key in omitted:
+            del detail[key]
+        detail["detail_omitted_fields"] = omitted
+        detail["detail_evidence_ref"] = {
+            "store": "kamandal SQLite plans and live_order_intents",
+            "plan_id": detail.get("plan_id"),
+            "ticket_hashes": [ticket.get("ticket_hash") for ticket in detail.get("order_tickets_json", [])],
+        }
+        cell = json.dumps(detail, sort_keys=True, separators=(",", ":"))
+    if len(cell) > 48000:
+        raise ValueError(f"daily_plan column {column} exceeds safe Sheet cell limit; executable data preserved in ledger")
+    return cell

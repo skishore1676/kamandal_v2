@@ -96,7 +96,7 @@ def test_one_source_opportunity_cannot_open_again_through_the_other_route(tmp_pa
         def account_state(self):
             return PortfolioState(10_000, 10_000, 0, 0)
 
-    assert _fresh_sheet_entry_blocker({}, Adapter(), store, exact, preflight_bpr=500) == "source_opportunity_already_open_or_pending"
+    assert _fresh_sheet_entry_blocker({}, Adapter(), store, exact, preflight_bpr=500) == "source_opportunity_already_consumed_or_pending"
 
 
 def test_source_switch_does_not_cancel_legacy_working_planner_order(monkeypatch) -> None:

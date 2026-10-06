@@ -587,7 +587,7 @@ def _fresh_sheet_entry_blocker(
         opportunity = str(ticket.get("source_opportunity_id") or "")
         occupied = occupied_source_opportunities(store, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""))
         if source and any((source, value) in occupied for value in {opportunity, *ticket.get("source_opportunity_ids", [])} if value):
-            return "source_opportunity_already_open_or_pending"
+            return "source_opportunity_already_consumed_or_pending"
         sleeve_policy = compile_sleeve_policy(pull_portfolio_sleeves(config))
         if str(ticket.get("source_id") or ""):
             if blocker := _source_route_blocker(ticket, pull_trade_sources(config)):

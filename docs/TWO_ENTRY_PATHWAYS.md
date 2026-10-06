@@ -181,3 +181,18 @@ Timing is a separate acceptance gap: deployed Birdclaw collection is 13:50 then
 Birdclaw 14:35, Kamandal intake 14:45, planner 14:50, retaining the existing
 closing collection. This requires a separate upstream collection/scheduler gate;
 classification support alone does not prove timely acquisition or a natural fill.
+
+
+## October 6 consumed-opening and Sheet publication repair
+
+Filled source openings remain consumed after position closure and across trading
+days. Planner admission and submission both consult the retained opening-intent
+ledger, including terminal partial fills and all source opportunity aliases. An
+unfilled retry can exclude only its own pending reservation; it cannot exclude
+a completed fill. New source adds have distinct opportunity identities.
+
+The cockpit omits duplicate candidate/preflight diagnostics only when a plan's
+JSON cell exceeds the safe size budget. Executable tickets, hashes, control
+flags and basket metadata remain intact. The cell identifies the omitted
+fields and original plan/ticket ledger records. Oversized executable content
+still fails closed rather than being truncated or partially published.

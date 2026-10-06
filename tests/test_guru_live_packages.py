@@ -222,3 +222,18 @@ def test_sheet_activation_preserves_switches_caps_and_unrelated_policy():
     assert propose(result)==result
     gate=validate_sheet_policy(load_control(),tables=result)
     assert gate.ok,json.dumps(gate.to_dict())
+
+
+@pytest.mark.parametrize('status', ['filled', 'manual_fill_recorded', 'partially_filled_terminal'])
+def test_source_opening_remains_consumed_after_close_and_day_boundary(tmp_path, status):
+    store = LocalStore(tmp_path/'state.db')
+    ticket = dict(ticket_hash='consumed', order_id='o', plan_id='p', candidate_id='c', intent_type='open',
+                  source_id='greg_harmon', source_opportunity_id='original-opening', source_opportunity_ids=['original-alias'])
+    store.save_live_order_intent(ticket, status=status)
+    assert store.open_live_position_groups() == []
+    expected = {('greg_harmon','original-opening'), ('greg_harmon','original-alias')}
+    assert occupied_source_opportunities(store) == expected
+    assert occupied_source_opportunities(store, exclude_ticket_hash='consumed') == expected
+    failed = dict(ticket, ticket_hash='unfilled', order_id='retry', source_opportunity_id='new-opening', source_opportunity_ids=[])
+    store.save_live_order_intent(failed, status='cancelled')
+    assert ('greg_harmon', 'new-opening') not in occupied_source_opportunities(store)
