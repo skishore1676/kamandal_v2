@@ -196,3 +196,22 @@ JSON cell exceeds the safe size budget. Executable tickets, hashes, control
 flags and basket metadata remain intact. The cell identifies the omitted
 fields and original plan/ticket ledger records. Oversized executable content
 still fails closed rather than being truncated or partially published.
+
+## October 7 no-concession campaign repair
+
+A positive, valid concession allowance smaller than one tick now omits only
+that concession attempt. Improved-price and midpoint attempts remain eligible;
+the midpoint is rounded in the operator's favor. The frozen campaign records
+`concession_omitted_reason`, and the executor stops after its last retained
+price. Broker preflight still reserves the maximum risk, including fees, across
+all retained attempts. Missing or invalid bounds, stale quotes, and exhausted
+economic headroom still block entry. Existing frozen tickets are unchanged.
+
+For the retained QQQ pricing geometry (midpoint 4.285, improvement 0.013,
+allowance bound 0.0065), the debit campaign is 4.27 then 4.28. This repairs future
+eligible candidates; it does not revive the expired October 5 source opening.
+
+NDX remains unsupported: the current Public adapter selects INDEX instruments
+only for SPX. NDX requires proved broker chain/contract resolution, quote and tick
+handling, fee-inclusive preflight, and reconciliation before live admission.
+Changing the source-package allowlist alone is insufficient.

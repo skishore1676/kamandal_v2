@@ -148,3 +148,33 @@ def test_public_terminal_tick_rejection_rechecks_normalized_campaign(monkeypatch
     assert result.bpr == 523.92
     assert result.raw['request']['limitPrice'] == '5.15'
     assert [check['limit_price'] for check in result.raw['campaign_bpr_checks']] == campaign['prices']
+
+
+def test_subtick_campaign_preflights_both_prices_and_stops_at_midpoint(monkeypatch):
+    candidate = spx_candidate()
+    candidate.net_credit = -4.285
+    candidate.estimated_bpr = 428.5
+    config = adapter_config()
+    config['live']['entry_pricing'].update(min_improvement=.013, max_improvement=.013)
+    adapter = PublicAdapter(config)
+    requests = []
+
+    def preflight(endpoint, payload):
+        assert endpoint.endswith('/preflight/multi-leg')
+        requests.append(deepcopy(payload))
+        return {'buyingPowerRequirement': round(float(payload['limitPrice'])*100+3.92, 2)}
+
+    monkeypatch.setattr(adapter, '_post', preflight)
+    result = adapter.preflight(candidate)
+    assert result.ok
+    assert [r['limitPrice'] for r in requests] == ['4.27', '4.28']
+    assert result.bpr == 431.92
+    candidate.preflight = result
+    _apply_preflight_bpr(candidate, result)
+    root = build_open_ticket(SimpleNamespace(plan_id='plan', plan_rank=1), candidate)
+    midpoint = _repriced_open_ticket(root, config)
+    assert midpoint['limit_price'] == '4.28'
+    assert midpoint['entry_risk_budget'] == root['entry_risk_budget'] == 431.92
+    assert midpoint['legs'] == root['legs']
+    with pytest.raises(ValueError, match='no valid next price'):
+        _repriced_open_ticket(midpoint, config)

@@ -654,3 +654,20 @@ def _selected_ticket(ticket_hash_value: str, candidate_id: str = "rank-one-candi
         "legs": [],
         "submit_payload": {"orderId": f"order-{ticket_hash_value}", "limitPrice": "-1.00", "legs": []},
     }
+
+
+@pytest.mark.parametrize("side", ["credit", "debit"])
+def test_subtick_allowance_retains_improved_and_midpoint_only(side: str) -> None:
+    candidate = _credit_candidate()
+    candidate.net_credit = 4.285 if side == "credit" else -4.285
+    candidate.entry_credit_floor = 3.0
+    candidate.entry_debit_ceiling = 12.0
+    candidate.legs[0].bid, candidate.legs[0].ask = 1.96, 2.04
+    candidate.legs[1].bid, candidate.legs[1].ask = 0.975, 1.025
+    campaign = entry_campaign(candidate, _campaign_config())
+    assert campaign.prices == (("-4.30", "-4.29") if side == "credit" else ("4.27", "4.28"))
+    assert campaign.allowance == 0
+    assert campaign.metadata["concession_omitted_reason"] == "allowance_below_valid_tick"
+    assert campaign.metadata["skip_reason"] == ""
+    assert candidate_entry_limit_price(candidate, _campaign_config()) == campaign.prices[0]
+    assert all(abs(float(p)) >= 4.285 if side == "credit" else abs(float(p)) <= 4.285 for p in campaign.prices)
