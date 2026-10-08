@@ -199,7 +199,8 @@ def compile_source_episode_packet(
     for record in ordered_records:
         signal_id = str(record["signal_id"])
         if signal_id in reused:
-            episode = _hold_possible_edits(reused[signal_id], duplicate_peers.get(signal_id, []))
+            episode = _revalidate_short_roll(reused[signal_id])
+            episode = _hold_possible_edits(episode, duplicate_peers.get(signal_id, []))
             episode = resolve_declared_text_contracts(record, episode, profile)
             episodes.append(episode)
             _advance_active_from_episode(active, episode)
@@ -518,6 +519,66 @@ def _normalize_exact_package(raw: Any) -> dict[str, Any]:
     }
 
 
+def _expected_package_leg_count(action: str, structure: str, legs: list[dict[str, Any]]) -> int | None:
+    """A full short straddle/strangle roll contains old and new position legs."""
+    expected = LEG_COUNTS.get(structure)
+    if action != "roll" or structure not in {"short_straddle", "short_strangle"} or len(legs) != 4:
+        return expected
+    groups = [[leg for leg in legs if leg.get("order_code") == code] for code in ("BTC", "STO")]
+    try:
+        for group in groups:
+            if len(group) != 2 or {leg["option_type"] for leg in group} != {"put", "call"}:
+                return expected
+            if len({leg["expiration"] for leg in group}) != 1:
+                return expected
+            put = next(leg for leg in group if leg["option_type"] == "put")
+            call = next(leg for leg in group if leg["option_type"] == "call")
+            put_strike, call_strike = Decimal(put["strike"]), Decimal(call["strike"])
+            if not all(value.is_finite() and value > 0 for value in (put_strike, call_strike)):
+                return expected
+            if (put_strike != call_strike if structure == "short_straddle" else put_strike >= call_strike):
+                return expected
+            if put["quantity"] != call["quantity"] or put["quantity"] <= 0:
+                return expected
+        if groups[0][0]["quantity"] != groups[1][0]["quantity"]:
+            return expected
+        old = {(leg["expiration"], leg["option_type"], Decimal(leg["strike"])) for leg in groups[0]}
+        new = {(leg["expiration"], leg["option_type"], Decimal(leg["strike"])) for leg in groups[1]}
+        if old & new:
+            return expected
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return expected
+    return 4
+
+
+def _revalidate_short_roll(episode: dict[str, Any]) -> dict[str, Any]:
+    """Repair cached shape validation without reinterpreting contracts or history."""
+    updated = copy.deepcopy(episode)
+    for event in updated.get("events", []):
+        changed = False
+        for package in event.get("exact_packages", []):
+            if (package.get("blocker") == "structure_leg_count_mismatch"
+                    and _expected_package_leg_count(event.get("action", ""), event.get("structure_hint", ""), package.get("legs", [])) == 4
+                    and event.get("action") == "roll"
+                    and event.get("structure_hint") in {"short_straddle", "short_strangle"}):
+                package.update(complete=True, blocker=None)
+                changed = True
+        if changed:
+            packages = event["exact_packages"]
+            if all(package.get("complete") for package in packages):
+                event["blockers"] = [b for b in event.get("blockers", []) if b not in {"exact_package_incomplete", "exact_package_missing"}]
+            if "exact_package" not in event["projections"]:
+                event["projections"].append("exact_package")
+            event["projection_dispositions"] = _projection_dispositions(
+                action=event["action"], projections=event["projections"],
+                exact_packages=[p for p in packages if p.get("complete")],
+                evidence_status=event["evidence_status"], blockers=event["blockers"],
+                symbol=event.get("symbol"), structure=event.get("structure_hint"), direction=event["direction"],
+            )
+            event["planner_new_entry"] = False
+    return updated
+
+
 def _finalize_episode(
     record: Mapping[str, Any],
     interpreted: Mapping[str, Any],
@@ -576,7 +637,7 @@ def _finalize_episode(
             if structure == "butterfly" and _is_put_fly_with_call_vertical(package["legs"]):
                 package["deterministic_structure"] = "put_butterfly_with_call_vertical"
             expected = (5 if package.get("deterministic_structure") == "put_butterfly_with_call_vertical"
-                        else LEG_COUNTS.get(structure))
+                        else _expected_package_leg_count(action, structure, package["legs"]))
             if expected is not None and len(package["legs"]) != expected:
                 package["complete"] = False
                 package["blocker"] = "structure_leg_count_mismatch"

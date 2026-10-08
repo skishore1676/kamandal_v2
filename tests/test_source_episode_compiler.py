@@ -1415,3 +1415,68 @@ def test_exact_condor_opening_gets_age_limit_even_when_envelope_is_hedge(tmp_pat
     assert package.source_published_at == '2026-09-29T15:15:33Z'
     assert package.source_valid_until == '2026-09-30T15:15:33+00:00'
     assert package.structure == 'iron_condor'
+
+
+def _short_roll_legs():
+    return [
+        {"expiration": expiry, "option_type": kind, "order_code": code, "quantity": 1, "strike": "7900"}
+        for expiry, code in (("Oct 16 2026", "BTC"), ("Nov 20 2026", "STO"))
+        for kind in ("put", "call")
+    ]
+
+
+def test_complete_short_straddle_roll_is_not_a_new_opening():
+    record = _record("mes-roll", "Rolled /MESZ6 short straddle out a month", ["/MESZ6"])
+    response = {"schema": PROMPT_SCHEMA, "episodes": [{"signal_id": record["signal_id"], "events": [
+        _event(action="roll", symbol="/MESZ6", direction="neutral", structure_hint="short_straddle",
+               projections=["exact_package", "residual"], exact_packages=[{
+                   "complete": True, "blocker": None, "legs": _short_roll_legs(), "field_provenance": ["text"],
+               }])
+    ]}]}
+    compilation = compile_source_episode_packet(_packet([record]), _profile("mike_butler"), FakeClient(response))
+    event = compilation.episodes[0]["events"][0]
+    assert event["exact_packages"][0]["complete"] is True
+    assert event["link_state"] == event["evidence_status"] == "needs_history"
+    assert event["planner_new_entry"] is False
+    assert "lifecycle_link_missing" in event["blockers"]
+
+    # Old retained validation can be repaired without another model call or
+    # changing the contract transcription, identity, or unresolved history.
+    import copy
+    old = copy.deepcopy(compilation.episodes[0])
+    before = old["events"][0]
+    before["exact_packages"][0].update(complete=False, blocker="structure_leg_count_mismatch")
+    before["blockers"].append("exact_package_incomplete")
+    before["projections"] = ["residual"]
+    reused = compile_source_episode_packet(_packet([record]), _profile("mike_butler"), None, history=[old])
+    repaired = reused.episodes[0]["events"][0]
+    assert repaired["exact_packages"][0]["complete"]
+    assert repaired["exact_packages"][0]["legs"] == _short_roll_legs()
+    assert repaired["event_id"] == before["event_id"]
+    assert repaired["link_state"] == "needs_history"
+    assert repaired["planner_new_entry"] is False
+    assert "exact_package_incomplete" not in repaired["blockers"]
+    assert old["events"][0]["exact_packages"][0]["complete"] is False
+    again = compile_source_episode_packet(_packet([record]), _profile("mike_butler"), None, history=reused.episodes)
+    assert again.episodes == reused.episodes
+
+
+@pytest.mark.parametrize("defect", ["open", "missing_leg", "wrong_code", "same_contracts", "different_sizes", "bad_strike"])
+def test_short_roll_exception_does_not_relax_opening_or_malformed_packages(defect):
+    from kamandal_v2.intelligence.source_episode_compiler import _expected_package_leg_count
+    legs = _short_roll_legs()
+    action = "roll"
+    if defect == "open":
+        action = "open"
+    elif defect == "missing_leg":
+        legs.pop()
+    elif defect == "wrong_code":
+        legs[2]["order_code"] = "STC"
+    elif defect == "same_contracts":
+        for leg in legs:
+            leg["expiration"] = "Oct 16 2026"
+    elif defect == "different_sizes":
+        legs[2]["quantity"] = 2
+    else:
+        legs[2]["strike"] = "8000"
+    assert _expected_package_leg_count(action, "short_straddle", legs) == 2

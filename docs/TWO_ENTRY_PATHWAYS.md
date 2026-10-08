@@ -225,3 +225,23 @@ stale and stopped the 11:45 job before activation. Each source retains its own
 freshness checks; a stale digest still fails the job and cannot reach extraction.
 Import-only mode still skips correspondent activation. No schedule, extra job,
 manual production replay, or freshness-threshold change is required.
+
+## October 8 daily-audit triage
+
+The retained GLD source image (SHA256
+`565c3b130a7b80d8b13d6f3dae270684abb7e00892f22c900b40691eb76b3fde`)
+shows STC for the October 16 $450 call, matching the episode. The daily audit's
+STO claim is incorrect; do not change that leg or infer opening authority.
+
+A complete short-straddle or short-strangle roll may contain two BTC legs and
+two STO legs. The compiler recognizes that four-leg transaction only when both
+old/new pairs preserve the relevant call/put geometry and size, with distinct
+contracts. Cached leg-count failures are revalidated without a model call,
+changing event identity, or changing any leg. Missing history remains missing;
+these follow-ups cannot become new entries or authorize copying source exits.
+
+RKLB's October 8 short-put opening was captured after close. Current controls
+have no enabled exact short-put playbook, and short_put is absent from live exact
+capabilities. An earlier packet alone would not make this executable. Do not
+silently enable a new short-put risk policy or synthesize a different structure.
+The next natural planner receipt remains the authoritative live disposition.
