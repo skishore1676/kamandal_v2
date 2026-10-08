@@ -139,3 +139,25 @@ def test_worksheet_creates_tab_only_for_not_found() -> None:
 
     assert client._worksheet("daily_plan", rows=100, cols=26) is created
     assert add_calls == [{"title": "daily_plan", "rows": 100, "cols": 26}]
+
+
+def test_oversized_plan_detail_preserves_all_execution_tickets():
+    import json
+    from kamandal_v2.sheets import _plan_cell
+    from kamandal_v2.live.execution import _tickets_from_row
+    tickets = [{'ticket_hash':'q','legs':[{'strike':760}], 'preflight':{'evidence':'p'*11000}},
+               {'ticket_hash':'s','legs':[{'strike':500}], 'preflight':{'evidence':'p'*8000}}]
+    detail = {'plan_id':'plan', 'lane':'live', 'candidates':[{'metadata':'x'*35000}],
+              'public_preflight_json':{'raw':'y'*10000}, 'order_ticket_json':tickets[0],
+              'order_tickets_json':tickets, 'basket_execution_json':{'executable':True}}
+    result = _plan_cell('plan_detail_json', json.dumps(detail))
+    assert len(result)<48000
+    decoded = json.loads(result)
+    assert decoded['order_ticket_json'] == tickets[0]
+    assert _tickets_from_row({'plan_detail_json':result},close=False) == tickets
+    assert decoded['basket_execution_json'] == detail['basket_execution_json']
+    assert decoded['detail_evidence_ref']['plan_id']=='plan'
+    assert set(decoded['detail_omitted_fields'])=={'candidates','public_preflight_json'}
+    import pytest
+    with pytest.raises(ValueError,match='exceeds safe Sheet cell limit'):
+        _plan_cell('plan_detail_json', json.dumps({'order_tickets_json':[{'payload':'z'*50001}]}))

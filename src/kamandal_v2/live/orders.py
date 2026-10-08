@@ -99,6 +99,7 @@ def build_csa_live_ticket(ticket: StrategyTicket, *, entry_candidate: Candidate 
         metadata = entry_candidate.metadata or {}
         live_ticket.update({
             "entry_risk_budget": float(entry_candidate.estimated_bpr),
+            "capital_scope_venues": list(metadata.get("capital_scope_venues") or []),
             "source_valid_until": str(metadata.get("source_valid_until") or ""),
             "sleeve_id": "guru_exact" if metadata.get("input_kind") == "exact_package" else "current_idea",
             "source_id": str(metadata.get("source_profile") or ""),
@@ -198,7 +199,7 @@ def ticket_hash(ticket: dict[str, Any]) -> str:
             "preflight",
         )
     }
-    for key in ("entry_risk_budget", "source_valid_until", "sleeve_id", "source_id", "source_output_kind", "source_opportunity_id", "source_opportunity_ids", "source_package_signature", "source_event_id", "source_evidence_revision_id", "source_verification_ref"):
+    for key in ("entry_risk_budget", "capital_scope_venues", "source_valid_until", "sleeve_id", "source_id", "source_output_kind", "source_opportunity_id", "source_opportunity_ids", "source_package_signature", "source_event_id", "source_evidence_revision_id", "source_verification_ref"):
         if key in ticket:
             stable[key] = ticket[key]
     return hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:24]
@@ -250,6 +251,7 @@ def _build_ticket(
         "execution_quality": _execution_quality(candidate),
         **({
             "entry_risk_budget": float(candidate.estimated_bpr),
+            "capital_scope_venues": list((getattr(candidate, "metadata", {}) or {}).get("capital_scope_venues") or []),
             "source_valid_until": str((getattr(candidate, "metadata", {}) or {}).get("source_valid_until") or ""),
             "sleeve_id": "guru_exact" if (getattr(candidate, "metadata", {}) or {}).get("input_kind") == "exact_package" else "current_idea",
             "source_id": str((getattr(candidate, "metadata", {}) or {}).get("source_profile") or ""),

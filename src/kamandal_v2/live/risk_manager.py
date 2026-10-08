@@ -346,7 +346,7 @@ def _check_cluster_concentration(
         for member in members or []:
             membership[str(member).strip().upper()] = str(name)
     counts: dict[str, int] = {}
-    for group in store.open_live_position_groups():
+    for group in _idea_groups(store):
         symbol = _group_underlying(group)
         cluster = membership.get(symbol)
         if cluster:
@@ -381,7 +381,7 @@ def _check_underlying_concentration(
     if not max_per_underlying or max_per_underlying <= 0:
         return
     counts: dict[str, int] = {}
-    for group in store.open_live_position_groups():
+    for group in _idea_groups(store):
         symbol = _group_underlying(group)
         if symbol:
             counts[symbol] = counts.get(symbol, 0) + 1
@@ -402,6 +402,12 @@ def _check_underlying_concentration(
                 "max_positions": max_per_underlying,
             }
         )
+
+
+def _idea_groups(store: LocalStore) -> list[dict[str, Any]]:
+    from kamandal_v2.portfolio_sleeves import candidate_lane
+    return [group for group in store.open_live_position_groups()
+            if (group.get("sleeve_id") or candidate_lane(group.get("candidate") or {})) == "current_idea"]
 
 
 def _closed_group_pnl(store: LocalStore, group: dict[str, Any]) -> float | None:

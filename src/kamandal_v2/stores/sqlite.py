@@ -738,25 +738,32 @@ class LocalStore:
                 idea_ids.add(idea_id)
         return idea_ids
 
-    def shadow_portfolio_state(self, base: PortfolioState) -> PortfolioState:
+    def shadow_portfolio_state(self, base: PortfolioState, *, sleeve: str | None = None) -> PortfolioState:
+        from kamandal_v2.portfolio_sleeves import candidate_lane
+
         with self._connect() as conn:
+            candidate_payloads = {
+                str(row["id"]): json.loads(row["payload"])
+                for row in conn.execute("SELECT id, payload FROM candidates").fetchall()
+            }
             typed = _typed_shadow_lifecycles(conn, statuses={"open"})
             if typed is None:
                 rows = [
                     dict(row)
                     for row in conn.execute(
                         """
-                        SELECT underlying, estimated_bpr, delta, gamma, theta, vega
+                        SELECT candidate_id, underlying, estimated_bpr, delta, gamma, theta, vega
                         FROM shadow_fills
                         WHERE status = 'open'
                         """
                     ).fetchall()
                 ]
+                if sleeve is not None:
+                    rows = [row for row in rows if candidate_lane(candidate_payloads.get(str(row["candidate_id"]), {})) == sleeve]
             else:
-                candidate_payloads = {
-                    str(row["id"]): json.loads(row["payload"])
-                    for row in conn.execute("SELECT id, payload FROM candidates").fetchall()
-                }
+                if sleeve is not None:
+                    typed = [item for item in typed if candidate_lane(candidate_payloads.get(
+                        str((item.get("metadata") or {}).get("candidate_id") or ""), {})) == sleeve]
                 rows = [_typed_shadow_portfolio_row(item, candidate_payloads) for item in typed]
         bpr_used = round(sum(float(row.get("estimated_bpr") or 0.0) for row in rows), 2)
         greeks = Greeks()
@@ -783,9 +790,14 @@ class LocalStore:
             per_underlying_bpr=per_underlying_bpr,
         )
 
-    def live_portfolio_state(self, base: PortfolioState) -> PortfolioState:
+    def live_portfolio_state(self, base: PortfolioState, *, sleeve: str | None = None) -> PortfolioState:
+        from kamandal_v2.portfolio_sleeves import candidate_lane
+
         groups = self.open_live_position_groups()
-        if not groups:
+        if sleeve is not None:
+            groups = [group for group in groups if
+                      (group.get("sleeve_id") or candidate_lane(group.get("candidate") or {})) == sleeve]
+        if not groups and sleeve is None:
             return base
         per_underlying_bpr: dict[str, float] = {}
         greeks = Greeks()
@@ -799,9 +811,9 @@ class LocalStore:
         return PortfolioState(
             account_size=base.account_size,
             buying_power=base.buying_power,
-            bpr_used=base.bpr_used,
+            bpr_used=base.bpr_used if sleeve is None else sum(per_underlying_bpr.values()),
             positions_count=len(groups),
-            greeks=greeks if any((greeks.delta, greeks.gamma, greeks.theta, greeks.vega)) else base.greeks,
+            greeks=greeks if sleeve is not None or any((greeks.delta, greeks.gamma, greeks.theta, greeks.vega)) else base.greeks,
             per_underlying_bpr=per_underlying_bpr,
         )
 
@@ -1390,8 +1402,13 @@ class LocalStore:
                 "trigger_progress_pct": target_progress,
                 "profit_pct": profit_pct,
                 "marked_at": marked_at,
-                "quote_fresh": bool(metadata.get("mark_quote_actionable")),
-                "pricing_complete": not bool(metadata.get("mark_quote_blockers")),
+                "quote_fresh": bool(metadata.get("mark_quote_fresh", metadata.get("mark_quote_actionable"))),
+                "quote_actionable": bool(metadata.get("mark_quote_actionable")),
+                "pricing_complete": bool(metadata.get("mark_pricing_complete", not bool(metadata.get("mark_quote_blockers")))),
+                "quote_blockers": list(metadata.get("mark_quote_blockers") or []),
+                "selected_action_type": str(metadata.get("mark_selected_action_type") or ""),
+                "execution_quote_scope": str(metadata.get("mark_execution_quote_scope") or "whole_position"),
+                "strangle_detection": dict(metadata.get("strangle_detection") or {}),
                 "max_leg_bid_ask_pct": _float(metadata.get("mark_max_leg_bid_ask_pct"), 0.0),
                 "mark_source": str(metadata.get("mark_source") or "canonical_lifecycle"),
                 "decision_observation_id": str(metadata.get("mark_observation_id") or ""),

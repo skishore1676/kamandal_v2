@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from kamandal_v2.domain.models import OptionLeg
-from kamandal_v2.strategy_lanes.models import LifecycleState, stable_csa_id
+from kamandal_v2.strategy_lanes.models import LaneId, LifecycleState, stable_csa_id
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 
 
@@ -43,6 +43,7 @@ class PackageObservation:
     selected_reason: str = ""
     selected_reason_class: str = ""
     execution_status: str = "observed"
+    execution_quote_scope: str = "whole_position"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -60,6 +61,10 @@ def observe_package(
     """Build one decision mark without confusing valuation with execution."""
 
     blockers: list[str] = []
+    # Closing a short option buys at the ask. Its bid can legitimately be zero
+    # after successful decay; per-leg percentage width then tends to 200%.
+    # Retain finite, non-crossed, fresh quotes and the PACKAGE width boundary.
+    strangle_close = lifecycle.lane is LaneId.SHORT_STRANGLE
     midpoint_liquidation = 0.0
     natural_liquidation = 0.0
     gross_mid = 0.0
@@ -73,7 +78,7 @@ def observe_package(
         if not all(math.isfinite(value) for value in (bid, ask, mid)):
             blockers.append(f"non_finite_quote:{label}")
             continue
-        if bid <= 0 or ask <= 0 or ask < bid or mid <= 0:
+        if bid < 0 or (bid == 0 and not (strangle_close and leg.side == "sell")) or ask <= 0 or ask < bid or mid <= 0:
             blockers.append(f"invalid_two_sided_quote:{label}")
         if mid <= 0:
             continue
@@ -99,7 +104,7 @@ def observe_package(
         blockers.append("incomplete_package")
     max_allowed = float(policy.resolved_fields["max_bid_ask_pct"])
     package_spread = (gross_spread / gross_mid) if gross_mid > 0 else math.inf
-    if max_leg_spread > max_allowed:
+    if max_leg_spread > max_allowed and not strangle_close:
         blockers.append("spread_exceeds_frozen_policy")
     if package_spread > max_allowed:
         blockers.append("package_spread_exceeds_frozen_policy")
@@ -148,6 +153,7 @@ def observe_package(
         pricing_complete=pricing_complete,
         quote_actionable=not blockers,
         quote_blockers=tuple(dict.fromkeys(blockers)),
+        execution_quote_scope="strangle_close_package" if strangle_close else "whole_position",
     )
 
 

@@ -22,6 +22,7 @@ SUPPORTED_VALIDATOR_STRUCTURES = {
     "call_butterfly",
     "put_butterfly",
     "call_crab",
+    "split_call_fly",
     "calendar_bundle",
 }
 
@@ -40,6 +41,7 @@ def validate_structure(structure: str, legs: list[OptionLeg], underlying_price: 
         "call_butterfly": lambda legs, price: _butterfly(legs, option_type="call"),
         "put_butterfly": lambda legs, price: _butterfly(legs, option_type="put"),
         "call_crab": _call_crab,
+        "split_call_fly": _split_call_fly,
         "calendar_bundle": _calendar_bundle,
         "put_spread": _put_spread,
         "call_spread": _call_spread,
@@ -55,6 +57,44 @@ def validate_structure(structure: str, legs: list[OptionLeg], underlying_price: 
     if validator is None:
         return ValidationResult(False, f"unsupported_structure:{structure}")
     return validator(legs, underlying_price)
+
+
+def validate_exact_structure(structure: str, legs: list[OptionLeg], underlying_price: float) -> ValidationResult:
+    """Contract geometry for copies, without spot/OTM selection preferences."""
+    if structure in {"call_spread", "put_spread"}:
+        kind = structure.split("_")[0]
+        valid = (len(legs) == 2 and {leg.option_type for leg in legs} == {kind}
+                 and {leg.side for leg in legs} == {"buy", "sell"}
+                 and len({leg.expiration for leg in legs}) == 1
+                 and len({leg.quantity for leg in legs}) == 1
+                 and len({leg.strike for leg in legs}) == 2)
+        return ValidationResult(valid, "" if valid else "exact_vertical_contract_geometry_invalid")
+    if structure == "short_strangle":
+        puts, calls = [leg for leg in legs if leg.option_type == "put"], [leg for leg in legs if leg.option_type == "call"]
+        valid = (len(legs) == 2 and len(puts) == len(calls) == 1
+                 and all(leg.side == "sell" for leg in legs)
+                 and puts[0].strike < calls[0].strike
+                 and len({leg.expiration for leg in legs}) == len({leg.quantity for leg in legs}) == 1)
+        return ValidationResult(valid, "" if valid else "exact_strangle_contract_geometry_invalid")
+    if structure == "iron_condor":
+        puts = sorted((leg for leg in legs if leg.option_type == "put"), key=lambda leg: leg.strike)
+        calls = sorted((leg for leg in legs if leg.option_type == "call"), key=lambda leg: leg.strike)
+        valid = (len(legs) == 4 and len(puts) == len(calls) == 2
+                 and len({leg.expiration for leg in legs}) == len({leg.quantity for leg in legs}) == 1
+                 and [leg.side for leg in puts + calls] == ["buy", "sell", "sell", "buy"]
+                 and puts[0].strike < puts[1].strike < calls[0].strike < calls[1].strike)
+        return ValidationResult(valid, "" if valid else "exact_condor_contract_geometry_invalid")
+    return validate_structure(structure, legs, underlying_price)
+
+
+def _split_call_fly(legs: list[OptionLeg], underlying_price: float) -> ValidationResult:
+    ordered = sorted(legs, key=lambda leg: leg.strike)
+    valid = (len(ordered) == 4 and {leg.option_type for leg in ordered} == {"call"}
+             and len({leg.expiration for leg in ordered}) == 1
+             and len({leg.strike for leg in ordered}) == 4
+             and [leg.quantity for leg in ordered] == [1, 1, 1, 1]
+             and [leg.side for leg in ordered] == ["buy", "sell", "sell", "buy"])
+    return ValidationResult(valid, "" if valid else "split_call_fly_contract_geometry_invalid")
 
 
 def _short_put(legs: list[OptionLeg], underlying_price: float) -> ValidationResult:

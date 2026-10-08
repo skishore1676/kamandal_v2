@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import math
 import re
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -49,15 +50,26 @@ def parse_occ_symbol(symbol: str) -> dict[str, Any]:
     }
 
 
-def _candidate_risk_bpr(candidate: Candidate, public_bpr: float | None) -> float:
+def _candidate_risk_bpr(candidate: Candidate, public_bpr: float | None, *, limit_price: str | None = None) -> float:
     """Prefer broker margin for undefined-risk structures; otherwise keep the safety floor."""
 
     fallback = abs(float(candidate.estimated_bpr or 0.0))
+    if limit_price is not None:
+        # Public can report credit proceeds instead of defined-risk margin.
+        # Retain the structural risk floor, including the extra cash at risk
+        # when a campaign pays more debit or accepts less credit than midpoint.
+        credit_at_limit = abs(float(limit_price)) * (1 if candidate.net_credit > 0 else -1)
+        fallback += max(float(candidate.net_credit) - credit_at_limit, 0.0) * 100
     if public_bpr is None or not abs(float(public_bpr)):
         return round(fallback, 2)
     broker_bpr = abs(float(public_bpr))
     if candidate.structure in {"short_strangle", "strangle"}:
         return round(broker_bpr, 2)
+    if limit_price is not None and candidate.net_credit > 0 and public_bpr < 0:
+        # A negative requirement is net credit received, already reduced by
+        # fees. Translate it into structural risk instead of treating proceeds
+        # as margin; this also reserves the fees on a credit-spread campaign.
+        fallback = max(fallback, abs(float(candidate.estimated_bpr)) + candidate.net_credit * 100 - broker_bpr)
     return round(max(broker_bpr, fallback), 2)
 
 
@@ -198,26 +210,7 @@ class PublicAdapter:
                 },
             )
         try:
-            endpoint = "single-leg" if len(candidate.legs) == 1 else "multi-leg"
-            response = self._post(
-                f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
-                payload,
-            )
-            raw_bpr = _find_optional_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"))
-            bpr = _candidate_risk_bpr(candidate, raw_bpr)
-            return PreflightResult(
-                ok=True,
-                bpr=bpr,
-                message="Public preflight ok",
-                raw={
-                    "request": payload,
-                    "response": response,
-                    "entry_pricing": entry_price_metadata(candidate, self._config),
-                    "public_bpr_raw": raw_bpr,
-                    "broker_bpr_provided": raw_bpr is not None and abs(raw_bpr) > 0,
-                    "bpr_source": "broker_preflight" if raw_bpr is not None and abs(raw_bpr) > 0 else "local_fallback",
-                },
-            )
+            return self._preflight_entry_campaign(candidate, payload, entry_price_metadata(candidate, self._config))
         except Exception as exc:  # noqa: BLE001
             if _is_nickel_increment_rejection(exc):
                 retry_payload = dict(payload)
@@ -231,26 +224,11 @@ class PublicAdapter:
                     retry_campaign.get("prices", [candidate_entry_limit_price(candidate, self._config, nickel=True)])[0]
                 )
                 try:
-                    response = self._post(
-                        f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
-                        retry_payload,
-                    )
-                    raw_bpr = _find_optional_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"))
-                    bpr = _candidate_risk_bpr(candidate, raw_bpr)
-                    return PreflightResult(
-                        ok=True,
-                        bpr=bpr,
-                        message="Public preflight ok after nickel tick retry",
-                        raw={
-                            "request": retry_payload,
-                            "response": response,
-                            "retry_reason": str(exc),
-                            "entry_pricing": retry_entry_pricing,
-                            "public_bpr_raw": raw_bpr,
-                            "broker_bpr_provided": raw_bpr is not None and abs(raw_bpr) > 0,
-                            "bpr_source": "broker_preflight" if raw_bpr is not None and abs(raw_bpr) > 0 else "local_fallback",
-                        },
-                    )
+                    result = self._preflight_entry_campaign(candidate, retry_payload, retry_entry_pricing)
+                    result.raw["retry_reason"] = _safe_public_error(exc)
+                    if result.ok:
+                        result.message = "Public preflight ok after nickel tick retry"
+                    return result
                 except Exception as retry_exc:  # noqa: BLE001
                     message = f"Public preflight failed: {_safe_public_error(retry_exc)}"
                     raw = {"source": "public", "first_error": _safe_public_error(exc)}
@@ -262,6 +240,44 @@ class PublicAdapter:
             raw.update(_public_api_error_raw(message))
             raw.update(_public_invalid_order_raw(message))
             return PreflightResult(ok=False, bpr=candidate.estimated_bpr, message=message, raw=raw)
+
+    def _preflight_entry_campaign(
+        self, candidate: Candidate, payload: dict[str, Any], metadata: dict[str, Any],
+    ) -> PreflightResult:
+        """Reserve broker-checked risk for every allowed price before selection."""
+        endpoint = "single-leg" if len(candidate.legs) == 1 else "multi-leg"
+        campaign = metadata.get("campaign") or {}
+        prices = campaign.get("prices") if campaign.get("enabled") else [payload["limitPrice"]]
+        checks = []
+        first_response: dict[str, Any] = {}
+        first_bpr = None
+        for price in prices:
+            response = self._post(
+                f"/userapigateway/trading/{self._account_id()}/preflight/{endpoint}",
+                {**payload, "limitPrice": price},
+            )
+            raw_bpr = _find_optional_number(response, ("buyingPowerRequirement", "buyingPowerEffect", "estimatedBuyingPower"))
+            provided = raw_bpr is not None and math.isfinite(raw_bpr) and abs(raw_bpr) > 0
+            if not checks:
+                first_response, first_bpr = response, raw_bpr
+            bpr = _candidate_risk_bpr(candidate, raw_bpr if provided else None,
+                                      limit_price=price if campaign.get("enabled") else None)
+            checks.append({"limit_price": price, "ok": provided, "bpr": bpr,
+                           "broker_bpr_provided": provided, "public_bpr_raw": raw_bpr})
+            if campaign.get("enabled") and not provided:
+                return PreflightResult(False, bpr, "entry campaign broker BPR missing", {
+                    "request": payload, "response": first_response, "entry_pricing": metadata,
+                    "broker_bpr_provided": False, "campaign_bpr_checks": checks,
+                })
+        provided = all(check["broker_bpr_provided"] for check in checks)
+        return PreflightResult(True, max(check["bpr"] for check in checks), "Public preflight ok", {
+            # Ticket construction must continue to use the first price, while
+            # planner caps/sleeves reserve the largest checked requirement.
+            "request": payload, "response": first_response, "entry_pricing": metadata,
+            "public_bpr_raw": first_bpr, "broker_bpr_provided": provided,
+            "bpr_source": "broker_preflight" if provided else "local_fallback",
+            **({"campaign_bpr_checks": checks} if campaign.get("enabled") else {}),
+        })
 
     def preflight_ticket(self, ticket: dict[str, Any]) -> PreflightResult:
         self._require_available()

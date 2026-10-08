@@ -693,7 +693,11 @@ def main() -> None:
             provider=args.provider,
             branch=args.branch,
         )
-        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+        output = result.to_dict()
+        if args.provider == "public":
+            from kamandal_v2.intelligence.trade_source_activity import refresh_trade_source_outcomes
+            output["activity_projection"] = refresh_trade_source_outcomes(config, LocalStore(args.db))
+        print(json.dumps(output, indent=2, sort_keys=True))
         if not result.ok:
             raise SystemExit(1)
         return
@@ -865,6 +869,9 @@ def main() -> None:
             )
         else:
             result = execute_live_approved(config, submit=submit)
+        if submit:
+            from kamandal_v2.intelligence.trade_source_activity import refresh_trade_source_outcomes
+            result["activity_projection"] = refresh_trade_source_outcomes(config, LocalStore())
         print(json.dumps(result, indent=2))
         return
     if args.command == "execute-live-approved-closes":

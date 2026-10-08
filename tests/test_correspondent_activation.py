@@ -101,7 +101,7 @@ def test_production_x_job_refuses_retired_bookmark_fallback() -> None:
     assert "retired bookmark fallback is disabled" in script
 
 
-def test_activation_publishes_eligible_ideas_and_clears_them_when_no_longer_eligible(tmp_path: Path) -> None:
+def test_activation_does_not_publish_unconfirmed_template_entries(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     store = LocalStore(tmp_path / "kamandal.db")
     commands: list[list[str]] = []
@@ -118,14 +118,12 @@ def test_activation_publishes_eligible_ideas_and_clears_them_when_no_longer_elig
     )
 
     assert activated.status == "succeeded"
-    assert activated.planner_idea_count == 1
+    assert activated.planner_idea_count == 0
     assert commands[0][commands[0].index("--profile") + 1] == "greg_harmon"
     assert commands[0][commands[0].index("--since-hours") + 1] == "336"
     active_path = activated.active_idea_paths[0]
     ideas = load_ideas([active_path])
-    assert len(ideas) == 1
-    assert ideas[0].underlying == "TSLA"
-    assert ideas[0].allowed_structures == ["short_strangle"]
+    assert ideas == []
     receipt = json.loads(activated.receipt_path.read_text(encoding="utf-8"))
     assert receipt["effects"]["active_idea_publication"] is True
     assert all(
@@ -357,10 +355,11 @@ def test_observed_package_profile_publishes_typed_feed_and_reuses_cache(tmp_path
     )
     live_package = load_observed_package_feed(live_result.observed_package_feed_path)[0].packages[0]
     assert live_package.source_verified
-    assert live_package.source_verification_ref.startswith("sv_")
-    assert image_client.calls == 1
+    assert live_package.source_verification_ref.startswith("scv_")
+    assert live_package.source_verification_method == "single_pass_contract_validation"
+    assert image_client.calls == 0
 
-    # The independently checked projection survives the feed seam and can be
+    # The deterministically source-bound projection survives the feed seam and can be
     # evaluated by the exact live planner without changing its source legs.
     from dataclasses import replace
     from types import SimpleNamespace
@@ -410,15 +409,16 @@ def test_observed_package_profile_publishes_typed_feed_and_reuses_cache(tmp_path
         trade_source_rows=live_rows,
     )
     disagreed = load_observed_package_feed(changed.observed_package_feed_path)[0].packages[0]
-    assert not disagreed.source_verified
-    assert disagreed.source_verification_reason == "source_contracts_disagree_with_image"
+    assert disagreed.source_verified
+    assert disagreed.source_verification_reason is None
+    # Optional independent model labor is not invoked by scheduled admission.
     assert build_observed_package_candidates(
         [replace(disagreed, source_valid_until="2026-08-27T19:00:00Z")],
         policies=(policy,), playbooks=[playbook], market=market,
         store=LocalStore(tmp_path / "disagreed-planner.db"),
         config={"runtime": {"observed_at": "2026-08-27T18:00:00Z"}},
         trade_source_policies=source_policies, mode="live",
-    ) == []
+    )[0].eligible
 
 
 def test_activation_records_outside_universe_mentions_for_weekly_review(tmp_path: Path) -> None:
@@ -492,7 +492,7 @@ def test_activation_asks_current_packet_then_publishes_bearish_diagonal(tmp_path
     packet["records"] = [
         {
             "schema": "birdclaw.correspondent_signal.v1",
-            "signal_id": "x-post:weekly-current",
+                        "signal_id": "x-post:weekly-current",
             "profile_id": "greg_harmon",
             "source": {
                 "kind": "public_x_post",
@@ -533,7 +533,7 @@ def test_activation_asks_current_packet_then_publishes_bearish_diagonal(tmp_path
                 "episodes": [{
                     "signal_id": "x-post:weekly-current",
                     "events": [{
-                        "action": "open",
+                        "action": "commentary",
                         "symbol": "SPY",
                         "direction": "bullish",
                         "structure_hint": "call_diagonal",

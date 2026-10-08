@@ -27,8 +27,9 @@ class TradeSourceMode(StrEnum):
 # permission only within this set; broker and exit readback are still required
 # before promoting a new name in the operator Sheet.
 LIVE_EXACT_STRUCTURES = frozenset({
-    "long_call", "call_butterfly", "put_butterfly", "call_crab", "calendar_bundle",
+    "long_call", "call_butterfly", "put_butterfly", "call_crab", "split_call_fly", "calendar_bundle",
     "iron_condor", "short_strangle", "call_calendar", "put_calendar", "call_diagonal", "put_diagonal",
+    "call_spread", "put_spread",
 })
 
 

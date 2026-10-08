@@ -107,6 +107,9 @@ class ObservedPackageEvidence:
     source_verified: bool = False
     source_verification_ref: str | None = None
     source_verification_reason: str | None = None
+    evidence_basis: str = "image"
+    source_text_sha256: str = ""
+    source_verification_method: str = "independent_image"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -136,7 +139,10 @@ class ObservedPackageEvidence:
             "source_verified": self.source_verified,
             "source_verification_ref": self.source_verification_ref,
             "source_verification_reason": self.source_verification_reason,
+            "source_verification_method": self.source_verification_method,
             "provenance": {
+                "evidence_basis": self.evidence_basis,
+                "source_text_sha256": self.source_text_sha256,
                 "image_sha256": self.image_sha256,
                 "prompt_sha256": self.prompt_sha256,
                 "output_sha256": self.output_sha256,
@@ -345,7 +351,7 @@ def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageB
             legs=tuple(legs),
             package_signature=_optional_text(item.get("package_signature")),
             evidence_revision_id=_required_text(item.get("evidence_revision_id"), f"packages[{index}].evidence_revision_id"),
-            image_sha256=_required_text(provenance.get("image_sha256"), f"packages[{index}].provenance.image_sha256"),
+            image_sha256=str(provenance.get("image_sha256") or ""),
             prompt_sha256=_required_text(provenance.get("prompt_sha256"), f"packages[{index}].provenance.prompt_sha256"),
             output_sha256=_required_text(provenance.get("output_sha256"), f"packages[{index}].provenance.output_sha256"),
             opportunity_group_id=_optional_text(item.get("opportunity_group_id")),
@@ -356,8 +362,14 @@ def observed_package_batch_from_dict(raw: Mapping[str, Any]) -> ObservedPackageB
             source_verified=item.get("source_verified", False),
             source_verification_ref=_optional_text(item.get("source_verification_ref")),
             source_verification_reason=_optional_text(item.get("source_verification_reason")),
+            evidence_basis=str(provenance.get("evidence_basis") or "image"),
+            source_text_sha256=str(provenance.get("source_text_sha256") or ""),
+            source_verification_method=str(item.get("source_verification_method") or "independent_image"),
         )
-        if package.action not in _PACKAGE_ACTIONS or package.media_index <= 0 or package.package_position <= 0:
+        valid_locator = (package.media_index > 0 and bool(package.image_sha256)
+                         if package.evidence_basis == "image" else
+                         package.evidence_basis == "text" and package.media_index == 0 and len(package.source_text_sha256) == 64)
+        if package.action not in _PACKAGE_ACTIONS or not valid_locator or package.package_position <= 0:
             raise ObservedPackageValidationError(f"batch package {index} has invalid identity fields")
         packages.append(package)
     return ObservedPackageBatch(
@@ -669,6 +681,13 @@ def infer_observed_structure(legs: tuple[ObservedLegEvidence, ...], *, action: s
     if len(opening_legs) == 3 and _is_butterfly(opening_legs):
         return f"{opening_legs[0].option_type}_butterfly"
     if len(opening_legs) == 4:
+        ordered = sorted(opening_legs, key=lambda leg: Decimal(str(leg.strike)))
+        if ({leg.option_type for leg in ordered} == {"call"}
+                and len({leg.expiration for leg in ordered}) == 1
+                and len({leg.strike for leg in ordered}) == 4
+                and [leg.quantity for leg in ordered] == [1, 1, 1, 1]
+                and [leg.order_code for leg in ordered] == ["BTO", "STO", "STO", "BTO"]):
+            return "split_call_fly"
         calendar_type = _double_calendar_type(opening_legs)
         if calendar_type:
             return calendar_type

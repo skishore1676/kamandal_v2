@@ -272,7 +272,7 @@ def execute_live_approved(
                 ),
                 "",
             )
-            if submit and (underlying_cap or cluster_cap):
+            if submit and ticket.get("source_output_kind") != "exact_package" and (underlying_cap or cluster_cap):
                 reason = "blocked_risk_underlying_cap" if underlying_cap else f"blocked_risk_cluster_cap:{cluster_cap}"
                 return {
                     "action": action,
@@ -335,7 +335,7 @@ def execute_live_approved(
             continue
         for ticket in tickets:
             capped_underlying = underlying_capped.get(str(ticket.get("underlying") or "").upper())
-            if capped_underlying and submit and not close:
+            if capped_underlying and submit and not close and ticket.get("source_output_kind") != "exact_package":
                 store.event(
                     "live_entry_blocked_by_underlying_cap",
                     {
@@ -354,7 +354,7 @@ def execute_live_approved(
                 )
                 continue
             capped_cluster = cluster_capped.get(str(ticket.get("underlying") or "").upper())
-            if capped_cluster and submit and not close:
+            if capped_cluster and submit and not close and ticket.get("source_output_kind") != "exact_package":
                 store.event("live_entry_blocked_by_cluster_cap", {"ticket_hash": ticket.get("ticket_hash"), "underlying": ticket.get("underlying"), "cluster": capped_cluster})
                 results.append({"status": "blocked", "reason": f"blocked_risk_cluster_cap:{capped_cluster}", "underlying": ticket.get("underlying"), "ticket_hash": ticket.get("ticket_hash")})
                 continue
@@ -473,7 +473,7 @@ def _execute_ticket(
                 fresh_preflight.message or "fresh_preflight_failed",
                 failure_code="fresh_preflight_failed",
             )
-        if not close and ticket.get("source_output_kind") == "exact_package":
+        if ticket.get("intent_type") == "open" and ticket.get("source_output_kind") == "exact_package":
             blocker = _fresh_source_route_blocker(config, ticket)
             if blocker:
                 store.event("live_entry_exact_evidence_blocked", {
@@ -486,7 +486,7 @@ def _execute_ticket(
                 } else "blocked_source_revision"
                 store.update_live_order_intent_status(str(ticket["ticket_hash"]), status)
                 return _failure(ticket, blocker, failure_code=blocker)
-        if not close and str((config.get("portfolio") or {}).get("sleeves_source") or "") == "sheet":
+        if ticket.get("intent_type") == "open" and str((config.get("portfolio") or {}).get("sleeves_source") or "") == "sheet":
             blocker = _fresh_sheet_entry_blocker(
                 config, adapter, store, ticket, preflight_bpr=float(fresh_preflight.bpr or 0),
             )
@@ -587,16 +587,50 @@ def _fresh_sheet_entry_blocker(
         opportunity = str(ticket.get("source_opportunity_id") or "")
         occupied = occupied_source_opportunities(store, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""))
         if source and any((source, value) in occupied for value in {opportunity, *ticket.get("source_opportunity_ids", [])} if value):
-            return "source_opportunity_already_open_or_pending"
+            return "source_opportunity_already_consumed_or_pending"
         sleeve_policy = compile_sleeve_policy(pull_portfolio_sleeves(config))
         if str(ticket.get("source_id") or ""):
             if blocker := _source_route_blocker(ticket, pull_trade_sources(config)):
                 return blocker
-        account = adapter.account_state()
+        from kamandal_v2.market.venue_router import _aggregate_portfolios
+
+        venue = ticket_execution_venue(config, ticket)
+        scope = ticket.get("capital_scope_venues") or [venue]
+        if (not isinstance(scope, list) or not all(isinstance(value, str) for value in scope)
+                or venue not in scope or len(set(scope)) != len(scope)):
+            return "entry_capital_scope_invalid"
+        states = {}
+        for name in scope:
+            scoped_adapter = adapter if name == venue else broker_adapter(config, execution_venue=name)
+            if hasattr(scoped_adapter, "available") and not scoped_adapter.available():
+                return f"entry_capital_scope_unavailable:{name}"
+            readiness = scoped_adapter.live_readiness() if hasattr(scoped_adapter, "live_readiness") else {"ready": True}
+            if not readiness.get("ready", True):
+                return f"entry_capital_scope_unavailable:{name}"
+            state = scoped_adapter.account_state()
+            if (not all(math.isfinite(value) for value in (state.account_size, state.buying_power, state.bpr_used))
+                    or state.account_size <= 0 or state.bpr_used < 0):
+                return f"entry_capital_scope_invalid:{name}"
+            states[name] = state
+        account = _aggregate_portfolios(states)
         usage = live_sleeve_usage(
             store, account, exclude_ticket_hash=str(ticket.get("ticket_hash") or ""),
         )
-        return sleeve_entry_blocker(sleeve_policy, usage, [(ticket_lane(ticket), max(budget, preflight_bpr))])
+        required = max(budget, preflight_bpr)
+        blocker = sleeve_entry_blocker(sleeve_policy, usage, [(ticket_lane(ticket), required)])
+        venue_account = states[venue]
+        if not blocker and required > venue_account.buying_power:
+            blocker = f"execution_venue_buying_power:{venue}"
+        if not blocker and (venue_account.bpr_used + required) / venue_account.account_size * 100 > sleeve_policy.portfolio_total_pct:
+            blocker = f"execution_venue_bpr_cap:{venue}"
+        store.event("live_entry_capital_checked", {
+            "ticket_hash": ticket.get("ticket_hash"), "sleeve_id": ticket_lane(ticket),
+            "capital_scope_venues": scope, "execution_venue": venue,
+            "usage": usage.to_dict(), "limits_pct": sleeve_policy.to_dict(),
+            "required_bpr": required, "venue_account": venue_account.to_dict(),
+            "blocker": blocker, "broker_effects": False,
+        })
+        return blocker
     except Exception as exc:  # noqa: BLE001 - unavailable Sheet or broker account fails closed.
         return f"entry_sheet_policy_unavailable:{type(exc).__name__}"
 
@@ -625,8 +659,23 @@ def _fresh_exact_evidence_blocker(config: dict[str, Any], ticket: dict[str, Any]
                 and package.source_verified
                 and not package.source_verification_reason
                 and package.source_verification_ref == str(ticket["source_verification_ref"])):
-            return ""
+            return "" if _ticket_preserves_source_contracts(ticket, package) else "entry_exact_contracts_changed"
     return "entry_exact_evidence_superseded"
+
+
+def _ticket_preserves_source_contracts(ticket: dict[str, Any], package: Any) -> bool:
+    """The approved local unit package keeps every source contract and ratio."""
+    import math
+    try:
+        divisor = math.gcd(*(int(leg.quantity) for leg in package.legs))
+        expected = sorted((leg.expiration, leg.option_type, float(leg.strike), leg.side,
+                           int(leg.quantity) // divisor) for leg in package.legs)
+        actual = sorted((str(leg["expiration"]), str(leg["option_type"]), float(leg["strike"]),
+                         str(leg["side"]), int(leg["quantity"])) for leg in ticket["legs"])
+        return (str(ticket.get("underlying") or "") == package.symbol and actual == expected
+                and all(str(leg.get("effect") or "open") == "open" for leg in ticket["legs"]))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return False
 
 
 def _source_route_blocker(ticket: dict[str, Any], rows: list[dict[str, Any]]) -> str:
@@ -822,7 +871,7 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
                     }
                 )
             continue
-        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "close" and _close_expire_due(store, ticket, response, config):
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type in {"close", "adjust"} and _close_expire_due(store, ticket, response, config):
             expire_result = _expire_live_close_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **expire_result})
             continue
@@ -833,7 +882,7 @@ def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manag
                 expire_result = _expire_live_entry_order(adapter, store, config, ticket, response)
                 results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, "route_blocker": route_blocker, **expire_result})
                 continue
-        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type == "close" and _close_reprice_due(store, ticket, response, config):
+        if status in {"NEW", "OPEN", "WORKING"} and should_manage_submitted and intent_type in {"close", "adjust"} and _close_reprice_due(store, ticket, response, config):
             reprice_result = _reprice_live_close_order(adapter, store, config, ticket, response)
             results.append({"ticket_hash": ticket["ticket_hash"], "order_id": ticket["order_id"], "status": status, **reprice_result})
             continue
@@ -1130,15 +1179,22 @@ def _expire_live_close_order(adapter: Any, store: LocalStore, config: dict[str, 
 
 
 def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str, Any], ticket: dict[str, Any], broker_status: dict[str, Any]) -> dict[str, Any]:
+    close = str(ticket.get("intent_type") or "") == "close"
     try:
         _assert_submit_allowed(config, submit=True)
-        window = submission_window(config, ticket, close=True)
+        window = submission_window(config, ticket, close=close)
         if not window["allowed"]:
             store.event("live_order_close_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_market_closed", "submission_window": window}
         new_ticket = _repriced_close_ticket(ticket, config)
+        if not close:
+            fresh_preflight = _preflight_ticket_with_entry_risk(adapter, new_ticket)
+            if not fresh_preflight.ok:
+                return {"reprice_status": "deferred_preflight_failed", "reprice_message": fresh_preflight.message}
+            new_ticket["preflight"] = fresh_preflight.to_dict()
+            new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
         if _staged_replace_required(adapter, new_ticket):
-            return _begin_staged_replacement(adapter, store, ticket, new_ticket, broker_status=broker_status, close=True)
+            return _begin_staged_replacement(adapter, store, ticket, new_ticket, broker_status=broker_status, close=close)
         if _atomic_replace_supported(adapter, new_ticket):
             return _replace_live_order_atomically(
                 adapter,
@@ -1147,7 +1203,7 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
                 ticket,
                 new_ticket,
                 broker_status=broker_status,
-                close=True,
+                close=close,
             )
         fresh_preflight = _preflight_ticket_with_entry_risk(adapter, new_ticket)
         if not fresh_preflight.ok:
@@ -1170,7 +1226,7 @@ def _reprice_live_close_order(adapter: Any, store: LocalStore, config: dict[str,
             return {"reprice_status": "deferred_preflight_failed", "reprice_message": fresh_preflight.message}
         new_ticket["preflight"] = fresh_preflight.to_dict()
         new_ticket["ticket_hash"] = compute_ticket_hash(new_ticket)
-        window = submission_window(config, new_ticket, close=True)
+        window = submission_window(config, new_ticket, close=close)
         if not window["allowed"]:
             store.event("live_order_close_reprice_deferred", {"ticket_hash": ticket.get("ticket_hash"), "order_id": ticket.get("order_id"), "submission_window": window})
             return {"reprice_status": "deferred_market_closed", "submission_window": window}
@@ -1740,7 +1796,7 @@ def _entry_expire_due(store: LocalStore, ticket: dict[str, Any], broker_status: 
 
 
 def _close_expire_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
-    if str(ticket.get("intent_type") or "") != "close":
+    if str(ticket.get("intent_type") or "") != "close" and not _bounded_strangle_adjustment(ticket):
         return False
     if bool(ticket.get("resting_profit_order")):
         return False
@@ -1778,7 +1834,7 @@ def _entry_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status:
 
 
 def _close_reprice_due(store: LocalStore, ticket: dict[str, Any], broker_status: dict[str, Any], config: dict[str, Any]) -> bool:
-    if str(ticket.get("intent_type") or "") != "close":
+    if str(ticket.get("intent_type") or "") != "close" and not _bounded_strangle_adjustment(ticket):
         return False
     if bool(ticket.get("resting_profit_order")):
         return False
@@ -1891,12 +1947,27 @@ def _repriced_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str
     return next_price
 
 
+def _bounded_strangle_adjustment(ticket: dict[str, Any]) -> bool:
+    return (
+        ticket.get("intent_type") == "adjust"
+        and ticket.get("structure") == "short_strangle"
+        and bool(ticket.get("csa_lifecycle_id"))
+        and (ticket.get("execution_envelope") or {}).get("minimum_credit") is not None
+    )
+
+
 def _repriced_close_limit_price(ticket: dict[str, Any], config: dict[str, Any]) -> str:
     current_net = _close_net_from_limit_price(ticket)
     natural_net = _optional_float(ticket.get("exit_natural_net"))
     if natural_net is None:
         natural_price = _optional_float(ticket.get("exit_natural_limit_price"))
         natural_net = _close_net_from_price_with_current_side(ticket, natural_price) if natural_price is not None else current_net
+    if ticket.get("intent_type") == "adjust":
+        if not _bounded_strangle_adjustment(ticket):
+            raise ValueError("adjustment_execution_envelope_missing")
+        minimum = float(ticket["execution_envelope"]["minimum_credit"]) * 100.0
+        if not all(math.isfinite(x) for x in (current_net, natural_net, minimum)) or minimum <= 0 or natural_net < minimum or current_net < natural_net:
+            raise ValueError("adjustment_credit_boundary_invalid")
     reason = str(ticket.get("exit_reason") or "").lower()
     reason_class = str(ticket.get("exit_reason_class") or ticket.get("csa_action_reason_class") or "").lower()
     floor_net = _optional_float(ticket.get("exit_profit_floor_net"))
@@ -1920,7 +1991,10 @@ def _repriced_close_limit_price(ticket: dict[str, Any], config: dict[str, Any]) 
     repriced_net = min(max(repriced_net, lower), upper)
     if (reason_class == "executable_profit" or reason == "profit_target") and floor_net is not None:
         repriced_net = max(repriced_net, floor_net)
-    return _close_limit_price_from_net(ticket, repriced_net)
+    price = _close_limit_price_from_net(ticket, repriced_net)
+    if ticket.get("intent_type") == "adjust" and -float(price) * 100.0 < minimum - 0.000001:
+        raise ValueError("adjustment_reprice_below_minimum_credit")
+    return price
 
 
 def _close_net_from_limit_price(ticket: dict[str, Any]) -> float:

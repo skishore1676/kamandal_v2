@@ -100,11 +100,11 @@ def compile_sleeve_policy(rows: Iterable[dict[str, Any]]) -> SleevePolicy:
 
 def candidate_lane(candidate: Candidate | dict[str, Any]) -> str:
     metadata = (candidate.get("metadata") or {}) if isinstance(candidate, dict) else candidate.metadata
+    if str(metadata.get("input_kind") or "") == "exact_package":
+        return GURU_EXACT
     explicit = str(metadata.get("sleeve_id") or "")
     if explicit in {CURRENT_IDEA, GURU_EXACT}:
         return explicit
-    if str(metadata.get("input_kind") or "") == "exact_package" and metadata.get("source_profile"):
-        return GURU_EXACT
     return CURRENT_IDEA
 
 
@@ -125,8 +125,12 @@ def occupied_source_opportunities(
         opportunity = str(group.get("source_opportunity_id") or metadata.get("source_opportunity_id") or "")
         if source and opportunity:
             occupied.update((source, str(value)) for value in {opportunity, *group.get("source_opportunity_ids", metadata.get("source_opportunity_ids", []))} if value)
-    for ticket in store.live_order_intents_by_type("open", PENDING_ENTRY_STATUSES):
-        if str(ticket.get("ticket_hash") or "") == exclude_ticket_hash:
+    filled_statuses = {"filled", "manual_fill_recorded", "partially_filled_terminal"}
+    # Execution consumes a source opening permanently, including after its
+    # position closes. Only an unfilled retry may exclude its own reservation.
+    for ticket in store.live_order_intents_by_type("open", PENDING_ENTRY_STATUSES | filled_statuses):
+        if (str(ticket.get("ticket_hash") or "") == exclude_ticket_hash
+                and ticket.get("_ledger_status") not in filled_statuses):
             continue
         source = str(ticket.get("source_id") or "").lower()
         opportunity = str(ticket.get("source_opportunity_id") or "")

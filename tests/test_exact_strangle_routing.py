@@ -105,20 +105,20 @@ def test_live_strangle_is_not_duplicated_in_shadow(tmp_path):
     assert candidate.preflight.raw["broker_effects"] is False
 
 
-def test_disabled_universe_blocks_exact_trade(tmp_path):
+def test_ideas_universe_does_not_select_guru_contracts(tmp_path):
     market = Market()
     candidate, = _build(tmp_path, market=market, enabled=False)
-    assert candidate.rejection_reason == "universe_symbol_not_enabled"
-    assert market.calls == 0
+    assert candidate.eligible
+    assert market.calls == 1
 
 
 @pytest.mark.parametrize("iv,event,reason", [(20, "clear", "strangle_entry_outside_configured_ranges"), (60, "earnings_soon", "event_status_blocked")])
-def test_exact_trade_does_not_bypass_strategy_admission(tmp_path, iv, event, reason):
+def test_exact_trade_does_not_use_ideas_iv_or_earnings_preferences(tmp_path, iv, event, reason):
     market = Market()
     market.iv, market.event = iv, event
     candidate, = _build(tmp_path, market=market)
-    assert candidate.rejection_reason.startswith(reason)
-    assert market.calls == 0
+    assert candidate.eligible
+    assert market.calls == 1
 
 
 @pytest.mark.parametrize("mutator", [
@@ -182,14 +182,15 @@ def test_staged_exact_ticket_requires_current_verified_source_revision(tmp_path)
     assert _fresh_exact_evidence_blocker(config, ticket) == "entry_exact_evidence_superseded"
 
 
-def test_exact_strangle_never_resizes_source_quantity(tmp_path):
+def test_exact_strangle_sizes_one_local_package_and_preserves_source_ratio(tmp_path):
     package = _package()
     package = replace(package, legs=tuple(replace(leg, quantity=2) for leg in package.legs))
     market = Market()
     candidate, = _build(tmp_path, package=package, market=market)
-    assert candidate.rejection_reason == "exact_strangle_quantity_above_policy"
-    assert [leg.quantity for leg in candidate.legs] == [2, 2]
-    assert market.calls == 0
+    assert candidate.eligible
+    assert [leg.quantity for leg in candidate.legs] == [1, 1]
+    assert candidate.metadata["source_quantities"] == [2, 2]
+    assert market.calls == 1
 
 
 def test_final_live_gate_accepts_tasty_bpr_and_rejects_missing_or_increased_bpr(tmp_path):

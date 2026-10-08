@@ -27,6 +27,14 @@ from kamandal_v2.strategy_lanes.store import CsaStore
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mike_observed_packages"
 
 
+@pytest.fixture(autouse=True)
+def fixture_clock(monkeypatch):
+    """Retained August contracts are evaluated at their original session."""
+    from kamandal_v2.planner import observed_package_candidates
+    monkeypatch.setattr(observed_package_candidates, "utc_now", lambda: "2026-08-27T14:00:00Z")
+    monkeypatch.setattr(__name__ + ".utc_now", lambda: "2026-08-27T14:00:00Z")
+
+
 def _batch(fixture_index: int = 0):  # noqa: ANN202
     manifest = json.loads((FIXTURE_ROOT / "ground-truth.json").read_text(encoding="utf-8"))
     fixture = manifest["fixtures"][fixture_index]
@@ -57,6 +65,7 @@ def _observed_calendar_row() -> dict[str, object]:
                     "sizing_method": "fixed_contracts",
                     "sizing_value": 1,
                     "max_contracts": 1,
+                    "live_max_bpr_per_order": 1200,
                     "score_weight_credit": 1,
                     "score_weight_pop": 1,
                     "score_weight_liquidity": 1,
@@ -415,13 +424,13 @@ def test_new_guru_shapes_make_bounded_shadow_candidates_only(
 
 
 @pytest.mark.parametrize("change,expected", [
-    ({"dte_min": 2, "dte_max": 3}, "exact_near_dte_outside_policy"),
-    ({"long_dte_min": 10, "long_dte_max": 40}, "exact_far_dte_outside_policy"),
+    ({"dte_min": 2, "dte_max": 3}, ""),
+    ({"long_dte_min": 10, "long_dte_max": 40}, ""),
     ({"max_contracts": 0}, "exact_quantity_above_policy"),
-    ({"short_delta_min": 0.7}, "exact_short_delta_outside_policy"),
-    ({"live_max_bpr_per_order": 100}, "exact_debit_above_order_cap"),
+    ({"short_delta_min": 0.7}, ""),
+    ({"live_max_bpr_per_order": 100}, "exact_risk_above_order_cap:140.0>100.0"),
 ])
-def test_live_exact_calendar_honors_contract_and_cash_policy(
+def test_live_exact_calendar_ignores_idea_preferences_but_honors_size_and_cash(
     tmp_path: Path, change: dict[str, object], expected: str
 ) -> None:
     package = replace(
@@ -458,7 +467,7 @@ def test_live_exact_calendar_honors_contract_and_cash_policy(
         trade_source_policies=source, mode="live",
     )
     assert candidate.rejection_reason == expected
-    assert called == []
+    assert bool(called) is (expected == "")
 
 
 def test_exact_candidate_requests_source_expirations_only(tmp_path: Path) -> None:
@@ -660,7 +669,7 @@ def test_source_verified_calendar_reaches_live_ticket_with_close_policy(
     assert CsaStore(store.sqlite_path).lifecycle(lifecycle.lifecycle_id).status == "closed"
 
 
-def test_source_verified_diagonal_keeps_pair_and_blocks_out_of_range_dte(tmp_path: Path) -> None:
+def test_source_verified_diagonal_keeps_pair_outside_ideas_dte_window(tmp_path: Path) -> None:
     package = replace(
         _batch(2).packages[0], source_published_at="2026-08-24T13:00:00Z",
         source_valid_until="2026-08-24T16:00:00Z", source_verified=True,
@@ -711,7 +720,7 @@ def test_source_verified_diagonal_keeps_pair_and_blocks_out_of_range_dte(tmp_pat
         ("short_near", "sell", 110), ("long_far", "buy", 100),
     ]
     blocked = build(replace(playbook, dte_max=30), "blocked")
-    assert blocked.rejection_reason == "exact_near_dte_outside_policy"
+    assert blocked.eligible
 
 
 def test_multi_package_opening_cannot_partially_enter_live(tmp_path: Path) -> None:
@@ -959,6 +968,7 @@ def test_economic_rejection_keeps_first_actionable_source_mark(tmp_path: Path) -
         profiles=[],
         max_bid_ask_pct=0.5,
         min_option_oi=10,
+        max_contracts=1,
         live_max_bpr_per_order=100,
         max_debit_to_width_ratio=1.0,
     )

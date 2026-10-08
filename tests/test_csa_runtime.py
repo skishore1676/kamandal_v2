@@ -945,6 +945,9 @@ def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_pat
 
 
 def test_mandatory_shadow_exit_waits_on_wide_quote_then_retries_same_lifecycle(tmp_path) -> None:
+    # Fixture contracts roll with today; keep the scenario on that same date.
+    from datetime import date
+    scenario_day = date.today().isoformat()
     database = tmp_path / "kamandal.db"
     LocalStore(database)
     migrate_csa_database(database, dry_run=False, backup_dir=tmp_path / "backups")
@@ -952,8 +955,8 @@ def test_mandatory_shadow_exit_waits_on_wide_quote_then_retries_same_lifecycle(t
     tables["playbooks"][0]["exit_dte_min"] = 100
     tables["playbooks"][0]["max_bid_ask_pct"] = 0.20
     entry_market = FixtureMarketDataProvider(account_size=100_000)
-    run_csa_shadow_scan({}, sqlite_path=str(database), provider="fixture", tables=tables, market=entry_market, preflight=FixturePreflightClient(), observed_at="2026-08-24T14:00:00Z")
-    run_csa_shadow_scan({}, sqlite_path=str(database), provider="fixture", tables=tables, market=entry_market, preflight=FixturePreflightClient(), observed_at="2026-08-24T14:05:00Z")
+    run_csa_shadow_scan({}, sqlite_path=str(database), provider="fixture", tables=tables, market=entry_market, preflight=FixturePreflightClient(), observed_at=f"{scenario_day}T14:00:00Z")
+    run_csa_shadow_scan({}, sqlite_path=str(database), provider="fixture", tables=tables, market=entry_market, preflight=FixturePreflightClient(), observed_at=f"{scenario_day}T14:05:00Z")
 
     class ManagementMarket:
         def __init__(self, *, wide: bool, captured_at: str):
@@ -974,8 +977,8 @@ def test_mandatory_shadow_exit_waits_on_wide_quote_then_retries_same_lifecycle(t
         sqlite_path=str(database),
         provider="fixture",
         tables=tables,
-        market=ManagementMarket(wide=True, captured_at="2026-08-24T15:00:00Z"),
-        observed_at="2026-08-24T15:00:00Z",
+        market=ManagementMarket(wide=True, captured_at=f"{scenario_day}T15:00:00Z"),
+        observed_at=f"{scenario_day}T15:00:00Z",
     )
     store = CsaStore(database, read_only=True)
     lifecycle = store.open_lifecycles()[0]
@@ -995,8 +998,8 @@ def test_mandatory_shadow_exit_waits_on_wide_quote_then_retries_same_lifecycle(t
         sqlite_path=str(database),
         provider="fixture",
         tables=tables,
-        market=ManagementMarket(wide=False, captured_at="2026-08-24T15:05:00Z"),
-        observed_at="2026-08-24T15:05:00Z",
+        market=ManagementMarket(wide=False, captured_at=f"{scenario_day}T15:05:00Z"),
+        observed_at=f"{scenario_day}T15:05:00Z",
     )
     close_tickets = [
         json.loads(row["payload"])

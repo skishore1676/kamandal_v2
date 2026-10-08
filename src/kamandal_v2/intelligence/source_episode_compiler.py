@@ -24,7 +24,7 @@ from kamandal_v2.intelligence.llm_client import JsonLlmClient
 from kamandal_v2.intelligence.exact_entry_review import LEG_COUNTS, possible_edit_duplicates
 from kamandal_v2.intelligence.source_shorthand import resolve_declared_text_contracts
 
-INTERPRETATION_RULES_VERSION = "source-evidence-v3"
+INTERPRETATION_RULES_VERSION = "source-evidence-v4-two-pathways"
 
 EPISODE_COMPILATION_SCHEMA = "kamandal.source_episode_compilation.v1"
 EPISODE_SCHEMA = "kamandal.source_episode.v1"
@@ -790,7 +790,9 @@ def _projection_dispositions(
         disposition = "retained"
         reason = "non_entry_evidence"
         if projection == "idea":
-            if action not in _ENTRY_ACTIONS:
+            if action in _ENTRY_ACTIONS:
+                disposition, reason = "owned_by_exact", "confirmed_opening_owned_by_guru_exact"
+            elif action != "commentary":
                 disposition, reason = "benchmark_only", "follow_up_is_not_a_new_entry"
             elif "planner_structure_unsupported" in blockers:
                 disposition, reason = "parked", "planner_structure_unsupported"
@@ -973,13 +975,17 @@ Source: {profile.get('profile_id')}
 Source guidance:
 {guidance}
 
-Use idea only for a new thesis Kamandal could reconstruct. Use exact_package
+Use idea only for actionable directional commentary without a confirmed source
+opening (action commentary). A confirmed open or scale_in belongs exclusively
+to exact_package, even when its contracts are incomplete. Never create an idea
+fallback for such an opening. Use exact_package
 only when every displayed leg is observable from supplied text/image or an
 unambiguous declared source grammar. A close, roll, adjustment, scale-out, or
 hold is never a new idea. Missing required media or prior-trade context must be
 marked needs_media or needs_history and retained as residual. If the text fully
-supports an idea but the image legs are unavailable, keep the idea complete and
-mark only exact_package incomplete with its blocker. One event may contain
+reports an opening but the contracts are unavailable, mark exact_package
+incomplete with its blocker. Complete literal text does not require an image.
+One event may contain
 several exact_packages when the post shows variants of the same action, symbol,
 direction, and structure; do not repeat the idea projection for each variant.
 If source text and image disagree about contract quantity, mark the exact

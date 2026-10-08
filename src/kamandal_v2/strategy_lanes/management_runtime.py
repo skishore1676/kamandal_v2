@@ -23,7 +23,7 @@ from kamandal_v2.planner.engine import _market_provider
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
-from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, policy_bool, propose_action
+from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, lifecycle_value, policy_bool, propose_action
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode
 from kamandal_v2.strategy_lanes.observations import PackageObservation, observe_package
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
@@ -266,6 +266,8 @@ def _run_lifecycle_management(
                 if resting_proposal is not None:
                     proposals.append(resting_proposal)
             raw_selected = arbitrate_actions(proposals).selected
+            if lifecycle.lane is LaneId.SHORT_STRANGLE and raw_selected.action_type is ActionType.ADJUST:
+                observation = _strangle_roll_observation(observation, plans.get("roll"), policy)
             selected, observation = _apply_management_safety(
                 raw_selected,
                 observed_lifecycle,
@@ -274,7 +276,7 @@ def _run_lifecycle_management(
                 store=writable_live_store,
                 proposed_at=started_at,
             )
-            execution_status = "held" if selected.action_type in {ActionType.HOLD, ActionType.BLOCK} else "ready"
+            execution_status = "blocked" if selected.action_type is ActionType.BLOCK else ("held" if selected.action_type is ActionType.HOLD else "ready")
             if selected.action_type not in {ActionType.HOLD, ActionType.BLOCK} and not observation.quote_actionable:
                 execution_status = "waiting_valid_quote"
             observation = replace(
@@ -298,6 +300,7 @@ def _run_lifecycle_management(
                 "max_loss_watch": observation.adverse_loss_watch,
                 "raw_selected_reason": str(raw_selected.reason_codes[0] if raw_selected.reason_codes else ""),
                 "raw_selected_reason_class": str(raw_selected.payload.get("arbiter_class") or ""),
+                "strangle_detection": dict(observed_lifecycle.metadata.get("strangle_detection") or {}),
             }
             writable_live_store.record_live_position_mark(lifecycle.lifecycle_id, observation_payload)
             store.save_action(selected)
@@ -542,7 +545,9 @@ def _management_context(
     if lifecycle.lane is LaneId.SHORT_STRANGLE:
         put = next(leg for leg in legs if leg.role == "short_put")
         call = next(leg for leg in legs if leg.role == "short_call")
-        tested = "put" if snapshot.underlying_price <= put.strike else ("call" if snapshot.underlying_price >= call.strike else "")
+        spot = float(snapshot.underlying_price)
+        detection_valid = observation.quote_fresh and math.isfinite(spot) and spot > 0
+        tested = ("put" if spot <= put.strike else ("call" if spot >= call.strike else "")) if detection_valid else ""
         breached_strike = put.strike if tested == "put" else (call.strike if tested == "call" else None)
         observed = observe_strangle_episode(
             replace(lifecycle, metadata=metadata),
@@ -551,11 +556,22 @@ def _management_context(
             required_confirmations=int(_resolved_or_lifecycle(policy, "tested_side_confirmations", "tested_side_confirmation")),
             rearm_inside_confirmations=int(_resolved_or_default(policy, "rearm_inside_confirmations", 2)),
             observation_key=str(snapshot.captured_at),
-        ) if observation.quote_actionable else replace(lifecycle, metadata=metadata)
+        ) if detection_valid else replace(lifecycle, metadata=metadata)
         metadata = dict(observed.metadata)
         episode = dict(metadata.get("strangle_test_episode") or {})
         confirmations = int(episode.get("confirmations") or 0)
         metadata["tested_side_confirmations"] = confirmations
+        metadata["strangle_detection"] = {
+            "definition": "underlying_at_or_beyond_short_strike",
+            "underlying_price": spot if math.isfinite(spot) else None,
+            "tested_side": tested,
+            "tested_strike": breached_strike,
+            "put_distance_pct": (spot / put.strike - 1.0) * 100.0 if detection_valid else None,
+            "call_distance_pct": (1.0 - spot / call.strike) * 100.0 if detection_valid else None,
+            "valid": detection_valid,
+            "confirmations": confirmations,
+            "blocker": "" if detection_valid else "strangle_test_observation_invalid",
+        }
         roll_plan = _strangle_credit_roll_plan(tested, put, call, snapshot, policy)
         plans["roll"] = roll_plan
         context = {
@@ -564,7 +580,9 @@ def _management_context(
             "tested_side": tested,
             "breached_strike": breached_strike,
             "strangle_episode_id": str(episode.get("episode_id") or ""),
-            "strangle_episode_eligible": strangle_adjustment_eligible(observed),
+            "strangle_episode_eligible": detection_valid and strangle_adjustment_eligible(observed),
+            "strangle_episode_consumed": bool(episode.get("consumed")),
+            "strangle_detection_blocker": metadata["strangle_detection"]["blocker"],
             "cooldown_elapsed": _cooldown_elapsed(metadata, policy, observed_at),
             "tested_side_confirmations": confirmations,
             "adjustment_count": int(metadata.get("adjustment_count") or 0),
@@ -572,7 +590,7 @@ def _management_context(
         }
     elif lifecycle.lane in {LaneId.CALL_VERTICAL, LaneId.GENERIC_CLOSE_ONLY}:
         context = {**common, "dte": min(dtes)}
-        if (policy.resolved_fields.get("structure") in {"iron_condor", "call_butterfly", "put_butterfly"}
+        if (policy.resolved_fields.get("structure") in {"iron_condor", "call_butterfly", "put_butterfly", "split_call_fly"}
                 and int(policy.resolved_fields.get("dte_min", 1)) == 0
                 and min(leg.expiration for leg in legs) == observed_date.isoformat()):
             from kamandal_v2.live.expiry_day import expiry_day_window
@@ -697,6 +715,9 @@ def _strangle_credit_roll_plan(tested: str, put: OptionLeg, call: OptionLeg, sna
     if not tested:
         return None
     old = call if tested == "put" else put
+    if not all(math.isfinite(x) for x in (old.bid, old.ask)) or not 0 <= old.bid <= old.ask or old.ask <= 0:
+        return None
+    minimum_credit = _minimum_roll_credit(policy)
     eligible = [
         q
         for q in snapshot.quotes
@@ -704,9 +725,10 @@ def _strangle_credit_roll_plan(tested: str, put: OptionLeg, call: OptionLeg, sna
         and q.expiration == old.expiration
         and math.isfinite(q.delta)
         and 0 < abs(q.delta) <= _resolved_or_default(policy, "management_delta_max", 0.40)
-        and q.mid > 0
-        and q.ask >= q.bid >= 0
+        and all(math.isfinite(x) for x in (q.bid, q.ask, q.mid))
+        and q.ask >= q.bid > 0
         and q.spread_pct <= float(policy.resolved_fields["max_bid_ask_pct"])
+        and q.bid - old.ask >= minimum_credit
     ]
     ordinary = [
         q
@@ -728,6 +750,27 @@ def _strangle_credit_roll_plan(tested: str, put: OptionLeg, call: OptionLeg, sna
         }
 
     return plan(ordinary)
+
+
+def _minimum_roll_credit(policy: CsaPolicy) -> float:
+    return float((lifecycle_value(policy, "roll") or {})["min_credit"])
+
+
+def _strangle_roll_observation(observation: PackageObservation, plan: dict[str, Any] | None, policy: CsaPolicy) -> PackageObservation:
+    """The untouched tested leg does not determine liquidity of a paired roll."""
+    blockers = []
+    if not observation.quote_fresh:
+        blockers.append("stale_snapshot")
+    if not plan:
+        blockers.append("adjustment_no_eligible_credit_roll")
+    else:
+        # New short passes the frozen liquidity limit in the selector. The
+        # buyback is bounded by its ask and the roll's minimum natural credit;
+        # applying an entry-style spread ratio to that decayed option would
+        # recreate the deadlock this action-specific check removes.
+        if plan["natural_credit"] < _minimum_roll_credit(policy):
+            blockers.append("adjustment_credit_below_minimum")
+    return replace(observation, quote_actionable=not blockers, quote_blockers=tuple(blockers), execution_quote_scope="untested_side_replacement")
 
 
 def _resolved_or_default(policy: CsaPolicy, field: str, default: float) -> float:
@@ -839,7 +882,10 @@ def _management_ticket(
                     "midpoint_net": float(plan["credit"]) * 100.0,
                     "natural_net": float(plan["natural_credit"]) * 100.0,
                     "quote_max_bid_ask_pct": observation.max_bid_ask_pct,
+                    "minimum_credit": _minimum_roll_credit(policy),
                 },
+                "exit_midpoint_net": float(plan["credit"]) * 100.0,
+                "exit_natural_net": float(plan["natural_credit"]) * 100.0,
             },
         )
         return _with_position_projection(ticket, lifecycle)
@@ -919,6 +965,10 @@ def _with_observation_mark(lifecycle: LifecycleState, observation: PackageObserv
         "mark_quote_blockers": list(observation.quote_blockers),
         "mark_max_leg_bid_ask_pct": observation.max_leg_bid_ask_pct,
         "mark_selected_reason": observation.selected_reason,
+        "mark_selected_action_type": observation.selected_action_type,
+        "mark_execution_quote_scope": observation.execution_quote_scope,
+        "mark_quote_fresh": observation.quote_fresh,
+        "mark_pricing_complete": observation.pricing_complete,
         "mark_selected_reason_class": observation.selected_reason_class,
         "mark_execution_status": observation.execution_status,
         "mark_waiting_valid_quote_since": waiting_since,

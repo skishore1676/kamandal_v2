@@ -1,7 +1,14 @@
 # Trade Source Routing
 
 Date: 2026-09-04
-Status: routing, Sheet controls, and richer source-episode interpretation deployed; first natural scheduled execution pending
+Status: source routing deployed; October 1 two-pathway entry contract supersedes earlier mixed selection
+
+See [Two entry pathways](TWO_ENTRY_PATHWAYS.md) for the current approved contract.
+Confirmed Guru openings belong exclusively to `guru_exact`; ordinary directional
+ideas belong to `current_idea`. Source modes govern entry permission, not fallback
+between these pathways. Complete text can supply exact contracts without an
+image. Historical shadow-only and independent-image requirements in this
+document do not describe the October 1 target.
 
 ## Implementation status
 
@@ -29,8 +36,8 @@ projection remain the required proof of scheduled consumption and behavior.
 Trusted people such as Greg Harmon and Mike Butler are **trade sources**, not
 strategy lanes. Birdclaw captures their sanitized public evidence. Kamandal
 turns each post into zero or more normalized outputs, applies the Google Sheet's
-source policy, and sends supported outputs into its one portfolio planner,
-execution path, and lifecycle manager.
+source policy, and sends supported outputs into ideas optimization or exact
+capital admission, then the shared execution path and lifecycle manager.
 
 The two executable output kinds are deliberately plain:
 
@@ -53,9 +60,10 @@ the atomic mixed-post contract. It gives each
 source an independent semantic profile while reusing one bounded orchestration
 and every existing downstream control.
 
-If one atomic source opportunity projects as both an `idea` and an
-`exact_package`, the children share an `opportunity_group_id`; the planner may
-select at most one. Mixed output must never mean duplicate capital allocation.
+Confirmed openings and complete opening adds belong exclusively to the exact
+pathway; an adapted idea projection cannot enter even if the exact route is Off
+or blocked. Commentary can produce ideas. Stable opportunity IDs prevent
+duplicate admission and follow each source event through execution.
 
 ## Stable ownership
 
@@ -83,7 +91,7 @@ ordinary Idea adapter   exact-leg candidate adapter
        |                    |
        +---------+----------+
                  v
-capability support + one portfolio planner
+ideas optimization | Guru FIFO capital admission
                  |
                  v
 safer(source mode, playbook mode) + existing safety gates
@@ -176,51 +184,25 @@ During migration, each existing row starts with its current `source_mode` value,
 so `market_scan` and `portfolio_hedge` behavior is not accidentally converted to
 `idea`. Historical snapshots with a blank legacy `source_mode` resolve to
 `idea`; every enabled row in the new Sheet must then contain an explicit value.
-For the first release, exactly one existing playbook per supported concrete
-structure may also accept `exact_package`:
+Each supported exact structure has exactly one compatible accepting playbook.
+Zero matches park as unsupported and multiple matches park as
+`ambiguous_playbook_match`; ranking never selects management semantics. Dedicated
+`guru_exact_*` rows supply bounded local sizing and management for source copies.
+Ordinary ideas continue to use construction playbooks.
 
-- `call_calendar_low_iv`
-- `put_calendar_low_iv`
-- `call_diagonal_oversold`
-- `put_diagonal_overextended`
+Kamandal assigns canonical leg roles, normalizes source quantity to local size
+without altering ratios, resolves current contracts and checks executable quotes.
+Complete source text or a cached image can provide the contract evidence. One
+interpreter plus deterministic source/contract binding is the scheduled path;
+independent image re-transcription remains an optional audit.
 
-That means:
-
-- a Mike `idea` is treated like a Greg, YouTube, or My Ideas thesis: Kamandal
-  constructs the trade using the existing playbook; and
-- a Mike `exact_package` keeps Mike's exact legs, but the compatible existing
-  playbook supplies eligibility, portfolio gates, effect ceiling, and Kamandal's
-  own lifecycle management.
-
-The Mike-specific 40% target and other special management values are
-intentionally not preserved. The experiment asks whether Mike's entry selection
-works when Kamandal manages the position according to strategies Suman already
-owns. Mike's own later management remains separately measured benchmark
-evidence.
-
-An exact package may match only a playbook whose `accepted_inputs` contains
-`exact_package` and whose concrete structure matches. Exactly one accepting
-playbook must exist: zero matches park as `unsupported`, and multiple matches
-park as `ambiguous_playbook_match`. Optimizer rank must never select management
-semantics.
-
-Before that playbook can validate or manage the package, Kamandal assigns its
-existing canonical leg roles deterministically. For a two-leg calendar or
-diagonal, the sold nearer expiration becomes `short_near` and the bought farther
-expiration becomes `long_far`. This role normalization changes no expiration,
-strike, option type, side, quantity, or ratio. Any package that cannot be mapped
-without changing those observed facts parks as invalid exact evidence.
-
-The exact package must then pass the chosen playbook's ordinary DTE, delta,
-IV/event, quote-quality, BPR, portfolio, and management-validity gates. The rule
-can be generalized later if a real need for disjoint exact-package variants
-appears.
-
-Recognizing a structure in a transcription does not make it executable.
-Butterflies, double calendars, super bull/bear packages, straddles, futures
-options, or any other shape without complete Kamandal construction, quoting,
-management, and reconciliation support remain visible residuals until that
-reusable capability is deliberately added.
+Exact openings are admitted in source-time order subject to source mode, current
+source revision, freshness, duplicate/overlap protection, supported management,
+per-order cash limits, available broker capital and 40/40/80 sleeve/account caps.
+They do not pass ordinary construction DTE/delta/IV/event/yield preferences or
+ideas portfolio-fit selection. Actual expiration and configured exit windows
+remain hard manageability checks. See [Two entry pathways](TWO_ENTRY_PATHWAYS.md)
+and [Exact Guru package execution](operations/guru-live-packages.md).
 
 ### `trade_source_activity` — machine-owned observation surface
 
@@ -367,4 +349,4 @@ capabilities, one Kamandal money path, and every output visible.**
 
 ## Activated Tuesday contract (September 5 approval)
 
-The initial modes above are historical rollout defaults. The current operator-approved Sheet settings are **Greg ideas live, Greg exact shadow, Mike ideas live, Mike exact shadow**. See [Tuesday operating contract](reviews/guru-tuesday-readiness-2026-09-08.md) for daily tracking, source ownership, and verification. The Sheet remains authoritative; seeded defaults do not override it.
+The initial modes above are historical rollout defaults. At the October 1 pre-deploy readback, both sources had ideas and exact modes **live**; the Sheet remains the live authority. See [Tuesday operating contract](reviews/guru-tuesday-readiness-2026-09-08.md) for daily tracking, source ownership, and verification. The Sheet remains authoritative; seeded defaults do not override it.

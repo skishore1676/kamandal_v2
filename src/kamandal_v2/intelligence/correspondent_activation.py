@@ -260,18 +260,11 @@ def activate_correspondent_sources(
                 if exact_policy is not None and exact_policy.inference_enabled:
                     profile_batches = list(projected.observed_batches)
                     profile_observed_failures = list(projected.failures)
-                    if exact_policy.mode is TradeSourceMode.LIVE:
-                        from kamandal_v2.intelligence.source_contract_verification import verify_live_source_contracts
+                    from kamandal_v2.intelligence.source_contract_verification import bind_interpreted_source_contracts
 
-                        verified, verification_failures = verify_live_source_contracts(
-                            profile_batches,
-                            packet,
-                            live_structures=exact_policy.live_structures,
-                            client=observed_package_client,
-                            cache_root=output_root / "source_verification",
-                        )
-                        profile_batches = list(verified)
-                        profile_observed_failures.extend(verification_failures)
+                    verified, verification_failures = bind_interpreted_source_contracts(profile_batches, packet)
+                    profile_batches = list(verified)
+                    profile_observed_failures.extend(verification_failures)
                 elif idea_policy is None or not idea_policy.inference_enabled:
                     _record_episode_outputs(
                         discovery_store,
@@ -501,7 +494,7 @@ def _record_episode_outputs(
                 "broker_effects": False,
             },
         )
-        if "outside_configured_universe" in str(observed.get("reason") or ""):
+        if observed.get("outside_configured_universe") or "outside_configured_universe" in str(observed.get("reason") or ""):
             symbol = str(observed.get("symbol") or "").strip().upper()
             if symbol:
                 store.record_discovery_evidence(

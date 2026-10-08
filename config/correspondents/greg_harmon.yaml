@@ -19,6 +19,8 @@ episode_interpreter:
     lululemon: LULU
     Palo Alto Networks: PANW
   structure_aliases:
+    call_condor: split_call_fly
+    split_wing_butterfly: split_call_fly
     call_vertical: call_spread
     bull_call_spread: call_spread
     put_vertical: put_spread
@@ -38,6 +40,10 @@ episode_interpreter:
     - {id: looks_to_expire, regex: "\\blook(?:s)? to expire\\b", action: hold}
     - {id: added, regex: "\\b(?:also )?added\\b", action: scale_in}
   composite_structure_rules:
+    - id: split_call_fly
+      regex: "\\bsplit[- ]wing (?:butterfly )?call (?:spreads?|fl(?:y|ies))\\b"
+      component_structures: [call_spread, butterfly, split_call_fly]
+      structure_hint: split_call_fly
     - id: call_diagonal_with_short_put
       regex: "\\bcall diagonals?\\b.*\\b(?:sell|selling|short)\\b.*\\bput\\b"
       component_structures: [call_diagonal, short_put]
@@ -62,7 +68,10 @@ episode_interpreter:
     trim, roll, and management language are follow-ups, never fresh entries.
     Standard shorthand such as call-spread risk reversal and broken-wing call
     fly may supply normalized leg ratios when every strike and expiration is
-    explicit. Do not fetch or invent inaccessible article terms or bonus ideas.
+    explicit. A split-wing butterfly call spread is one four-leg split_call_fly:
+    buy the outer strikes and sell both distinct inner strikes, 1:1:1:1, at the
+    stated expiration. Preserve all four legs in one package. Do not fetch or
+    invent inaccessible article terms or bonus ideas.
     A "5 Trade Ideas for Monday" headline and an article going live announce
     research, not a confirmed opening by Greg.
     In a standalone ticker + expiration + option-structure shorthand, with no

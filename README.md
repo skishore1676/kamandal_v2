@@ -8,8 +8,8 @@ Kamandal operates through a strictly bounded pipeline designed to keep the AI cr
 
 The canonical north-star and the bounded single-engine cutover are documented in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). CSA is temporary implementation
-scaffolding, not a permanent product lane: the target is one portfolio planner,
-one strategy lifecycle engine, and shadow/live execution adapters.
+scaffolding. The [two entry pathways](docs/TWO_ENTRY_PATHWAYS.md) feed one
+strategy lifecycle engine and the existing shadow/live execution adapters.
 
 1. **Intelligence Gathering**
    - Source content (YouTube video captions via `yt-dlp` and X/Twitter bookmarks/timelines) are fetched and ingested locally.
@@ -17,7 +17,7 @@ one strategy lifecycle engine, and shadow/live execution adapters.
 
 2. **LLM Extraction**
    - Agent Broker routes the configured LLM to extract abstract trading ideas (e.g., "Bullish SPY, 7 days, mean-revert thesis").
-   - The LLM **never** picks options legs or sees the option chain or your strategy templates. 
+   - For ordinary ideas, the LLM extracts a thesis and deterministic construction chooses contracts. For confirmed Guru openings, one interpreter extracts the source contracts from text or images; deterministic validation binds them to that evidence.
    - Extracted ideas are output as structured YAML files into the `data/ideas/` directory.
 
 3. **Deterministic Planning**
@@ -26,7 +26,7 @@ one strategy lifecycle engine, and shadow/live execution adapters.
    - Put/call spread construction can optionally search a set of widths (`planner.vertical_width_search` in `control.yaml`, off by default) instead of a single fixed width, keeping the narrowest construction that clears both the playbook's credit-to-width gate and the structure's per-order BPR cap — see `docs/CANDIDATE_GATE_SEARCH.md`.
 
 4. **Portfolio Optimization**
-   - Candidates are evaluated and grouped into "Plans". A beam-search portfolio optimizer selects the best combination of trades that maximize the overall score while strictly respecting your Buying Power Reduction (BPR) limits and max position caps.
+   - The ideas sleeve uses the beam-search optimizer and its own exposures for portfolio preferences. Confirmed Guru openings use chronological admission with exact source contracts and bounded local sizing, without ideas delta/IV/DTE/yield/score filters. Both use 40% sleeve ceilings, an 80% account ceiling, broker preflight, and shared execution protections.
    - In the live lane, `auto_top_plan` makes only the rank-1 eligible plan available to the guarded submission path.
 
 5. **Reporting & Review**

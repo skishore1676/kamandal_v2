@@ -116,7 +116,7 @@ def entry_campaign_policy(config: dict[str, Any] | None) -> EntryCampaignPolicy:
 
 
 def entry_campaign(candidate: Candidate, config: dict[str, Any] | None) -> EntryCampaign:
-    """Build a frozen, bounded three-price campaign without broker effects."""
+    """Build a frozen, bounded campaign without broker effects."""
 
     campaign_policy = entry_campaign_policy(config)
     side = "credit" if candidate.net_credit > 0 else "debit"
@@ -175,8 +175,7 @@ def entry_campaign(candidate: Candidate, config: dict[str, Any] | None) -> Entry
         return _campaign_terminal(side, "allowance_bound_invalid", campaign_policy, midpoint, improvement, bounds)
     allowance = min(positive_bounds.values())
     allowance = _tick_floor(allowance, campaign_policy.valid_tick)
-    if allowance < campaign_policy.valid_tick:
-        return _campaign_terminal(side, "allowance_below_valid_tick", campaign_policy, midpoint, improvement, bounds)
+    concession_omitted_reason = "allowance_below_valid_tick" if allowance < campaign_policy.valid_tick else ""
 
     if side == "credit":
         raw_prices = (
@@ -191,7 +190,7 @@ def entry_campaign(candidate: Candidate, config: dict[str, Any] | None) -> Entry
         )
         p3_magnitude = abs(float(prices[2]))
         if p3_magnitude >= abs(float(prices[1])):
-            return _campaign_terminal(side, "allowance_does_not_move_from_midpoint", campaign_policy, midpoint, improvement, bounds, allowance)
+            concession_omitted_reason = concession_omitted_reason or "allowance_does_not_move_from_midpoint"
     else:
         raw_prices = (
             midpoint - (campaign_policy.initial_improvement_multiplier * improvement),
@@ -205,7 +204,10 @@ def entry_campaign(candidate: Candidate, config: dict[str, Any] | None) -> Entry
         )
         p3_magnitude = abs(float(prices[2]))
         if p3_magnitude <= abs(float(prices[1])):
-            return _campaign_terminal(side, "allowance_does_not_move_from_midpoint", campaign_policy, midpoint, improvement, bounds, allowance)
+            concession_omitted_reason = concession_omitted_reason or "allowance_does_not_move_from_midpoint"
+
+    if concession_omitted_reason:
+        prices = tuple(dict.fromkeys(prices[:2]))
 
     binding_cap = min(positive_bounds, key=positive_bounds.get)
     metadata = {
@@ -217,6 +219,7 @@ def entry_campaign(candidate: Candidate, config: dict[str, Any] | None) -> Entry
         "allowance": round(allowance, 6),
         "allowance_bounds": {key: round(value, 6) for key, value in bounds.items()},
         "allowance_binding_cap": binding_cap,
+        "concession_omitted_reason": concession_omitted_reason,
         "valid_tick": campaign_policy.valid_tick,
         "economic_bound_source": candidate.entry_economic_bound_source,
         "economic_bound": round(

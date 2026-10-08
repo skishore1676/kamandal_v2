@@ -132,7 +132,7 @@ def _source_strangle(candidate_id: str, *, underlying: str, source: str) -> Cand
     candidate.metadata.update(
         {
             "ranking_source": source,
-            "input_kind": "market_scan" if source == "market_scan" else "exact_package",
+            "input_kind": "market_scan" if source == "market_scan" else "idea",
             "candidate_score_components": {"structure_thesis_fit": 18.0},
         }
     )

@@ -21,6 +21,7 @@ SUPPORTED_STRUCTURES = {
     "call_butterfly",
     "put_butterfly",
     "call_crab",
+    "split_call_fly",
     "calendar_bundle",
     "put_spread",
     "call_spread",

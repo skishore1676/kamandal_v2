@@ -5,6 +5,32 @@ from kamandal_v2.schemas import TRADE_SOURCE_ACTIVITY_HEADER
 from kamandal_v2.stores.sqlite import LocalStore
 
 
+def test_fresh_exact_opening_awaits_planning_until_a_concrete_receipt(tmp_path):
+    from datetime import datetime, UTC
+    from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
+    from kamandal_v2.portfolio_sleeves import SleevePolicy
+    store = LocalStore(tmp_path / 'waiting.db')
+    store.event('trade_source_output_observed', {
+        'source_id': 'mike_butler', 'post_ref': 'x-post:2105682038947017090',
+        'output_id': 'fresh-revision', 'classification': 'exact_package',
+        'effective_mode': 'live', 'action': 'open', 'symbol': 'SPX', 'structure': 'put_butterfly',
+        'planner_disposition': 'observed_only', 'reason': '',
+        'normalized_output': {'source_event_id': 'fresh-event', 'opportunity_group_id': 'corr_opp_fresh',
+            'source_valid_until': '2026-10-02T15:31:34Z', 'complete': True,
+            'legs': [{'expiration': '2026-10-30', 'option_type': 'put', 'quantity': quantity,
+                      'strike': strike, 'side': side} for strike, side, quantity in
+                     [(7300, 'buy', 1), (7400, 'sell', 2), (7500, 'buy', 1)]]},
+    })
+    def read():
+        return chief_of_staff_rows(store, source_modes={('mike_butler', 'exact_package'): 'live'},
+                                   sleeve_policy=SleevePolicy(40, 40, 80), now=datetime(2026, 10, 1, 18, tzinfo=UTC))[1]
+    assert read()[0][3] == 'Awaiting planning'
+    assert 'next scheduled planning run' in read()[0][4]
+    store.event('trade_source_planner_disposition', {'source_id': 'mike_butler',
+        'evidence_revision_id': 'fresh-revision', 'status': 'blocked', 'reason': 'unsupported', 'mode': 'live'})
+    assert read()[0][3] == 'Unsupported'
+
+
 def test_activity_projection_joins_output_to_planner_disposition(tmp_path) -> None:  # noqa: ANN001
     store = LocalStore(tmp_path / "kamandal.db")
     store.event(
@@ -601,6 +627,44 @@ def test_chief_brief_joins_projected_opportunity_to_entered_position(tmp_path):
     assert 'STO 1 2026-10-16 330 call' in details[0][2]
     assert '1 entered' in summary[3][1]
 
+    store.save_live_position_group('entered-1', {
+        'source_id': 'mike_butler', 'source_output_kind': 'exact_package',
+        'source_opportunity_id': _opportunity_id(group),
+        'candidate': {'estimated_bpr': 500},
+    }, status='closed')
+    _summary, closed = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'exact_package'): 'live'}, sleeve_policy=policy,
+    )
+    assert closed[0][3] == 'Closed'
+
+
+def test_outcome_refresh_retries_failure_skips_unchanged_and_tracks_close(tmp_path, monkeypatch):
+    from kamandal_v2.intelligence.trade_source_activity import refresh_trade_source_outcomes
+    store = LocalStore(tmp_path / 'refresh.db')
+    assert refresh_trade_source_outcomes({}, store)['status'] == 'no_source_outcomes'
+    ticket = {'ticket_hash': 'copy', 'order_id': 'copy', 'intent_type': 'open', 'plan_id': 'p', 'candidate_id': 'c',
+              'source_id': 'mike_butler', 'source_opportunity_id': 'opening'}
+    store.save_live_order_intent(ticket, status='pending_approval')
+    calls = []
+    def publish(_config, _store):
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError('transient Sheet failure')
+        return 2
+    monkeypatch.setattr('kamandal_v2.intelligence.trade_source_activity.project_trade_source_activity', publish)
+    assert refresh_trade_source_outcomes({}, store)['status'] == 'failed_non_blocking'
+    assert store.latest_event('trade_source_outcome_projection') is None
+    assert refresh_trade_source_outcomes({}, store)['status'] == 'succeeded'
+    assert refresh_trade_source_outcomes({}, store)['status'] == 'unchanged'
+    store.update_live_order_intent_status('copy', 'blocked_preflight_failed')
+    assert refresh_trade_source_outcomes({}, store)['status'] == 'succeeded'
+    store.save_live_position_group('filled', {'source_id': 'mike_butler'}, status='open')
+    assert refresh_trade_source_outcomes({}, store)['status'] == 'succeeded'
+    store.save_live_position_group('filled', {'source_id': 'mike_butler'}, status='closed')
+    assert refresh_trade_source_outcomes({}, store)['status'] == 'succeeded'
+    assert refresh_trade_source_outcomes({}, store)['status'] == 'unchanged'
+    assert len(calls) == 5
+
 
 def test_brief_marks_unresolved_contract_as_evidence_and_summarizes_action(tmp_path):
     from kamandal_v2.intelligence.trade_source_activity import chief_of_staff_rows
@@ -707,6 +771,14 @@ def test_brief_shows_actual_sheet_block_and_separate_position_slot(tmp_path):
         sleeve_policy=policy, max_positions=15,
     )
     assert later_details[0][3] == 'Blocked by preflight'
+
+    store.record_live_order_attempt(store.live_order_intent('blocked-ticket'), action='preflight_open',
+                                    submit=True, ok=False, request_payload={},
+                                    response_payload={'message': 'exact_source_expired_before_submission'})
+    _summary, expired_details = chief_of_staff_rows(
+        store, source_modes={('mike_butler', 'exact_package'): 'live'}, sleeve_policy=policy,
+    )
+    assert expired_details[0][3] == 'Expired before submission'
 
     store.update_live_order_intent_status('blocked-ticket', 'blocked_source_revision')
     store.event('live_entry_exact_evidence_blocked', {

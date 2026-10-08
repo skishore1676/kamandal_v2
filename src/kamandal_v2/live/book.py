@@ -53,9 +53,9 @@ def run_live_book(store: LocalStore, config: dict[str, Any] | None = None) -> di
         management = store.latest_live_management_decision(group_id) or {}
         if canonical_mark:
             management = {
-                **management,
-                "action": "close" if canonical_mark.get("execution_status") in {"ready", "waiting_valid_quote"} else "hold",
+                "action": canonical_mark.get("selected_action_type") or ("close" if canonical_mark.get("execution_status") in {"ready", "waiting_valid_quote"} else "hold"),
                 "reason": str(canonical_mark.get("selected_reason") or ""),
+                "quote_blockers": list(canonical_mark.get("quote_blockers") or []),
                 "execution_status": str(canonical_mark.get("execution_status") or ""),
                 "decision_observation_id": str(canonical_mark.get("decision_observation_id") or ""),
             }
@@ -288,6 +288,8 @@ def _reconciliation_status(issues: list[dict[str, Any]], group_id: str, underlyi
 
 
 def _management_blocker(management: dict[str, Any]) -> str:
+    if management.get("execution_status") == "waiting_valid_quote":
+        return ",".join(management.get("quote_blockers") or []) or "waiting_valid_quote"
     reason = str(management.get("_reason") or management.get("reason") or "")
     action = str(management.get("_action") or management.get("action") or "")
     if action == "hold" and reason not in {"", "no_exit"}:
@@ -302,7 +304,8 @@ def _recommended_action(management: dict[str, Any]) -> str:
     urgency = str(management.get("urgency") or "")
     if not action and not reason:
         return ""
-    parts = [part for part in [action, reason, urgency] if part]
+    status = str(management.get("execution_status") or "")
+    parts = [part for part in [action, reason, urgency, status if status in {"waiting_valid_quote", "blocked"} else ""] if part]
     return ":".join(parts)
 
 
