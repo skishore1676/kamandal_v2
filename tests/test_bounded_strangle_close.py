@@ -112,7 +112,7 @@ def test_event_exit_adds_no_confirmation_wait(tmp_path):
 def test_very_cheap_close_uses_valid_tick_with_rounding_in_budget(tmp_path):
     local, _ = seed(tmp_path)
     run(local, cheap(ask=0.01))
-    result = run(local, cheap('2026-10-07T18:45:00Z', ask=0.01))
+    result = run(local, cheap('2026-10-07T18:45:00', ask=0.01))
     assert result.ok and result.live_intent_count == 1
     ticket = local.live_order_intents_by_type('close')[0]
     assert ticket['limit_price'] == '0.05'

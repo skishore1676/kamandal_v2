@@ -204,7 +204,7 @@ def confirm_bounded_strangle_close(
         zero_cost = sum(leg.ask * leg.quantity * 100 for leg in legs if leg.bid == 0)
         # CSA tickets use nickels. Include rounding in the concession budget,
         # and never stage a zero-price midpoint for a very cheap buyback.
-        natural_limit = math.ceil((-observation.natural_liquidation - 1e-9) / 0.05) * 5.0
+        natural_limit = max(5.0, math.ceil((-observation.natural_liquidation - 1e-9) / 0.05) * 5.0)
         initial_limit = max(5.0, math.floor((-observation.midpoint_liquidation + 1e-9) / 0.05) * 5.0)
         concession = natural_limit + observation.midpoint_liquidation * 100
         asks = {f"{leg.role}:{leg.expiration}:{leg.strike}:{leg.quantity}": leg.ask * leg.quantity * 100 for leg in legs}
@@ -227,10 +227,10 @@ def confirm_bounded_strangle_close(
             for leg in legs if leg.bid > 0
         )
         if bounded and positive_legs_valid:
-            captured = datetime.fromisoformat(observation.snapshot_captured_at.replace("Z", "+00:00"))
+            captured = _parse(observation.snapshot_captured_at)
             old_stamp = str(previous.get("snapshot_captured_at") or "")
             old_asks = previous.get("asks_dollars") or {}
-            gap = (captured - datetime.fromisoformat(old_stamp.replace("Z", "+00:00"))).total_seconds() if old_stamp else -1
+            gap = (captured - _parse(old_stamp)).total_seconds() if old_stamp else -1
             similar = (
                 previous.get("lifecycle_version") == lifecycle.version
                 and previous.get("status") in {"awaiting_confirmation", "confirmed", "urgent_admission"}
