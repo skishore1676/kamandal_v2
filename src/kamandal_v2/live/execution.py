@@ -1991,6 +1991,18 @@ def _repriced_close_limit_price(ticket: dict[str, Any], config: dict[str, Any]) 
     repriced_net = min(max(repriced_net, lower), upper)
     if (reason_class == "executable_profit" or reason == "profit_target") and floor_net is not None:
         repriced_net = max(repriced_net, floor_net)
+    receipt = ticket.get("bounded_close_confirmation") or {}
+    if ticket.get("intent_type") == "close" and receipt.get("status") in {"confirmed", "urgent_admission"}:
+        # Preserve the total-dollar ceiling through every replacement, including
+        # tick rounding. All these tickets are debit buybacks of short legs.
+        ceiling = float(receipt["natural_limit_dollars"])
+        if not math.isfinite(ceiling) or ceiling <= 0 or natural_net != -ceiling:
+            raise ValueError("bounded_close_execution_boundary_invalid")
+        debit = min(-repriced_net, ceiling)
+        rounded = math.floor((debit + 1e-7) / 5.0) * 5.0
+        if rounded <= 0:
+            raise ValueError("bounded_close_below_minimum_tick")
+        return f"{rounded / 100.0:.2f}"
     price = _close_limit_price_from_net(ticket, repriced_net)
     if ticket.get("intent_type") == "adjust" and -float(price) * 100.0 < minimum - 0.000001:
         raise ValueError("adjustment_reprice_below_minimum_credit")

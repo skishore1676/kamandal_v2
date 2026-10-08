@@ -1409,6 +1409,7 @@ class LocalStore:
                 "selected_action_type": str(metadata.get("mark_selected_action_type") or ""),
                 "execution_quote_scope": str(metadata.get("mark_execution_quote_scope") or "whole_position"),
                 "strangle_detection": dict(metadata.get("strangle_detection") or {}),
+                "bounded_close_confirmation": dict(metadata.get("bounded_close_confirmation") or {}),
                 "max_leg_bid_ask_pct": _float(metadata.get("mark_max_leg_bid_ask_pct"), 0.0),
                 "mark_source": str(metadata.get("mark_source") or "canonical_lifecycle"),
                 "decision_observation_id": str(metadata.get("mark_observation_id") or ""),

@@ -80,3 +80,35 @@ missing replacements, natural-credit floor, limit preservation, exit precedence,
 health escalation, adjustment repricing and trading-window enforcement. Runtime
 completion still requires natural scheduled broker admission and fill/reconcile
 receipts after deployment.
+
+## Bounded confirmation followed by action — October 8 follow-up
+
+Operator intent: once an exit is due, repeated reasonable zero-bid quotes should
+lead to a bounded execution attempt, not endless observation. Stable quotes are
+not proof of a fill. Ordinary valid exits proceed immediately.
+
+The narrow exception applies only to short-strangle buybacks whose sole failed
+check is package percentage spread. All quotes must remain fresh, complete and
+valid; positive-bid legs still meet the frozen leg-spread limit. Total zero-bid
+buyback cost is capped at **$50**, total package midpoint-to-natural concession
+at **$25**, including quantities, the standard 100 multiplier and rounding
+the natural boundary up to the existing nickel price increment. A midpoint below
+one nickel starts at one nickel within that budget. These are
+conservative operational budgets, not research-derived strategy thresholds.
+Two chronologically distinct snapshots within the quote freshness interval must
+have total absolute ask changes no greater than **$5**. Cached repeats do not
+advance confirmation; invalid evidence, changed legs/version, excessive gaps or
+price changes reset it. Budgets are total dollars, not per-contract allowances.
+
+On confirmation, the existing joint-close executor starts at midpoint and uses
+its existing tick-aware repricing toward the frozen, tick-rounded natural limit. Profit floors,
+venue preflight, ownership, market hours and approval controls still apply.
+Emergency, event and adverse-loss exits acquire no additional quote-confirmation
+wait; the same absolute bounds and existing loss debounce remain. The exception
+cannot authorize opening or rolling positions, or selling a zero-bid long leg.
+
+The lifecycle mark and ticket retain confirmation and dollar-bound receipts.
+Exceeding the exception bounds on a selected close immediately raises operator
+attention; unconfirmed exits escalate through the existing stall threshold.
+Existing working-order/failure health covers admitted but unfilled orders.
+No new scheduler, Sheet field, frozen-policy rewrite or manual order is needed.

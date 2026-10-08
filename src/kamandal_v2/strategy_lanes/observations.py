@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -172,3 +172,82 @@ def _fresh(captured_at: str, observed_at: str, *, max_age_minutes: int) -> bool:
 def _parse(value: str) -> datetime:
     parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def confirm_bounded_strangle_close(
+    lifecycle: LifecycleState,
+    observation: PackageObservation,
+    legs: tuple[OptionLeg, ...],
+    *,
+    max_gap_minutes: int = 10,
+) -> tuple[LifecycleState, PackageObservation]:
+    """A narrow dollar-bounded alternative to a cheap package's spread ratio.
+
+    Ordinary admissible quotes are unchanged. This cannot admit malformed quotes,
+    other structures, wide positive-bid legs, or a sale at an absent bid.
+    """
+    key = "bounded_close_confirmation"
+    previous = dict(lifecycle.metadata.get(key) or {})
+    state: dict[str, Any] = {"status": "not_applicable", "confirmations": 0}
+    if lifecycle.lane is not LaneId.SHORT_STRANGLE:
+        return lifecycle, observation
+    candidate = (
+        not observation.quote_actionable
+        and observation.quote_fresh
+        and observation.pricing_complete
+        and set(observation.quote_blockers) == {"package_spread_exceeds_frozen_policy"}
+        and len(legs) == 2
+        and all(leg.side == "sell" and leg.quantity > 0 for leg in legs)
+        and any(leg.bid == 0 for leg in legs)
+    )
+    if candidate:
+        zero_cost = sum(leg.ask * leg.quantity * 100 for leg in legs if leg.bid == 0)
+        # CSA tickets use nickels. Include rounding in the concession budget,
+        # and never stage a zero-price midpoint for a very cheap buyback.
+        natural_limit = max(5.0, math.ceil((-observation.natural_liquidation - 1e-9) / 0.05) * 5.0)
+        initial_limit = max(5.0, math.floor((-observation.midpoint_liquidation + 1e-9) / 0.05) * 5.0)
+        concession = natural_limit + observation.midpoint_liquidation * 100
+        asks = {f"{leg.role}:{leg.expiration}:{leg.strike}:{leg.quantity}": leg.ask * leg.quantity * 100 for leg in legs}
+        state = {
+            "status": "budget_exceeded", "confirmations": 0,
+            "lifecycle_version": lifecycle.version,
+            "snapshot_captured_at": observation.snapshot_captured_at,
+            "asks_dollars": asks,
+            "zero_bid_buyback_dollars": round(zero_cost, 6),
+            "package_concession_dollars": round(concession, 6),
+            "natural_limit_dollars": round(natural_limit, 6),
+            "initial_limit_dollars": round(initial_limit, 6),
+            "zero_bid_buyback_cap_dollars": 50.0,
+            "package_concession_cap_dollars": 25.0,
+            "ask_change_cap_dollars": 5.0,
+        }
+        bounded = zero_cost <= 50.0 + 1e-6 and 0 <= concession <= 25.0 + 1e-6
+        positive_legs_valid = all(
+            (leg.ask - leg.bid) / ((leg.ask + leg.bid) / 2) <= observation.max_bid_ask_pct
+            for leg in legs if leg.bid > 0
+        )
+        if bounded and positive_legs_valid:
+            captured = _parse(observation.snapshot_captured_at)
+            old_stamp = str(previous.get("snapshot_captured_at") or "")
+            old_asks = previous.get("asks_dollars") or {}
+            gap = (captured - _parse(old_stamp)).total_seconds() if old_stamp else -1
+            similar = (
+                previous.get("lifecycle_version") == lifecycle.version
+                and previous.get("status") in {"awaiting_confirmation", "confirmed", "urgent_admission"}
+                and old_asks.keys() == asks.keys()
+                and sum(abs(asks[k] - old_asks[k]) for k in asks) <= 5.0 + 1e-6
+                and 0 <= gap <= max_gap_minutes * 60
+            )
+            count = min(2, int(previous.get("confirmations") or 0) + int(gap > 0)) if similar else 1
+            state.update(status="confirmed" if count >= 2 else "awaiting_confirmation", confirmations=count)
+            observation = replace(
+                observation,
+                quote_actionable=count >= 2,
+                quote_blockers=() if count >= 2 else ("bounded_close_awaiting_confirmation",),
+                execution_quote_scope="bounded_strangle_close",
+            )
+        else:
+            blocker = "bounded_close_budget_exceeded" if not bounded else "bounded_close_positive_bid_leg_too_wide"
+            state["status"] = blocker
+            observation = replace(observation, quote_blockers=(*observation.quote_blockers, blocker))
+    return replace(lifecycle, metadata={**lifecycle.metadata, key: state}), observation
