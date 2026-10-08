@@ -97,7 +97,7 @@ def test_tlt_wide_natural_quote_is_evidence_not_a_loss_decision() -> None:
     assert observation.natural_liquidation == pytest.approx(-2.96)
     assert observation.loss_multiple == pytest.approx(1.555 / 0.56)
     assert observation.quote_actionable is False
-    assert "spread_exceeds_frozen_policy" in observation.quote_blockers
+    assert "package_spread_exceeds_frozen_policy" in observation.quote_blockers
 
 
 def test_tight_package_uses_midpoint_for_decision_and_natural_for_boundary() -> None:

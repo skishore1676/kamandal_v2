@@ -553,6 +553,16 @@ def _collect_mark_events(
                 "operator_state": "operator_needed" if stalled else "self_healing",
             },
         )
+    if bool(group_mark.get("adjustment_waiting_quote")):
+        stalled = bool(group_mark.get("adjustment_quote_stalled"))
+        events.append({
+            "severity": "red" if stalled else "yellow",
+            "reason": "adjustment_quote_stalled" if stalled else "adjustment_waiting_quote",
+            "detail": str(group_mark.get("selected_reason") or "") + ": " + ", ".join(group_mark.get("quote_blockers") or []),
+            "group_id": group_mark.get("group_id"),
+            "age_minutes": group_mark.get("waiting_quote_age_minutes"),
+            "operator_state": "operator_needed" if stalled else "self_healing",
+        })
     if bool(group_mark.get("target_reached")):
         events.append(
             {
@@ -585,7 +595,8 @@ def _mark_overview(
     waiting = str(mark.get("execution_status") or "") == "waiting_valid_quote"
     reason_class = str(mark.get("selected_reason_class") or "")
     mandatory_waiting = waiting and reason_class in {"mandatory_event_exit", "time_decision", "hard_emergency"}
-    waiting_age = _age_minutes(str(mark.get("waiting_valid_quote_since") or ""), now=now) if mandatory_waiting else None
+    adjustment_waiting = waiting and reason_class == "lane_adjustment"
+    waiting_age = _age_minutes(str(mark.get("waiting_valid_quote_since") or ""), now=now) if mandatory_waiting or adjustment_waiting else None
     return {
         "group_id": group_id,
         "underlying": str(mark.get("underlying") or ""),
@@ -593,7 +604,7 @@ def _mark_overview(
         "profit_pct": float(mark.get("profit_pct") or 0.0),
         "target_progress_pct": float(mark.get("target_progress_pct") or 0.0),
         "trigger_progress_pct": float(mark.get("trigger_progress_pct") or 0.0),
-        "target_reached": bool(mark.get("quote_fresh", True)) and profit_target_reached(mark, config),
+        "target_reached": bool(mark.get("pricing_complete", True)) and bool(mark.get("quote_actionable", mark.get("quote_fresh", True))) and profit_target_reached(mark, config),
         "loss_watch": bool(mark.get("loss_watch") or bool(mark.get("max_loss_watch"))),
         "loss_watch_observations": mark.get("loss_watch_observations") or {},
         "selected_reason": str(mark.get("selected_reason") or ""),
@@ -601,6 +612,9 @@ def _mark_overview(
         "execution_status": str(mark.get("execution_status") or ""),
         "mandatory_exit_waiting_quote": mandatory_waiting,
         "mandatory_exit_quote_stalled": mandatory_waiting and waiting_age is not None and waiting_age > _exit_pipeline_stalled_minutes(config),
+        "adjustment_waiting_quote": adjustment_waiting,
+        "adjustment_quote_stalled": adjustment_waiting and waiting_age is not None and waiting_age > _exit_pipeline_stalled_minutes(config),
+        "quote_blockers": list(mark.get("quote_blockers") or []),
         "waiting_quote_age_minutes": waiting_age,
         "updated_at": str(mark.get("marked_at") or mark.get("updated_at") or mark.get("created_at") or ""),
     }

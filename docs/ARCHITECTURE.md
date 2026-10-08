@@ -534,7 +534,8 @@ side is economically a one-side adjustment but operationally a paired roll:
 
 For the initial `short_strangle_high_iv` shadow policy, a side is tested when the
 underlying is at or beyond its short strike for two consecutive management
-observations on the **same side**. A side change or return inside both active
+observations on the **same side**. These observations depend on fresh underlying
+price, not on option execution liquidity. A side change or return inside both active
 strikes resets confirmation. One filled replacement consumes that tested
 episode; the same continuing breach cannot walk the untested leg inward again.
 The capability re-arms only after two consecutive observations back inside the
@@ -548,6 +549,9 @@ share. It observes a 30-minute cooldown after a filled adjustment. A maximum of
 two successfully filled side replacements across the lifecycle is the initial
 operator safety/experiment limit; rejected, cancelled, expired, or unfilled
 tickets do not count. Two is not asserted as a universal tastylive rule.
+
+The action-specific quote contract, blocked-action reporting, and historical MS
+repair evidence are documented in [Detection is not order liquidity](lessons/strangle-management-detection-is-not-order-liquidity.md).
 
 Working-order or ownership ambiguity blocks action. Emergency, mandatory event,
 profit, configured loss, and DTE exits outrank an adjustment. Adjustments are

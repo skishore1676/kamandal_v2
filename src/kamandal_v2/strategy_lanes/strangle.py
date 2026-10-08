@@ -49,25 +49,37 @@ def propose_strangle_actions(
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "loss_stage_close", arbiter_class="adverse_price_loss", proposed_at=proposed_at))
 
     if _tested_side_confirmed(policy, context) and _adjustment_available(policy, context):
-        roll = lifecycle_value(policy, "roll")
-        roll_credit = _context_number(context, "same_expiry_roll_credit")
-        if isinstance(roll, dict) and roll.get("min_credit") not in (None, "") and roll_credit >= nested_number(roll, "min_credit", prefix="lifecycle.roll"):
-            actions.append(
-                propose_action(
-                    lifecycle,
-                    ActionType.ADJUST,
-                    "tested_side_confirmed",
-                    arbiter_class="lane_adjustment",
-                    proposed_at=proposed_at,
-                    payload={
-                        "adjustment_kind": "untested_side_same_expiry_credit_roll",
-                        "tested_side": str(context.get("tested_side") or ""),
-                        "breached_strike": context.get("breached_strike"),
-                        "episode_id": str(context.get("strangle_episode_id") or ""),
-                    },
-                )
+        # Propose the required management action independently of execution
+        # quotes. The manager records an explicit blocked adjustment if no
+        # bounded credit roll is executable, rather than disguising it as hold.
+        actions.append(
+            propose_action(
+                lifecycle,
+                ActionType.ADJUST,
+                "tested_side_confirmed",
+                arbiter_class="lane_adjustment",
+                proposed_at=proposed_at,
+                payload={
+                    "adjustment_kind": "untested_side_same_expiry_credit_roll",
+                    "tested_side": str(context.get("tested_side") or ""),
+                    "breached_strike": context.get("breached_strike"),
+                    "episode_id": str(context.get("strangle_episode_id") or ""),
+                },
             )
-    actions.append(propose_action(lifecycle, ActionType.HOLD, "no_higher_precedence_action", arbiter_class="hold", proposed_at=proposed_at))
+        )
+    hold_reason = "no_higher_precedence_action"
+    if context.get("tested_side"):
+        if not _adjustment_available(policy, context):
+            hold_reason = "strangle_adjustment_limit_reached"
+        elif not context.get("cooldown_elapsed"):
+            hold_reason = "strangle_adjustment_cooldown"
+        elif context.get("strangle_episode_consumed"):
+            hold_reason = "strangle_episode_already_adjusted"
+        else:
+            hold_reason = "strangle_test_awaiting_confirmation"
+    elif context.get("strangle_detection_blocker"):
+        hold_reason = str(context["strangle_detection_blocker"])
+    actions.append(propose_action(lifecycle, ActionType.HOLD, hold_reason, arbiter_class="hold", proposed_at=proposed_at))
     return tuple(actions)
 
 
