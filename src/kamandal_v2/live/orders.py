@@ -124,6 +124,7 @@ def build_csa_live_ticket(ticket: StrategyTicket, *, entry_candidate: Candidate 
         "resting_profit_arm_progress_pct",
         "resting_order_day",
         "execution_envelope",
+        "bounded_close_confirmation",
     ):
         if key in ticket.metadata:
             live_ticket[key] = ticket.metadata[key]

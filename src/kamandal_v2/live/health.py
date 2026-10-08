@@ -74,6 +74,7 @@ REASON_ORDER = [
     "failed_preflight_close",
     "exit_pipeline_stalled",
     "mandatory_exit_quote_stalled",
+    "bounded_close_action_needed",
     "mandatory_exit_waiting_quote",
     "urgent_close_order_stale",
     "loss_watch",
@@ -92,6 +93,7 @@ VENUE_SCOPED_HEALTH_REASONS = {
     "failed_preflight_close",
     "exit_pipeline_stalled",
     "mandatory_exit_quote_stalled",
+    "bounded_close_action_needed",
     "mandatory_exit_waiting_quote",
     "urgent_close_order_stale",
     "loss_watch",
@@ -541,6 +543,14 @@ def _collect_mark_events(
     target_state = "self_healing" if str(live.get("exit_approval_mode") or "sheet_approval") == "auto_rules" else "operator_needed"
     loss_action = str((live.get("exit_pricing") or {}).get("max_loss_action") or "review")
     loss_state = "self_healing" if loss_action in {"close", "close_when_confirmed"} else "operator_needed"
+    if bool(group_mark.get("bounded_close_action_needed")):
+        events.append({
+            "severity": "red", "reason": "bounded_close_action_needed",
+            "detail": "Exit unresolved: " + ", ".join(group_mark.get("quote_blockers") or []),
+            "group_id": group_mark.get("group_id"),
+            "age_minutes": group_mark.get("waiting_quote_age_minutes"),
+            "operator_state": "operator_needed",
+        })
     if bool(group_mark.get("mandatory_exit_waiting_quote")):
         stalled = bool(group_mark.get("mandatory_exit_quote_stalled"))
         events.append(
@@ -596,7 +606,9 @@ def _mark_overview(
     reason_class = str(mark.get("selected_reason_class") or "")
     mandatory_waiting = waiting and reason_class in {"mandatory_event_exit", "time_decision", "hard_emergency"}
     adjustment_waiting = waiting and reason_class == "lane_adjustment"
-    waiting_age = _age_minutes(str(mark.get("waiting_valid_quote_since") or ""), now=now) if mandatory_waiting or adjustment_waiting else None
+    bounded = mark.get("bounded_close_confirmation") or {}
+    bounded_waiting = waiting and mark.get("selected_action_type") == "close" and bounded.get("status") not in {None, "not_applicable"}
+    waiting_age = _age_minutes(str(mark.get("waiting_valid_quote_since") or ""), now=now) if mandatory_waiting or adjustment_waiting or bounded_waiting else None
     return {
         "group_id": group_id,
         "underlying": str(mark.get("underlying") or ""),
@@ -612,6 +624,10 @@ def _mark_overview(
         "execution_status": str(mark.get("execution_status") or ""),
         "mandatory_exit_waiting_quote": mandatory_waiting,
         "mandatory_exit_quote_stalled": mandatory_waiting and waiting_age is not None and waiting_age > _exit_pipeline_stalled_minutes(config),
+        "bounded_close_action_needed": bool(bounded_waiting and (
+            str(bounded.get("status") or "").startswith("bounded_close_")
+            or (waiting_age is not None and waiting_age > _exit_pipeline_stalled_minutes(config))
+        )),
         "adjustment_waiting_quote": adjustment_waiting,
         "adjustment_quote_stalled": adjustment_waiting and waiting_age is not None and waiting_age > _exit_pipeline_stalled_minutes(config),
         "quote_blockers": list(mark.get("quote_blockers") or []),

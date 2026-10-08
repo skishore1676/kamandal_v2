@@ -25,7 +25,7 @@ from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
 from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, lifecycle_value, policy_bool, propose_action
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode
-from kamandal_v2.strategy_lanes.observations import PackageObservation, observe_package
+from kamandal_v2.strategy_lanes.observations import PackageObservation, confirm_bounded_strangle_close, observe_package
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.registry import lifecycle_registry
 from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
@@ -268,6 +268,15 @@ def _run_lifecycle_management(
             raw_selected = arbitrate_actions(proposals).selected
             if lifecycle.lane is LaneId.SHORT_STRANGLE and raw_selected.action_type is ActionType.ADJUST:
                 observation = _strangle_roll_observation(observation, plans.get("roll"), policy)
+            # Urgent closes keep the dollar bounds, but add no new quote wait.
+            if (
+                raw_selected.action_type is ActionType.CLOSE
+                and raw_selected.payload.get("arbiter_class") in {"hard_emergency", "mandatory_event_exit", "adverse_price_loss"}
+                and observation.quote_blockers == ("bounded_close_awaiting_confirmation",)
+            ):
+                observation = replace(observation, quote_actionable=True, quote_blockers=())
+                receipt = {**observed_lifecycle.metadata["bounded_close_confirmation"], "status": "urgent_admission"}
+                observed_lifecycle = replace(observed_lifecycle, metadata={**observed_lifecycle.metadata, "bounded_close_confirmation": receipt})
             selected, observation = _apply_management_safety(
                 raw_selected,
                 observed_lifecycle,
@@ -301,6 +310,7 @@ def _run_lifecycle_management(
                 "raw_selected_reason": str(raw_selected.reason_codes[0] if raw_selected.reason_codes else ""),
                 "raw_selected_reason_class": str(raw_selected.payload.get("arbiter_class") or ""),
                 "strangle_detection": dict(observed_lifecycle.metadata.get("strangle_detection") or {}),
+                "bounded_close_confirmation": dict(observed_lifecycle.metadata.get("bounded_close_confirmation") or {}),
             }
             writable_live_store.record_live_position_mark(lifecycle.lifecycle_id, observation_payload)
             store.save_action(selected)
@@ -493,8 +503,10 @@ def _management_context(
         observed_at=observed_at,
         quote_max_age_minutes=quote_age,
     )
+    lifecycle, observation = confirm_bounded_strangle_close(lifecycle, observation, legs, max_gap_minutes=quote_age)
     profit_pct = observation.profit_pct if observation.quote_actionable else -1.0e12
-    loss_multiple = observation.loss_multiple if observation.quote_actionable else 0.0
+    bounded_pending = (lifecycle.metadata.get("bounded_close_confirmation") or {}).get("status") == "awaiting_confirmation"
+    loss_multiple = observation.loss_multiple if observation.quote_actionable or bounded_pending else 0.0
     observed_date = _parse_timestamp(observed_at).date()
     dtes = [max((date.fromisoformat(leg.expiration) - observed_date).days, 0) for leg in legs]
     half_time = _half_time_state(lifecycle, policy, legs, remaining_dtes=dtes)
@@ -805,6 +817,12 @@ def _management_ticket(
             if resting_profit
             else plans["midpoint_liquidation"]
         )
+        bounded_receipt = dict(lifecycle.metadata.get("bounded_close_confirmation") or {})
+        bounded_close = observation.execution_quote_scope == "bounded_strangle_close" and not resting_profit
+        natural_net = observation.natural_liquidation * 100.0
+        if bounded_close:
+            limit_price = -float(bounded_receipt["initial_limit_dollars"]) / 100.0
+            natural_net = -float(bounded_receipt["natural_limit_dollars"])
         ticket = mixed_ticket(
             action,
             policy,
@@ -829,7 +847,8 @@ def _management_ticket(
                 "exit_reason": str(action.reason_codes[0] if action.reason_codes else ""),
                 "exit_reason_class": reason_class,
                 "exit_midpoint_net": observation.midpoint_liquidation * 100.0,
-                "exit_natural_net": observation.natural_liquidation * 100.0,
+                "exit_natural_net": natural_net,
+                "bounded_close_confirmation": dict(lifecycle.metadata.get("bounded_close_confirmation") or {}),
                 **(
                     {
                         "resting_profit_order": True,
@@ -859,7 +878,7 @@ def _management_ticket(
                         "initial": "midpoint",
                         "boundary": "natural",
                         "midpoint_net": observation.midpoint_liquidation * 100.0,
-                        "natural_net": observation.natural_liquidation * 100.0,
+                        "natural_net": natural_net,
                         "quote_max_bid_ask_pct": observation.max_bid_ask_pct,
                     }
                 ),
