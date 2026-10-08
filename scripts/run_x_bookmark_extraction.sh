@@ -17,6 +17,24 @@ run_x_bookmark_extraction() {
 
   mkdir -p "$source_root" "$digest_dir" "$ideas_dir"
 
+  # Correspondent packets have independent freshness receipts. A stale general
+  # digest must not prevent their activation; digest failure still fails this job.
+  if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then
+    # Correspondent activation exports the current Birdclaw packet, asks any
+    # profile-declared Cartographer questions, and then publishes planner ideas.
+    # The exchange is generic; this X job does not contain Greg-specific chart logic.
+    log "Activating configured correspondent signals for the planner."
+    if activation_json="$("$KAMANDAL_BIN" activate-correspondent-signals \
+      --config-source sheet \
+      --active-ideas-dir "$ideas_dir" 2>&1)"; then
+      log "$activation_json"
+    else
+      log "Guru intake failed; source failure receipt follows."
+      log "$activation_json"
+      return 1
+    fi
+  fi
+
   log "Importing Birdclaw canonical X digest into source docs."
   if import_json="$("$KAMANDAL_BIN" import-x-digest \
       --output-dir "$source_root" \
@@ -32,22 +50,6 @@ run_x_bookmark_extraction() {
     import_error="$(printf '%s\n' "$import_json" | tail -n 1)"
     log "Birdclaw canonical X digest unavailable; retired bookmark fallback is disabled. $import_error"
     return 1
-  fi
-
-  if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then
-    # Correspondent activation exports the current Birdclaw packet, asks any
-    # profile-declared Cartographer questions, and then publishes planner ideas.
-    # The exchange is generic; this X job does not contain Greg-specific chart logic.
-    log "Activating configured correspondent signals for the planner."
-    if activation_json="$("$KAMANDAL_BIN" activate-correspondent-signals \
-      --config-source sheet \
-      --active-ideas-dir "$ideas_dir" 2>&1)"; then
-      log "$activation_json"
-    else
-      log "Guru intake failed; source failure receipt follows."
-      log "$activation_json"
-      return 1
-    fi
   fi
 
   if [[ -z "$source_doc_dir" || ! -d "$source_doc_dir" ]]; then

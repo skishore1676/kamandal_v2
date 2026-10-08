@@ -215,3 +215,13 @@ NDX remains unsupported: the current Public adapter selects INDEX instruments
 only for SPX. NDX requires proved broker chain/contract resolution, quote and tick
 handling, fee-inclusive preflight, and reconciliation before live admission.
 Changing the source-package allowlist alone is insufficient.
+
+## October 8 independent source freshness
+
+The existing X intake job activates correspondent packets before importing the
+separate general bookmarks/timeline digest. On October 8 the correspondent owner
+reported Greg and Mike caught up at 11:35 Chicago, while the general digest was
+stale and stopped the 11:45 job before activation. Each source retains its own
+freshness checks; a stale digest still fails the job and cannot reach extraction.
+Import-only mode still skips correspondent activation. No schedule, extra job,
+manual production replay, or freshness-threshold change is required.
