@@ -399,6 +399,7 @@ def _live_health_unit(live_health: dict[str, Any]) -> dict[str, Any]:
         "finding_details": events,
         "self_healing": live_health.get("self_healing") or {},
         "operator_state": _operator_state(events, lifecycle),
+        "last": {"domain": {"attention_required": attention_required}},
         "attention_required": attention_required,
         "escalation_state": "owner_attention_required" if attention_required else "not_required",
         "available_actions": ["live-status", "live-health-report-now"],

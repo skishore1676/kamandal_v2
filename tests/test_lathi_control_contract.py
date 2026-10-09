@@ -636,6 +636,7 @@ def test_live_health_projects_owner_attention_without_changing_policy(overall, e
     report = {"overall": overall, "events": events, "reasons": [e["reason"] for e in events]}
     original = json.dumps(report, sort_keys=True)
     unit = launchd_status._live_health_unit(report)
+    assert unit["last"]["domain"]["attention_required"] is expected
     assert unit["attention_required"] is expected
     assert unit["escalation_state"] == ("owner_attention_required" if expected else "not_required")
     assert unit["finding_details"] == events

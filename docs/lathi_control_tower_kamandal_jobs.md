@@ -82,7 +82,8 @@ domain proof for applied, refused, stale, expired, or already-applied decisions.
 ### Live-health attention projection
 
 The `kamandal:live-health` unit explicitly exports `attention_required` and
-`escalation_state` (`owner_attention_required` or `not_required`). These use
+`escalation_state` (`owner_attention_required` or `not_required`), plus the
+bridge input `last.domain.attention_required` consumed by Lathi. These use
 Kamandal's existing `health_attention` policy before notification deduplication.
 A stalled mandatory exit remains visible even if its alert was already considered;
 self-handled, self-healing, delegated review, and derived owner conditions retain
