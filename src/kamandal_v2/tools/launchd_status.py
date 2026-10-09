@@ -20,7 +20,7 @@ from kamandal_v2.ops.alerts import default_lathi_bus_profile
 from kamandal_v2.ops.launchd_registry import CENTRAL, launchd_jobs
 from kamandal_v2.paths import PROJECT_ROOT
 from kamandal_v2.stores.sqlite import LocalStore
-from kamandal_v2.tools.launchd_job import read_launchd_observation, scheduled_job_health
+from kamandal_v2.tools.launchd_job import health_attention, read_launchd_observation, scheduled_job_health
 from kamandal_v2.tools.review_queue import build_review_queue
 
 
@@ -379,6 +379,8 @@ def _launchd_loaded_labels() -> set[str] | None:
 def _live_health_unit(live_health: dict[str, Any]) -> dict[str, Any]:
     status = str(live_health.get("overall") or "NO_DATA").upper()
     lifecycle = _live_health_lifecycle(live_health)
+    # Project the owner policy before notification dedupe; status is not a send.
+    attention_required = bool(health_attention(live_health)["notify"])
     events = list(live_health.get("events") or [])
     return {
         "unit_id": "kamandal:live-health",
@@ -397,6 +399,8 @@ def _live_health_unit(live_health: dict[str, Any]) -> dict[str, Any]:
         "finding_details": events,
         "self_healing": live_health.get("self_healing") or {},
         "operator_state": _operator_state(events, lifecycle),
+        "attention_required": attention_required,
+        "escalation_state": "owner_attention_required" if attention_required else "not_required",
         "available_actions": ["live-status", "live-health-report-now"],
         "action_requirements": {
             "live-status": {"requires_confirmation": False, "reason": "Read-only live-health status."},

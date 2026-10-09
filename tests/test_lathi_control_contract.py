@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -615,3 +617,34 @@ def test_launchd_control_retry_job_refuses_unknown_job(capsys) -> None:  # noqa:
     payload = json.loads(capsys.readouterr().out)
     assert payload["ok"] is False
     assert payload["result_status"] == "job_not_retryable"
+
+
+@pytest.mark.parametrize(
+    ("overall", "events", "expected"),
+    [
+        ("RED", [{"reason": "mandatory_exit_quote_stalled", "severity": "red", "operator_state": "operator_needed"}], True),
+        ("YELLOW", [{"reason": "exit_pipeline_stalled", "operator_state": "blocked_self_healing"}], True),
+        ("RED", [{"reason": "risk_cluster_at_cap", "severity": "red", "operator_state": "self_handled"}], False),
+        ("YELLOW", [{"reason": "position_target_reached", "operator_state": "self_healing"}], False),
+        ("RED", [{"reason": "reconciliation_review", "severity": "red", "operator_state": "operator_needed", "attention_surface": "external_review"}], False),
+        ("RED", [{"reason": "risk_account_snapshot_stale", "severity": "red", "operator_state": "operator_needed"}], False),
+        ("RED", [], True),
+        ("GREEN", [], False),
+    ],
+)
+def test_live_health_projects_owner_attention_without_changing_policy(overall, events, expected):
+    report = {"overall": overall, "events": events, "reasons": [e["reason"] for e in events]}
+    original = json.dumps(report, sort_keys=True)
+    unit = launchd_status._live_health_unit(report)
+    assert unit["attention_required"] is expected
+    assert unit["escalation_state"] == ("owner_attention_required" if expected else "not_required")
+    assert unit["finding_details"] == events
+    assert json.dumps(report, sort_keys=True) == original
+
+
+def test_live_health_attention_clears_when_owner_recovers():
+    stalled = {"overall": "RED", "events": [{"reason": "mandatory_exit_quote_stalled", "operator_state": "operator_needed"}]}
+    assert launchd_status._live_health_unit(stalled)["attention_required"] is True
+    recovered = launchd_status._live_health_unit({"overall": "GREEN", "events": []})
+    assert recovered["attention_required"] is False
+    assert recovered["escalation_state"] == "not_required"

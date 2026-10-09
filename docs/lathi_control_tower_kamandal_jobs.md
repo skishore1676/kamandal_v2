@@ -79,6 +79,17 @@ The important safety rule is that Lathi's journal is proof of operator intent,
 not proof of trading mutation. Kamandal's SQLite event/receipt remains the
 domain proof for applied, refused, stale, expired, or already-applied decisions.
 
+### Live-health attention projection
+
+The `kamandal:live-health` unit explicitly exports `attention_required` and
+`escalation_state` (`owner_attention_required` or `not_required`). These use
+Kamandal's existing `health_attention` policy before notification deduplication.
+A stalled mandatory exit remains visible even if its alert was already considered;
+self-handled, self-healing, delegated review, and derived owner conditions retain
+the existing policy's exclusions. Recovery clears the fields on the next read.
+This read-only projection does not send alerts, refresh quotes, change price gates,
+or submit orders; the existing lifecycle remains responsible for re-evaluation.
+
 ## Current State
 
 ### Kamandal
