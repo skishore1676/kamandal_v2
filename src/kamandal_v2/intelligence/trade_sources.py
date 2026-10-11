@@ -29,7 +29,7 @@ class TradeSourceMode(StrEnum):
 LIVE_EXACT_STRUCTURES = frozenset({
     "long_call", "call_butterfly", "put_butterfly", "call_crab", "split_call_fly", "calendar_bundle",
     "iron_condor", "short_strangle", "call_calendar", "put_calendar", "call_diagonal", "put_diagonal",
-    "call_spread", "put_spread",
+    "call_spread", "put_spread", "short_put",
 })
 
 

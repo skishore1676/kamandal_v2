@@ -69,6 +69,11 @@ def validate_exact_structure(structure: str, legs: list[OptionLeg], underlying_p
                  and len({leg.quantity for leg in legs}) == 1
                  and len({leg.strike for leg in legs}) == 2)
         return ValidationResult(valid, "" if valid else "exact_vertical_contract_geometry_invalid")
+    if structure == "short_put":
+        valid = (len(legs) == 1 and legs[0].option_type == "put"
+                 and legs[0].side == "sell" and legs[0].quantity > 0
+                 and 0 < legs[0].strike < float("inf"))
+        return ValidationResult(valid, "" if valid else "exact_short_put_contract_geometry_invalid")
     if structure == "short_strangle":
         puts, calls = [leg for leg in legs if leg.option_type == "put"], [leg for leg in legs if leg.option_type == "call"]
         valid = (len(legs) == 2 and len(puts) == len(calls) == 1

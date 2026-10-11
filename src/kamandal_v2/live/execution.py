@@ -298,11 +298,13 @@ def execute_live_approved(
     cluster_capped: dict[str, str] = {}
     underlying_capped: dict[str, int] = {}
     if submit and not close:
-        gate_tickets = [
-            ticket
-            for row in rows[:1]
-            for ticket in _tickets_from_row(row, close=False)
-        ]
+        # A basket can span brokers, but only its next executable tickets
+        # reach this submit cycle. Later or completed tickets must not export
+        # their venue's local health block to that selected work. Keep the
+        # conservative full-row check when selection cannot resolve a ticket.
+        gate_tickets, _ = _tickets_to_execute(config, store, rows[0], submit=True, close=False)
+        if not gate_tickets:
+            gate_tickets = _tickets_from_row(rows[0], close=False)
         gate = _entry_health_gate_for_tickets(config, store, gate_tickets)
         risk_manager = gate.get("risk_manager") or {}
         if bool(risk_manager.get("enabled")):

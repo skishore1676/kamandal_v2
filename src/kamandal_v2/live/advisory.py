@@ -213,7 +213,7 @@ def _live_candidate_policy(
         elif candidate_lane(candidate) == "current_idea" and candidate.underlying.upper() in cluster_capped:
             cluster = cluster_for_symbol(config, candidate.underlying) or "unknown"
             candidate.rejection_reason = f"live_risk_cluster_cap:{cluster}"
-        elif len(candidate.legs) < min_entry_legs and not _verified_exact_single_call(candidate):
+        elif len(candidate.legs) < min_entry_legs and not _verified_exact_single_option(candidate):
             candidate.rejection_reason = f"live_leg_count_below_min:{len(candidate.legs)}<{min_entry_legs}"
         elif any(int(leg.quantity or 1) > max_contracts for leg in candidate.legs) and not _verified_exact_ratio_package(candidate, max_contracts):
             candidate.rejection_reason = "live_contract_limit"
@@ -353,12 +353,13 @@ def _loads(raw: Any) -> dict[str, Any]:
         return {}
 
 
-def _verified_exact_single_call(candidate: Candidate) -> bool:
+def _verified_exact_single_option(candidate: Candidate) -> bool:
     return (candidate.metadata.get("input_kind") == "exact_package"
             and candidate.metadata.get("source_verified") is True
             and bool(candidate.metadata.get("source_verification_ref"))
-            and candidate.structure == "long_call" and len(candidate.legs) == 1
-            and candidate.legs[0].side == "buy" and candidate.legs[0].option_type == "call"
+            and len(candidate.legs) == 1
+            and (candidate.structure, candidate.legs[0].side, candidate.legs[0].option_type)
+            in {("long_call", "buy", "call"), ("short_put", "sell", "put")}
             and candidate.legs[0].quantity == 1)
 
 

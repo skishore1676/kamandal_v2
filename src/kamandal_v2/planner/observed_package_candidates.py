@@ -326,9 +326,11 @@ def _exact_execution_rejections(candidate: Candidate, playbook: Playbook, config
         reasons.extend(_intraday_rejections(candidate, config, getattr(policy, "management", {})))
     elif remaining_dte <= exit_dte:
         reasons.append("exact_entry_at_or_inside_exit_window")
-    if candidate.structure in {"short_strangle", "iron_condor"}:
+    if candidate.structure in {"short_put", "short_strangle", "iron_condor"}:
         if candidate.net_credit <= 0:
             reasons.append("exact_credit_structure_requires_positive_credit")
+        if candidate.structure == "short_put" and candidate.net_credit >= candidate.legs[0].strike:
+            reasons.append("exact_short_put_credit_exceeds_strike")
         if candidate.structure == "iron_condor":
             width = max(abs(a.strike - b.strike) for a in candidate.legs for b in candidate.legs if a.option_type == b.option_type)
             if candidate.net_credit >= width:
@@ -411,6 +413,11 @@ def _canonical_roles(package: ObservedPackageEvidence) -> list[str]:
     if package.structure == "calendar_bundle":
         expirations = sorted({leg.expiration for leg in package.legs})
         return ["short_near" if leg.expiration == expirations[0] else "long_far" for leg in package.legs]
+    if package.structure == "short_put":
+        if (len(package.legs) != 1 or package.legs[0].option_type != "put"
+                or package.legs[0].side != "sell" or package.legs[0].effect != "open"):
+            raise ValueError("exact_short_put_requires_one_short_open_put")
+        return ["short_put"]
     if package.structure == "long_call":
         if len(package.legs) != 1 or package.legs[0].option_type != "call" or package.legs[0].side != "buy":
             raise ValueError("exact_long_call_requires_one_long_call")

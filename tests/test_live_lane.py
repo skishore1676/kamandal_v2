@@ -3374,3 +3374,69 @@ def test_sync_keeps_unmatched_uncertain_submission_blocked(tmp_path, monkeypatch
     result = sync_live_orders(_live_control(), store=store, manage_entries=False)
     assert result["orders"][0]["needs_broker_status_review"] is True
     assert store.live_order_intent(ticket["ticket_hash"])["_ledger_status"] == "submit_uncertain"
+
+
+@pytest.mark.parametrize(
+    ("first_venue", "first_status", "shared_blocker", "expected_venue", "blocked"),
+    [
+        ("public_primary", "pending_approval", False, "public_primary", False),
+        ("tasty_primary", "pending_approval", False, "tasty_primary", True),
+        ("tasty_primary", "filled", False, "public_primary", False),
+        ("public_primary", "pending_approval", True, "public_primary", True),
+    ],
+)
+def test_basket_health_uses_next_executable_ticket_venue(
+    tmp_path, monkeypatch, first_venue, first_status, shared_blocker, expected_venue, blocked,
+):
+    """DHR's Tasty-only gate must not leak through an unsubmitted basket leg."""
+    from kamandal_v2.live import health
+
+    store = LocalStore(tmp_path / "health-basket.db")
+    control = _live_control()
+    control["runtime"].update(mode="live", trading_enabled=True)
+    control["live"]["max_live_entry_submits_per_run"] = 1
+    second_venue = "public_primary" if first_venue == "tasty_primary" else "tasty_primary"
+    tickets = []
+    for index, venue in enumerate((first_venue, second_venue)):
+        ticket = {
+            "ticket_hash": f"venue-ticket-{index}", "order_id": f"order-{index}",
+            "plan_id": "plan-venue", "candidate_id": f"candidate-{index}",
+            "intent_type": "open", "execution_venue": venue, "underlying": "XYZ",
+        }
+        store.save_live_order_intent(ticket, status=first_status if index == 0 else "pending_approval")
+        tickets.append(ticket)
+    row = {
+        "mode": "live_advisory", "operator_action": APPROVE_LIVE,
+        "trade_bundle": "mixed-venue-basket",
+        "plan_detail_json": json.dumps({"lane": "live_advisory", "order_tickets_json": tickets}),
+    }
+    events = [{"reason": "mandatory_exit_quote_stalled", "severity": "red", "execution_venue": "tasty_primary"}]
+    if shared_blocker:
+        events.append({"reason": "reconciliation_blocker", "severity": "red", "execution_venue": "tasty_primary"})
+    report = {"overall": "RED", "events": events, "counts": {}, "risk_manager": {"enabled": True, "blocked": False}}
+    monkeypatch.setattr(health, "run_live_health", lambda *_a, **_k: report)
+    monkeypatch.setattr(live_execution, "pull_sheet_tables", lambda _config: {"daily_plan": [row]})
+    monkeypatch.setattr(live_execution, "broker_adapter", lambda _config: object())
+    monkeypatch.setattr(live_execution, "_daily_basket_cap_allows", lambda *_a: True)
+    executed_tickets = []
+    def fake_execute(_config, _adapter, _store, ticket, **_kwargs):
+        executed_tickets.append(ticket)
+        return {"status": "fixture_submitted", "ticket_hash": ticket["ticket_hash"]}
+    monkeypatch.setattr(live_execution, "_execute_ticket", fake_execute)
+    monkeypatch.setenv("KAMANDAL_LIVE_SUBMIT_CONFIRM", "I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS")
+
+    result = execute_live_approved(control, submit=True, store=store)
+
+    if blocked:
+        assert not executed_tickets
+        assert result["health_gate"]["blocked"] is True
+        assert result["health_gate"]["execution_venues"] == [expected_venue]
+    else:
+        assert len(executed_tickets) == 1
+        assert executed_tickets[0]["execution_venue"] == expected_venue
+        assert result["results"][0]["status"] == "fixture_submitted"
+    gate = store.latest_event("risk_manager_entry_gate_decision")["gate"]
+    assert gate["execution_venues"] == [expected_venue]
+    assert gate["blocked"] is blocked
+    if not blocked:
+        assert gate["excluded_other_venue_reasons"] == ["mandatory_exit_quote_stalled"]

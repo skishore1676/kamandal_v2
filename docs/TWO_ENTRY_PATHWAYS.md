@@ -177,10 +177,12 @@ the existing full-package close policy.
 
 Timing is a separate acceptance gap: deployed Birdclaw collection is 13:50 then
 15:05 Chicago; Kamandal intake is 14:00 then 15:15, and its last planner is
-14:15. A 14:32 post cannot enter that afternoon. Proposed coordinated late cycle:
-Birdclaw 14:35, Kamandal intake 14:45, planner 14:50, retaining the existing
-closing collection. This requires a separate upstream collection/scheduler gate;
-classification support alone does not prove timely acquisition or a natural fill.
+14:15. A 14:32 post cannot enter that afternoon. The previously proposed
+14:35/14:45/14:50 collection/intake/planner cycle is shelved: it would finish
+after the protected 14:40 entry cutoff. No extra paid collection or schedule
+change was activated. Late posts may wait until the next session, subject to
+source freshness; classification support does not prove timely acquisition.
+
 
 
 ## October 6 consumed-opening and Sheet publication repair
@@ -245,3 +247,27 @@ have no enabled exact short-put playbook, and short_put is absent from live exac
 capabilities. An earlier packet alone would not make this executable. Do not
 silently enable a new short-put risk policy or synthesize a different structure.
 The next natural planner receipt remains the authoritative live disposition.
+
+
+## October 10 weekly triage
+
+The basket submitter checks health for the next selected executable tickets.
+A later Tasty ticket cannot export its venue-local DHR mandatory-exit block to
+a selected Public ticket. Shared reconciliation/risk failures remain global;
+DHR pricing and Tasty entry protection remain intact.
+
+Exact short puts now have source-contract hydration, geometry and credit
+validation, and the verified one-contract exception to the ideas multileg
+minimum. The dedicated Sheet migration adds `guru_exact_short_put` using the
+existing short-put management and $2500 BPR cap, capped at one contract.
+Ideas short-put policies remain disabled. Both native broker preflight and
+final fresh BPR validation still apply: a cash-secured RKLB requirement above
+the cap is a legitimate rejection. Generic close-only lifecycle management
+uses the frozen 40% profit target, 2.5 loss multiple and 21-DTE exit boundary.
+No automatic roll/assignment policy is introduced. Expired posts are not replayed.
+
+This closes implementation gaps, not the overall acceptance case. Natural
+Public submission under a Tasty-local hold and a fresh affordable exact short
+put still need runtime receipts. NDX capability and late-post coverage remain
+known limits. Weekly counts must separate distinct source opportunities from
+fills, and exclude the October 6 erroneous MSFT re-entry from successful capture.
