@@ -944,7 +944,7 @@ def test_management_and_scorecard_complete_the_broker_inert_runtime_loop(tmp_pat
     assert written.csv_path.exists()
 
 
-def test_mandatory_shadow_exit_waits_on_wide_quote_then_retries_same_lifecycle(tmp_path) -> None:
+def test_mandatory_shadow_exit_stages_on_wide_quote_without_duplicate(tmp_path) -> None:
     # Fixture contracts roll with today; keep the scenario on that same date.
     from datetime import date
     scenario_day = date.today().isoformat()
@@ -989,9 +989,9 @@ def test_mandatory_shadow_exit_waits_on_wide_quote_then_retries_same_lifecycle(t
     ]
 
     assert first.selected_actions == {"close": 1}
-    assert lifecycle.metadata["mark_execution_status"] == "waiting_valid_quote"
+    assert lifecycle.metadata["mark_execution_status"] == "ready"
     assert lifecycle.metadata["mark_selected_reason"] == "time_exit"
-    assert close_tickets == []
+    assert len(close_tickets) == 1
 
     second = run_csa_shadow_management(
         {},

@@ -774,3 +774,11 @@ def test_strangle_adjustment_cannot_increase_short_contract_count() -> None:
             created_at=NOW,
             limit_price=0.1,
         )
+
+
+@pytest.mark.parametrize("trigger", ["hard_emergency", "near_leg_expired"])
+def test_unknown_earnings_event_does_not_veto_other_forced_exits(trigger):
+    policy = _policy("call_calendar")
+    context = {"ownership_clear": True, "event_state": "unknown", "profit_pct": 0, trigger: True}
+    result = arbitrate_actions(lifecycle_registry().resolve(policy.lane)(_lifecycle(policy.lane), policy, context, proposed_at=NOW))
+    assert result.selected.action_type is ActionType.CLOSE

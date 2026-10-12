@@ -221,9 +221,9 @@ live:
     loss_watch_max_leg_bid_ask_pct: 1.0
     loss_watch_confirmations_required: 2
     loss_watch_window_minutes: 120
-  # Resting package targets are deliberately inert until separately activated.
-  # They use the immutable lifecycle target and remain DAY orders at that exact
-  # price; the ordinary exit reprice ladder does not apply.
+  # Universal across live lanes, including already-open positions. Strangles
+  # arm immediately; other trades use frozen arm progress (25% if absent).
+  # Target dollars stay frozen. DAY target orders never concede their price.
   resting_profit:
     live_enabled: true
     shadow_enabled: false

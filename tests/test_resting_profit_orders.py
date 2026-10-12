@@ -141,7 +141,7 @@ def test_resting_proposal_requires_actionable_arm_progress_and_is_day_stable() -
     assert armed.reason_codes == ("profit_target_resting",)
 
 
-def test_legacy_lifecycle_is_not_opted_in_by_platform_switch() -> None:
+def test_universal_platform_policy_includes_legacy_positions() -> None:
     legacy = replace(
         _policy(),
         resolved_fields={"profit_target_pct": 50, "max_bid_ask_pct": 0.25},
@@ -157,10 +157,10 @@ def test_legacy_lifecycle_is_not_opted_in_by_platform_switch() -> None:
         _observation(midpoint_pnl=0.30),
         platform,
         proposed_at=NOW,
-    ) is None
+    ) is not None
 
 
-def test_sheet_permission_and_arm_threshold_control_the_offer() -> None:
+def test_legacy_opt_out_cannot_disable_universal_offer_but_threshold_stays_frozen() -> None:
     platform = resting_profit_policy(
         {"live": {"resting_profit": {"shadow_enabled": True}}},
         "shadow",
@@ -182,7 +182,7 @@ def test_sheet_permission_and_arm_threshold_control_the_offer() -> None:
 
     assert _resting_profit_proposal(
         _lifecycle(), denied, _observation(midpoint_pnl=0.30), platform, proposed_at=NOW
-    ) is None
+    ) is not None
     assert _resting_profit_proposal(
         _lifecycle(), late_arm, _observation(midpoint_pnl=0.30), platform, proposed_at=NOW
     ) is None
@@ -547,3 +547,17 @@ def test_canonical_live_manager_rearms_after_broker_day_expiry(tmp_path, monkeyp
     )
     assert authorized is True
     assert reason == "lifecycle_authorization_frozen"
+
+
+@pytest.mark.parametrize("lane", list(LaneId))
+def test_resting_offer_is_universal_with_lane_specific_arming(lane):
+    lifecycle = replace(_lifecycle(), lane=lane)
+    policy = replace(_policy(), lane=lane, resolved_fields={**_policy().resolved_fields, "resting_profit_enabled": False})
+    enabled = resting_profit_policy({"live": {"resting_profit": {"live_enabled": True}}}, "live")
+    for pnl, expected in [(-0.10, lane is LaneId.SHORT_STRANGLE), (0.18, lane is LaneId.SHORT_STRANGLE), (0.20, True)]:
+        offer = _resting_profit_proposal(lifecycle, policy, _observation(midpoint_pnl=pnl), enabled, proposed_at=NOW)
+        assert (offer is not None) is expected
+        if offer:
+            assert offer.payload["arm_progress_pct"] == (0 if lane is LaneId.SHORT_STRANGLE else 25)
+    assert _resting_profit_proposal(lifecycle, policy, _observation(actionable=False), enabled, proposed_at=NOW) is None
+    assert _resting_profit_proposal(lifecycle, policy, _observation(), resting_profit_policy({}, "live"), proposed_at=NOW) is None

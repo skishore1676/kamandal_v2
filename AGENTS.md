@@ -49,3 +49,6 @@ evidence > diary > brain summary**.
 Before changing `scheduled-job-health`, launchd availability projection, or its
 operator status contract, read
 `docs/lessons/non-recursive-monitors-need-direct-status-receipts.md`.
+
+Before changing lifecycle exits, resting-profit orders, or close repricing, read
+`docs/EXIT_EXECUTION.md` and preserve its shared cross-lane acceptance contract.

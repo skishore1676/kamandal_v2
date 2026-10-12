@@ -57,6 +57,7 @@ def observe_package(
     *,
     observed_at: str,
     quote_max_age_minutes: int = 10,
+    close_execution: bool = False,
 ) -> PackageObservation:
     """Build one decision mark without confusing valuation with execution."""
 
@@ -78,7 +79,7 @@ def observe_package(
         if not all(math.isfinite(value) for value in (bid, ask, mid)):
             blockers.append(f"non_finite_quote:{label}")
             continue
-        if bid < 0 or (bid == 0 and not (strangle_close and leg.side == "sell")) or ask <= 0 or ask < bid or mid <= 0:
+        if bid < 0 or (bid == 0 and not (close_execution or (strangle_close and leg.side == "sell"))) or ask <= 0 or ask < bid or mid <= 0:
             blockers.append(f"invalid_two_sided_quote:{label}")
         if mid <= 0:
             continue
@@ -104,9 +105,9 @@ def observe_package(
         blockers.append("incomplete_package")
     max_allowed = float(policy.resolved_fields["max_bid_ask_pct"])
     package_spread = (gross_spread / gross_mid) if gross_mid > 0 else math.inf
-    if max_leg_spread > max_allowed and not strangle_close:
+    if not close_execution and max_leg_spread > max_allowed and not strangle_close:
         blockers.append("spread_exceeds_frozen_policy")
-    if package_spread > max_allowed:
+    if not close_execution and package_spread > max_allowed:
         blockers.append("package_spread_exceeds_frozen_policy")
 
     cumulative = float(lifecycle.metadata.get("cumulative_cashflow") or 0.0)
@@ -153,7 +154,7 @@ def observe_package(
         pricing_complete=pricing_complete,
         quote_actionable=not blockers,
         quote_blockers=tuple(dict.fromkeys(blockers)),
-        execution_quote_scope="strangle_close_package" if strangle_close else "whole_position",
+        execution_quote_scope="close_package" if close_execution else ("strangle_close_package" if strangle_close else "whole_position"),
     )
 
 

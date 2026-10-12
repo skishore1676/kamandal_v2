@@ -245,3 +245,17 @@ def test_typed_close_retains_reason_and_midpoint_to_natural_envelope() -> None:
     assert live["decision_observation_id"] == "observation-1"
     assert live["exit_natural_net"] == -24.0
     assert _repriced_close_limit_price(live, {}) == "0.24"
+
+
+@pytest.mark.parametrize("lane", list(LaneId))
+def test_all_close_lanes_accept_wide_valid_quotes_without_changing_entry_gates(lane):
+    now = "2026-08-18T19:35:00Z"
+    lifecycle, policy = replace(_lifecycle(), lane=lane), replace(_policy(), lane=lane)
+    legs = (_leg("short_put", "put", 79, 0.15, 2.70), _leg("short_call", "call", 85, 0, 0.26))
+    close = observe_package(lifecycle, policy, legs, _snapshot(now), observed_at=now, close_execution=True)
+    entry = observe_package(lifecycle, policy, legs, _snapshot(now), observed_at=now)
+    assert close.quote_actionable
+    assert close.package_bid_ask_pct > close.max_bid_ask_pct
+    assert not entry.quote_actionable
+    stale = observe_package(lifecycle, policy, legs, _snapshot("2026-08-18T18:00:00Z"), observed_at=now, close_execution=True)
+    assert not stale.quote_actionable

@@ -25,7 +25,7 @@ from kamandal_v2.strategy_lanes.action_arbiter import arbitrate_actions
 from kamandal_v2.strategy_lanes.earnings_read import latest_earnings_snapshot
 from kamandal_v2.strategy_lanes.lane_common import lifecycle_number, lifecycle_value, policy_bool, propose_action
 from kamandal_v2.strategy_lanes.models import ActionType, CsaStage, LaneId, LifecycleState, SourceMode
-from kamandal_v2.strategy_lanes.observations import PackageObservation, confirm_bounded_strangle_close, observe_package
+from kamandal_v2.strategy_lanes.observations import PackageObservation, observe_package
 from kamandal_v2.strategy_lanes.policy import CsaPolicy
 from kamandal_v2.strategy_lanes.registry import lifecycle_registry
 from kamandal_v2.strategy_lanes.shadow_execution import ShadowExecutionAdapter
@@ -268,15 +268,6 @@ def _run_lifecycle_management(
             raw_selected = arbitrate_actions(proposals).selected
             if lifecycle.lane is LaneId.SHORT_STRANGLE and raw_selected.action_type is ActionType.ADJUST:
                 observation = _strangle_roll_observation(observation, plans.get("roll"), policy)
-            # Urgent closes keep the dollar bounds, but add no new quote wait.
-            if (
-                raw_selected.action_type is ActionType.CLOSE
-                and raw_selected.payload.get("arbiter_class") in {"hard_emergency", "mandatory_event_exit", "adverse_price_loss"}
-                and observation.quote_blockers == ("bounded_close_awaiting_confirmation",)
-            ):
-                observation = replace(observation, quote_actionable=True, quote_blockers=())
-                receipt = {**observed_lifecycle.metadata["bounded_close_confirmation"], "status": "urgent_admission"}
-                observed_lifecycle = replace(observed_lifecycle, metadata={**observed_lifecycle.metadata, "bounded_close_confirmation": receipt})
             selected, observation = _apply_management_safety(
                 raw_selected,
                 observed_lifecycle,
@@ -502,11 +493,14 @@ def _management_context(
         snapshot,
         observed_at=observed_at,
         quote_max_age_minutes=quote_age,
+        close_execution=True,
     )
-    lifecycle, observation = confirm_bounded_strangle_close(lifecycle, observation, legs, max_gap_minutes=quote_age)
+    # Spread width is evidence for the exit limit, not a veto on closing held
+    # risk. Fresh, complete, finite quotes still determine admissible prices.
+    lifecycle = replace(lifecycle, metadata={**lifecycle.metadata,
+        "bounded_close_confirmation": {"status": "superseded_by_shared_close_policy"}})
     profit_pct = observation.profit_pct if observation.quote_actionable else -1.0e12
-    bounded_pending = (lifecycle.metadata.get("bounded_close_confirmation") or {}).get("status") == "awaiting_confirmation"
-    loss_multiple = observation.loss_multiple if observation.quote_actionable or bounded_pending else 0.0
+    loss_multiple = observation.loss_multiple if observation.quote_actionable else 0.0
     observed_date = _parse_timestamp(observed_at).date()
     dtes = [max((date.fromisoformat(leg.expiration) - observed_date).days, 0) for leg in legs]
     half_time = _half_time_state(lifecycle, policy, legs, remaining_dtes=dtes)
@@ -820,6 +814,10 @@ def _management_ticket(
         bounded_receipt = dict(lifecycle.metadata.get("bounded_close_confirmation") or {})
         bounded_close = observation.execution_quote_scope == "bounded_strangle_close" and not resting_profit
         natural_net = observation.natural_liquidation * 100.0
+        if not resting_profit and -0.05 < limit_price < 0:
+            # Preserve the existing minimum executable nickel for tiny buybacks.
+            limit_price = -0.05
+            natural_net = min(natural_net, -5.0)
         if bounded_close:
             limit_price = -float(bounded_receipt["initial_limit_dollars"]) / 100.0
             natural_net = -float(bounded_receipt["natural_limit_dollars"])
@@ -852,7 +850,7 @@ def _management_ticket(
                 **(
                     {
                         "resting_profit_order": True,
-                        "resting_profit_arm_progress_pct": float(action.payload.get("arm_progress_pct") or 25.0),
+                        "resting_profit_arm_progress_pct": float(action.payload.get("arm_progress_pct", 25.0)),
                         "resting_order_day": str(action.payload.get("resting_order_day") or ""),
                         "exit_target_net": limit_price * 100.0,
                         "target_profit_dollars": _target_profit_dollars(lifecycle, policy),
@@ -1018,14 +1016,12 @@ def _resting_profit_proposal(
 ):
     if not resting_policy.enabled or not observation.quote_actionable:
         return None
-    raw_enabled = policy.resolved_fields.get("resting_profit_enabled")
-    if raw_enabled in (None, ""):
-        # Existing lifecycles predate this capability.  A platform deployment
-        # or kill-switch change must never opt them into new economics.
-        return None
-    if not policy_bool(raw_enabled, label=f"{policy.playbook_id}.resting_profit_enabled"):
-        return None
-    raw_arm_progress = policy.resolved_fields.get("resting_profit_arm_progress_pct")
+    # Universal platform execution policy; old per-playbook enable flags must
+    # not strand existing positions. Profit amounts remain frozen per position.
+    raw_arm_progress = (0 if lifecycle.lane is LaneId.SHORT_STRANGLE else
+                        policy.resolved_fields.get("resting_profit_arm_progress_pct", 25))
+    if raw_arm_progress in (None, ""):
+        raw_arm_progress = 25
     if isinstance(raw_arm_progress, bool) or raw_arm_progress in (None, ""):
         raise ValueError(
             f"{policy.playbook_id}.resting_profit_arm_progress_pct must be numeric"
@@ -1041,7 +1037,7 @@ def _resting_profit_proposal(
             f"{policy.playbook_id}.resting_profit_arm_progress_pct must be between 0 and 100"
         )
     progress = _target_progress(lifecycle, policy, observation)
-    if progress < arm_progress_pct:
+    if lifecycle.lane is not LaneId.SHORT_STRANGLE and progress < arm_progress_pct:
         return None
     order_day = _parse_timestamp(proposed_at).date().isoformat()
     return propose_action(

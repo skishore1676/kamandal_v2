@@ -138,8 +138,8 @@ def test_half_time_exit_beats_adjustment_and_accepts_valid_zero_bid_buyback(tmp_
     assert not local.live_order_intents_by_type('adjust')
 
 
-@pytest.mark.parametrize('bid,ask', [(0, 0), (-0.01, 0.27), (0.5, 0.27), (float('nan'), 0.27), (0, float('inf')), (0, 5)])
-def test_invalid_or_excessively_wide_close_quotes_still_block(tmp_path, bid, ask):
+@pytest.mark.parametrize('bid,ask', [(0, 0), (-0.01, 0.27), (0.5, 0.27), (float('nan'), 0.27), (0, float('inf'))])
+def test_invalid_close_quotes_still_block(tmp_path, bid, ask):
     local, store = seed(tmp_path)
     snap = snapshot('2026-10-07T18:47:50Z')
     snap.quotes[1].bid, snap.quotes[1].ask = bid, ask
@@ -274,3 +274,21 @@ def test_filled_repriced_adjustment_reconciles_two_shorts_and_consumes_one_episo
     # A replay of the same broker fill cannot add another credit or adjustment.
     execution._adopt_csa_live_fill(local, child, {'status': 'FILLED', 'averagePrice': '2.53', 'filledQuantity': '1', 'updatedAt': '2026-09-30T19:15:00Z'}, filled_quantity=1)
     assert store.lifecycle('ms-lifecycle').metadata['adjustment_count'] == 1
+
+
+def test_wide_close_starts_at_midpoint_and_concedes_in_bounded_rounds(tmp_path):
+    local, store = seed(tmp_path)
+    snap = snapshot('2026-10-12T18:47:50Z', spot=210)
+    snap.quotes[0].bid, snap.quotes[0].ask = 4.15, 6.15
+    snap.quotes[1].bid, snap.quotes[1].ask = 0, 1.05
+    result = run(local, snap)
+    assert result.ok, result.errors
+    assert result.live_intent_count == 1
+    ticket = local.live_order_intents_by_type('close')[0]
+    assert ticket['exit_reason'] == 'time_exit'
+    assert float(ticket['limit_price']) == pytest.approx(5.65)
+    assert ticket['exit_natural_net'] == pytest.approx(-720)
+    first = execution._repriced_close_ticket(ticket, CONFIG)
+    second = execution._repriced_close_ticket(first, CONFIG)
+    assert 5.65 < float(first['limit_price']) < float(second['limit_price']) == 7.20
+    assert store.lifecycle('ms-lifecycle').policy_hash == 'frozen-ms-policy'
