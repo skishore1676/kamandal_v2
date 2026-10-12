@@ -377,3 +377,53 @@ def test_primary_iv_overlay_falls_back_to_local_history(tmp_path) -> None:
     assert overlay.iv_percentile("TSLA") == 0.0
     assert overlay.iv_rank("TSLA") == 0.0
     assert overlay.iv_abs("TSLA") == 30.0
+
+
+def test_iv_save_waits_for_reader_longer_than_default_sqlite_timeout(tmp_path):
+    """A live reader may delay COMMIT beyond SQLite's default five seconds."""
+    import sqlite3
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from contextlib import closing
+    store = IvStore(tmp_path / 'contended.db')
+    snapshot = IvSnapshot('XYZ', '2026-10-12', 35, 'fixture', DAILY_IV_RANK_METRIC, 1, {})
+    with closing(store._connect()) as configured:
+        assert configured.execute('PRAGMA busy_timeout').fetchone()[0] == 30000
+    with closing(sqlite3.connect(store.sqlite_path)) as reader:
+        reader.execute('BEGIN')
+        reader.execute('SELECT * FROM iv_snapshots').fetchall()
+        started = Event()
+        def save():
+            started.set()
+            store.save(snapshot)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(save)
+            assert started.wait(2)
+            try:
+                # This would raise OperationalError under the former 5s budget.
+                import time
+                time.sleep(5.3)
+                assert not future.done()
+            finally:
+                reader.rollback()
+            future.result(timeout=5)
+    assert store.latest('XYZ', metric=DAILY_IV_RANK_METRIC) == snapshot
+
+
+def test_iv_persistent_lock_fails_and_rolls_back_without_partial_snapshot(tmp_path, monkeypatch):
+    import sqlite3
+    import pytest
+    from contextlib import closing
+    from kamandal_v2.volatility import iv_store
+    store = IvStore(tmp_path / 'persistent.db')
+    snapshot = IvSnapshot('XYZ', '2026-10-12', 35, 'fixture', DAILY_IV_RANK_METRIC, 1, {})
+    monkeypatch.setattr(iv_store, 'SQLITE_BUSY_TIMEOUT_MS', 50)
+    with closing(sqlite3.connect(store.sqlite_path)) as reader:
+        reader.execute('BEGIN')
+        reader.execute('SELECT * FROM iv_snapshots').fetchall()
+        with pytest.raises(sqlite3.OperationalError, match='locked'):
+            store.save(snapshot)
+        reader.rollback()
+    assert store.latest('XYZ', metric=DAILY_IV_RANK_METRIC) is None
+    store.save(snapshot)
+    assert store.latest('XYZ', metric=DAILY_IV_RANK_METRIC) == snapshot

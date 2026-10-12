@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from kamandal_v2.paths import resolve_path
+from kamandal_v2.stores.sqlite import SQLITE_BUSY_TIMEOUT_MS
 
 
 DAILY_IV_ABS_METRIC = "daily_iv_abs"
@@ -37,12 +39,13 @@ class IvStore:
         self._ensure_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.sqlite_path)
+        conn = sqlite3.connect(self.sqlite_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+        conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
         conn.row_factory = sqlite3.Row
         return conn
 
     def _ensure_schema(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS iv_snapshots (
@@ -61,7 +64,7 @@ class IvStore:
     def save(self, snapshot: IvSnapshot) -> None:
         import json
 
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO iv_snapshots
@@ -82,7 +85,7 @@ class IvStore:
     def history(self, symbol: str, *, metric: str = "atm_30_45_mean_iv", limit: int = 252) -> list[IvSnapshot]:
         import json
 
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             rows = conn.execute(
                 """
                 SELECT symbol, snapshot_date, iv, source, metric, quote_count, raw_json
