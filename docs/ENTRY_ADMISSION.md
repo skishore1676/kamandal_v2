@@ -23,7 +23,7 @@ Birdclaw's existing digest owner adds correspondent-only afternoon captures;
 Kamandal intake follows by one minute. Frequency rises from 15 minutes after
 13:00 CT to 2–5 minutes near the close. Generic digest extraction retains its
 original slots and stable publication. Extra executor ticks at 14:51–14:54 CT
-support the Guru-only cutoff at 14:55 CT (five minutes before regular close).
+follow the last capture/intake at 14:52/14:53 CT and support the Guru-only cutoff at 14:55 CT (five minutes before regular close).
 Ordinary entries retain 14:40 CT. Product/early-close calendars and the opening
 buffer still apply. Acquisition or interpretation latency can still miss a cutoff;
 none of these schedules guarantees an entry or fill.
