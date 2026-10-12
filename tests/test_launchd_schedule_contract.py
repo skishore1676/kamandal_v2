@@ -87,7 +87,8 @@ def test_installer_renders_registry_schedule(tmp_path: Path) -> None:
 
     assert weekday_one_times("iv_afternoon") == {(13, 45)}
     assert weekday_one_times("youtube") == {(9, 15), (11, 45), (14, 0)}
-    assert weekday_one_times("x_bookmarks") == {(8, 15), (9, 15), (11, 45), (14, 0), (15, 15)}
+    assert weekday_one_times("x_bookmarks") == {(8, 15), (9, 15), (11, 45), (14, 0), (15, 15), *((13, m) for m in (1, 16, 31, 46)), *((14, m) for m in (1, 11, 21, 31, 36, 41, 46, 49, 52, 54))}
+    assert {(14, 51), (14, 52), (14, 53), (14, 54)}.issubset(weekday_one_times("live_approved_orders"))
     assert weekday_one_times("live_reconciliation") == {(8, 35), (10, 30), (12, 30), (14, 10)}
     assert weekday_one_times("unified_planning") == {
         (8, 50),

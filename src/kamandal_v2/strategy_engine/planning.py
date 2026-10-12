@@ -11,6 +11,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import date
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,7 @@ def run_unified_books(
     exclude_candidate_ids: set[str] | None = None,
     exclude_contract_keys: set[str] | None = None,
     include_shadow: bool = True,
+    guru_only: bool = False,
     observed_package_batches: tuple[ObservedPackageBatch, ...] = (),
     trade_source_rows: tuple[dict[str, Any], ...] | list[dict[str, Any]] | None = None,
 ) -> UnifiedPlanningResult:
@@ -104,6 +106,8 @@ def run_unified_books(
     masquerade as complete.  Once policy compilation succeeds, failures stay
     per-book: a shadow failure cannot erase a valid live result and vice versa.
     """
+    if guru_only and (write_sheet or include_shadow):
+        raise ValueError("Guru intake planning requires write_sheet=False and include_shadow=False")
     effective_trade_source_rows = trade_source_rows
     if (
         effective_trade_source_rows is None
@@ -159,6 +163,17 @@ def run_unified_books(
             live=PlanningBook(ExecutionMode.LIVE, (), None, errors),
             shadow=PlanningBook(ExecutionMode.SHADOW, (), None, errors),
         )
+    guru_revision = ""
+    if guru_only:
+        revision_payload = {
+            "policy": supplied_policy_hash,
+            "day": daily_policy_snapshot.trading_date if daily_policy_snapshot else "",
+            "packages": [package.to_dict() for package in observed_packages],
+        }
+        guru_revision = hashlib.sha256(json.dumps(revision_payload, sort_keys=True).encode()).hexdigest()
+        previous = active_store.latest_event("guru_intake_planning_completed") or {}
+        if not observed_packages or previous.get("revision") == guru_revision:
+            return UnifiedPlanningResult(compilation, PlanningBook(ExecutionMode.LIVE, (), None, ()), PlanningBook(ExecutionMode.SHADOW, (), None, ()))
     live = _run_book(
         ExecutionMode.LIVE,
         compilation.policies,
@@ -175,7 +190,10 @@ def run_unified_books(
         exclude_contract_keys=exclude_contract_keys,
         observed_packages=observed_packages,
         trade_source_policies=source_policies,
+        guru_only=guru_only,
     )
+    if guru_only and not live.errors:
+        active_store.event("guru_intake_planning_completed", {"revision": guru_revision, "handoffs": list(live.handoffs), "broker_effects": False})
     if include_shadow:
         if observed_packages and not any(
             "exact_package" in policy.accepted_inputs for policy in compilation.policies
@@ -225,6 +243,7 @@ def _run_book(
     exclude_contract_keys: set[str] | None = None,
     observed_packages: tuple[ObservedPackageEvidence, ...] = (),
     trade_source_policies: dict[tuple[str, TradeSourceOutputKind], TradeSourcePolicy] | None = None,
+    guru_only: bool = False,
 ) -> PlanningBook:
     shadow_input_kinds = {
         output_kind.value
@@ -330,7 +349,7 @@ def _run_book(
     try:
         result = run_plan(
             mode_config,
-            idea_paths=idea_paths,
+            idea_paths=[] if guru_only else idea_paths,
             config_source="seed",
             provider=provider,
             write_sheet=write_sheet if mode is ExecutionMode.SHADOW else False,
@@ -339,7 +358,7 @@ def _run_book(
             candidate_postprocessor=candidate_postprocessor,
             universe_override=universe,
             playbooks_override=playbooks,
-            source_groups_factory=lambda ideas, entries, selected_playbooks, portfolio: _source_groups(
+            source_groups_factory=lambda ideas, entries, selected_playbooks, portfolio: [] if guru_only else _source_groups(
                 ideas,
                 entries,
                 selected_playbooks,
@@ -382,6 +401,12 @@ def _run_book(
             )
         except Exception as exc:  # noqa: BLE001 - no live intent may lack an adoptable lifecycle.
             return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (f"live handoff failed: {type(exc).__name__}: {exc}",))
+        if guru_only and (config.get("live") or {}).get("entry_approval_mode") == "auto_top_plan":
+            for ticket in store.live_order_intents_by_type("open", statuses={"pending_approval"}):
+                if result.plans and ticket.get("plan_id") == result.plans[0].plan_id:
+                    if ticket.get("source_output_kind") != "exact_package" or ticket.get("sleeve_id") != "guru_exact" or not ticket.get("stage_authorized"):
+                        raise ValueError("Guru intake selected a non-Guru or unauthorized ticket")
+                    store.update_live_order_intent_status_with_payload(ticket["ticket_hash"], "stage_approved_pending_submit", {"guru_intake_staged": True})
         result.daily_plan_rows[:] = rows
         if write_sheet:
             write_daily_plan(mode_config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_advisory"})

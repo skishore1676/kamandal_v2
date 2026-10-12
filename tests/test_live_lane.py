@@ -894,7 +894,8 @@ def test_live_execute_approved_dry_run_uses_sheet_gate(tmp_path, monkeypatch) ->
         assert conn.execute("SELECT count(*) FROM live_order_attempts").fetchone()[0] == 1
 
 
-def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("has_idea_row", [False, True])
+def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_path, monkeypatch, has_idea_row) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     candidate = _ticket_candidate("csa_candidate", "csa_idea", "MSFT")
     plan = type("StagePlan", (), {"plan_id": "csa_lifecycle", "plan_rank": 1})()
@@ -906,6 +907,7 @@ def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_
         "csa_policy_snapshot_date": "2026-08-15",
         "csa_policy_snapshot_hash": "snapshot-hash",
         "stage_authorized": True,
+        "guru_intake_staged": has_idea_row,
         "pilot_contract_cap": 1,
     })
     store.save_live_order_intent(ticket, status="stage_approved_pending_submit")
@@ -939,6 +941,7 @@ def test_live_execute_approved_accepts_sheet_stage_authorized_ledger_ticket(tmp_
     monkeypatch.setattr("kamandal_v2.live.execution.load_daily_policy_snapshot", lambda _config: snapshot)
     monkeypatch.setattr("kamandal_v2.live.execution.broker_adapter", lambda _config: object())
 
+    monkeypatch.setattr("kamandal_v2.live.execution._approved_rows", lambda *a, **kw: [{"plan_id": "independent-ideas"}] if has_idea_row else [])
     executed = execute_live_approved(_live_control(), submit=False, store=store)
 
     assert executed["source"] == "stage_authorized_ledger"
@@ -1148,7 +1151,8 @@ def test_live_submit_can_submit_multiple_pending_basket_tickets_when_configured(
     assert [item["status"] for item in executed["results"]] == ["submitted", "submitted"]
 
 
-def test_cleanup_live_approvals_keeps_pending_basket_ticket(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("terminal_status", ["filled", "cancelled", "rejected"])
+def test_cleanup_live_approvals_keeps_pending_basket_ticket(tmp_path, monkeypatch, terminal_status) -> None:
     store = LocalStore(tmp_path / "kamandal.db")
     before = PortfolioState(account_size=10_000, buying_power=10_000, bpr_used=0, positions_count=0, greeks=Greeks())
     after = PortfolioState(account_size=10_000, buying_power=9_200, bpr_used=800, positions_count=2, greeks=Greeks(delta=-0.2, theta=0.1))
@@ -1175,7 +1179,7 @@ def test_cleanup_live_approvals_keeps_pending_basket_ticket(tmp_path, monkeypatc
     row = dict(zip(DAILY_PLAN_HEADER, rows[0], strict=False))
     row["operator_action"] = APPROVE_LIVE
     tickets = json.loads(row["plan_detail_json"])["order_tickets_json"]
-    store.update_live_order_intent_status(tickets[0]["ticket_hash"], "filled")
+    store.update_live_order_intent_status(tickets[0]["ticket_hash"], terminal_status)
     written = {}
 
     class FakeSheetClient:
@@ -1196,6 +1200,11 @@ def test_cleanup_live_approvals_keeps_pending_basket_ticket(tmp_path, monkeypatc
 
     assert cleaned["cleared"] == 0
     assert written == {}
+
+    from kamandal_v2.live.execution import _tickets_to_execute
+    selected, reason = _tickets_to_execute(load_control(), store, row, submit=True, close=False)
+    assert reason == "pending_basket_tickets"
+    assert [ticket["ticket_hash"] for ticket in selected] == [tickets[1]["ticket_hash"]]
 
 
 def test_cleanup_live_approvals_retires_stale_unreferenced_entry_approvals(tmp_path, monkeypatch) -> None:
@@ -3479,3 +3488,12 @@ def test_auto_entry_uses_current_selection_before_historical_approved_rows(tmp_p
     result=execute_live_approved(control,submit=True,store=store)
     assert result['processed']==0
     assert executed==['current']
+
+
+def test_cancelled_parent_keeps_active_replacement_in_basket(tmp_path):
+    from kamandal_v2.live.execution import _ticket_progress
+    store = LocalStore(tmp_path / "replace.db")
+    parent = {"ticket_hash": "parent", "order_id": "parent", "plan_id": "p", "candidate_id": "p", "intent_type": "open"}
+    store.save_live_order_intent(parent, status="cancelled")
+    store.save_live_order_intent({**parent, "ticket_hash": "child", "order_id": "child", "parent_ticket_hash": "parent"}, status="submitted")
+    assert _ticket_progress(store, parent)["state"] == "active"

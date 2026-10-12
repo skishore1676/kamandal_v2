@@ -91,6 +91,7 @@ def main() -> None:
     csa_history_parser.add_argument("--db", default="data/kamandal_v2.db")
     csa_history_parser.add_argument("--lifecycle-id", default="")
     unified_plan_parser = subparsers.add_parser("unified-plan", help="Build isolated live and shadow books through the unified policy compiler")
+    unified_plan_parser.add_argument("--guru-only", action="store_true", help="Evaluate fresh exact Guru evidence without replacing the ideas cockpit")
     unified_plan_parser.add_argument("--manual-strangle", metavar="TICKER", help="Plan only today's explicit Strangle row for this ticker from my_ideas")
     unified_plan_parser.add_argument("--db", default="data/kamandal_v2.db")
     unified_plan_parser.add_argument("--ideas", nargs="+", default=["data/ideas/active"])
@@ -625,6 +626,8 @@ def main() -> None:
                     "observed_package_feed_rejected",
                     {"path": str(feed_path), "error": observed_package_feed_warning, "broker_effects": False},
                 )
+        if args.guru_only and (args.manual_strangle or args.write_sheet):
+            raise SystemExit("--guru-only cannot replace the cockpit or combine with --manual-strangle")
         idea_paths = _expand_paths(args.ideas)
         if args.manual_strangle:
             from kamandal_v2.planner.idea_loader import load_ideas
@@ -642,7 +645,8 @@ def main() -> None:
             universe_rows=daily_policy_snapshot.tables["universe"],
             playbook_rows=daily_policy_snapshot.tables["playbooks"],
             idea_paths=idea_paths,
-            include_shadow=not bool(args.manual_strangle),
+            include_shadow=not bool(args.manual_strangle or args.guru_only),
+            guru_only=args.guru_only,
             provider=args.provider,
             store=active_store,
             write_sheet=args.write_sheet,
@@ -661,7 +665,7 @@ def main() -> None:
             "live": {"policy_ids": result.live.policy_ids, "plans": len(result.live.result.plans) if result.live.result else None, "errors": result.live.errors},
             "shadow": {"policy_ids": result.shadow.policy_ids, "plans": len(result.shadow.result.plans) if result.shadow.result else None, "errors": result.shadow.errors},
         }
-        if args.config_source == "sheet" and args.write_sheet:
+        if args.config_source == "sheet" and (args.write_sheet or args.guru_only):
             try:
                 from kamandal_v2.intelligence.trade_source_activity import project_trade_source_activity
 

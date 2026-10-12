@@ -83,6 +83,10 @@ def stale_entry_approvals(
             continue
         created_at = parse_ledger_timestamp(str(ticket.get("_ledger_created_at") or ticket.get("created_at") or ""))
         before_today = bool(created_at and created_at < market_start)
+        # Guru intake has its own frozen authorization and intentionally does
+        # not replace the ideas cockpit. Absence there is not supersession.
+        if ticket.get("guru_intake_staged") and not before_today:
+            continue
         if not active_hashes and not before_today:
             continue
         reason = "stale_entry_approval_not_in_current_daily_plan" if active_hashes else "stale_entry_approval_from_prior_market_day"

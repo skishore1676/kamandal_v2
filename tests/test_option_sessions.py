@@ -276,3 +276,25 @@ def test_waiting_entry_is_not_an_operator_failure() -> None:
     }
 
     assert execution._selected_entry_failure(waiting, submit=True) is None
+
+
+@pytest.mark.parametrize("action,kind,sleeve,minute,allowed", [
+    ("open", "exact_package", "guru_exact", 54, True),
+    ("open", "exact_package", "guru_exact", 55, False),
+    ("open", "idea", "guru_exact", 54, False),
+    ("open", "exact_package", "current_idea", 54, False),
+    ("adjust", "exact_package", "guru_exact", 54, False),
+    ("close", "exact_package", "guru_exact", 54, False),
+])
+def test_late_guru_window_is_only_for_exact_openings(action, kind, sleeve, minute, allowed):
+    ticket = {"underlying": "JPM", "intent_type": action, "source_output_kind": kind,
+              "sleeve_id": sleeve, "exit_reason_class": "adverse_price_loss"}
+    result = submission_window(_config(), ticket, close=action == "close", now=datetime(2026, 10, 12, 14, minute, tzinfo=CENTRAL))
+    assert result["allowed"] is allowed
+
+
+def test_guru_early_close_keeps_five_minute_buffer():
+    ticket = {"underlying": "JPM", "intent_type": "open", "source_output_kind": "exact_package", "sleeve_id": "guru_exact"}
+    result = submission_window(_config(), ticket, close=False, now=datetime(2026, 11, 27, 11, 55, tzinfo=CENTRAL))
+    assert not result["allowed"]
+    assert result["submission_cutoff_at"].startswith("2026-11-27T11:55:")

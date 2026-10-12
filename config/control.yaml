@@ -97,6 +97,7 @@ live:
     quote_max_age_minutes: 10       # package observations older than this cannot drive management
     # The final 14:15 plan leaves several executor/reprice opportunities before
     # regular-session entries stop at 14:40, 20 minutes before the close.
+    guru_entry_buffer_minutes: 5     # exact Guru openings only; ordinary entries retain their buffer
     entry_buffer_minutes: 20
     close_buffer_minutes: 5
     early_close_dates:

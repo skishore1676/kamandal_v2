@@ -35,6 +35,24 @@ run_x_bookmark_extraction() {
     fi
   fi
 
+  if [[ "${KAMANDAL_X_EXTRACTION_IMPORT_ONLY:-0}" != "1" ]]; then
+    log "Evaluating fresh Guru packages through the shared live planner."
+    local planning_status=0
+    ( with_lock unified_planning "$KAMANDAL_BIN" unified-plan \
+      --guru-only --provider "${KAMANDAL_MARKET_PROVIDER:-public}" --config-source sheet ) || planning_status=$?
+    if [[ "$planning_status" == "75" ]]; then
+      log "Shared planner is active; retained Guru evidence will be evaluated on the next intake tick."
+    elif [[ "$planning_status" != "0" ]]; then
+      return "$planning_status"
+    fi
+    # Extra afternoon ticks are correspondent-only. Keep general digest/LLM
+    # extraction on its established five daily slots.
+    case "$(TZ="$KAMANDAL_MARKET_TZ" date '+%H:%M')" in
+      08:15|09:15|11:45|14:00|15:15) ;;
+      *) return 0 ;;
+    esac
+  fi
+
   log "Importing Birdclaw canonical X digest into source docs."
   if import_json="$("$KAMANDAL_BIN" import-x-digest \
       --output-dir "$source_root" \

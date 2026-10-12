@@ -73,9 +73,11 @@ JOB_LABEL_SUFFIXES = {
 
 JOB_SCHEDULES = {
     "x-bookmarks": JobSchedule(
-        # Closing intake follows Birdclaw's 15:05 collection. It prepares late
-        # source posts for the next natural planner; it cannot submit orders.
-        fixed_times=(time(8, 15), time(9, 15), time(11, 45), time(14, 0), time(15, 15))
+        # Follow correspondent capture by one minute; the last ticks retain
+        # time for guarded submission before Guru's 14:55 cutoff.
+        fixed_times=tuple(sorted((time(8, 15), time(9, 15), time(11, 45), time(14, 0), time(15, 15))
+        + tuple(time(13, minute) for minute in (1, 16, 31, 46))
+        + tuple(time(14, minute) for minute in (1, 11, 21, 31, 36, 41, 46, 49, 52, 54))))
     ),
     "youtube": JobSchedule(fixed_times=(time(9, 15), time(11, 45), time(14, 0))),
     "my-ideas": JobSchedule(fixed_times=(time(8, 5), time(9, 20))),
@@ -83,7 +85,7 @@ JOB_SCHEDULES = {
     "unified-planning": JobSchedule(
         fixed_times=(time(8, 50), time(9, 25), time(11, 55), time(14, 15))
     ),
-    "live-approved-orders": JobSchedule(cadence_minutes=5, window_start=time(8, 30), window_end=time(15, 15)),
+    "live-approved-orders": JobSchedule(fixed_times=(time(14, 51), time(14, 52), time(14, 53), time(14, 54)), cadence_minutes=5, window_start=time(8, 30), window_end=time(15, 15)),
     "unified-lifecycle-management": JobSchedule(
         cadence_minutes=5,
         window_start=time(8, 30),

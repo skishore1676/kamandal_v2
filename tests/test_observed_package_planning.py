@@ -556,9 +556,10 @@ def test_exact_calendar_expiration_request_crosses_full_live_market_stack(tmp_pa
     ("2026-08-27T14:00:00Z", "2026-08-28", "2026-09-04", 60),
     ("2026-09-25T14:00:00Z", "2026-12-18", "2027-01-15", 90),
 ])
+@pytest.mark.parametrize("guru_only", [False, True])
 def test_source_verified_calendar_reaches_live_ticket_with_close_policy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    now: str, near_expiry: str, far_expiry: str, near_dte_max: int,
+    now: str, near_expiry: str, far_expiry: str, near_dte_max: int, guru_only: bool,
 ) -> None:
     from kamandal_v2.strategy_engine import planning
     from kamandal_v2.strategy_lanes.daily_policy import DailyPolicySnapshot, policy_tables_hash
@@ -616,9 +617,21 @@ def test_source_verified_calendar_reaches_live_ticket_with_close_policy(
     result = planning.run_unified_books(
         control, universe_rows=[], playbook_rows=[row], idea_paths=[], provider="fixture",
         store=store, audit_root=tmp_path / "audit", daily_policy_snapshot=snapshot,
-        trade_source_rows=sources,
+        trade_source_rows=sources, guru_only=guru_only, include_shadow=not guru_only,
         observed_package_batches=(replace(_batch(), packages=(package,)),),
     )
+    if guru_only:
+        assert store.latest_event("live_current_selection") is None
+        assert store.live_order_intents_by_type("open")[0]["_ledger_status"] == "stage_approved_pending_submit"
+        monkeypatch.setattr(planning, "_source_groups", lambda *a, **kw: pytest.fail("Guru intake must not build ideas/market-scan groups"))
+        repeated = planning.run_unified_books(
+            control, universe_rows=[], playbook_rows=[row], idea_paths=["nonexistent-ideas.yaml"], provider="fixture",
+            store=store, audit_root=tmp_path / "repeated", daily_policy_snapshot=snapshot,
+            trade_source_rows=sources, guru_only=True, include_shadow=False,
+            observed_package_batches=(replace(_batch(), packages=(package,)),),
+        )
+        assert repeated.live.result is None
+        assert len(store.live_order_intents_by_type("open")) == 1
     assert result.compilation.ok
     assert result.live.errors == ()
     assert len(result.live.handoffs) == 1, [(c.rejection_reason, c.reasons) for c in result.live.result.candidates]

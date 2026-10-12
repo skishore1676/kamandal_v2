@@ -249,3 +249,50 @@ def test_submission_uses_planned_account_scope_and_keeps_venue_limits(monkeypatc
         assert calls == ['public_primary']
     if case == 'legacy':
         assert calls == []  # A prior staged ticket cannot silently gain another account's capital.
+
+
+def test_superseded_reservation_retires_before_sleeve_admission(tmp_path):
+    store = LocalStore(tmp_path / "capital.db")
+    store.save_live_position_group("ideas", {"sleeve_id": CURRENT_IDEA, "candidate": {"estimated_bpr": 8453.47}}, status="open")
+    def save(key, plan, budget, **extra):
+        ticket = {"ticket_hash": key, "order_id": key, "plan_id": plan, "candidate_id": key, "plan_rank": 1,
+                  "intent_type": "open", "sleeve_id": CURRENT_IDEA, "entry_risk_budget": budget, **extra}
+        store.save_live_order_intent(ticket)
+        return ticket
+    save("old-shop", "old", 2500)
+    save("selected-msft", "new", 360.09)
+    selection = {"plan_id": "new", "ticket_hashes": ["selected-msft"]}
+    account = PortfolioState(27877.76, 19424.29, 8453.47, 1)
+    before = live_sleeve_usage(store, account, exclude_ticket_hash="selected-msft")
+    assert sleeve_entry_blocker(compile_sleeve_policy(ROWS), before, [(CURRENT_IDEA, 360.09)]) == "sleeve_bpr_cap:current_idea"
+    assert store.retire_superseded_plan_entries(selection) == ["old-shop"]
+    after = live_sleeve_usage(store, account, exclude_ticket_hash="selected-msft")
+    assert sleeve_entry_blocker(compile_sleeve_policy(ROWS), after, [(CURRENT_IDEA, 360.09)]) == ""
+    assert store.live_order_intent("selected-msft")["_ledger_status"] == "pending_approval"
+
+
+@pytest.mark.parametrize("protection", ["broker_order_id", "parent_ticket_hash", "guru_intake_staged", "submit_attempt", "staged", "bad_selection"])
+def test_supersession_keeps_independent_or_uncertain_reservations(tmp_path, protection):
+    store = LocalStore(tmp_path / "capital.db")
+    old = {"ticket_hash": "old", "order_id": "old", "plan_id": "old-plan", "candidate_id": "old", "plan_rank": 1, "intent_type": "open"}
+    if protection in {"broker_order_id", "parent_ticket_hash", "guru_intake_staged"}:
+        old[protection] = "retained"
+    store.save_live_order_intent(old, status="stage_approved_pending_submit" if protection == "staged" else "pending_approval")
+    store.save_live_order_intent({**old, "ticket_hash": "new", "order_id": "new", "plan_id": "new-plan"})
+    if protection == "submit_attempt":
+        store.record_live_order_attempt(old, action="APPROVE_LIVE", submit=True, ok=False, request_payload={}, response_payload={})
+    selection = {"plan_id": "wrong" if protection == "bad_selection" else "new-plan", "ticket_hashes": ["new"]}
+    assert store.retire_superseded_plan_entries(selection) == []
+    assert store.live_order_intent("old")["_ledger_status"] in {"pending_approval", "stage_approved_pending_submit"}
+
+
+def test_cockpit_cleanup_does_not_age_out_independent_same_day_guru(tmp_path):
+    from datetime import UTC, datetime
+    from kamandal_v2.live.entry_hygiene import stale_entry_approvals
+    store = LocalStore(tmp_path / "independent.db")
+    store.save_live_order_intent({"ticket_hash": "guru", "order_id": "guru", "plan_id": "guru", "candidate_id": "guru",
+                                 "intent_type": "open", "guru_intake_staged": True}, status="stage_approved_pending_submit")
+    with store._connect() as conn:
+        conn.execute("UPDATE live_order_intents SET created_at='2026-10-12 14:00:00', updated_at='2026-10-12 14:00:00'")
+    assert stale_entry_approvals({}, store, active_hashes={"ideas"}, now=datetime(2026, 10, 12, 19, tzinfo=UTC)) == []
+    assert len(stale_entry_approvals({}, store, active_hashes={"ideas"}, now=datetime(2026, 10, 13, 19, tzinfo=UTC))) == 1

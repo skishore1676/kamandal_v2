@@ -989,6 +989,43 @@ class LocalStore:
                 )
         return sorted(superseded)
 
+    def retire_superseded_plan_entries(self, selection: dict[str, Any]) -> list[str]:
+        """Release only unsubmitted rank-one reservations replaced by this selection.
+
+        Validate the retained selection against the ledger, then inspect broker
+        evidence and transition under one write transaction. Independent Guru
+        staging and every ticket with submission evidence remain reserved.
+        """
+        plan_id = str(selection.get("plan_id") or "")
+        hashes = {str(value) for value in selection.get("ticket_hashes") or []}
+        if not plan_id or not hashes:
+            return []
+        retired = []
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute("SELECT * FROM live_order_intents WHERE intent_type = 'open'").fetchall()
+            selected = [row for row in rows if row["ticket_hash"] in hashes]
+            if len(selected) != len(hashes) or any(json.loads(row["payload"]).get("plan_id") != plan_id for row in selected):
+                return []
+            selected_created = max(str(row["created_at"]) for row in selected)
+            for row in rows:
+                payload = json.loads(row["payload"])
+                if (row["status"] != "pending_approval" or row["ticket_hash"] in hashes
+                    or payload.get("plan_id") == plan_id or payload.get("plan_rank") != 1
+                    or str(row["created_at"]) > selected_created
+                    or payload.get("guru_intake_staged") or payload.get("parent_ticket_hash")
+                    or payload.get("broker_order_id") or payload.get("replaces_broker_order_id")):
+                    continue
+                submitted = conn.execute("SELECT 1 FROM live_order_attempts WHERE ticket_hash = ? AND submit = 1 LIMIT 1", (row["ticket_hash"],)).fetchone()
+                broker_status = conn.execute("SELECT 1 FROM live_order_status WHERE ticket_hash = ? OR order_id = ? LIMIT 1", (row["ticket_hash"], row["order_id"])).fetchone()
+                if submitted or broker_status:
+                    continue
+                payload["superseded_by_plan_id"] = plan_id
+                payload["superseded_reason"] = "current_owner_selection_replaced_unsubmitted_plan"
+                conn.execute("UPDATE live_order_intents SET status = 'retired_superseded_entry_revision', payload = ?, updated_at = CURRENT_TIMESTAMP WHERE ticket_hash = ? AND status = 'pending_approval'", (json.dumps(payload), row["ticket_hash"]))
+                retired.append(str(row["ticket_hash"]))
+        return retired
+
     def live_order_intent(self, ticket_hash: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(

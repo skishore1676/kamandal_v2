@@ -55,6 +55,9 @@ def submission_window(
     intent_type = "close" if is_close_action else action_type
     underlying = str(ticket.get("underlying") or ticket.get("symbol") or "").upper()
     entry_buffer = int(policy.get("entry_buffer_minutes", DEFAULT_ENTRY_BUFFER_MINUTES))
+    guru_entry = action_type == "open" and ticket.get("source_output_kind") == "exact_package" and ticket.get("sleeve_id") == "guru_exact"
+    if guru_entry:
+        entry_buffer = int(policy.get("guru_entry_buffer_minutes", 5))
     close_buffer = int(policy.get("close_buffer_minutes", DEFAULT_CLOSE_BUFFER_MINUTES))
     buffer_minutes = entry_buffer if adverse_price_exit else (close_buffer if is_close_action else entry_buffer)
 

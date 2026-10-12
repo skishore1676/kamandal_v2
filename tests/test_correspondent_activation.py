@@ -662,11 +662,12 @@ with_lock() {{ shift; "$@"; }}
     assert "UNEXPECTED_EXTRACTION" not in result.stdout
 
 
+@pytest.mark.parametrize("slot", ["14:00", "14:52"])
 @pytest.mark.parametrize("import_only", [False, True])
-def test_stale_digest_does_not_gate_independent_correspondents(tmp_path: Path, import_only: bool) -> None:
+def test_stale_digest_does_not_gate_independent_correspondents(tmp_path: Path, import_only: bool, slot: str) -> None:
     import subprocess
     fake = tmp_path / "kamandal"
-    fake.write_text("#!/bin/bash\ncase \"$1\" in\nactivate-correspondent-signals) echo CORRESPONDENT_ACTIVATED; exit 0;;\nimport-x-digest) echo STALE_DIGEST; exit 1;;\n*) echo UNEXPECTED_EXTRACTION; exit 9;;\nesac\n")
+    fake.write_text("#!/bin/bash\ncase \"$1\" in\nactivate-correspondent-signals) echo CORRESPONDENT_ACTIVATED; exit 0;;\nunified-plan) echo GURU_EVALUATED; exit 0;;\nimport-x-digest) echo STALE_DIGEST; exit 1;;\n*) echo UNEXPECTED_EXTRACTION; exit 9;;\nesac\n")
     fake.chmod(0o755)
     (tmp_path / "common.sh").write_text(f'''REPO_ROOT="{Path.cwd()}"
 KAMANDAL_BIN="{fake}"
@@ -675,6 +676,7 @@ KAMANDAL_X_SOURCE_DOC_DIR="{tmp_path}/sources"
 KAMANDAL_X_BOOKMARK_DIGEST_DIR="{tmp_path}/digest"
 KAMANDAL_ACTIVE_IDEAS_DIR="{tmp_path}/ideas"
 KAMANDAL_X_EXTRACTION_IMPORT_ONLY="{int(import_only)}"
+date() {{ echo "{slot}"; }}
 require_trading_day() {{ :; }}
 log() {{ printf '%s\\n' "$*"; }}
 with_lock() {{ shift; "$@"; }}
@@ -682,9 +684,11 @@ with_lock() {{ shift; "$@"; }}
     script = tmp_path / "run.sh"
     script.write_text(Path("scripts/run_x_bookmark_extraction.sh").read_text())
     result = subprocess.run(["bash", str(script)], capture_output=True, text=True)
-    assert result.returncode == 1
-    assert "STALE_DIGEST" in result.stdout
+    expect_digest = import_only or slot == "14:00"
+    assert result.returncode == (1 if expect_digest else 0)
+    assert ("STALE_DIGEST" in result.stdout) is expect_digest
+    assert ("GURU_EVALUATED" in result.stdout) is not import_only
     assert ("CORRESPONDENT_ACTIVATED" in result.stdout) is not import_only
     assert "UNEXPECTED_EXTRACTION" not in result.stdout
-    if not import_only:
-        assert result.stdout.index("CORRESPONDENT_ACTIVATED") < result.stdout.index("STALE_DIGEST")
+    if not import_only and expect_digest:
+        assert result.stdout.index("CORRESPONDENT_ACTIVATED") < result.stdout.index("GURU_EVALUATED") < result.stdout.index("STALE_DIGEST")

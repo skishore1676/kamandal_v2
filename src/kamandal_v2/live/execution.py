@@ -78,6 +78,7 @@ LEGACY_REPRICE_TRACKING_STATUSES = {"reprice_blocked_preflight_failed"}
 EXPIRED_BROKER_MISSING_STATUS = "expired_broker_status_missing"
 FAILED_TICKET_STATUS_PREFIXES = ("blocked_", "reprice_", "submit_failed")
 FAILED_TICKET_STATUSES = {
+    "retired_superseded_entry_revision",
     "rejected",
     "expired",
     EXPIRED_EOD_STATUS,
@@ -214,7 +215,10 @@ def execute_live_approved(
             # Retained APPROVE_LIVE cells are historical operator projections.
             # Today's owner-selected plan is the only automatic entry authority.
             rows = [row for row in rows if row.get("plan_id") == selection.get("plan_id")]
-    if not rows and not close:
+            retired = store.retire_superseded_plan_entries(selection)
+            if retired:
+                store.event("superseded_entry_reservations_retired", {"plan_id": selection.get("plan_id"), "ticket_hashes": retired})
+    if not close:
         staged = sorted(
             (
                 ticket
@@ -222,6 +226,7 @@ def execute_live_approved(
                     {"stage_approved_pending_submit", WAITING_ENTRY_WINDOW}
                 )
                 if str(ticket.get("intent_type") or "open") == "open"
+                and (not rows or ticket.get("guru_intake_staged"))
             ),
             key=lambda ticket: (
                 str(ticket.get("created_at") or ""),
@@ -229,75 +234,10 @@ def execute_live_approved(
             ),
         )
         if staged:
-            ticket = staged[0]
-            try:
-                daily_policy = load_daily_policy_snapshot(config)
-            except (FileNotFoundError, ValueError) as exc:
-                authorized, authorization_reason = False, f"blocked_daily_policy_snapshot:{type(exc).__name__}"
-            else:
-                authorized, authorization_reason = _stage_ticket_authorization(ticket, daily_policy)
-            if not authorized:
-                store.event(
-                    "stage_authorized_live_entry_blocked",
-                    {
-                        "ticket_hash": ticket.get("ticket_hash"),
-                        "playbook_id": ticket.get("csa_playbook_id"),
-                        "reason": authorization_reason,
-                    },
-                )
-                return {
-                    "action": action,
-                    "submit": submit,
-                    "processed": 1,
-                    "results": [{"status": "blocked", "reason": authorization_reason}],
-                    "source": "stage_authorized_ledger",
-                }
-            _assert_submit_allowed(config, submit=submit)
-            gate = entry_health_gate(
-                store,
-                config,
-                execution_venue=ticket_execution_venue(config, ticket),
-            )
-            if submit and gate["blocked"]:
-                return {
-                    "action": action,
-                    "submit": submit,
-                    "processed": 1,
-                    "results": [{"status": "blocked", "reason": "blocked_live_health_red:" + ",".join(gate["reasons"])}],
-                    "source": "stage_authorized_ledger",
-                    "health_gate": gate,
-                }
-            risk_manager = gate.get("risk_manager") or {}
-            symbol = str(ticket.get("underlying") or "").upper()
-            underlying_cap = int((risk_manager.get("underlyings_at_cap") or {}).get(symbol) or 0)
-            cluster_cap = next(
-                (
-                    str(cluster)
-                    for cluster, symbols in (risk_manager.get("clusters_at_cap") or {}).items()
-                    if symbol in {str(item).upper() for item in symbols}
-                ),
-                "",
-            )
-            if submit and ticket.get("source_output_kind") != "exact_package" and (underlying_cap or cluster_cap):
-                reason = "blocked_risk_underlying_cap" if underlying_cap else f"blocked_risk_cluster_cap:{cluster_cap}"
-                return {
-                    "action": action,
-                    "submit": submit,
-                    "processed": 1,
-                    "results": [{"status": "blocked", "reason": reason, "underlying": symbol}],
-                    "source": "stage_authorized_ledger",
-                    "health_gate": gate,
-                }
-            adapter = broker_adapter(config)
-            result = _execute_ticket(config, adapter, store, ticket, submit=submit, close=False)
-            return {
-                "action": action,
-                "submit": submit,
-                "processed": 1,
-                "results": [result],
-                "source": "stage_authorized_ledger",
-                "health_gate": gate,
-            }
+            result = _execute_stage_entry(config, store, staged[0], submit=submit)
+            # A blocked Guru package must not starve the independent ideas lane.
+            if not rows or any(item.get("status") != "blocked" for item in result.get("results", [])):
+                return result
     if not rows:
         return {"action": action, "submit": submit, "processed": 0, "results": []}
     _assert_submit_allowed(config, submit=submit)
@@ -368,6 +308,78 @@ def execute_live_approved(
                 continue
             results.append(_execute_ticket(config, adapter, store, ticket, submit=submit, close=close))
     return {"action": action, "submit": submit, "processed": len(results), "results": results}
+
+
+def _execute_stage_entry(config: dict[str, Any], store: LocalStore, ticket: dict[str, Any], *, submit: bool) -> dict[str, Any]:
+    action = APPROVE_LIVE
+    try:
+        daily_policy = load_daily_policy_snapshot(config)
+    except (FileNotFoundError, ValueError) as exc:
+        authorized, authorization_reason = False, f"blocked_daily_policy_snapshot:{type(exc).__name__}"
+    else:
+        authorized, authorization_reason = _stage_ticket_authorization(ticket, daily_policy)
+    if not authorized:
+        store.event(
+            "stage_authorized_live_entry_blocked",
+            {
+                "ticket_hash": ticket.get("ticket_hash"),
+                "playbook_id": ticket.get("csa_playbook_id"),
+                "reason": authorization_reason,
+            },
+        )
+        return {
+            "action": action,
+            "submit": submit,
+            "processed": 1,
+            "results": [{"status": "blocked", "reason": authorization_reason}],
+            "source": "stage_authorized_ledger",
+        }
+    _assert_submit_allowed(config, submit=submit)
+    gate = entry_health_gate(
+        store,
+        config,
+        execution_venue=ticket_execution_venue(config, ticket),
+    )
+    if submit and gate["blocked"]:
+        return {
+            "action": action,
+            "submit": submit,
+            "processed": 1,
+            "results": [{"status": "blocked", "reason": "blocked_live_health_red:" + ",".join(gate["reasons"])}],
+            "source": "stage_authorized_ledger",
+            "health_gate": gate,
+        }
+    risk_manager = gate.get("risk_manager") or {}
+    symbol = str(ticket.get("underlying") or "").upper()
+    underlying_cap = int((risk_manager.get("underlyings_at_cap") or {}).get(symbol) or 0)
+    cluster_cap = next(
+        (
+            str(cluster)
+            for cluster, symbols in (risk_manager.get("clusters_at_cap") or {}).items()
+            if symbol in {str(item).upper() for item in symbols}
+        ),
+        "",
+    )
+    if submit and ticket.get("source_output_kind") != "exact_package" and (underlying_cap or cluster_cap):
+        reason = "blocked_risk_underlying_cap" if underlying_cap else f"blocked_risk_cluster_cap:{cluster_cap}"
+        return {
+            "action": action,
+            "submit": submit,
+            "processed": 1,
+            "results": [{"status": "blocked", "reason": reason, "underlying": symbol}],
+            "source": "stage_authorized_ledger",
+            "health_gate": gate,
+        }
+    adapter = broker_adapter(config)
+    result = _execute_ticket(config, adapter, store, ticket, submit=submit, close=False)
+    return {
+        "action": action,
+        "submit": submit,
+        "processed": 1,
+        "results": [result],
+        "source": "stage_authorized_ledger",
+        "health_gate": gate,
+    }
 
 
 def execute_live_approved_with_recovery(
@@ -2233,7 +2245,7 @@ def cleanup_live_approvals(config: dict[str, Any], *, store: LocalStore | None =
         statuses = ",".join(item["status"] for item in progress)
         if not progress or "unknown" in states:
             continue
-        if "failed" not in states and ("pending" in states or "active" in states):
+        if "pending" in states or "active" in states:
             continue
         row["operator_action"] = ""
         row["operator_notes"] = f"auto-cleared stale {action}; ledger_statuses={statuses}"
@@ -2493,7 +2505,7 @@ def _tickets_to_execute(
         if progress["state"] == "done":
             continue
         if progress["state"] == "failed":
-            return [], f"basket_ticket_failed:{status}"
+            continue
         if progress["state"] == "active":
             return [], f"basket_ticket_active:{status}"
         if progress["state"] == "pending":
@@ -2528,10 +2540,10 @@ def _ticket_progress(store: LocalStore, ticket: dict[str, Any]) -> dict[str, str
         return {"state": "active", "status": status}
     if status in LEGACY_REPRICE_TRACKING_STATUSES:
         return {"state": "active", "status": "legacy_reprice_tracking"}
-    if status == "repriced":
-        children = store.live_order_child_intents(ticket_hash)
+    children = store.live_order_child_intents(ticket_hash) if status == "repriced" or status in FAILED_TICKET_STATUSES else []
+    if status == "repriced" or children:
         child_states = [_ticket_progress(store, child) for child in children]
-        if any(child["state"] == "active" for child in child_states):
+        if any(child["state"] in {"active", "pending", "unknown"} for child in child_states):
             return {"state": "active", "status": "repriced_child_active"}
         if any(child["state"] == "done" for child in child_states):
             return {"state": "done", "status": "repriced_child_done"}
