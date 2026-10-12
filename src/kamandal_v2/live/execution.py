@@ -208,6 +208,12 @@ def execute_live_approved(
 
     sheet_tables = pull_sheet_tables(config)
     rows = _approved_rows(config, close=close, tables=sheet_tables)
+    if submit and not close and (config.get("live") or {}).get("entry_approval_mode") == "auto_top_plan":
+        selection = store.latest_event("live_current_selection") or {}
+        if selection.get("trading_date") == market_today(config):
+            # Retained APPROVE_LIVE cells are historical operator projections.
+            # Today's owner-selected plan is the only automatic entry authority.
+            rows = [row for row in rows if row.get("plan_id") == selection.get("plan_id")]
     if not rows and not close:
         staged = sorted(
             (

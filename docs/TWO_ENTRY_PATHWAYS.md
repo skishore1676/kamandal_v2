@@ -271,3 +271,12 @@ Public submission under a Tasty-local hold and a fresh affordable exact short
 put still need runtime receipts. NDX capability and late-post coverage remain
 known limits. Weekly counts must separate distinct source opportunities from
 fills, and exclude the October 6 erroneous MSFT re-entry from successful capture.
+
+### October 12 natural-session correction
+
+A retained historical `APPROVE_LIVE` row preceded the current HOOD selection.
+Its retired INTC/SHOP basket hit the conservative health fallback, so Tasty's
+DHR block still prevented reaching Public. In `auto_top_plan` mode, today's
+`live_current_selection` now selects the matching approved Sheet row before
+health evaluation. Missing current approval does not authorize an old row.
+Manual approval mode and all ticket-level risk/price checks are unchanged.

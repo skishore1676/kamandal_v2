@@ -3440,3 +3440,42 @@ def test_basket_health_uses_next_executable_ticket_venue(
     assert gate["blocked"] is blocked
     if not blocked:
         assert gate["excluded_other_venue_reasons"] == ["mandatory_exit_quote_stalled"]
+
+
+def test_auto_entry_uses_current_selection_before_historical_approved_rows(tmp_path, monkeypatch):
+    store = LocalStore(tmp_path / 'selected-row.db')
+    control = _live_control()
+    control['runtime'].update(mode='live', trading_enabled=True)
+    control['live']['entry_approval_mode'] = 'auto_top_plan'
+    tickets = []
+    rows = []
+    for plan, venue in [('old', 'tasty_primary'), ('current', 'public_primary')]:
+        t = dict(ticket_hash=plan, order_id=plan, plan_id=plan, candidate_id=plan,
+                 intent_type='open', execution_venue=venue, underlying='XYZ')
+        store.save_live_order_intent(t, status='retired_stale_entry_approval' if plan=='old' else 'pending_approval')
+        tickets.append(t)
+        rows.append(dict(plan_id=plan, mode='live_advisory', operator_action=APPROVE_LIVE,
+                         plan_detail_json=json.dumps({'lane':'live_advisory','order_tickets_json':[t]})))
+    store.event('live_current_selection', {'plan_id':'current','ticket_hashes':['current'],
+                                          'trading_date':live_execution.market_today(control)})
+    monkeypatch.setattr(live_execution,'pull_sheet_tables',lambda _c:{'daily_plan':rows})
+    checked=[]
+    def gate(_c,_s,ts):
+        checked.extend(t['ticket_hash'] for t in ts)
+        return {'blocked':False,'risk_manager':{}}
+    monkeypatch.setattr(live_execution,'_entry_health_gate_for_tickets',gate)
+    monkeypatch.setattr(live_execution,'broker_adapter',lambda _c:object())
+    monkeypatch.setattr(live_execution,'_daily_basket_cap_allows',lambda *_a:True)
+    executed=[]
+    def execute(_c,_a,_s,t,**_k):
+        executed.append(t['ticket_hash']); return {'status':'fixture'}
+    monkeypatch.setattr(live_execution,'_execute_ticket',execute)
+    monkeypatch.setenv('KAMANDAL_LIVE_SUBMIT_CONFIRM','I_UNDERSTAND_THIS_SUBMITS_REAL_ORDERS')
+    result=execute_live_approved(control,submit=True,store=store)
+    assert checked==executed==['current']
+    assert result['processed']==1
+    # Missing current Sheet approval must not resurrect the historical row.
+    rows.pop()
+    result=execute_live_approved(control,submit=True,store=store)
+    assert result['processed']==0
+    assert executed==['current']
