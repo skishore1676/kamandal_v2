@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/common.sh"
 run_x_bookmark_extraction() {
   require_trading_day
 
-  local today source_root digest_dir ideas_dir limit import_json import_error source_doc_dir activation_json
+  local today source_root digest_dir ideas_dir limit import_json import_error source_doc_dir activation_json activation_status=0
   today="$(TZ="$KAMANDAL_MARKET_TZ" date '+%Y-%m-%d')"
   source_root="${KAMANDAL_X_SOURCE_DOC_DIR:-data/source_docs/x_digest}"
   digest_dir="${KAMANDAL_X_BOOKMARK_DIGEST_DIR:-data/digest/x_bookmarks/$today}"
@@ -31,7 +31,13 @@ run_x_bookmark_extraction() {
     else
       log "Guru intake failed; source failure receipt follows."
       log "$activation_json"
-      return 1
+      # A degraded owner receipt may retain current valid successful siblings.
+      # Evaluate those without hiding the failed source or treating an unhealthy
+      # empty feed as no signals. Malformed/all-failed activation still stops.
+      if ! "$REPO_ROOT/.venv/bin/python" -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("status")=="degraded" and int(d.get("observed_package_batch_count") or 0)>0 else 1)' <<< "$activation_json"; then
+        return 1
+      fi
+      activation_status=1
     fi
   fi
 
@@ -44,6 +50,9 @@ run_x_bookmark_extraction() {
       log "Shared planner is active; retained Guru evidence will be evaluated on the next intake tick."
     elif [[ "$planning_status" != "0" ]]; then
       return "$planning_status"
+    fi
+    if [[ "$activation_status" != "0" ]]; then
+      return "$activation_status"
     fi
     # Extra afternoon ticks are correspondent-only. Keep general digest/LLM
     # extraction on its established five daily slots.

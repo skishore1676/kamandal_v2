@@ -264,7 +264,7 @@ def test_filled_repriced_adjustment_reconciles_two_shorts_and_consumes_one_episo
     parent = local.live_order_intents_by_type('adjust')[0]
     child = execution._repriced_close_ticket(execution._repriced_close_ticket(parent, CONFIG), CONFIG)
     local.save_live_order_intent(child, status='submitted')
-    result = execution._adopt_csa_live_fill(local, child, {'status': 'FILLED', 'averagePrice': '2.53', 'filledQuantity': '1', 'updatedAt': '2026-09-30T19:15:00Z'}, filled_quantity=1)
+    result = execution._adopt_csa_live_fill(local, child, {'status': 'FILLED', 'averagePrice': '2.53', 'filledQuantity': '1', 'filledAt': '2026-09-30T19:15:00Z'}, filled_quantity=1)
     lifecycle = store.lifecycle('ms-lifecycle')
     assert result
     assert [(leg['role'], leg['strike']) for leg in lifecycle.active_legs] == [('short_put', 190), ('short_call', 200)]

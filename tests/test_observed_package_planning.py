@@ -630,7 +630,8 @@ def test_source_verified_calendar_reaches_live_ticket_with_close_policy(
             trade_source_rows=sources, guru_only=True, include_shadow=False,
             observed_package_batches=(replace(_batch(), packages=(package,)),),
         )
-        assert repeated.live.result is None
+        assert repeated.live.result is not None
+        assert repeated.live.result.plans == []
         assert len(store.live_order_intents_by_type("open")) == 1
     assert result.compilation.ok
     assert result.live.errors == ()

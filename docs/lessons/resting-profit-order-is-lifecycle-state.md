@@ -9,6 +9,12 @@ refs: [src/kamandal_v2/strategy_lanes/management_runtime.py, src/kamandal_v2/liv
 
 # A Resting Multileg Profit Order Is Lifecycle State
 
+October 12, 2026 update: the operator's shared
+[exit execution contract](../EXIT_EXECUTION.md) supersedes the historical
+per-playbook enabling rule below. Strangles offer the frozen target on the first
+valid observation; other lanes retain their frozen progress threshold (25% when
+absent). Target dollars, lineage, and cancel-before-replace remain unchanged.
+
 ## What We Learned
 
 An early profit offer must remain inside the canonical lifecycle. Midpoint still

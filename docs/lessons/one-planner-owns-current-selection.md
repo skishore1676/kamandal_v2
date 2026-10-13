@@ -9,6 +9,13 @@ refs: [src/kamandal_v2/strategy_engine/planning.py, src/kamandal_v2/live/executi
 
 # One planner owns the current portfolio selection
 
+October 12, 2026 update: [ENTRY_ADMISSION.md](../ENTRY_ADMISSION.md) defines the
+automatic entry ledger as the single decision authority in `auto_top_plan`.
+The unified planner and its existing Guru-only intake commit frozen tickets and
+safe reservation replacement before cockpit projection. Manual approval retains
+its Sheet contract. This supersedes the historical automatic Sheet dependency
+below without restoring executor-side portfolio replanning.
+
 A failed order is execution evidence for the next scheduled planner, not a reason
 for the executor or reconciler to become another portfolio decision-maker.
 

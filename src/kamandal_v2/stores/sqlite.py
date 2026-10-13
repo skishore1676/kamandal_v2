@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import hashlib
 from datetime import UTC, datetime, timedelta
@@ -900,6 +901,7 @@ class LocalStore:
         placeholders = ",".join("?" for _ in replaceable)
         superseded: list[str] = []
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
                 f"""
                 SELECT ticket_hash, order_id, status, created_at, payload
@@ -989,6 +991,105 @@ class LocalStore:
                 )
         return sorted(superseded)
 
+    def stage_lifecycle_close(self, ticket: dict[str, Any]) -> bool:
+        """Queue a freshly observed close, including safe terminal recovery.
+
+        A stable close identity is not a terminal lifecycle decision. Unsubmitted
+        deferrals/preflight failures reuse it with fresh evidence. A broker-
+        terminal, unfilled attempt gets a new deterministic client identity.
+        Unknown, partial, filled and working commitments are never replayed.
+        """
+        from dataclasses import replace
+        from kamandal_v2.live.orders import build_csa_live_ticket
+        from kamandal_v2.strategy_lanes.models import stable_csa_id
+        from kamandal_v2.strategy_lanes.store import strategy_ticket_from_payload
+
+        if ticket.get("intent_type") != "close" or not ticket.get("csa_lifecycle_id"):
+            raise ValueError("lifecycle close staging requires a typed close")
+        base_hash = str(ticket["ticket_hash"])
+        retryable = {"deferred_market_closed", "blocked_preflight_stale", "blocked_preflight_failed",
+                     "rejected", "cancelled", "canceled", "expired", "expired_eod", "failed"}
+        active = {"pending_close_approval", "approved_close_pending_submit", "stage_approved_pending_submit",
+                  "submitted", "repriced", "partially_filled", "submit_uncertain", "fill_economics_pending",
+                  "replace_cancel_pending", "replace_waiting_cancel"}
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT * FROM live_order_intents WHERE intent_type = 'close' AND "
+                "json_extract(payload, '$.csa_lifecycle_id') = ?",
+                (str(ticket["csa_lifecycle_id"]),),
+            ).fetchall()
+            if any(row["status"] in active for row in rows):
+                return False
+            lineage = [row for row in rows if row["ticket_hash"] == base_hash
+                       or json.loads(row["payload"]).get("management_recovery_base_hash") == base_hash]
+            existing = max(lineage, key=lambda row: int(json.loads(row["payload"]).get("management_recovery_generation") or 0)) if lineage else None
+            staged = dict(ticket)
+            if existing is not None:
+                if existing["status"] not in retryable:
+                    return False
+                old = json.loads(existing["payload"])
+                history = conn.execute(
+                    "SELECT status, payload FROM live_order_status WHERE ticket_hash = ? OR order_id = ? ORDER BY id",
+                    (existing["ticket_hash"], existing["order_id"]),
+                ).fetchall()
+                for item in history:
+                    payload = json.loads(item["payload"])
+                    quantity = payload.get("filledQuantity", payload.get("filled-quantity", payload.get("filled_quantity", 0)))
+                    try:
+                        observed_quantity = float(quantity or 0)
+                        if not math.isfinite(observed_quantity) or observed_quantity < 0:
+                            return False
+                        filled = observed_quantity > 0
+                    except (TypeError, ValueError):
+                        return False
+                    if filled or str(item["status"]).upper() in {"FILLED", "PARTIALLY_FILLED"}:
+                        return False
+                effects = conn.execute(
+                    "SELECT 1 FROM live_order_attempts WHERE ticket_hash = ? AND submit = 1 "
+                    "AND action NOT LIKE '%preflight%' LIMIT 1", (existing["ticket_hash"],),
+                ).fetchone()
+                broker_observed = bool(history or effects or old.get("broker_order_id"))
+                if broker_observed:
+                    if not history or str(history[-1]["status"]).upper() not in {"CANCELLED", "CANCELED", "REJECTED", "EXPIRED", "FAILED"}:
+                        return False
+                    terminal = json.loads(history[-1]["payload"])
+                    terminal_quantity = terminal.get("filledQuantity", terminal.get("filled-quantity", terminal.get("filled_quantity")))
+                    if terminal_quantity in (None, "") and str(history[-1]["status"]).upper() != "REJECTED":
+                        return False
+                    generation = int(old.get("management_recovery_generation") or 0) + 1
+                    strategy = strategy_ticket_from_payload(ticket["csa_strategy_ticket"])
+                    recovered = replace(strategy, ticket_id=stable_csa_id("management-recovery", [strategy.ticket_id, base_hash, generation]))
+                    staged.update(build_csa_live_ticket(recovered))
+                    staged.update(management_recovery_base_hash=base_hash,
+                                  management_recovery_generation=generation,
+                                  management_recovery_from_ticket_hash=str(existing["ticket_hash"]))
+                else:
+                    # No broker effect occurred. Refresh the same identity atomically;
+                    # the executor still checks current session, ownership and preflight.
+                    generation = int(old.get("management_recovery_generation") or 0)
+                    if generation:
+                        strategy = strategy_ticket_from_payload(ticket["csa_strategy_ticket"])
+                        recovered = replace(strategy, ticket_id=stable_csa_id("management-recovery", [strategy.ticket_id, base_hash, generation]))
+                        staged.update(build_csa_live_ticket(recovered))
+                    staged.update({k: old[k] for k in ("management_recovery_base_hash", "management_recovery_generation",
+                                                       "management_recovery_from_ticket_hash") if k in old})
+                    staged["ticket_hash"] = existing["ticket_hash"]
+                    staged["order_id"] = existing["order_id"]
+                    staged["client_order_id"] = existing["order_id"]
+                    staged["submit_payload"] = {**staged["submit_payload"], "orderId": existing["order_id"]}
+                staged["management_recovery_prior_status"] = existing["status"]
+            conn.execute(
+                "INSERT INTO live_order_intents "
+                "(ticket_hash, order_id, plan_id, candidate_id, idea_id, intent_type, status, created_at, updated_at, payload) "
+                "VALUES (?, ?, ?, ?, ?, 'close', 'stage_approved_pending_submit', ?, CURRENT_TIMESTAMP, ?) "
+                "ON CONFLICT(ticket_hash) DO UPDATE SET status=excluded.status, payload=excluded.payload, "
+                "created_at=excluded.created_at, updated_at=CURRENT_TIMESTAMP",
+                (staged["ticket_hash"], staged["order_id"], staged["plan_id"], staged["candidate_id"],
+                 str(staged.get("idea_id") or ""), staged["created_at"], json.dumps(staged, sort_keys=True)),
+            )
+        return True
+
     def retire_superseded_plan_entries(self, selection: dict[str, Any]) -> list[str]:
         """Release only unsubmitted rank-one reservations replaced by this selection.
 
@@ -1025,6 +1126,85 @@ class LocalStore:
                 conn.execute("UPDATE live_order_intents SET status = 'retired_superseded_entry_revision', payload = ?, updated_at = CURRENT_TIMESTAMP WHERE ticket_hash = ? AND status = 'pending_approval'", (json.dumps(payload), row["ticket_hash"]))
                 retired.append(str(row["ticket_hash"]))
         return retired
+
+    def supersedable_automatic_entries(self) -> set[str]:
+        """Read the reservations a new full automatic selection may replace."""
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM live_order_intents WHERE intent_type='open'").fetchall()
+            return {str(row["ticket_hash"]) for row in rows if _automatic_entry_replaceable(conn, row)}
+
+    def bind_live_entry_policy(self, ticket: dict[str, Any], *, expected_statuses: set[str]) -> bool:
+        """Attach policy only before another owner claims the opening ticket."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT status, payload FROM live_order_intents WHERE ticket_hash=?", (ticket["ticket_hash"],)).fetchone()
+            if row is None or row["status"] not in expected_statuses:
+                return False
+            conn.execute("UPDATE live_order_intents SET payload=?, updated_at=CURRENT_TIMESTAMP WHERE ticket_hash=?",
+                         (json.dumps({**json.loads(row["payload"]), **ticket}, sort_keys=True), ticket["ticket_hash"]))
+        return True
+
+    def commit_automatic_selection(self, selection: dict[str, Any], *, replace_hashes: set[str], independent_guru: bool = False,
+                                   prepared_tickets: list[dict[str, Any]] | None = None) -> list[str]:
+        """Publish queue authority and retire replacement reservations atomically.
+
+        Planning can calculate against a proposed replacement without releasing
+        capital first. A changed/broker-claimed predecessor aborts the commit.
+        Successful empty selection explicitly withdraws only the captured safe
+        reservations; failed planning never calls this transition.
+        """
+        hashes = {str(value) for value in selection.get("ticket_hashes") or []}
+        plan_id = str(selection.get("plan_id") or "")
+        if bool(hashes) != bool(plan_id) or (independent_guru and replace_hashes):
+            raise ValueError("invalid automatic selection")
+        retired = []
+        prepared = {str(t["ticket_hash"]): t for t in (prepared_tickets or [])}
+        if prepared_tickets is not None and prepared.keys() != hashes:
+            raise ValueError("prepared tickets differ from automatic selection")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = {str(r["ticket_hash"]): r for r in conn.execute("SELECT * FROM live_order_intents WHERE intent_type='open'")}
+            for key in replace_hashes - hashes:
+                if key not in rows or not _automatic_entry_replaceable(conn, rows[key]):
+                    raise RuntimeError("automatic selection predecessor changed; replan required")
+            for key in hashes:
+                if key not in rows and key not in prepared:
+                    raise ValueError("automatic selection ticket missing")
+                payload = prepared.get(key) or json.loads(rows[key]["payload"])
+                if payload.get("plan_id") != plan_id or not payload.get("stage_authorized") or not payload.get("csa_lifecycle_id"):
+                    raise ValueError("automatic selection requires a frozen lifecycle handoff")
+                if independent_guru and (payload.get("sleeve_id") != "guru_exact" or payload.get("source_output_kind") != "exact_package"):
+                    raise ValueError("independent Guru selection contains non-Guru entry")
+                if key in prepared and key in rows and not _automatic_entry_replaceable(conn, rows[key]):
+                    raise RuntimeError("selected automatic ticket was claimed; replan required")
+            for key in replace_hashes - hashes:
+                payload = json.loads(rows[key]["payload"])
+                payload.update(superseded_by_plan_id=plan_id, superseded_reason="automatic_selection_transition")
+                conn.execute("UPDATE live_order_intents SET status='retired_superseded_entry_revision', payload=?, updated_at=CURRENT_TIMESTAMP WHERE ticket_hash=?",
+                             (json.dumps(payload, sort_keys=True), key))
+                retired.append(key)
+            for key in hashes:
+                payload = dict(prepared[key]) if key in prepared else json.loads(rows[key]["payload"])
+                payload.update(entry_authority="guru_intake" if independent_guru else "automatic_plan",
+                               entry_authority_trading_date=selection["trading_date"])
+                if independent_guru:
+                    payload["guru_intake_staged"] = True
+                prior = rows[key]["status"] if key in rows else "pending_approval"
+                status = "stage_approved_pending_submit" if prior == "pending_approval" else prior
+                if key in prepared:
+                    conn.execute("INSERT INTO live_order_intents "
+                        "(ticket_hash,order_id,plan_id,candidate_id,idea_id,intent_type,status,created_at,updated_at,payload) "
+                        "VALUES (?,?,?,?,?,'open',?,?,CURRENT_TIMESTAMP,?) "
+                        "ON CONFLICT(ticket_hash) DO UPDATE SET status=excluded.status,payload=excluded.payload,created_at=excluded.created_at,updated_at=CURRENT_TIMESTAMP",
+                        (key,payload["order_id"],payload["plan_id"],payload["candidate_id"],str(payload.get("idea_id") or ""),
+                         status,payload["created_at"],json.dumps(payload,sort_keys=True)))
+                else:
+                    conn.execute("UPDATE live_order_intents SET status=?, payload=?, updated_at=CURRENT_TIMESTAMP WHERE ticket_hash=?",
+                                 (status, json.dumps(payload, sort_keys=True), key))
+            event = "guru_intake_selection" if independent_guru else "live_current_selection"
+            conn.execute("INSERT INTO events(event_type,payload) VALUES (?,?)",
+                         (event, json.dumps({**selection, "authority": "automatic_entry_ledger", "retired_ticket_hashes": sorted(retired)}, sort_keys=True)))
+        return sorted(retired)
 
     def live_order_intent(self, ticket_hash: str) -> dict[str, Any] | None:
         with self._connect() as conn:
@@ -2298,3 +2478,18 @@ def _account_book_mode(value: str | None) -> str:
     if mode not in {"live", "shadow"}:
         raise ValueError(f"account snapshot mode must be live or shadow, got {value!r}")
     return mode
+
+
+def _automatic_entry_replaceable(conn: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    payload = json.loads(row["payload"])
+    if row["status"] != "pending_approval" and not (
+        row["status"] in {"stage_approved_pending_submit", "waiting_entry_window"}
+        and payload.get("entry_authority") == "automatic_plan"
+    ):
+        return False
+    if (payload.get("plan_rank") != 1 or payload.get("guru_intake_staged")
+            or payload.get("parent_ticket_hash") or payload.get("broker_order_id")
+            or payload.get("replaces_broker_order_id")):
+        return False
+    return not (conn.execute("SELECT 1 FROM live_order_attempts WHERE ticket_hash=? AND submit=1 LIMIT 1", (row["ticket_hash"],)).fetchone()
+                or conn.execute("SELECT 1 FROM live_order_status WHERE ticket_hash=? OR order_id=? LIMIT 1", (row["ticket_hash"], row["order_id"])).fetchone())

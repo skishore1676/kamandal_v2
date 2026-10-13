@@ -109,7 +109,8 @@ def run_plan(
     portfolio = _shadow_portfolio_with_open_fills(portfolio, store, config)
     portfolio = _live_portfolio_with_open_groups(portfolio, store, config)
     if mode == "live" and config.get("_live_sleeve_policy") is not None:
-        config["_live_sleeve_usage"] = live_sleeve_usage(store, portfolio)
+        config["_live_sleeve_usage"] = live_sleeve_usage(store, portfolio,
+            exclude_ticket_hashes=config.get("_automatic_selection_replace_hashes"))
     ideas_portfolio = (store.live_portfolio_state(portfolio, sleeve="current_idea") if mode == "live"
                        else store.shadow_portfolio_state(portfolio, sleeve="current_idea"))
     preflight = _live_overlap_preflight_guard(preflight, store, config)
@@ -168,7 +169,8 @@ def run_plan(
     if candidate_postprocessor is not None:
         candidate_postprocessor(candidates, store, config, portfolio)
     if mode == "live":
-        occupied = occupied_source_opportunities(store)
+        occupied = occupied_source_opportunities(store,
+            exclude_ticket_hashes=config.get("_automatic_selection_replace_hashes"))
         for candidate in candidates:
             source = str(candidate.metadata.get("source_profile") or "").lower()
             opportunity = str(candidate.metadata.get("source_opportunity_id") or "")

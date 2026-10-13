@@ -604,7 +604,7 @@ def test_terminal_partial_fill_is_adopted_into_typed_lifecycle_before_replan(tmp
         "csa_strategy_ticket": strategy_ticket.to_dict(),
     }
     store.save_live_order_intent(ticket, status="submitted")
-    response = {"status": "CANCELED", "filledQuantity": 1, "averagePrice": 0.95, "updatedAt": "2026-08-21T14:05:00Z"}
+    response = {"status": "CANCELED", "filledQuantity": 1, "averagePrice": 0.95, "filledAt": "2026-08-21T14:05:00Z"}
     class FakeAdapter:
         def get_order(self, _order_id):
             return dict(response)

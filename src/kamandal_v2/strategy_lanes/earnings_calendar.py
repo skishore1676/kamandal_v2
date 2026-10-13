@@ -24,6 +24,11 @@ def propose_earnings_calendar_actions(
     # Event uncertainty does not remove authority to close already-owned risk.
     if bool(context.get("hard_emergency")):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "hard_emergency", arbiter_class="hard_emergency", proposed_at=proposed_at))
+    # Older frozen earnings policies may lack a loss threshold. Never invent it;
+    # consume the explicitly frozen Sheet value when one is present.
+    if policy.resolved_fields.get("max_loss_multiple") not in (None, ""):
+        if float(context.get("loss_multiple") or 0) >= sheet_number(policy, "max_loss_multiple"):
+            actions.append(propose_action(lifecycle, ActionType.CLOSE, "earnings_loss_exit", arbiter_class="adverse_price_loss", proposed_at=proposed_at))
     if str(context.get("event_state") or "") == "confirmed" and bool(context.get("event_exit_due")):
         actions.append(propose_action(lifecycle, ActionType.CLOSE, "earnings_event_exit", arbiter_class="mandatory_event_exit", proposed_at=proposed_at))
     if _number(context, "profit_pct") >= sheet_number(policy, "profit_target_pct"):

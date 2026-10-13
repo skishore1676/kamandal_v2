@@ -21,6 +21,7 @@ APPROVED_CLOSE_PENDING_SUBMIT = "approved_close_pending_submit"
 LOCAL_ONLY_CLOSE_STATUSES = {"pending_close_approval", APPROVED_CLOSE_PENDING_SUBMIT}
 BROKER_OBSERVED_STATUSES = {
     "submitted",
+    "fill_economics_pending",
     "repriced",
     "reprice_blocked_preflight_failed",
     "replace_cancel_pending",
@@ -208,6 +209,14 @@ def _reconcile_broker_close_order(store: LocalStore, adapter: Any, ticket: dict[
         result["staged_replace_parent_status"] = broker_status
         return result
     if broker_status in {"FILLED", "PARTIALLY_FILLED"}:
+        if ticket.get("_ledger_status") == "fill_economics_pending":
+            if not dry_run and broker_status == "FILLED":
+                from kamandal_v2.live.execution import _adopt_csa_live_fill
+                adopted = _adopt_csa_live_fill(store, ticket, response)
+                result["reconciled_status"] = "close_filled" if adopted.get("saved") else "fill_economics_pending"
+            else:
+                result["reconciled_status"] = "fill_economics_pending"
+            return result
         result["reconciled_status"] = "close_filled"
         if not dry_run:
             store.update_live_order_intent_status(str(ticket["ticket_hash"]), "close_filled")

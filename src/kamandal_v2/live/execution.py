@@ -70,7 +70,7 @@ PENDING_TICKET_STATUSES = {
     WAITING_ENTRY_WINDOW,
     "dry_run",
 }
-ACTIVE_TICKET_STATUSES = {"submitted", "repriced", "partially_filled", "submit_uncertain"}
+ACTIVE_TICKET_STATUSES = {"submitted", "repriced", "partially_filled", "submit_uncertain", "fill_economics_pending"}
 REPLACE_CANCEL_PENDING = "replace_cancel_pending"
 REPLACE_WAITING_CANCEL = "replace_waiting_cancel"
 CANCEL_PENDING_TICKET_STATUSES = {"repriced", "expired", REPLACE_CANCEL_PENDING}
@@ -154,6 +154,11 @@ def execute_live_approved(
 ) -> dict[str, Any]:
     store = store or LocalStore()
     action = APPROVE_LIVE_CLOSE if close else APPROVE_LIVE
+    if not close and (config.get("live") or {}).get("entry_approval_mode") == "auto_top_plan":
+        selection = store.latest_event("live_current_selection") or {}
+        staged_entries = store.live_order_intents_by_type("open", {"stage_approved_pending_submit", WAITING_ENTRY_WINDOW})
+        if selection.get("authority") == "automatic_entry_ledger" or any(t.get("entry_authority") for t in staged_entries):
+            return _execute_automatic_entries(config, store, submit=submit)
     if close and _exit_submit_source(config) == "ledger":
         # Typed lifecycle management is already authorized and persisted by
         # the unified manager.  Consume it before consulting the Sheet-backed
@@ -382,6 +387,40 @@ def _execute_stage_entry(config: dict[str, Any], store: LocalStore, ticket: dict
     }
 
 
+def _execute_automatic_entries(config: dict[str, Any], store: LocalStore, *, submit: bool) -> dict[str, Any]:
+    """Drain the shared automatic entry queue without using cockpit cells as authority."""
+    tickets = [t for t in store.live_order_intents_by_type("open", {"stage_approved_pending_submit", WAITING_ENTRY_WINDOW})
+               if t.get("entry_authority") in {"automatic_plan", "guru_intake"} or t.get("guru_intake_staged")]
+    tickets.sort(key=lambda t: (str(t.get("created_at") or t.get("_ledger_created_at") or ""), str(t.get("ticket_hash") or "")))
+    results = []
+    submitted = 0
+    limit = _ticket_limit(config, submit=submit, close=False)
+    for ticket in tickets:
+        if submitted >= limit:
+            break
+        if ticket.get("entry_authority_trading_date") and ticket["entry_authority_trading_date"] != market_today(config):
+            results.append({"status": "blocked", "reason": "automatic_entry_from_prior_trading_day", "ticket_hash": ticket["ticket_hash"]})
+            continue
+        if submit and not _daily_basket_cap_allows(config, store, {"plan_id": ticket.get("plan_id")}):
+            results.append({"status": "blocked", "reason": "max_live_baskets_per_day_reached", "ticket_hash": ticket["ticket_hash"]})
+            continue
+        result = _execute_stage_entry(config, store, ticket, submit=submit)
+        for item in result.get("results", []):
+            item.setdefault("ticket_hash", ticket["ticket_hash"])
+            item.setdefault("underlying", ticket.get("underlying"))
+            item.setdefault("execution_venue", ticket_execution_venue(config, ticket))
+            results.append(item)
+            if item.get("status") in {"submitted", "submit_uncertain", "dry_run"}:
+                submitted += 1
+        # Per-ticket venue health is isolated. A genuine global risk breaker
+        # still stops this queue; a local hold does not consume submit capacity.
+        gate = result.get("health_gate") or {}
+        if (gate.get("risk_manager") or {}).get("blocked"):
+            break
+    return {"action": APPROVE_LIVE, "submit": submit, "processed": len(results), "results": results,
+            "source": "automatic_entry_ledger", "submitted": submitted}
+
+
 def execute_live_approved_with_recovery(
     config: dict[str, Any],
     *,
@@ -523,7 +562,9 @@ def _execute_ticket(
             return _defer_ticket_for_window(store, ticket, window)
         # Write intent before crossing the broker boundary. A timeout or a
         # process crash must not make this order eligible for another POST.
-        store.update_live_order_intent_status(str(ticket["ticket_hash"]), "submit_uncertain")
+        if not store.transition_live_order_intent_status(str(ticket["ticket_hash"]),
+                expected_statuses=allowed_statuses, status="submit_uncertain"):
+            return _failure(ticket, "ticket_authority_changed_before_submission")
         try:
             response = adapter.place_order_ticket(ticket)
             ok = bool(response.get("orderId"))
@@ -782,8 +823,16 @@ def sync_live_orders(config: dict[str, Any], *, store: LocalStore | None = None,
 def _sync_live_orders_locked(config: dict[str, Any], *, store: LocalStore, manage_entries: bool) -> dict[str, Any]:
     default_adapter = broker_adapter(config)
     tickets = store.live_order_intents_by_status(
-        {"submitted", "submit_uncertain", "partially_filled", *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
+        {"submitted", "submit_uncertain", "partially_filled", "fill_economics_pending",
+         *CANCEL_PENDING_TICKET_STATUSES, *LEGACY_REPRICE_TRACKING_STATUSES}
     )
+    # An EOD cancellation request is not broker-terminal proof. Confirm it for
+    # held typed risk without polling retired historical lifecycles forever.
+    for ticket in store.live_order_intents_by_status({EXPIRED_EOD_STATUS}):
+        lifecycle_id = str(ticket.get("csa_lifecycle_id") or "")
+        lifecycle = CsaStore(store.sqlite_path, read_only=True).lifecycle(lifecycle_id) if lifecycle_id else None
+        if lifecycle and lifecycle.status == "open":
+            tickets.append(ticket)
     known_hashes = {str(ticket.get("ticket_hash") or "") for ticket in tickets}
     for child in store.live_order_intents_by_status({REPLACE_WAITING_CANCEL}):
         parent_hash = str(child.get("parent_ticket_hash") or "")
@@ -2685,17 +2734,36 @@ def _adopt_csa_live_fill(
     raw_price = order_status.get("averagePrice")
     if raw_price in (None, ""):
         raw_price = order_status.get("average-price")
-    filled_price = abs(float(raw_price)) if raw_price not in (None, "") else abs(float(strategy_ticket.limit_price))
+    try:
+        filled_price = abs(float(raw_price)) if raw_price not in (None, "") else math.nan
+    except (TypeError, ValueError):
+        filled_price = math.nan
     raw_observed = (
         order_status.get("filledAt")
         or order_status.get("filled-at")
         or order_status.get("terminalAt")
         or order_status.get("terminal-at")
-        or order_status.get("updatedAt")
-        or order_status.get("updated-at")
-        or _now_utc()
     )
-    observed_at = _normalize_fill_timestamp(raw_observed)
+    try:
+        # Accept explicit ISO or epoch broker times. Missing input must never
+        # reach the legacy normalizer's fallback to the current time.
+        observed_at = _normalize_fill_timestamp(raw_observed) if raw_observed not in (None, "") else None
+        if observed_at is not None:
+            datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+    except (TypeError, ValueError, OverflowError, OSError):
+        observed_at = None
+    if not math.isfinite(filled_price) or observed_at is None:
+        reason = "broker_fill_price_missing_or_invalid" if not math.isfinite(filled_price) else "broker_fill_time_missing_or_invalid"
+        evidence = {"status": "pending", "reason": reason,
+                    "broker_status": str(order_status.get("status") or ""),
+                    "reported_filled_quantity": observed_quantity}
+        retained = store.live_order_intent(str(ticket["ticket_hash"])) or {}
+        store.update_live_order_intent_status_with_payload(str(ticket["ticket_hash"]), "fill_economics_pending",
+                                                         {"canonical_fill_economics": evidence})
+        if retained.get("canonical_fill_economics") != evidence:
+            store.event("canonical_lifecycle_fill_waiting_economics", {"ticket_hash": ticket["ticket_hash"],
+                        "lifecycle_id": lifecycle.lifecycle_id, **evidence, "broker_effects": False})
+        return {"saved": False, "reason": reason, "economics_pending": True, "lifecycle_id": lifecycle.lifecycle_id}
     fill = ShadowFill(
         fill_id=stable_csa_id("live-fill", [strategy_ticket.ticket_id, ticket.get("order_id"), filled_price]),
         ticket_id=strategy_ticket.ticket_id,
@@ -2716,9 +2784,10 @@ def _adopt_csa_live_fill(
         or ""
     )
     metadata = dict(lifecycle.metadata)
+    metadata["fill_economics_status"] = "broker_confirmed"
     if projection_id:
         metadata["position_projection_id"] = projection_id
-        lifecycle = replace(lifecycle, metadata=metadata)
+    lifecycle = replace(lifecycle, metadata=metadata)
     updated = ShadowExecutionAdapter().adopt_fill(lifecycle, strategy_ticket, fill)
     action_type = str(strategy_ticket.metadata.get("action_type") or "")
     committed = store.commit_canonical_lifecycle_fill(
@@ -2915,6 +2984,14 @@ def _entry_snapshot_from_lineage(
     execution_fills: list[dict[str, Any]],
     fill_quantity: float = 1.0,
 ) -> dict[str, Any]:
+    economics_pending = False
+    if ticket.get("csa_lifecycle_id"):
+        for fill in execution_fills:
+            try:
+                price = float(fill.get("average_price"))
+                economics_pending = economics_pending or not math.isfinite(price)
+            except (TypeError, ValueError):
+                economics_pending = True
     entry_net_cashflow = round(
         sum(
             float(fill.get("net_credit") or 0.0)
@@ -2927,9 +3004,10 @@ def _entry_snapshot_from_lineage(
     net_credit = entry_net_cashflow / (100.0 * fill_quantity) if fill_quantity else _net_credit_from_ticket(ticket)
     return {
         "entry_kind": "credit" if entry_net_cashflow > 0 else "debit",
-        "entry_net_credit": round(net_credit, 4),
-        "entry_net_cashflow": entry_net_cashflow,
-        "entry_value": abs(entry_net_cashflow),
+        "entry_net_credit": None if economics_pending else round(net_credit, 4),
+        "entry_net_cashflow": None if economics_pending else entry_net_cashflow,
+        "entry_value": None if economics_pending else abs(entry_net_cashflow),
+        "economics_status": "pending" if economics_pending else "broker_price_confirmed" if ticket.get("csa_lifecycle_id") else "legacy_projection",
         "fill_price": order_status.get("averagePrice"),
         "fill_quantity": fill_quantity,
         "source_order_id": ticket.get("order_id"),
@@ -3072,6 +3150,17 @@ def _execution_fill(
 ) -> dict[str, Any]:
     net_credit = _net_credit_from_ticket(ticket)
     average_price = order_status.get("averagePrice")
+    if ticket.get("csa_lifecycle_id"):
+        try:
+            valid_price = math.isfinite(float(average_price))
+        except (TypeError, ValueError):
+            valid_price = False
+        if not valid_price:
+            return {"order_id": str(order_status.get("_order_id") or ticket.get("order_id") or ""),
+                    "ticket_hash": str(order_status.get("_ticket_hash") or ticket.get("ticket_hash") or ""),
+                    "filled_quantity": fill_quantity, "average_price": None, "net_credit": None,
+                    "broker_status": str(order_status.get("_broker_status") or order_status.get("status") or ""),
+                    "observed_at": order_status.get("_observed_at"), "source": source, "economics_status": "pending"}
     if average_price not in (None, ""):
         observed_price = abs(float(average_price))
         side = str(order_status.get("side") or "").upper()

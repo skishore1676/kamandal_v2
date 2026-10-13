@@ -346,7 +346,9 @@ def _run_lifecycle_management(
                         "csa_policy_snapshot_hash": str(lifecycle.metadata.get("policy_snapshot_hash") or lifecycle.policy_hash),
                     }
                 )
-                if writable_live_store.live_order_intent(str(live_ticket["ticket_hash"])) is None:
+                if existing_resting is None and selected.action_type is ActionType.CLOSE:
+                    live_intent_count += int(writable_live_store.stage_lifecycle_close(live_ticket))
+                elif writable_live_store.live_order_intent(str(live_ticket["ticket_hash"])) is None:
                     if existing_resting is not None:
                         parent_status = str(existing_resting.get("_ledger_status") or "")
                         if parent_status in PENDING_TICKET_STATUSES:
@@ -636,6 +638,7 @@ def _management_context(
             "hard_emergency": False,
             "event_exit_due": due,
             "profit_pct": profit_pct,
+            "loss_multiple": loss_multiple,
             "near_leg_expired": min(dtes) <= 0,
         }
     return context, plans, replace(lifecycle, updated_at=observed_at, metadata=metadata), observation

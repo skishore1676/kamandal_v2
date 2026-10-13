@@ -20,7 +20,7 @@ PORTFOLIO_TOTAL = "portfolio_total"
 REQUIRED_ROWS = (CURRENT_IDEA, GURU_EXACT, PORTFOLIO_TOTAL)
 PENDING_ENTRY_STATUSES = {
     "pending_approval", "stage_approved_pending_submit", "waiting_entry_window",
-    "submitted", "partially_filled", "submit_uncertain", "replace_cancel_pending",
+    "submitted", "partially_filled", "submit_uncertain", "fill_economics_pending", "replace_cancel_pending",
     "replace_waiting_cancel",
 }
 
@@ -114,7 +114,7 @@ def ticket_lane(ticket: dict[str, Any]) -> str:
 
 
 def occupied_source_opportunities(
-    store: LocalStore, *, exclude_ticket_hash: str = "",
+    store: LocalStore, *, exclude_ticket_hash: str = "", exclude_ticket_hashes: set[str] | None = None,
 ) -> set[tuple[str, str]]:
     """A source opening is one opportunity across its idea and exact routes."""
     occupied: set[tuple[str, str]] = set()
@@ -129,7 +129,7 @@ def occupied_source_opportunities(
     # Execution consumes a source opening permanently, including after its
     # position closes. Only an unfilled retry may exclude its own reservation.
     for ticket in store.live_order_intents_by_type("open", PENDING_ENTRY_STATUSES | filled_statuses):
-        if (str(ticket.get("ticket_hash") or "") == exclude_ticket_hash
+        if (str(ticket.get("ticket_hash") or "") in {exclude_ticket_hash, *(exclude_ticket_hashes or set())}
                 and ticket.get("_ledger_status") not in filled_statuses):
             continue
         source = str(ticket.get("source_id") or "").lower()
@@ -144,6 +144,7 @@ def live_sleeve_usage(
     account: PortfolioState,
     *,
     exclude_ticket_hash: str = "",
+    exclude_ticket_hashes: set[str] | None = None,
 ) -> SleeveUsage:
     if not math.isfinite(account.account_size) or account.account_size <= 0:
         raise ValueError("portfolio_sleeves: account size unavailable")
@@ -164,7 +165,7 @@ def live_sleeve_usage(
     # which reduces capacity safely until reconciliation catches up.
     pending: dict[tuple[str, str], tuple[str, float]] = {}
     for ticket in store.live_order_intents_by_type("open", PENDING_ENTRY_STATUSES):
-        if str(ticket.get("ticket_hash") or "") == exclude_ticket_hash:
+        if str(ticket.get("ticket_hash") or "") in {exclude_ticket_hash, *(exclude_ticket_hashes or set())}:
             continue
         key = (str(ticket.get("plan_id") or ""), str(ticket.get("candidate_id") or ticket.get("ticket_hash") or ""))
         try:

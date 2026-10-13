@@ -63,6 +63,7 @@ PREFLIGHT_FAIL_CLOSE_STATUSES = {
 }
 REASON_ORDER = [
     "order_submission_uncertain",
+    "fill_economics_pending",
     "risk_account_snapshot_stale",
     "risk_daily_drawdown_breaker",
     "risk_weekly_drawdown_breaker",
@@ -89,6 +90,7 @@ REASON_ORDER = [
 ]
 VENUE_SCOPED_HEALTH_REASONS = {
     "order_submission_uncertain",
+    "fill_economics_pending",
     "failed_close_order",
     "failed_preflight_close",
     "exit_pipeline_stalled",
@@ -164,6 +166,11 @@ def run_live_health(
     risk = _risk_overview(store, config)
 
     events: list[dict[str, Any]] = []
+    for ticket in store.live_order_intents_by_status({"fill_economics_pending"}):
+        events.append({"severity": "red", "reason": "fill_economics_pending",
+                       "detail": "Broker fill occurred; actual price/time evidence is pending ordinary order reconciliation",
+                       "ticket_hash": str(ticket.get("ticket_hash") or ""),
+                       "execution_venue": _payload_execution_venue(ticket), "operator_state": "self_healing"})
     for ticket in store.live_order_intents_by_status({"submit_uncertain"}):
         events.append({
             "severity": "red", "reason": "order_submission_uncertain",

@@ -171,8 +171,10 @@ def run_unified_books(
             "packages": [package.to_dict() for package in observed_packages],
         }
         guru_revision = hashlib.sha256(json.dumps(revision_payload, sort_keys=True).encode()).hexdigest()
-        previous = active_store.latest_event("guru_intake_planning_completed") or {}
-        if not observed_packages or previous.get("revision") == guru_revision:
+        # Cache source interpretation, not admission against mutable quotes,
+        # account capacity or broker readiness. Existing commitments deduplicate
+        # repeat intake through the shared opening-intent ledger.
+        if not observed_packages:
             return UnifiedPlanningResult(compilation, PlanningBook(ExecutionMode.LIVE, (), None, ()), PlanningBook(ExecutionMode.SHADOW, (), None, ()))
     live = _run_book(
         ExecutionMode.LIVE,
@@ -347,6 +349,11 @@ def _run_book(
             )
 
     try:
+        replacement_hashes = set()
+        if (mode is ExecutionMode.LIVE and not guru_only and write_sheet
+                and (config.get("live") or {}).get("entry_approval_mode") == "auto_top_plan"):
+            replacement_hashes = store.supersedable_automatic_entries()
+            mode_config["_automatic_selection_replace_hashes"] = replacement_hashes
         result = run_plan(
             mode_config,
             idea_paths=[] if guru_only else idea_paths,
@@ -391,36 +398,37 @@ def _run_book(
     _record_trade_source_plan_dispositions(result, store=store, mode=mode)
     _record_short_strangle_source_comparison(result, store=store, mode=mode, control=mode_config)
     if mode is ExecutionMode.LIVE:
-        rows = live_renderer[0](result, mode_config, store=store, mode="live_advisory")
+        automatic = (config.get("live") or {}).get("entry_approval_mode") == "auto_top_plan" and (write_sheet or guru_only)
+        prepared_tickets = [] if automatic else None
+        rows = live_renderer[0](result, mode_config, store=store, mode="live_advisory", persist_order_intents=not automatic)
         try:
             handoffs = _bind_selected_live_lifecycle(
                 result,
                 selected,
                 store=store,
                 daily_policy_snapshot=daily_policy_snapshot,
+                prepared_tickets=prepared_tickets,
             )
         except Exception as exc:  # noqa: BLE001 - no live intent may lack an adoptable lifecycle.
             return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (f"live handoff failed: {type(exc).__name__}: {exc}",))
-        if guru_only and (config.get("live") or {}).get("entry_approval_mode") == "auto_top_plan":
-            for ticket in store.live_order_intents_by_type("open", statuses={"pending_approval"}):
-                if result.plans and ticket.get("plan_id") == result.plans[0].plan_id:
-                    if ticket.get("source_output_kind") != "exact_package" or ticket.get("sleeve_id") != "guru_exact" or not ticket.get("stage_authorized"):
-                        raise ValueError("Guru intake selected a non-Guru or unauthorized ticket")
-                    store.update_live_order_intent_status_with_payload(ticket["ticket_hash"], "stage_approved_pending_submit", {"guru_intake_staged": True})
+        selected_id = result.plans[0].plan_id if result.plans else ""
+        selection = {"trading_date": daily_policy_snapshot.trading_date,
+                     "plan_run_id": result.plan_run_id, "plan_id": selected_id,
+                     "ticket_hashes": ([t["ticket_hash"] for t in prepared_tickets] if automatic else
+                                       [t["ticket_hash"] for t in store.live_order_intents_by_type("open", statuses=LIVE_ENTRY_BINDABLE_STATUSES)
+                                       if t.get("plan_id") == selected_id]) if selected_id else []}
+        if automatic:
+            try:
+                store.commit_automatic_selection(selection, replace_hashes=replacement_hashes, independent_guru=guru_only,
+                                                 prepared_tickets=prepared_tickets)
+            except (ValueError, RuntimeError) as exc:
+                return PlanningBook(mode, tuple(p.playbook_id for p in selected), result,
+                                    (f"automatic entry transition failed: {exc}",))
         result.daily_plan_rows[:] = rows
         if write_sheet:
             write_daily_plan(mode_config, rows, DAILY_PLAN_HEADER, replace_lanes={"live_advisory"})
-            selected_id = result.plans[0].plan_id if result.plans else ""
-            store.event("live_current_selection", {
-                "trading_date": daily_policy_snapshot.trading_date,
-                "plan_run_id": result.plan_run_id,
-                "plan_id": selected_id,
-                "ticket_hashes": [
-                    ticket["ticket_hash"] for ticket in store.live_order_intents_by_type(
-                        "open", statuses=LIVE_ENTRY_BINDABLE_STATUSES
-                    ) if ticket.get("plan_id") == selected_id
-                ] if selected_id else [],
-            })
+            if not automatic:
+                store.event("live_current_selection", selection)
         return PlanningBook(mode, tuple(policy.playbook_id for policy in selected), result, (), tuple(handoffs))
     elif result.plans and result.plans[0].operator_action == "approve":
         try:
@@ -775,6 +783,7 @@ def _bind_selected_live_lifecycle(
     *,
     store: LocalStore,
     daily_policy_snapshot: DailyPolicySnapshot | None,
+    prepared_tickets: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Attach the frozen selected-entry lifecycle to its existing guarded ticket."""
     if not result.plans:
@@ -852,9 +861,14 @@ def _bind_selected_live_lifecycle(
             if str(ticket.get("plan_id") or "") == selected_plan.plan_id
             and str(ticket.get("candidate_id") or "") == candidate.candidate_id
         ]
-        if len(tickets) != 1:
-            raise ValueError(f"selected live candidate {candidate.candidate_id} has {len(tickets)} guarded intents")
-        ticket = dict(tickets[0])
+        if prepared_tickets is not None:
+            from kamandal_v2.live.orders import build_open_ticket
+            ticket = build_open_ticket(selected_plan, candidate)
+            ticket["_ledger_status"] = "stage_approved_pending_submit"
+        else:
+            if len(tickets) != 1:
+                raise ValueError(f"selected live candidate {candidate.candidate_id} has {len(tickets)} guarded intents")
+            ticket = dict(tickets[0])
         action = arbitrate_actions((propose_action(lifecycle, ActionType.OPEN, "unified_plan_selected", arbiter_class="routine_management", proposed_at=_plan_time(result)),)).selected
         strategy_ticket = open_ticket_from_candidate(candidate, action, compiled, created_at=_plan_time(result), limit_price=candidate.net_credit)
         ticket.update(
@@ -873,7 +887,10 @@ def _bind_selected_live_lifecycle(
                 "pilot_contract_cap": 1 if pilot_live else None,
             }
         )
-        store.save_live_order_intent(ticket, status=str(ticket["_ledger_status"]))
+        if prepared_tickets is not None:
+            prepared_tickets.append(ticket)
+        elif not store.bind_live_entry_policy(ticket, expected_statuses=LIVE_ENTRY_BINDABLE_STATUSES):
+            raise RuntimeError("selected live ticket was claimed during policy handoff; replan required")
         handoffs.append(
             {"source_id": candidate.idea_id, "plan_id": selected_plan.plan_id, "candidate_id": candidate.candidate_id, "playbook_id": compiled.playbook_id, "capability": policy.capability.key, "mode": "pilot_live" if pilot_live else "live", "lifecycle_id": lifecycle_id, "ticket_id": strategy_ticket.ticket_id, "adapter_state": str(ticket["_ledger_status"])}
         )

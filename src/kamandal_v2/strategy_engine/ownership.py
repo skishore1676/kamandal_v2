@@ -17,6 +17,7 @@ ACTIVE_OPEN_INTENT_STATUSES = {
     "waiting_entry_window",
     "submitted",
     "submit_uncertain",
+    "fill_economics_pending",
     "working",
     "repriced",
     "partially_filled",

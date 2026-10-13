@@ -327,6 +327,10 @@ def _repair_filled_canonical_lifecycle_projections(
                 reconcile_current_version=True,
             )
             repair["result"] = result
+            if result.get("economics_pending"):
+                repair["status"] = "waiting_fill_economics"
+                repairs.append(repair)
+                continue
             if str(result.get("status") or "") != "closed" or not result.get("projection_retired"):
                 raise RuntimeError(
                     f"canonical close repair did not retire {lifecycle.lifecycle_id}: {result}"
