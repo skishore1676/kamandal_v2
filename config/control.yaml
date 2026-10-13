@@ -85,6 +85,7 @@ live:
   exit_submit_source: sheet # sheet | ledger
   max_close_submits_per_run: 10
   max_new_plans_per_day: 3
+  # Per sleeve; confirmed terminal zero-fill campaigns release their slot.
   max_live_baskets_per_day: 3
   option_submission:
     # The broker-facing guard is authoritative; launchd timing is only a wake-up schedule.

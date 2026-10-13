@@ -283,10 +283,11 @@ def execute_live_approved(
         if not tickets:
             results.append({"status": "blocked", "reason": selection_reason, "trade_bundle": row.get("trade_bundle")})
             continue
-        if submit and not close and not _daily_basket_cap_allows(config, store, row):
-            results.append({"status": "blocked", "reason": "max_live_baskets_per_day_reached", "trade_bundle": row.get("trade_bundle")})
-            continue
         for ticket in tickets:
+            if submit and not close and not _daily_basket_cap_allows(config, store, ticket):
+                results.append({"status": "blocked", "reason": "max_live_baskets_per_day_reached",
+                                "sleeve_id": ticket_lane(ticket), "ticket_hash": ticket.get("ticket_hash")})
+                continue
             capped_underlying = underlying_capped.get(str(ticket.get("underlying") or "").upper())
             if capped_underlying and submit and not close and ticket.get("source_output_kind") != "exact_package":
                 store.event(
@@ -317,6 +318,10 @@ def execute_live_approved(
 
 def _execute_stage_entry(config: dict[str, Any], store: LocalStore, ticket: dict[str, Any], *, submit: bool) -> dict[str, Any]:
     action = APPROVE_LIVE
+    if submit and not _daily_basket_cap_allows(config, store, ticket):
+        return {"action": action, "submit": submit, "processed": 1,
+                "results": [{"status": "blocked", "reason": "max_live_baskets_per_day_reached",
+                             "sleeve_id": ticket_lane(ticket), "ticket_hash": ticket.get("ticket_hash")}]}
     try:
         daily_policy = load_daily_policy_snapshot(config)
     except (FileNotFoundError, ValueError) as exc:
@@ -401,8 +406,8 @@ def _execute_automatic_entries(config: dict[str, Any], store: LocalStore, *, sub
         if ticket.get("entry_authority_trading_date") and ticket["entry_authority_trading_date"] != market_today(config):
             results.append({"status": "blocked", "reason": "automatic_entry_from_prior_trading_day", "ticket_hash": ticket["ticket_hash"]})
             continue
-        if submit and not _daily_basket_cap_allows(config, store, {"plan_id": ticket.get("plan_id")}):
-            results.append({"status": "blocked", "reason": "max_live_baskets_per_day_reached", "ticket_hash": ticket["ticket_hash"]})
+        if submit and not _daily_basket_cap_allows(config, store, ticket):
+            results.append({"status": "blocked", "reason": "max_live_baskets_per_day_reached", "sleeve_id": ticket_lane(ticket), "ticket_hash": ticket["ticket_hash"]})
             continue
         result = _execute_stage_entry(config, store, ticket, submit=submit)
         for item in result.get("results", []):
@@ -2616,7 +2621,7 @@ def _daily_basket_cap_allows(config: dict[str, Any], store: LocalStore, row: dic
     if cap <= 0:
         return False
     current_plan_id = str(row.get("plan_id") or "")
-    opened_plan_ids = store.live_entry_plan_ids_since(_market_day_start(config))
+    opened_plan_ids = store.live_entry_plan_ids_since(_market_day_start(config), sleeve_id=ticket_lane(row))
     if current_plan_id in opened_plan_ids:
         return True
     return len(opened_plan_ids) < cap

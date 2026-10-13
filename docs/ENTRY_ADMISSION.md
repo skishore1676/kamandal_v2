@@ -33,7 +33,9 @@ still reaches the existing planner.
 
 The executor examines the shared queue in creation order. A ticket-local or
 venue-local hold yields to later tickets; a global risk breaker stops the queue.
-Existing submission and daily basket bounds remain enforced. Each ticket retains
+Existing per-cycle submission bounds remain enforced. Daily basket capacity is
+three baskets independently for `current_idea` and `guru_exact` (the configured
+`live.max_live_baskets_per_day` applies to each sleeve). Each ticket retains
 its venue, current-day authority, frozen policy, and final fresh admission checks.
 No executor, reconciler, or fallback campaign becomes another portfolio planner.
 
@@ -52,3 +54,24 @@ Regression coverage includes `test_automatic_entry_authority.py`,
 `test_portfolio_sleeves.py`, `test_live_lane.py`, `test_option_sessions.py`,
 `test_observed_package_planning.py`, `test_correspondent_activation.py`, and
 `test_launchd_schedule_contract.py`.
+
+## Daily basket slots — October 13, 2026
+
+A basket consumes one slot in a sleeve when that sleeve reaches broker admission
+or has a working, uncertain, partial, or filled commitment. Replacement attempts
+share the original plan's slot. A mixed plan consumes a slot in each sleeve only
+when that sleeve has an attempted commitment; an unsubmitted sibling is not a fill.
+Filled baskets retain their daily slot even after their positions close.
+
+A slot is released only when all attempted commitments in that plan/sleeve have
+confirmed terminal zero-fill broker receipts. Local cancellation alone, absent or
+malformed fill quantities, any partial-fill history, active replacements, or an
+unresolved later submission keep the slot. Complete native Tastytrade terminal
+leg receipts may prove zero fills using the existing adapter normalization.
+Refunds are derived from the ledger; historical receipts are never rewritten.
+A previously refunded plan must pass the sleeve limit again before resubmission.
+
+The shared executor, per-cycle submission rate, source deadlines, duplicate and
+ownership checks, 40/40/80 BPR ceilings, and broker/venue safeguards are unchanged.
+This is not a same-session symbol re-entry prohibition. The separately proposed
+DHR churn restriction has not been authorized by this change.

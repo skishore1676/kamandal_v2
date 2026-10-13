@@ -1333,39 +1333,58 @@ class LocalStore:
         tickets.sort(key=lambda item: (str(item.get("_ledger_updated_at") or ""), str(item.get("created_at") or "")), reverse=True)
         return tickets
 
-    def live_entry_plan_ids_since(self, created_since: str) -> set[str]:
+    def live_entry_plan_ids_since(self, created_since: str, *, sleeve_id: str | None = None) -> set[str]:
+        """Daily committed baskets, scoped by sleeve when requested.
+
+        A submission attempt reserves one slot for its plan/sleeve. Only complete
+        terminal zero-fill broker evidence releases it; local cancellation or a
+        missing receipt never does. Filled baskets retain their slot after close.
+        """
+        from kamandal_v2.portfolio_sleeves import ticket_lane
+
+        active = {"submitted", "submit_uncertain", "repriced", "partially_filled",
+                  "filled", "filled_via_replacement", "manual_fill_recorded",
+                  "fill_economics_pending", "partially_filled_terminal",
+                  "replace_cancel_pending", "replace_waiting_cancel"}
         with self._connect() as conn:
+            conn.execute("BEGIN")
+            # Keep the current-day scope while retaining cancelled attempt history.
             rows = conn.execute(
-                """
-                SELECT plan_id
-                FROM live_order_intents
-                WHERE intent_type = 'open'
-                  AND created_at >= ?
-                  AND status IN (
-                    'submitted', 'submit_uncertain', 'repriced', 'partially_filled',
-                    'filled', 'filled_via_replacement', 'manual_fill_recorded'
-                  )
-                UNION
-                SELECT intents.plan_id
-                FROM live_order_attempts AS attempts
-                JOIN live_order_intents AS intents
-                  ON intents.ticket_hash = attempts.ticket_hash
-                WHERE attempts.created_at >= ?
-                  AND attempts.submit = 1
-                  AND attempts.action IN (
-                    'submit_open', 'reprice_submit_open', 'atomic_replace_open',
-                    'submit_staged_replace_open'
-                  )
-                UNION
-                SELECT plan_id
-                FROM live_positions
-                WHERE opened_at >= ?
-                  AND plan_id IS NOT NULL
-                  AND plan_id != ''
-                """,
-                (created_since, created_since, created_since),
+                "SELECT * FROM live_order_intents WHERE intent_type = 'open' AND ("
+                "datetime(created_at) >= datetime(?) OR ticket_hash IN (SELECT ticket_hash FROM live_order_attempts "
+                "WHERE datetime(created_at) >= datetime(?) AND submit = 1))",
+                (created_since, created_since),
             ).fetchall()
-        return {str(row["plan_id"]) for row in rows if row["plan_id"]}
+            retained: set[str] = set()
+            for row in rows:
+                ticket = json.loads(row["payload"])
+                if sleeve_id is not None and ticket_lane(ticket) != sleeve_id:
+                    continue
+                history = conn.execute(
+                    "SELECT status, payload, created_at FROM live_order_status WHERE ticket_hash = ? OR order_id = ? ORDER BY id",
+                    (row["ticket_hash"], row["order_id"]),
+                ).fetchall()
+                attempted = conn.execute(
+                    "SELECT created_at FROM live_order_attempts WHERE ticket_hash = ? AND submit = 1 "
+                    "AND action IN ('submit_open', 'reprice_submit_open', 'atomic_replace_open', "
+                    "'submit_staged_replace_open') ORDER BY id DESC LIMIT 1", (row["ticket_hash"],),
+                ).fetchone()
+                if not (attempted or history or ticket.get("broker_order_id") or row["status"] in active):
+                    continue
+                terminal_local = row["status"] in {"cancelled", "canceled", "rejected", "expired", "expired_eod", "failed"}
+                later_attempt = bool(attempted and history and not conn.execute(
+                    "SELECT datetime(?) >= datetime(?)", (history[-1]["created_at"], attempted["created_at"]),
+                ).fetchone()[0])
+                if not terminal_local or later_attempt or not _confirmed_zero_fill_terminal(history, ticket):
+                    if row["plan_id"]:
+                        retained.add(str(row["plan_id"]))
+            # Preserve adopted/legacy positions even when their ticket is absent.
+            for row in conn.execute("SELECT plan_id, payload FROM live_positions WHERE datetime(opened_at) >= datetime(?)", (created_since,)):
+                position = json.loads(row["payload"])
+                plan_id = str(row["plan_id"] or "")
+                if plan_id and (sleeve_id is None or ticket_lane(position) == sleeve_id):
+                    retained.add(plan_id)
+        return retained
 
     def update_live_order_intent_status(self, ticket_hash: str, status: str) -> None:
         with self._connect() as conn:
@@ -2510,3 +2529,36 @@ def _automatic_entry_replaceable(conn: sqlite3.Connection, row: sqlite3.Row) -> 
         return False
     return not (conn.execute("SELECT 1 FROM live_order_attempts WHERE ticket_hash=? AND submit=1 LIMIT 1", (row["ticket_hash"],)).fetchone()
                 or conn.execute("SELECT 1 FROM live_order_status WHERE ticket_hash=? OR order_id=? LIMIT 1", (row["ticket_hash"], row["order_id"])).fetchone())
+
+
+def _confirmed_zero_fill_terminal(history: list, ticket: dict[str, Any]) -> bool:
+    """Require affirmative terminal zero-fill proof, preserving any partial history."""
+    if not history:
+        return False
+    terminal_states = {"CANCELLED", "CANCELED", "REJECTED", "EXPIRED", "FAILED"}
+    if str(history[-1]["status"]).upper() not in terminal_states:
+        return False
+    final_quantity = None
+    for row in history:
+        status = str(row["status"]).upper()
+        if status in {"FILLED", "PARTIALLY_FILLED", "PARTIALLY_FILLED_TERMINAL"}:
+            return False
+        observation = json.loads(row["payload"])
+        quantity = observation.get("filledQuantity", observation.get("filled-quantity", observation.get("filled_quantity")))
+        if quantity in (None, "") and isinstance(observation.get("raw"), dict) and str(ticket.get("execution_venue") or "").startswith("tasty"):
+            from kamandal_v2.market.tastytrade import _order_response
+            native = _order_response(observation["raw"])
+            if native.get("status") == status:
+                quantity = native.get("filledQuantity")
+        if quantity not in (None, ""):
+            if isinstance(quantity, bool):
+                return False
+            try:
+                value = float(quantity)
+            except (TypeError, ValueError):
+                return False
+            if not math.isfinite(value) or value != 0:
+                return False
+        final_quantity = quantity
+    # Even rejection requires explicit zero-fill evidence for slot refunds.
+    return final_quantity not in (None, "") and float(final_quantity) == 0

@@ -64,6 +64,8 @@ Both entry decisions hand off the same candidate/ticket contract, including
 source opportunity, sleeve, exact legs, local size, entry budget, evidence
 revision, current source deadline and frozen management policy. Existing
 submission throughput limits remain operational bounds, not alpha selection.
+The daily basket allowance is three per sleeve; confirmed terminal zero-fill
+campaigns release their slot. See `ENTRY_ADMISSION.md` for the evidence contract.
 
 ## Entry checks by purpose
 
