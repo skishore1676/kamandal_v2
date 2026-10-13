@@ -504,3 +504,16 @@ def test_tastytrade_readiness_requires_secret_and_refresh_token(tmp_path) -> Non
 
     assert report["ready"] is False
     assert "oauth_credentials_missing" in report["reasons"]
+
+
+@pytest.mark.parametrize('status', ['Expired', 'Canceled', 'Rejected'])
+def test_terminal_native_leg_evidence_confirms_zero_fill(status):
+    from kamandal_v2.market.tastytrade import _order_response
+    order = {'id': 'native-terminal', 'status': status, 'leg-count': 2, 'terminal-at': '2026-10-12T20:00:00Z',
+        'legs': [{'quantity': 1, 'remaining-quantity': 1, 'fills': []}, {'quantity': 1, 'remaining-quantity': 1, 'fills': []}]}
+    response = _order_response({'data': {'order': order}})
+    assert response['filledQuantity'] == 0 and response['terminalAt'] == order['terminal-at']
+    assert response['fill_quantity_source'] == 'explicit_terminal_unfilled_legs'
+    for incomplete in [{**order, 'leg-count': 3}, {**order, 'legs': [{**order['legs'][0], 'remaining-quantity': .5}, order['legs'][1]]},
+                       {**order, 'legs': [{k: v for k, v in leg.items() if k != 'fills'} for leg in order['legs']]}]:
+        assert 'filledQuantity' not in _order_response({'data': {'order': incomplete}})

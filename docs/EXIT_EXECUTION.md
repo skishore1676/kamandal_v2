@@ -24,6 +24,11 @@ confirmed terminal, unfilled attempt receives a new deterministic recovery
 identity, retained in the existing lifecycle lineage. Cancel-requested EOD status
 is not terminal proof: normal reconciliation must confirm it first. A terminal
 cancel/expiry with unknown fill quantity remains held for evidence.
+The check spans the lifecycle's close history, including differently priced
+tickets. Complete Tastytrade terminal leg receipts can prove zero fills when
+every leg explicitly has empty fills and its full quantity remaining; omitted
+or partial leg evidence cannot. Retained native receipts are decoded without
+rewriting history.
 
 Working, replacement, uncertain, partial, and economics-pending commitments never
 replay. Existing cancel-before-replace and both replacement bounds still apply.

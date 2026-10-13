@@ -7,10 +7,11 @@ import pytest
 
 from kamandal_v2.domain.models import PreflightResult
 from kamandal_v2.live import execution
-from kamandal_v2.live.orders import ticket_hash
+from kamandal_v2.live.orders import ticket_hash, build_csa_live_ticket
 from kamandal_v2.stores.sqlite import LocalStore
 from kamandal_v2.strategy_lanes.management_runtime import run_live_lifecycle_management
 from kamandal_v2.strategy_lanes.models import LaneId
+from kamandal_v2.strategy_lanes.store import strategy_ticket_from_payload
 from test_resting_profit_orders import _RuntimeMarket, _runtime_store
 from test_strangle_management_repair import seed, snapshot, CONFIG
 
@@ -235,3 +236,38 @@ def test_terminal_cancel_without_fill_quantity_is_not_unfilled_proof(tmp_path, q
     local.record_live_order_status(ticket['order_id'], 'CANCELLED', {'filledQuantity': quantity}, ticket_hash=ticket['ticket_hash'])
     local.update_live_order_intent_status(ticket['ticket_hash'], 'cancelled')
     assert not local.stage_lifecycle_close(ticket)
+
+
+@pytest.mark.parametrize('status,payload', [
+    ('CANCELLED', {'filledQuantity': .5}),
+    ('CANCELLED', {}),
+    ('CLOSE_EXPIRE_CANCEL_REQUESTED', {}),
+    ('FILLED', {'filledQuantity': 1}),
+])
+def test_changed_close_identity_cannot_bypass_lifecycle_fill_or_uncertainty(tmp_path, status, payload):
+    local, _, original = close_fixture(tmp_path)
+    local.record_live_order_status(original['order_id'], status, payload, ticket_hash=original['ticket_hash'])
+    local.update_live_order_intent_status(original['ticket_hash'], 'cancelled')
+    changed = {**original, **build_csa_live_ticket(replace(strategy_ticket_from_payload(original['csa_strategy_ticket']), limit_price=2, created_at=NEXT))}
+    assert changed['ticket_hash'] != original['ticket_hash'] and changed['order_id'] != original['order_id']
+    assert not local.stage_lifecycle_close(changed)
+    assert local.live_order_intent(changed['ticket_hash']) is None
+
+
+def test_terminal_unfilled_different_close_identity_does_not_suppress_new_duty(tmp_path):
+    local, _, original = close_fixture(tmp_path)
+    local.record_live_order_status(original['order_id'], 'CANCELLED', {'filledQuantity': 0}, ticket_hash=original['ticket_hash'])
+    local.update_live_order_intent_status(original['ticket_hash'], 'cancelled')
+    changed = {**original, **build_csa_live_ticket(replace(strategy_ticket_from_payload(original['csa_strategy_ticket']), limit_price=2, created_at=NEXT))}
+    assert local.stage_lifecycle_close(changed)
+
+
+def test_retained_native_terminal_empty_fills_allow_new_recovery_without_rewriting_history(tmp_path):
+    local, _, ticket = close_fixture(tmp_path)
+    native = {'data': {'order': {'id': 'expired-native', 'status': 'Expired', 'leg-count': 2,
+        'legs': [{'quantity': 1, 'remaining-quantity': 1, 'fills': []}, {'quantity': 1, 'remaining-quantity': 1, 'fills': []}]}}}
+    local.record_live_order_status(ticket['order_id'], 'EXPIRED', {'status': 'EXPIRED', 'raw': native}, ticket_hash=ticket['ticket_hash'])
+    local.update_live_order_intent_status(ticket['ticket_hash'], 'expired')
+    before = local.live_order_status_history({ticket['order_id']})
+    assert local.stage_lifecycle_close(ticket)
+    assert local.live_order_status_history({ticket['order_id']}) == before

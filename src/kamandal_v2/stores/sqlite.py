@@ -1021,6 +1021,50 @@ class LocalStore:
             ).fetchall()
             if any(row["status"] in active for row in rows):
                 return False
+            # Price/quote changes can produce another ticket hash. Resolve all
+            # prior close commitments before creating any fresh full-package duty.
+            broker_proofs = {}
+            for row in rows:
+                payload = json.loads(row["payload"])
+                history = conn.execute(
+                    "SELECT status, payload FROM live_order_status WHERE ticket_hash = ? OR order_id = ? ORDER BY id",
+                    (row["ticket_hash"], row["order_id"]),
+                ).fetchall()
+                if row["status"] == "close_filled":
+                    return False
+                for item in history:
+                    observation = json.loads(item["payload"])
+                    quantity = observation.get("filledQuantity", observation.get("filled-quantity", observation.get("filled_quantity", 0)))
+                    try:
+                        observed_quantity = float(quantity or 0)
+                        if not math.isfinite(observed_quantity) or observed_quantity < 0:
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                    if observed_quantity > 0 or str(item["status"]).upper() in {"FILLED", "PARTIALLY_FILLED"}:
+                        return False
+                effects = conn.execute(
+                    "SELECT 1 FROM live_order_attempts WHERE ticket_hash = ? AND submit = 1 "
+                    "AND action NOT LIKE '%preflight%' LIMIT 1", (row["ticket_hash"],),
+                ).fetchone()
+                broker_observed = bool(history or effects or payload.get("broker_order_id"))
+                if broker_observed:
+                    if not history or str(history[-1]["status"]).upper() not in {"CANCELLED", "CANCELED", "REJECTED", "EXPIRED", "FAILED"}:
+                        return False
+                    terminal = json.loads(history[-1]["payload"])
+                    terminal_quantity = terminal.get("filledQuantity", terminal.get("filled-quantity", terminal.get("filled_quantity")))
+                    if terminal_quantity in (None, "") and isinstance(terminal.get("raw"), dict):
+                        # Decode retained native receipts with the same adapter
+                        # contract; never rewrite historical observations.
+                        from kamandal_v2.market.tastytrade import _order_response
+                        native = _order_response(terminal["raw"])
+                        if native.get("status") == str(history[-1]["status"]).upper():
+                            terminal_quantity = native.get("filledQuantity")
+                    if terminal_quantity in (None, "") and str(history[-1]["status"]).upper() != "REJECTED":
+                        return False
+                    if terminal_quantity not in (None, "") and float(terminal_quantity) != 0:
+                        return False
+                broker_proofs[row["ticket_hash"]] = broker_observed
             lineage = [row for row in rows if row["ticket_hash"] == base_hash
                        or json.loads(row["payload"]).get("management_recovery_base_hash") == base_hash]
             existing = max(lineage, key=lambda row: int(json.loads(row["payload"]).get("management_recovery_generation") or 0)) if lineage else None
@@ -1029,34 +1073,7 @@ class LocalStore:
                 if existing["status"] not in retryable:
                     return False
                 old = json.loads(existing["payload"])
-                history = conn.execute(
-                    "SELECT status, payload FROM live_order_status WHERE ticket_hash = ? OR order_id = ? ORDER BY id",
-                    (existing["ticket_hash"], existing["order_id"]),
-                ).fetchall()
-                for item in history:
-                    payload = json.loads(item["payload"])
-                    quantity = payload.get("filledQuantity", payload.get("filled-quantity", payload.get("filled_quantity", 0)))
-                    try:
-                        observed_quantity = float(quantity or 0)
-                        if not math.isfinite(observed_quantity) or observed_quantity < 0:
-                            return False
-                        filled = observed_quantity > 0
-                    except (TypeError, ValueError):
-                        return False
-                    if filled or str(item["status"]).upper() in {"FILLED", "PARTIALLY_FILLED"}:
-                        return False
-                effects = conn.execute(
-                    "SELECT 1 FROM live_order_attempts WHERE ticket_hash = ? AND submit = 1 "
-                    "AND action NOT LIKE '%preflight%' LIMIT 1", (existing["ticket_hash"],),
-                ).fetchone()
-                broker_observed = bool(history or effects or old.get("broker_order_id"))
-                if broker_observed:
-                    if not history or str(history[-1]["status"]).upper() not in {"CANCELLED", "CANCELED", "REJECTED", "EXPIRED", "FAILED"}:
-                        return False
-                    terminal = json.loads(history[-1]["payload"])
-                    terminal_quantity = terminal.get("filledQuantity", terminal.get("filled-quantity", terminal.get("filled_quantity")))
-                    if terminal_quantity in (None, "") and str(history[-1]["status"]).upper() != "REJECTED":
-                        return False
+                if broker_proofs[existing["ticket_hash"]]:
                     generation = int(old.get("management_recovery_generation") or 0) + 1
                     strategy = strategy_ticket_from_payload(ticket["csa_strategy_ticket"])
                     recovered = replace(strategy, ticket_id=stable_csa_id("management-recovery", [strategy.ticket_id, base_hash, generation]))

@@ -669,6 +669,7 @@ def _order_response(response: dict[str, Any]) -> dict[str, Any]:
         "remainingQuantity": ("remaining-quantity", "remaining_quantity"),
         "averagePrice": ("average-price", "average_price"),
         "filledAt": ("filled-at", "filled_at"),
+        "terminalAt": ("terminal-at", "terminal_at"),
         "receivedAt": ("received-at", "received_at"),
         "updatedAt": ("updated-at", "updated_at"),
     }
@@ -678,6 +679,22 @@ def _order_response(response: dict[str, Any]) -> dict[str, Any]:
             value = next((order.get(alias) for alias in aliases if order.get(alias) is not None), None)
         if value is not None:
             normalized[normalized_name] = value
+    if normalized_status in {"CANCELED", "CANCELLED", "EXPIRED", "REJECTED", "FAILED"} and "filledQuantity" not in normalized:
+        # Native terminal orders can omit package quantity but explicitly show
+        # every leg unfilled. Absence of fill details alone is never zero proof.
+        legs = order.get("legs")
+        try:
+            complete_unfilled = (isinstance(legs, list) and bool(legs)
+                and int(order.get("leg-count", order.get("leg_count", 0))) == len(legs)
+                and all(isinstance(leg, dict) and leg.get("fills") == []
+                        and math.isfinite(float(leg.get("quantity"))) and float(leg["quantity"]) > 0
+                        and float(leg.get("remaining-quantity", leg.get("remaining_quantity"))) == float(leg["quantity"])
+                        for leg in legs))
+        except (TypeError, ValueError, OverflowError):
+            complete_unfilled = False
+        if complete_unfilled:
+            normalized["filledQuantity"] = 0.0
+            normalized["fill_quantity_source"] = "explicit_terminal_unfilled_legs"
     if normalized_status == "FILLED":
         details = _complete_package_fill(order)
         if details is None:
