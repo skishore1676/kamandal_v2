@@ -1,7 +1,13 @@
 # Short Strangle Experiment: Current State and Target
 
-Updated: 2026-09-08 after normal-live activation
-Status: operator set `short_strangle_high_iv` to `mode=live`, `csa_stage=live` for the next natural daily policy snapshot
+Updated: 2026-10-12 after live owner readback
+Status: `short_strangle_high_iv` is live at `tasty_primary`; DHR and NTAP remain open.
+
+The current frozen management rules, actual opening credits, time-exit duty,
+resting-profit behavior, and remaining natural recovery proof are in
+[the Tastytrade lane readback](MULTI_BROKER_STRANGLE_LANE.md#frozen-management-rules-and-october-12-readback).
+The evidence-week sections below retain the earlier shadow experiment; their
+states and economic figures are historical, not current live performance.
 
 The dated Friday `NO_GO` and September 8 gated pilot remain historical evidence.
 After the pilot failed closed on a stale morning risk snapshot, Suman separately
@@ -15,11 +21,11 @@ No job or broker action was triggered during activation.
 
 Kamandal selects the trade, applies portfolio and lifecycle policy, and retains the
 shadow evidence. Public supplies the current option-chain quotes. Tastytrade is the
-intended execution venue and currently supplies dry-run BPR/preflight evidence;
+frozen live execution venue and supplies native BPR/preflight, order, and fill evidence;
 DXLink quote streaming is not integrated. Cartographer's current-range answer is
 available as descriptive research context but is no longer an admission gate.
 
-## Current verified state
+## Historical state before normal-live activation
 
 - The experiment is currently `mode=shadow`, one contract, with all enabled universe profiles
   source-eligible. Price/IV, 35-50 DTE, 14-22 delta, earnings, quote, BPR, portfolio,
